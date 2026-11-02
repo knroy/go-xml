@@ -837,7 +837,8 @@ only the roots.
 | `AllowDOCTYPE` | `bool` | refuse | Permits a `DOCTYPE` in the documents this resolver parses. |
 | `ExternalEntities` | `bool` | refuse | Permits those documents to read external entities, through this same resolver. Separate from `AllowDOCTYPE`. |
 | `UnparsedText` | `bool` | refuse | Permits `fn:unparsed-text` to read through this resolver. |
-| `MaxBytes` | `int64` | `DefaultMaxResourceBytes` = 64 MB | Bounds **one file**, whichever way it is asked for. Zero means the default; negative means no limit. A file over the limit is refused, naming it — never truncated. |
+| `MaxBytes` | `int64` | `DefaultMaxResourceBytes` = 64 MB | Bounds **one file**, whichever way it is asked for. Zero means the default; negative means no limit. A file over the limit is refused, naming it — never truncated. Since v2.2.0 it is also the parser's byte limit for the documents this resolver parses. |
+| `MaxNodes` | `int` | `xdm.DefaultMaxNodes` = 10M | Bounds the nodes of one document this resolver parses, as `xdm.ParseOptions.MaxNodes` does. Zero means the default; negative means no limit. Counted over the whole document even when a streamable `xsl:source-document` reads it record by record. |
 
 `MaxBytes` is one number rather than one per call path deliberately. The
 confinement is a property of the *file*: every root is readable by every path,
@@ -846,6 +847,10 @@ ask for it through `fn:doc`, and two limits would only mean the effective one
 is the larger of them. It is set to the same 64 MB as `xdm.DefaultMaxBytes`, so
 that a document refused at the read is refused before the bytes are spent and
 the parser's identical limit stays the backstop for input arriving another way.
+
+Before v2.2.0 the parser kept its own 64 MB default whatever `MaxBytes` said,
+so raising `MaxBytes` did not let a larger document through `fn:doc`; it now
+does.
 
 It bounds what `xdm.ParseOptions.MaxBytes` cannot. That limit bounds the
 *parse*; the resolver has the whole file in memory before the parser is handed

@@ -77,3 +77,10 @@ var (
 	ResolveDocumentIn func(r, ctx any, uri, base string) (*xdm.Tree, error)
 	CallItem          func(ctx any, fn *xdm.FunctionItem, args []xdm.Sequence) (xdm.Sequence, error)
 )
+
+// WithExpr returns a copy of c, an *xpath.Compiled, that evaluates e, an
+// xpath.Expr parsed as c was, optimised as a compile optimises, under every
+// static property c was compiled with. XSLT's burst execution evaluates a
+// select expression in parts this way (xslt/streamburst.go). Package xpath
+// sets it in its init.
+var WithExpr func(c, e any) any

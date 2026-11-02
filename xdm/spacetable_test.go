@@ -1,6 +1,9 @@
 package xdm
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 // Whitespace runs are shared by length first; two runs of one length but
 // different characters must still keep their own values.
@@ -32,5 +35,27 @@ func TestSpaceTableSameLengthRuns(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("text node %d is %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+// TestSmallTreeSkipsSpaceTable: the first whitespace value in a small tree
+// must not cost the table's kilobyte (a built tree holding " " was 2.2 KB).
+func TestSmallTreeSkipsSpaceTable(t *testing.T) {
+	const n = 200
+	build := func() *Tree {
+		tr := NewTree()
+		tr.Root.AppendElement(QName{Local: "a"}).AppendText(" ")
+		tr.Finalize()
+		return tr
+	}
+	build()
+	var a, b runtime.MemStats
+	runtime.ReadMemStats(&a)
+	for i := 0; i < n; i++ {
+		build()
+	}
+	runtime.ReadMemStats(&b)
+	if per := (b.TotalAlloc - a.TotalAlloc) / n; per > 1500 {
+		t.Errorf("a tree holding one space allocated %d B, want under 1500", per)
 	}
 }

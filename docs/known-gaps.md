@@ -128,9 +128,10 @@ Found by the third memory audit (2026-11-01) and not fixed, each with the reason
   (40k items 12.4 GB, all garbage). Appending in place is unsound while other
   references may share the prefix.
 - **Identity templates allocate about 3.5 KB a node of context copies**
-  (`withSel`, `hostWithCurrent`, the leaf-hook copy), and built-in shallow-copy
-  copies a document-level result twice; removing that copy changes an error
-  case into output.
+  (`withSel`, `hostWithCurrent`, the leaf-hook copy). Built-in shallow-copy of
+  a document node builds the result once in a mode with no template rules
+  (v2.2.0), but still builds it and copies it into a document in a mode that
+  has rules, where a rule could add an attribute that must stay `XTDE0420`.
 - **Several large text values in one document cost about 1.3× their size to
   parse** (eight 3 MiB values: 1.30×). A single value is about 1.1× at every
   size since v2.1.1; with several, the first value's buffer overshoots once
@@ -149,6 +150,83 @@ Found by the third memory audit (2026-11-01) and not fixed, each with the reason
   `xquery/inline.go` has its own implementation.
 - **A regex program over 4,096 instructions is compiled on every call**,
   because it is not cached; the largest QT3 pattern is 4,059.
+
+### Memory: what the footprint round left open (performance)
+
+Measured on branches in 2026-11 and not adopted, each with the reason:
+
+- **A 32-byte node record** (the tree pointer read from a chunk header):
+  −11 to −22% retained, rejected because a by-value copy of an `xdm.Node`
+  would then read foreign memory instead of failing safely.
+- **Compact attribute records** (16 B, nodes made on demand): −10% retained on
+  parse-100mb, −16% on SAML, about 0 on XMark, but +10–25% CPU on
+  attribute-heavy XPath, c14n and copies (+45% worst case), and a held
+  attribute would cost 62 B instead of 40. Pointer identity of `*xdm.Node`
+  forces a real record per held node; denser storage needs a value-type node
+  handle, which is a breaking change.
+- **Template-driven shallow-copy does not share source text.** Deep copies
+  (`xsl:copy-of`, `xdm.Copy` of 4,096+ records) borrow the source's text
+  blocks; a template-built copy adds each value as a string.
+- **With any accumulator declared, every `fn:copy-of`/`fn:snapshot` copy is kept
+  until the transform ends**, with its original: §18.2.2 and §18.2.10 make the
+  copy answer with the original's accumulator values, and the copy-to-original
+  table is how it finds them. Weak references would not free them, since the
+  accumulator value cache holds every tree an accumulator was evaluated over.
+  With no accumulator in any package the table is not made.
+- **Holding millions of namespace nodes costs a sweep per collection.**
+  Namespace nodes are held weakly since v2.2.0; while a tree's table is not
+  empty, every GC cycle sweeps it.
+
+### Streamed execution covers two shapes (XSLT 3.0, performance)
+
+Since v2.2.0 an `xsl:source-document streamable="yes"` whose body is one
+`xsl:for-each` or `xsl:iterate` (optionally inside constant literal result
+elements) over a child path of plain names, with non-positional predicates on
+the last step only, and a body the gate recognises with a known and verified
+§19.8 verdict, runs record by record
+through `xdm.ParseBursts`: a 1 GB file totalled by `xsl:iterate` peaks at
+27 MB RSS against 3.7 GB, at about 2× the CPU. Everything else builds the tree,
+as before.
+
+The second shape is a body that is one `xsl:value-of`, `xsl:copy-of` or
+`xsl:sequence` (again optionally inside constant literal result elements) whose
+select reads one record path, such as `sum(doc/rec/@v)` or
+`count(doc/rec[@k = 'x'])`. The path runs per record; the rest of the select
+runs once over the values. `count`, `sum`, `min` and `max` fold per record and
+stay flat: over a 1 GB file of 25.9M records, `count` peaks at 3.4 MB heap /
+25 MB RSS and `sum` at 11 MB / 33 MB, where tree mode needs 773–1,284 MB at
+100 MB. Other consumers (`avg`, comparisons, `string-join`, a bare `value-of`
+of attributes) keep one atomic value per item, about half the tree's memory,
+still growing with the input. A select that would keep the records' nodes or
+copies (`copy-of(doc/rec)`, filters returning nodes, `head`/`tail` passed on)
+is refused and runs on the tree, because a kept record costs more there than in
+a whole tree (945 B against 208 B). Also refused: `distinct-values`, `reverse`,
+`sort`, `last()`, union/intersect/except, `let`, user functions, wildcard steps.
+
+In the W3C XSLT 3.0 run 364 cases take the burst path (9 before the second
+shape). Of the 786 single-instruction bodies over one record path with a known
+and verified verdict, 294 are admitted (261 bounded reducers, 33 pipelined).
+Also:
+
+- **The result is still built in memory**, so a large filtered copy grows with
+  its output and stops at the result-node cap.
+- **Error order can differ from tree mode, for the loop shape.** (The single-instruction
+  shape re-runs on the tree after any error, so its errors are the tree's; the
+  cost is a second read of the document, and the 1 GiB string budget charges the
+  strings both attempts built.) Tree mode reads the whole file,
+  then evaluates the whole `select`, before the body runs; bursts do each per
+  record. So a dynamic error in the body is raised before a malformed tail, a
+  `MaxNodes`/`MaxBytes` refusal or an encoding error later in the file, and
+  before a predicate's error on a later record (`a/r[xs:integer(@v) gt 0]`
+  with `1 idiv 0` in the body: FOAR0001 in bursts, FORG0001 in the tree).
+  `xsl:try` can see which code wins. A differential fuzzer (1.28M generated
+  cases, 495k on the burst path) found no other difference.
+- **`xsl:break` still reads the rest of the file**, so that a malformed tail is
+  an error as in tree mode.
+- **Only `FileResolver` streams**; another `DocumentResolver` builds the tree.
+  The streamed document is not cached, so a later `fn:doc` of it reads it again.
+- **The `FileResolver` limits apply to the whole file**: raise `MaxBytes` and
+  `MaxNodes` to stream a document past 64 MB or 10M nodes.
 
 ### `fn:replace` charges a backtracking or backreference result after building it (XPath, resource limits)
 
@@ -179,7 +257,8 @@ and §18.1's grounded demand at both the sites it names.
 
 All three fail in the same direction: the suite expects `XTSE3430` — *this
 construct is not guaranteed streamable* — and the transform succeeds instead.
-The engine builds a tree and streams nothing, so it produces the **right
+The engine builds a tree for these (it reads in bursts only the narrow shape
+described under *Streamed execution covers two shapes*), so it produces the **right
 answer** for all three; what it does not produce is the static refusal §19.8
 requires a streaming processor to make before running anything. These are not
 wrong answers; they are a static analysis that is not complete.
@@ -189,7 +268,13 @@ reports whether it *modelled* every construct it met separately from what it
 concluded, and an error is raised only on a fully-modelled verdict; anything
 else is "no opinion". A missing rule leaves a case failing, while a wrong rule
 would reject a valid stylesheet, and it is the second that the whole-corpus
-scan measures at zero.
+scan measures at zero. Since v2.2.0 a verdict also carries an *unverified* bit:
+it is set when the verdict rests on a streamable function, attribute set,
+accumulator or mode whose own check gave up, or on a declaration in another
+module. Refusals ignore the bit, so no XTSE3430 result moves; streamed execution
+requires it clear. In the W3C streaming stylesheets the static checks accept,
+58 known, grounded containers in 41 files are unverified (modes 28, functions
+10, cross-module 10, accumulators 7, other 3).
 
 **All three are measured, and each known fix costs more than it gains.**
 Modelling `||` refuses `si-fork-902`/`-952` and costs 18 `sx-union` cases
@@ -255,7 +340,10 @@ None is a wrong verdict.
   other arity is unmodelled.
 - `*xpath.LookupExpr` (`?`) is modelled in `expr()` (§19.8.8.18), but the
   inline-function walker `bodyMentionsStreamingParam` still lacks it, along
-  with `*xpath.StringConcat` and `*xpath.ArgumentPlaceholder`. The
+  with `*xpath.StringConcat` and `*xpath.ArgumentPlaceholder`. Since v2.2.0 the
+  walker runs on every inline function in a streamable construct (it looks for
+  `current()`), so such a body is unknown anywhere, not only in a stylesheet
+  function. The
   dispatcher half of `||` is measured and reverted; see
   [*The `||` operator*](conformance-gaps.md#the--operator--2-cases-gained-18-lost).
 - `functionParamTypes` splits a declared function type by hand: the comma in
@@ -1280,6 +1368,11 @@ kept because a negative result that was believed for two revisions is more
 dangerous than an open bug, and deleting one invites the same probe again.
 
 ### "An inline function declaration is grounded" — only if it mentions nothing streamed
+
+Since v2.2.0 two more closures are unknown rather than grounded: one over a
+quantified range variable bound to streamed nodes, and one calling `current()`
+or `current#0`. Read literally, §19.8.8.16 grounds both; withholding the verdict
+keeps execution from trusting it without refusing anything.
 
 Three §19.8.8 expression rules were proposed with code to implement them, and
 reading the Recommendation first changed two of them.

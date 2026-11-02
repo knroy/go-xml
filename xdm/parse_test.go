@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"unsafe"
+
+	"github.com/knroy/go-xml/v2/internal/xdmclone"
 )
 
 func TestParseBasicTree(t *testing.T) {
@@ -571,4 +573,44 @@ func TestTextRunPieces(t *testing.T) {
 			t.Errorf("%.40q: %d text nodes %.40q, want one %.40q", c.doc, len(kids(a)), got, c.want)
 		}
 	}
+}
+
+// TestFullChunksPaired pins the footprint of full record chunks. One full
+// chunk is 20480 B; with the runtime's 8-byte malloc header it falls in the
+// 21760 B size class and wastes 5%. From pairFrom on, chunks are allocated in
+// pairs (40960 B, whole pages, no header), so the two halves of a pair must be
+// adjacent in memory and each capped at chunkMax. The same holds for a copy.
+func TestFullChunksPaired(t *testing.T) {
+	if unsafe.Sizeof(Node{}) != 40 {
+		t.Skip("pinned for the 40-byte record")
+	}
+	if 2*chunkMax*40%8192 != 0 {
+		t.Fatalf("a chunk pair is %d B, not whole 8 KiB pages", 2*chunkMax*40)
+	}
+	n := (growingTotal + (pairFrom+4)*chunkMax) // elements: past pairFrom + 2 pairs
+	doc := "<r>" + strings.Repeat("<e/>", n) + "</r>"
+	tree, err := ParseString(doc, ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(name string, tr *Tree) {
+		t.Helper()
+		pairs := 0
+		for k := chunkMaxLog + 1 + pairFrom; k+1 < len(tr.chunks); k += 2 {
+			a, b := tr.chunks[k], tr.chunks[k+1]
+			if cap(a) != chunkMax || len(b) != chunkMax {
+				t.Fatalf("%s: chunk %d len/cap %d/%d, want %d", name, k, len(a), cap(a), chunkMax)
+			}
+			if uintptr(unsafe.Pointer(&b[0]))-uintptr(unsafe.Pointer(&a[0])) != chunkMax*40 {
+				t.Fatalf("%s: chunks %d and %d are not one allocation", name, k, k+1)
+			}
+			pairs++
+		}
+		if pairs < 2 {
+			t.Fatalf("%s: %d chunk pairs, want at least 2", name, pairs)
+		}
+	}
+	check("parse", tree)
+	cp := cloneSubtree(tree.Root, xdmclone.Options{})(tree.Root)
+	check("clone", cp.tree)
 }

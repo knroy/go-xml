@@ -41,6 +41,15 @@ type analyzer struct {
 	// implementation rather than a fact about the stylesheet.
 	known bool
 
+	// unverified is set where the verdict rests on a declaration whose own
+	// check did not positively pass, or that another module could override;
+	// trust verifies declarations on demand, and is nil on the refusal paths,
+	// which never read the bit. See streamtrust.go. The bit travels exactly
+	// as known does: every analyzer derived from this one starts from it and
+	// merges it back.
+	unverified bool
+	trust      *declTrust
+
 	// funcs indexes the stylesheet's own xsl:function declarations, so that
 	// a call on one can be assessed under §19.8.5 instead of abandoning the
 	// enclosing construct. Nil when no declarations were collected, which
@@ -349,6 +358,8 @@ func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
 		ctxPosture:            a.ctxPosture,
 		ctxAllowsChildren:     a.ctxAllowsChildren,
 		known:                 a.known,
+		unverified:            a.unverified,
+		trust:                 a.trust,
 		funcs:                 a.funcs,
 		streamingParam:        a.streamingParam,
 		paramCategory:         a.paramCategory,
@@ -366,6 +377,7 @@ func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
 	}
 	p := inner.expr(e)
 	a.known = a.known && inner.known
+	a.unverified = a.unverified || inner.unverified
 	return operand{
 		props:          p,
 		usage:          u,
@@ -479,6 +491,8 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 			ctxPosture:            cur.posture,
 			ctxAllowsChildren:     a.allowsChildren(x.Base),
 			known:                 a.known,
+			unverified:            a.unverified,
+			trust:                 a.trust,
 			funcs:                 a.funcs,
 			streamingParam:        a.streamingParam,
 			paramCategory:         a.paramCategory,
@@ -496,6 +510,7 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 		}
 		pp := inner.expr(p)
 		a.known = a.known && inner.known
+		a.unverified = a.unverified || inner.unverified
 		if pp.sweep != sweepMotionless {
 			return roamingFreeRanging
 		}
@@ -538,6 +553,8 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 			ctxPosture:            base.posture,
 			ctxAllowsChildren:     stepAllowsChildren(s),
 			known:                 a.known,
+			unverified:            a.unverified,
+			trust:                 a.trust,
 			funcs:                 a.funcs,
 			streamingParam:        a.streamingParam,
 			paramCategory:         a.paramCategory,
@@ -555,6 +572,7 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 		}
 		pp := inner.expr(p)
 		a.known = a.known && inner.known
+		a.unverified = a.unverified || inner.unverified
 		if pp.sweep != sweepMotionless {
 			return roamingFreeRanging
 		}
@@ -626,6 +644,8 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 				ctxPosture:            cur.posture,
 				ctxAllowsChildren:     curAllowsChildren,
 				known:                 a.known,
+				unverified:            a.unverified,
+				trust:                 a.trust,
 				funcs:                 a.funcs,
 				streamingParam:        a.streamingParam,
 				paramCategory:         a.paramCategory,
@@ -644,6 +664,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 			next = inner.expr(e)
 			curAllowsChildren = inner.allowsChildren(e)
 			a.known = a.known && inner.known
+			a.unverified = a.unverified || inner.unverified
 		}
 		if !next.streamable() {
 			prefix := x.Steps[:i+1]
@@ -760,6 +781,7 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 				ctxPosture:            postureStriding,
 				ctxAllowsChildren:     stepAllowsChildren(s),
 				known:                 true,
+				trust:                 a.trust,
 				funcs:                 a.funcs,
 				streamingParam:        a.streamingParam,
 				paramCategory:         a.paramCategory,
@@ -776,6 +798,7 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 				decl:                  a.decl,
 			}
 			sw := inner.expr(p).sweep
+			a.unverified = a.unverified || inner.unverified
 			if !inner.known {
 				// The predicate holds something this analysis does not
 				// model, so "not a scanning expression" is a statement
@@ -993,6 +1016,9 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		if arg := a.expr(x.Args[0]); arg.sweep != sweepMotionless {
 			return props{postureGrounded, sweepFreeRanging}
 		}
+		if !a.trust.accumulatorVerified(a.decl, x.Args[0]) {
+			a.unverified = true
+		}
 		sw, ok := accumulatorAfterSweep(a.accumAfter, a.ctxPosture, a.ctxAllowsChildren)
 		if !ok {
 			return a.unknown()
@@ -1010,6 +1036,11 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 	if x.Name.Local == "accumulator-before" && len(x.Args) == 1 {
 		if arg := a.expr(x.Args[0]); arg.sweep != sweepMotionless {
 			return roamingFreeRanging
+		}
+		// Grounded because the accumulator is streamable: the trust that
+		// rests on its declaration.
+		if !a.trust.accumulatorVerified(a.decl, x.Args[0]) {
+			a.unverified = true
 		}
 		return groundedMotionless
 	}

@@ -56,7 +56,7 @@ type valueOfInstr struct {
 func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	var seq xdm.Sequence
 	if i.sel != nil {
-		v, err := i.sel.Eval(rt.ctx)
+		v, err := rt.evalSelect(i, i.sel)
 		if err != nil {
 			return err
 		}
@@ -139,7 +139,7 @@ func (i *sequenceInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if i.sel == nil {
 		return execSequence(i.body, rt, out)
 	}
-	seq, err := i.sel.Eval(rt.ctx)
+	seq, err := rt.evalSelect(i, i.sel)
 	if err != nil {
 		return err
 	}
@@ -194,7 +194,7 @@ type copyOfInstr struct {
 }
 
 func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
-	seq, err := i.sel.Eval(rt.ctx)
+	seq, err := rt.evalSelect(i, i.sel)
 	if err != nil {
 		return err
 	}
@@ -1664,6 +1664,16 @@ type forEachInstr struct {
 }
 
 func (i *forEachInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if f := rt.burstsFor(i); f != nil {
+		pos := 0
+		return f.read(func(it xdm.Item) error {
+			if err := rt.ctx.Err(); err != nil {
+				return err
+			}
+			pos++
+			return execSequence(i.body, rt.withCurrent(it, pos, 0).clearCurrentRule(), out)
+		})
+	}
 	seq, err := i.sel.Eval(rt.ctx)
 	if err != nil {
 		return err

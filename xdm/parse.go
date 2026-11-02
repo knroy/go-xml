@@ -126,6 +126,9 @@ type ParseOptions struct {
 	// It is unexported for the same reason as the two fields above: it
 	// describes this parse's place in a larger document, not a knob.
 	entityBudget *entityBudget
+
+	// bursts, when set, makes this parse ParseBursts: see bursts.go.
+	bursts *burster
 }
 
 // Limits applied when the corresponding ParseOptions field is zero.
@@ -312,6 +315,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	var ns nsScope
 	var names nameCache
 	depth := 0
+	bs := opts.bursts
 	sawRoot := false
 	sawDecl := false
 	standalone := false // the XML declaration said standalone="yes"
@@ -365,6 +369,9 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		// tag, a new sibling -- can look at it.
 		if _, text := tok.(*xml.CharData); !text {
 			run.flush(&spaces, stripSpaceAt)
+			if bs != nil {
+				bs.trimLeaves(cur, depth, &spaces, &names)
+			}
 		}
 
 		// Each token points into the decoder and is copied out here; it is
@@ -411,6 +418,10 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 			if err := validateStartElement(t, &ns, dec.IsVersion11()); err != nil {
 				return nil, err
 			}
+			if bs != nil && cur == tree.Root {
+				bs.marks = append(bs.marks[:0], markOf(tree))
+				bs.v11 = dec.IsVersion11()
+			}
 			el, decls := buildElement(t, cur, &ns, &names)
 			if off := encodeOffset(start, trackPos); off != 0 {
 				el.setOffset(off)
@@ -444,6 +455,9 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 					maxNodes, ErrResourceLimit)
 			}
 			cur = el
+			if bs != nil {
+				bs.start(el, depth)
+			}
 
 		case *xml.EndElement:
 			t := *tok
@@ -465,8 +479,14 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 			// must not be gated on a strip-space declaration existing.
 			tree.closeLast()
 			ns.pop(len(cur.frame()))
+			closed := cur
 			cur = cur.Parent()
 			depth--
+			if bs != nil {
+				if err := bs.end(closed, depth+1, &spaces, &names); err != nil {
+					return nil, err
+				}
+			}
 
 		case *xml.CharData:
 			t := *tok
@@ -485,6 +505,9 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		case *xml.Comment:
 			t := *tok
 			sawPrologToken = true
+			if bs != nil && cur == tree.Root {
+				continue // a burst's tree holds no prolog (see bursts.go)
+			}
 			c := cur.appendChild(KindComment)
 			c.v0, c.v1 = tree.text.addBytes(t, 0)
 
@@ -509,6 +532,9 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 				return nil, fmt.Errorf("parse XML: processing-instruction target %q contains a colon", t.Target)
 			}
 			sawPrologToken = true
+			if bs != nil && cur == tree.Root {
+				continue
+			}
 			pi := cur.appendChild(KindPI)
 			pi.name = tree.intern(QName{Local: t.Target})
 			pi.v0, pi.v1 = tree.text.addBytes(t.Inst, 0)
@@ -996,17 +1022,36 @@ func (r *textRun) flush(spaces *spaceTable, strip func(*Node) bool) {
 // every repeat.
 type spaceTable struct {
 	m     map[string][2]uint32
-	byLen [maxSpaceLen + 1][2]uint32
+	byLen *[maxSpaceLen + 1][2]uint32 // made past few, so a small tree does not pay for it
+	few   [spaceFew][2]uint32         // the first distinct values, until byLen is made
+	nFew  uint8
+	// noMap keeps m unmade: ParseBursts empties the table at every burst.
+	noMap bool
 }
 
 const (
 	maxSpaceTable = 256
 	maxSpaceLen   = 128
+	spaceFew      = 4 // distinct values shared before the length table is made
 )
 
 func (t *spaceTable) text(s *textStore, b []byte) (uint32, uint32) {
 	if len(b) > maxSpaceLen || !onlySpace(b) {
 		return s.addBytes(b, 0)
+	}
+	if t.byLen == nil {
+		for _, r := range t.few[:t.nFew] {
+			if s.str(r[0], r[1]) == string(b) {
+				return r[0], r[1]
+			}
+		}
+		if t.nFew < spaceFew {
+			off, n := s.addBytes(b, 0)
+			t.few[t.nFew] = [2]uint32{off, n}
+			t.nFew++
+			return off, n
+		}
+		t.byLen = new([maxSpaceLen + 1][2]uint32)
 	}
 	if r := t.byLen[len(b)]; r[1] != 0 && s.str(r[0], r[1]) == string(b) {
 		return r[0], r[1]
@@ -1018,7 +1063,7 @@ func (t *spaceTable) text(s *textStore, b []byte) (uint32, uint32) {
 	off, n := s.addBytes(b, 0)
 	r := [2]uint32{off, n}
 	t.byLen[len(b)] = r
-	if len(t.m) < maxSpaceTable {
+	if len(t.m) < maxSpaceTable && !t.noMap {
 		if t.m == nil {
 			t.m = map[string][2]uint32{}
 		}

@@ -714,6 +714,25 @@ func (rt *runtime) noteCopiedAccumulators(orig, copy *xdm.Node) {
 	pair(orig, copy)
 }
 
+// newAccumOrigin is the copy-to-original table of a runtime for s, or nil when
+// nothing can ever read it.
+//
+// §18.2.2 makes an accumulator applicable to a copy made by fn:copy-of,
+// fn:snapshot or xsl:copy-of with copy-accumulators="yes" "if and only if it
+// is applicable to" the original's tree, and §18.2.10 gives the copy the
+// original's values. Both presuppose an accumulator: a stylesheet none of whose
+// packages declares one -- every package files its declarations in
+// s.accumulators -- has no name accumulator-before or accumulator-after can
+// resolve, so the table would only hold every copied node, and its original,
+// alive until the transform ends. That was 830 MB of peak heap for a streamed
+// 10 MB input taking copy-of(.) of each record.
+func newAccumOrigin(s *Stylesheet) map[*xdm.Node]*xdm.Node {
+	if len(s.accumulators) == 0 {
+		return nil
+	}
+	return map[*xdm.Node]*xdm.Node{}
+}
+
 // accumulatorOrigin follows a node back to the node it was copied from, or
 // returns it unchanged. The chain is followed to its end so that a copy of a
 // copy still answers with the original's value.

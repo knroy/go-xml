@@ -40,8 +40,8 @@ func TestInScopeNamespaceBindings(t *testing.T) {
 	if k != 1 {
 		t.Errorf("break did not stop the iteration")
 	}
-	if len(tr.side) != 0 {
-		t.Errorf("iterating made %d namespace nodes", len(tr.side))
+	if tr.side != nil {
+		t.Errorf("iterating made %d namespace nodes", len(tr.side.m))
 	}
 	if a := testing.AllocsPerRun(10, func() {
 		for range r.InScopeNamespaceBindings() {

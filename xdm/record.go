@@ -145,7 +145,7 @@ type Tree struct {
 
 	// Namespace nodes, made on demand.
 	sideMu sync.Mutex
-	side   map[sideKey]*Node
+	side   *sideTable
 }
 
 // treeSource is the part of a Tree that parsing fills in (see Tree.source).
@@ -309,7 +309,9 @@ func recentSlots(v *typingNames) uint64 {
 // The cap keeps every chunk a small-object allocation (at most 32 KB): a
 // larger one is allocated and freed as whole pages, which the runtime hands
 // back to the OS and faults in again, and on macOS that round trip costs more
-// than the parse saves.
+// than the parse saves. A large tree's full chunks are the exception: past
+// pairFrom they come two to an allocation (see appendChunk), five pages that
+// the malloc header would otherwise pad by 6%, and measured no slower.
 const (
 	chunkFirst   = 4
 	chunkMaxLog  = 7 // 4<<7 = 512
@@ -333,6 +335,23 @@ func chunkOf(i uint32) (k int, off uint32) {
 	return chunkMaxLog + 1 + int(j/chunkMax), j % chunkMax
 }
 
+// pairFrom is the first full chunk (counted from 0) that is allocated in a
+// pair; before it a tree stays small.
+const pairFrom = 8
+
+// appendChunk appends chunk k to cs. A full chunk is 20480 B, which the runtime
+// pads to 21760 B once it adds its 8-byte malloc header; two together are 40960
+// B, a large object of exactly five pages with no header and no padding. The
+// pair is allocated only if chunk k+1 is wanted (k < last), and each chunk is
+// capped so it still looks like a separate allocation.
+func appendChunk(cs [][]Node, k, last int) [][]Node {
+	if b := k - chunkMaxLog - 1; b >= pairFrom && b%2 == 0 && k < last {
+		s := make([]Node, 2*chunkMax)
+		return append(cs, s[:chunkMax:chunkMax], s[chunkMax:])
+	}
+	return append(cs, make([]Node, chunkLen(k)))
+}
+
 // rec returns the record at index i.
 func (t *Tree) rec(i uint32) *Node {
 	k, off := chunkOf(i)
@@ -344,7 +363,7 @@ func (t *Tree) alloc() *Node {
 	i := t.n
 	k, off := chunkOf(i)
 	if k == len(t.chunks) {
-		t.chunks = append(t.chunks, make([]Node, chunkLen(k)))
+		t.chunks = appendChunk(t.chunks, k, 1<<30)
 	}
 	t.n++
 	r := &t.chunks[k][off]
@@ -1470,7 +1489,7 @@ func (n *Node) sideNode(frame, index, owner uint32, slot int) *Node {
 	key := sideKey{n.self, prefix}
 	t.sideMu.Lock()
 	defer t.sideMu.Unlock()
-	if s, ok := t.side[key]; ok {
+	if s := t.sideLive(key); s != nil {
 		return s
 	}
 	// The slot places the node among n's others, by prefix, for document
@@ -1484,14 +1503,9 @@ func (n *Node) sideNode(frame, index, owner uint32, slot int) *Node {
 			}
 		}
 	}
-	s := &Node{tree: t, kind: uint8(KindNamespace), flags: fSide,
-		self: uint32(len(t.side)), parent: n.self, end: uint32(slot), prev: owner,
-		v0: frame, v1: index}
-	if t.side == nil {
-		t.side = map[sideKey]*Node{}
-	}
-	t.side[key] = s
-	return s
+	return t.sideAdd(key, Node{tree: t, kind: uint8(KindNamespace), flags: fSide,
+		self: t.sideSeq(), parent: n.self, end: uint32(slot), prev: owner,
+		v0: frame, v1: index})
 }
 
 // --- Identity and order ---------------------------------------------------
@@ -1678,9 +1692,29 @@ type textStore struct {
 	blocks [][]byte
 	cur    int32 // the ordinary block values are appended to, + 1 (0: none)
 	size   int32 // capacity of the last ordinary block made
+	// aux holds what few trees use, behind one pointer so that the store
+	// stays the size it was.
+	aux *textAux
+}
+
+type textAux struct {
 	// shared maps a string registered by share to where it is stored, so that
 	// add hands the same range to every value that is that string.
 	shared map[sharedKey][2]uint32
+	// ws shares one stored value among the whitespace-only values add is
+	// given, as a parse does.
+	ws spaceTable
+	// lent holds the blocks of another tree's store that planFrom named, keyed
+	// by address (a block is pinned by this store once it is borrowed, so its
+	// address cannot be reused while its entry says where it sits here).
+	lent map[uintptr]*lendState
+	// lastKey/last cache the previous lookup; copies run in document order.
+	lastKey uintptr
+	last    *lendState
+}
+
+type lendState struct {
+	idx int32 // index in this store of the borrowed block, + 1 (0: not borrowed yet)
 }
 
 // sharedKey identifies a string by where it lives: the same storage is the
@@ -1716,8 +1750,16 @@ func (s *textStore) add(v string) (uint32, uint32) {
 	if v == "" {
 		return 0, 0
 	}
-	if s.shared != nil && len(v) >= shareMin {
-		if r, ok := s.shared[sharedKey{unsafe.StringData(v), len(v)}]; ok {
+	if len(v) <= maxSpaceLen {
+		if b := unsafe.Slice(unsafe.StringData(v), len(v)); onlySpace(b) {
+			if s.aux == nil {
+				s.aux = new(textAux)
+			}
+			return s.aux.ws.text(s, b)
+		}
+	}
+	if s.aux != nil && len(v) >= shareMin {
+		if r, ok := s.aux.shared[sharedKey{unsafe.StringData(v), len(v)}]; ok {
 			return r[0], r[1]
 		}
 	}
@@ -1739,14 +1781,115 @@ func (s *textStore) share(v string) {
 	if len(v) < shareMin {
 		return
 	}
-	if s.shared == nil {
-		s.shared = map[sharedKey][2]uint32{}
+	if s.aux == nil {
+		s.aux = new(textAux)
+	}
+	if s.aux.shared == nil {
+		s.aux.shared = map[sharedKey][2]uint32{}
 	}
 	k := sharedKey{unsafe.StringData(v), len(v)}
-	if _, ok := s.shared[k]; !ok {
+	if _, ok := s.aux.shared[k]; !ok {
 		off, n := s.add(v)
-		s.shared[k] = [2]uint32{off, n}
+		s.aux.shared[k] = [2]uint32{off, n}
 	}
+}
+
+// addFrom stores the value at (off, n) of src, the store of another tree, as
+// add would store its string, except that a block planFrom named is borrowed:
+// the range names src's block instead of a copy of the bytes. A borrowed
+// block is the source's slice with its capacity clipped to its length, so
+// nothing is ever appended into it from here, and the source only appends past
+// that length; the bytes below it never change. Borrowing pins the whole
+// block, but planFrom names only blocks the copy is about to fill by half or
+// more, so the pinned bytes are at most twice the copy's own.
+func (s *textStore) addFrom(src *textStore, off, n uint32) (uint32, uint32) {
+	if n == 0 {
+		return 0, 0
+	}
+	if s.aux == nil || len(s.aux.lent) == 0 || s == src || n >= textOwnFrom {
+		return s.add(src.str(off, n))
+	}
+	blk := src.blocks[off>>textShift]
+	// Whitespace goes through add's table, as it does for a parse.
+	if n <= maxSpaceLen && onlySpace(blk[off&textMask:][:n]) {
+		return s.add(src.str(off, n))
+	}
+	l := s.lend(blk, false)
+	if l == nil {
+		return s.add(src.str(off, n))
+	}
+	if l.idx == 0 {
+		// The store's block numbers must not run out for want of room to copy
+		// into, so a store this full stops borrowing.
+		if len(s.blocks) >= 1<<(31-textShift) {
+			return s.add(src.str(off, n))
+		}
+		s.newBlock(blk[:len(blk):len(blk)])
+		l.idx = int32(len(s.blocks))
+	}
+	if int(off&textMask)+int(n) > len(s.blocks[l.idx-1]) {
+		return s.add(src.str(off, n)) // stored after the block was borrowed
+	}
+	return uint32(l.idx-1)<<textShift | off&textMask, n
+}
+
+// planFrom tells the store that the leaves of src's records [lo, hi), a deep
+// copy about to be made with addFrom, are to borrow every block they fill by
+// half or more. The count skips the whitespace-only values addFrom stores
+// through add. A subtree too small for the walk to repay itself borrows
+// nothing: a block a few values of it touch is not worth pinning.
+func (s *textStore) planFrom(t *Tree, lo, hi uint32) {
+	if hi-lo < planMin || s == &t.text {
+		return
+	}
+	counts := make([]int32, len(t.text.blocks))
+	for i := lo; i < hi; i++ {
+		r := t.rec(i)
+		if r.v1 == 0 || !r.isLeaf() || r.flags&fSide != 0 {
+			continue
+		}
+		b := t.text.blocks[r.v0>>textShift][r.v0&textMask:][:r.v1]
+		if len(b) > maxSpaceLen || !onlySpace(b) {
+			counts[r.v0>>textShift] += int32(len(b))
+		}
+	}
+	for k, c := range counts {
+		if blk := t.text.blocks[k]; c > 0 && 2*int(c) >= cap(blk) { // borrowing pins the array
+			s.lend(blk, true)
+		}
+	}
+}
+
+// planMin is the fewest records planFrom walks.
+const planMin = 4096
+
+// lend returns the account of the block blk of another store, made if create.
+func (s *textStore) lend(blk []byte, create bool) *lendState {
+	a := s.aux
+	if a == nil {
+		if !create {
+			return nil
+		}
+		a = new(textAux)
+		s.aux = a
+	}
+	key := uintptr(unsafe.Pointer(unsafe.SliceData(blk)))
+	if l := a.last; l != nil && a.lastKey == key {
+		return l
+	}
+	l := a.lent[key]
+	if l == nil {
+		if !create {
+			return nil
+		}
+		if a.lent == nil {
+			a.lent = map[uintptr]*lendState{}
+		}
+		l = new(lendState)
+		a.lent[key] = l
+	}
+	a.lastKey, a.last = key, l
+	return l
 }
 
 // keep stores b, which nothing else writes to, as a block of its own.

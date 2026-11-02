@@ -49,6 +49,9 @@ type sourceDocumentInstr struct {
 	// expression -- a per-element property, not a per-module one. Taking the
 	// module's base instead ignored xml:base, which non-stream-004 catches.
 	baseURI string
+	// bursts is the plan for running the body without building the
+	// document, when it qualifies; see streamburst.go.
+	bursts *burstPlan
 }
 
 func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
@@ -66,12 +69,24 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	if err != nil {
 		return nil, err
 	}
+	var plan *burstPlan
+	if isYes(n.AttrValue("streamable")) {
+		// A module other than the principal one, or a principal that pulls
+		// in others, is not the whole stylesheet.
+		plan = planBursts(n, n.Root() != c.sheet.source)
+	}
+	outer := c.burst
+	c.burst = plan
 	body, err := c.compileSequence(n, n)
+	c.burst = outer
 	if err != nil {
 		return nil, err
 	}
+	if plan != nil && plan.instr == nil {
+		plan = nil // the loop was not compiled (use-when)
+	}
 	instr := &sourceDocumentInstr{href: href, validation: spec, body: body,
-		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI}
+		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI, bursts: plan}
 	if n.Attr("", "use-accumulators") != nil {
 		accums, err := parseUseAccumulators(n)
 		if err != nil {
@@ -86,6 +101,11 @@ func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	href, err := i.href.eval(rt)
 	if err != nil {
 		return err
+	}
+	if i.bursts != nil {
+		if done, err := i.executeBursts(rt, out, href); done {
+			return err
+		}
 	}
 	root, err := i.load(rt, href)
 	if err != nil {
@@ -130,19 +150,7 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 			"FODC0002: document access is disabled (no resolver configured): %q",
 			href)
 	}
-	// 18.1 resolves @href as fn:doc does, against the static base URI of the
-	// expression -- the base URI of the xsl:source-document element, which an
-	// xml:base on it or an ancestor may move.
-	base := i.baseURI
-	if base == "" {
-		base = rt.ctx.StaticBaseURI()
-	}
-	if base == "" {
-		if n, ok := rt.ctx.Item.(*xdm.Node); ok {
-			base = n.BaseURI()
-		}
-	}
-	tree, err := resolveDocumentIn(rt.ctx, href, base)
+	tree, err := resolveDocumentIn(rt.ctx, href, i.base(rt))
 	if err != nil {
 		return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", href, err)
 	}
@@ -161,6 +169,23 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 	// Only the annotations go, which is what makes
 	// "data(.) instance of xs:decimal" false over a validated document.
 	return fragmentOf(rt.sheet.stripInputAnnotations(root), href)
+}
+
+// base is the URI @href resolves against. 18.1 resolves @href as fn:doc
+// does, against the static base URI of the expression -- the base URI of the
+// xsl:source-document element, which an xml:base on it or an ancestor may
+// move.
+func (i *sourceDocumentInstr) base(rt *runtime) string {
+	base := i.baseURI
+	if base == "" {
+		base = rt.ctx.StaticBaseURI()
+	}
+	if base == "" {
+		if n, ok := rt.ctx.Item.(*xdm.Node); ok {
+			base = n.BaseURI()
+		}
+	}
+	return base
 }
 
 // fragmentOf applies the fragment identifier of href, if there is one, to the
