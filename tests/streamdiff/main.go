@@ -44,8 +44,9 @@ import (
 // (M1.5), 576 with the core alone (M1.6, the burst plans retired into it),
 // 606 with streamable modes (M2), 629 with streamed principal input through
 // TransformReader (M2b), 707 with streamed grouping and full xsl:iterate
-// (M3). A stage may only raise it.
-const defaultFloor = 707
+// (M3), 877 with streamed xsl:try, function calls and attribute sets (M6).
+// A stage may only raise it.
+const defaultFloor = 877
 
 func main() {
 	floor := defaultFloor

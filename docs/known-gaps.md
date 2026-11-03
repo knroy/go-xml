@@ -203,7 +203,15 @@ of values (`group-by`, `xsl:sort`) reads its select off the cursor and
 groups as the tree does. `xsl:iterate` carries copies of its items
 (`xsl:next-iteration` with `copy-of(.)`). A consuming attribute value
 template on a literal result element (`<g n="{count(current-group())}"/>`)
-streams. A path
+streams. `xsl:try` streams when its catches read only the start tag (or
+nothing of the document): the body's output is buffered as in tree mode, a
+caught error skips the rest of the context, parsed and checked, and the catch
+runs on the view. A parse error after a caught error is still the document's
+error. Calls on stylesheet functions split as their bodies when the call is
+its body exactly (one `xsl:sequence`, focus free, the arguments `.`, a path or
+literals of the parameter types, a result type the body certainly has);
+recursive bodies stay on the tree. `P ! R` of atomic values is the path
+`P/R`. Streamable attribute sets run on the view. A path
 is child or descendant steps by name, wildcard or kind (`doc/rec`, `//rec`,
 `/*/*/rec`, `*:rec`, `p:*`, names resolved through `xpath-default-namespace`),
 optionally under `outermost()`/`innermost()`, with motionless or positional
@@ -246,7 +254,14 @@ Figures for the core, on this machine:
   against the tree's 1.04 s and 590 MB; 1 GB in 12.0 s and 158 MB against
   13.6 s and 6.0 GB. group-starting-with copying the ERROR entries of each
   run: 100 MB in 2.1 s and 82 MB against 1.4 s and 622 MB; 1 GB in 20.2 s and
-  890 MB against 19.7 s and 6.2 GB (the heap is the output).
+  890 MB against 19.7 s and 6.2 GB (the heap is the output);
+- an absorbing function per record in a sum (`sum(/doc/rec ! p:cd(.))`):
+  100 MB in 2.45 s and 2.8 MB against 2.39 s and 1,045 MB; 1 GB in 30.2 s and
+  3.1 MB against 39.2 s and 11.1 GB;
+- `xsl:try` around a for-each writing an element per record: 100 MB in 5.5 s
+  and 361 MB against 3.6 s and 1,226 MB (the loop alone is 1.8×; the try adds
+  about 11%); 1 GB in 61 s and 3.4 GB against 57 s and 11.6 GB (the heap is
+  the output, held twice at the end as the tree's try holds it).
 
 On flat documents the core costs 1.2–1.8× the tree's CPU (each match is a
 coroutine round trip on the cursor); on deep ones 0.14–1.5×.
@@ -256,19 +271,25 @@ the document node (it would hold more than the tree); `xsl:apply-templates`
 over a select that is not a bare path, or in a sequence-typed variable; a
 pattern a view cannot decide (positional, reading content, `id()`/`key()`,
 `text()` below a step); paths whose tail climbs; kept text, comment or processing-instruction nodes;
-union/intersect/except; `xsl:try`, `xsl:fork`,
+union/intersect/except; `xsl:fork`,
 `xsl:result-document`; `last()`, `reverse`, `sort`, user functions;
 `group-by` or `xsl:sort` over a streamed population (§19.8.4.19 makes them
 free-ranging); a grouping population that is not child steps (`//`,
 `outermost()`, attributes, text); a grouping over a grounded population of
 copies (`t/copy-of()`: their order across their own trees is not the tree's);
-a key or pattern a view cannot decide.
+a key or pattern a view cannot decide; an `xsl:try` where the stream could
+meet another error first than the tree (two parts of a select that may fail,
+a loop whose select may fail, `xsl:apply-templates` or grouping in its body),
+a consuming catch (no W3C case has one), `rollback-output="no"`; a call on a
+stylesheet function that is not its body exactly (a conversion that may fail,
+a recursive body, a global variable, a cache), or in an instruction the core
+checks on the view.
 
-In the W3C XSLT 3.0 run 707 cases stream (9 before the second burst shape,
+In the W3C XSLT 3.0 run 877 cases stream (9 before the second burst shape,
 364 before `//` record paths, 450 before the core, 576 before streamable
-modes, 606 before `TransformReader`, 629 before grouping). 27 of the 225
+modes, 606 before `TransformReader`, 629 before grouping, 707 before `xsl:try` and functions). 27 of the 225
 cases with a streamed principal input stream; the rest need accumulators,
-`xsl:fork`, `xsl:try` or streamable functions, or their mode is not verified.
+`xsl:fork`, constructs still refused above, or their mode is not verified.
 Also:
 
 - **The result is still built in memory**, so a large filtered copy grows with
