@@ -44,6 +44,9 @@ func (t Target) String() string {
 }
 
 type Runner struct {
+	// output, while checkOutput runs a case again, is where the principal
+	// result is streamed (TransformOptions.Output).
+	output io.Writer
 	// Root is the suite checkout.
 	Root string
 	// Target is the version measured. The zero value is XSLT 2.0, so an
@@ -218,6 +221,7 @@ func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
 
 	markStreams()
 	res, terr := r.transformSafely(set, tc)
+	rawErr := terr
 
 	// A failure that is really an engine limitation the suite does not
 	// declare as a feature is reported as out of scope rather than as a
@@ -257,6 +261,7 @@ func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
 	}
 
 	r.recordCase(set, tc, res, terr)
+	r.checkOutput(set, tc, res, rawErr)
 
 	// The schema the environment declares is part of the static context the
 	// assertions are evaluated in, exactly as it is for the stylesheet.
@@ -731,8 +736,10 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 			return nil, err
 		}
 		opts.SourceParseOptions = streamOpts
+		opts.Output = r.output
 		return ss.TransformReader(ctx, strings.NewReader(string(stripBOM(data))), opts)
 	}
+	opts.Output = r.output
 	return ss.Transform(ctx, src, opts)
 }
 

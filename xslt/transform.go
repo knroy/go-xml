@@ -9,6 +9,7 @@ import (
 	"time"
 	"weak"
 
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -91,7 +92,9 @@ type TransformOptions struct {
 	// correct stream whose state stays flat runs over any input, while one
 	// whose carried state grows is refused once that state crosses the bound.
 	// Only the first 4,096 nodes an item drops are handed back unless
-	// MaxNodesBuilt is set; see there.
+	// MaxNodesBuilt is set; see there. With Output set, the principal
+	// result's nodes are handed back as they are written, so what counts is
+	// the part of the result still held.
 	MaxNodes int
 
 	// MaxBytes bounds the string content the transform holds, in bytes, on
@@ -247,6 +250,28 @@ type TransformOptions struct {
 	// Transform ignores them: its source is already a tree.
 	SourceParseOptions xdm.ParseOptions
 
+	// Output, when set, receives the principal result serialized with the
+	// stylesheet's xsl:output, as Result.Serialize would write it, byte for
+	// byte; the Result's Nodes are then nil and its Tree is nil. The result
+	// is written as it is produced, so the transform holds only what it has
+	// not yet been able to write, and MaxNodes bounds the result-tree nodes
+	// held rather than all those built. Some results are written only once
+	// the transform has finished, held as they are without Output: those
+	// with a json or adaptive output method, build-tree="no", an
+	// item-separator, a normalization-form, a doctype or standalone
+	// declaration, a parameter-document, HTML5's html or xhtml method, or an
+	// output method chosen from the result before its first element. Output
+	// under an xsl:try that may roll back is held until the try completes,
+	// and under indent="yes" an element whose content is to be indented is
+	// held until it ends (see docs/known-gaps.md).
+	//
+	// The returned error is the one a transform followed by
+	// Result.Serialize would report: the transform's, else the
+	// serialization's. Output written before an error cannot be taken back,
+	// so Output may have received part of the result when an error is
+	// returned. Output is not closed.
+	Output io.Writer
+
 	// nestedDepth seeds the runtime's recursion depth, so that a transform
 	// started by fn:transform continues its caller's count instead of
 	// starting a fresh one. It is unexported because it is not a caller's
@@ -326,6 +351,9 @@ type Result struct {
 	BaseURI string
 	// output carries the stylesheet's serialisation settings.
 	output OutputSettings
+	// streamed marks a result written to TransformOptions.Output, which
+	// has no tree.
+	streamed bool
 }
 
 // Transform applies the stylesheet to a source document.
@@ -605,6 +633,12 @@ func (s *Stylesheet) transform(ctx context.Context, source *xdm.Node, opts Trans
 	rt = rt.withOutputURI(opts.BaseOutputURI)
 
 	out := newOutputBuilder(rt)
+	var so *streamOut
+	if opts.Output != nil {
+		so = newStreamOut(rt, opts.Output, s.output, s.activeCharMap)
+		xdmsink.Attach(out, so)
+		defer so.flush()
+	}
 
 	// rawResult carries the initial function's return value, which is a
 	// sequence rather than a tree. It is kept beside the output builder
@@ -765,7 +799,7 @@ func (s *Stylesheet) transform(ctx context.Context, source *xdm.Node, opts Trans
 	// here rather than in the instruction because the ordering is not fixed:
 	// the implicit content may be written either side of the instruction, and
 	// only at the end is it known that both happened.
-	if *rt.baseURIUsed && len(out.Sequence()) > 0 {
+	if *rt.baseURIUsed && xdmsink.Items(out) > 0 {
 		return nil, fmt.Errorf(
 			"XTDE1490: two result documents were written to the base output " +
 				"URI: the principal result tree and an xsl:result-document " +
@@ -813,6 +847,15 @@ func (s *Stylesheet) transform(ctx context.Context, source *xdm.Node, opts Trans
 	if haveRaw {
 		nodes = rawResult
 	}
+	if so != nil {
+		// The settings the parameter document gave the result, which a
+		// result held to the end is written with.
+		so.opts, so.charMap = output, charMap
+		if err := xdmsink.Finish(out, nodes); err != nil {
+			return nil, err
+		}
+		nodes = nil
+	}
 
 	return &Result{
 		Nodes:     nodes,
@@ -821,6 +864,7 @@ func (s *Stylesheet) transform(ctx context.Context, source *xdm.Node, opts Trans
 		Secondary: *rt.secondary,
 		output:    output,
 		charMap:   charMap,
+		streamed:  so != nil,
 	}, nil
 }
 
@@ -1447,7 +1491,8 @@ func (r *Result) BuildsTree() bool {
 
 // Tree returns the result as a document node, for callers that want to keep
 // navigating it rather than serialise it — which is what a Schematron driver
-// does with an SVRL report.
+// does with an SVRL report. It is nil for a result written to
+// TransformOptions.Output, which keeps no tree.
 func (r *Result) Tree() *xdm.Node {
 	// Section 24.1 defines what build-tree="yes" means: "a document node is
 	// created, and the result of evaluating the sequence constructor is used
@@ -1459,7 +1504,7 @@ func (r *Result) Tree() *xdm.Node {
 	// the attribute to "the raw principal result or secondary result", so
 	// the principal result is not exempt. Callers distinguish this nil from
 	// an empty result with BuildsTree.
-	if !r.output.buildsTree() {
+	if !r.output.buildsTree() || r.streamed {
 		return nil
 	}
 	tree := xdm.NewTree()

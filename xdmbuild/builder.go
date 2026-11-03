@@ -43,6 +43,12 @@ type Builder struct {
 	// declShared marks declared as a list NoteDeclaredList lent the builder,
 	// which must be copied before an entry is written in place.
 	declShared bool
+	// hold, fr and doc are the streamed output's (sink.go): hold keeps the
+	// element from being opened, fr is the builder's place in the sink's
+	// frames (+1; 0 for none), doc marks a document level.
+	hold bool
+	doc  uint8
+	fr   int32
 
 	// lastAtomic records that the item most recently appended was an atomic
 	// value rather than a node.
@@ -86,6 +92,10 @@ type Builder struct {
 	// refusal inside a deeply nested element is seen by the root: the latch
 	// belongs to the construction, not to one level of it.
 	refused *error
+
+	// sink, when set, streams what this builder builds (sink.go); a builder
+	// StartElement makes shares it.
+	sink *sink
 }
 
 // Refused reports the first budget refusal this construction met, or nil.
@@ -210,6 +220,7 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 	// the result. xsl:sequence is defined to preserve node identity — a
 	// variable declared as="item()*" holding (doc/one, doc/two) must answer
 	// true to "is" against the source nodes — and copying here answered false.
+	b.note(n.Kind(), "")
 	b.items = append(b.items, n)
 }
 
@@ -234,6 +245,7 @@ func (b *Builder) AppendCopyOf(n *xdm.Node) *xdm.Node {
 		return nil
 	case xdm.KindElement, xdm.KindComment, xdm.KindPI:
 		b.lastAtomic = false
+		b.note(n.Kind(), "")
 		c := b.open.AppendCopy(n)
 		Rebase(c, b.open.BaseURI())
 		return c
@@ -342,6 +354,7 @@ func (b *Builder) appendCopy(n *xdm.Node) {
 	if !fresh && !b.countNodes(CountSubtree(n)) {
 		return
 	}
+	b.note(n.Kind(), "")
 	c := b.open.AppendCopy(n)
 	if fresh {
 		// An adopted node kept its type environments; the copy does too.
@@ -411,6 +424,7 @@ func (b *Builder) AppendText(s string) {
 		if !b.countNodes(1) {
 			return
 		}
+		b.note(xdm.KindText, s)
 		b.open.AppendText(s)
 		return
 	}
@@ -424,6 +438,7 @@ func (b *Builder) AppendText(s string) {
 	if !b.countNodes(1) {
 		return
 	}
+	b.note(xdm.KindText, s)
 	b.items = append(b.items, b.newItem(xdm.KindText, xdm.QName{}, s))
 }
 
@@ -440,6 +455,7 @@ func (b *Builder) AppendValue(a *xdm.Atomic) {
 		b.lastAtomic = true
 		return
 	}
+	b.note(0, "")
 	b.items = append(b.items, a)
 	b.lastAtomic = true
 }
@@ -534,6 +550,7 @@ func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
 		if !b.countNodes(1) {
 			return b.Refused()
 		}
+		b.note(xdm.KindAttribute, "")
 		n := b.newItem(xdm.KindAttribute, name, value)
 		n.ApplyTyping(typing)
 		fixupOrphanAttrPrefix(n)
@@ -688,8 +705,22 @@ func (b *Builder) AddNamespace(prefix, uri string) error {
 		if !b.countNodes(1) {
 			return b.Refused()
 		}
+		b.note(xdm.KindNamespace, "")
 		b.items = append(b.items, b.newItem(xdm.KindNamespace, xdm.QName{Local: prefix}, uri))
 		return nil
+	}
+	// A streamed element whose start tag is written cannot take one more
+	// declaration. XSLT 3.0 §5.7.1 makes a namespace node after content
+	// XTDE0410; this builder admits it otherwise, and the streamed output
+	// cannot, so it is refused here and latched like a budget refusal.
+	if b.sink != nil && b.fr != 0 && b.open.FirstChild() != nil {
+		err := b.policy.Err(FaultAttrAfterChild,
+			fmt.Sprintf("namespace node %q added after the element %s has children, "+
+				"whose start tag the streamed output has written", prefix, b.open.Name().Lexical()))
+		if *b.refused == nil {
+			*b.refused = err
+		}
+		return err
 	}
 	// XTDE0440: "the result sequence contains a namespace node with no name
 	// and the element node being constructed has a null namespace URI (that
@@ -870,6 +901,7 @@ func (b *Builder) StartElement(name xdm.QName) *Builder {
 	// nothing further is appended to it.
 	b.countNodes(1)
 	b.lastAtomic = false
+	b.note(xdm.KindElement, "")
 	var el *xdm.Node
 	if b.open != nil {
 		// A constructed element's base URI is its parent's until something
@@ -880,7 +912,7 @@ func (b *Builder) StartElement(name xdm.QName) *Builder {
 		b.items = append(b.items, el)
 	}
 	return &Builder{open: el, parent: b, policy: b.policy,
-		refused: b.refused}
+		refused: b.refused, sink: b.sink}
 }
 
 // ReplaceOpen puts n, a parentless node, in place of the element this builder
@@ -926,6 +958,9 @@ func (b *Builder) Sequence() xdm.Sequence { return b.items }
 // xsl:function as="attribute()" is written that way — and only wrapping the
 // result in a document node makes it wrong.
 func (b *Builder) ToDocument() (*xdm.Node, error) {
+	if b.sink != nil && b.doc == docSeq && b.fr != 0 {
+		return b.sink.toDocument(b)
+	}
 	// A policy that answers nil to this fault is saying the node should be
 	// dropped rather than reported -- the same convention
 	// FaultDuplicateAttribute already uses, where 5.7.1 discards the loser
@@ -1174,6 +1209,7 @@ func (b *Builder) AppendOpaque(it xdm.Item) error {
 				it.TypeName(), b.open.Name().Lexical()))
 	}
 	b.lastAtomic = false
+	b.note(0, "")
 	b.items = append(b.items, it)
 	return nil
 }
