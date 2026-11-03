@@ -373,6 +373,13 @@ func (s *streamV) startElement(f *svFrame, el *xdm.Node, decl *ElementDecl) {
 	if v.schema.Version == Version11 {
 		typ = v.selectAlternativeType(el, decl)
 		f.inherited = v.pushInherited(el, decl)
+		// What a descendant's type alternative reads of them is their name
+		// and value (scopeForAlternative): detached copies, so that no
+		// record of the parse is held past its start tag.
+		for i := len(v.inherited) - f.inherited; i < len(v.inherited); i++ {
+			a := v.inherited[i]
+			v.inherited[i] = xdm.NewNode(xdm.KindAttribute, a.Name(), a.Value())
+		}
 	}
 	if xsiType := el.Attr(NSInstance, "type"); xsiType != nil {
 		t, err := v.resolveXSIType(el, xsiType.Value())

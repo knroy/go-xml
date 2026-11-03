@@ -29,8 +29,8 @@ package xslt
 //
 // Refused when the stylesheet compiles (mergeStreams), the merge then
 // running on the tree: a streamed source whose select the split cannot
-// read, or with use-accumulators, validation, or sort-before-merge="yes"
-// (which holds the input); an action that may ask for last() -- the tree
+// read, or with use-accumulators or sort-before-merge="yes" (which holds
+// the input; a validation is decided per document, streamvalidin.go); an action that may ask for last() -- the tree
 // gives it the number of groups, which a stream knows only at its end --
 // directly or through xsl:call-template or xsl:evaluate, which keep the
 // focus; and an action whose effects a re-run would repeat (xsl:message,
@@ -76,7 +76,7 @@ func mergeStreams(i *mergeInstr, action *xdm.Node) (bool, []int) {
 			}
 			continue
 		}
-		if src.split == nil || src.accums != nil || !src.validation.isDefault() || src.sortBeforeMerge {
+		if src.split == nil || src.accums != nil || src.sortBeforeMerge { // validation: mergeDocOf
 			return false, nil
 		}
 		any = true
@@ -102,7 +102,9 @@ func mergeKeysOneType(i *mergeInstr) ([]int, bool) {
 	for k := range i.sources[0].keyElems {
 		class := ""
 		for _, src := range i.sources {
-			c := mergeKeyClass(src.keyElems[k], src.streamed && src.sourceURIs != nil)
+			// A validated document's nodes are typed: a path's values are
+			// not told by how it is written (streamvalidin.go).
+			c := mergeKeyClass(src.keyElems[k], src.streamed && src.sourceURIs != nil && src.validation.isDefault())
 			if c == "avt" && class == "text" || c == "text" && class == "avt" {
 				// The template must resolve to "text" (runStream checks it),
 				// as the other is written: one type.
@@ -321,6 +323,7 @@ type mergeDoc struct {
 	base  string
 	strip func(*xdm.Node) bool
 	ctx   *xpath.Context // the select's focus: the anchor's position
+	vin   *streamValidation
 }
 
 // runStream is the streamed merge. A posture fault is returned as its error.
@@ -373,7 +376,7 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 			base = rt.ctx.StaticBaseURI()
 		}
 		for a, u := range uris {
-			d, err := mergeDocOf(rt, u, base, unread)
+			d, err := mergeDocOf(rt, u, base, unread, src.validation)
 			if err != nil {
 				return err
 			}
@@ -392,9 +395,13 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 			return i.merge(rt, out, inputs, resolved, colls)
 		}
 		d := docs[j]
-		return d.br.streamDoc(rt.ctx, d.href, d.base, func(c *xdmstream.Cursor) error {
+		return d.stream(rt.ctx, func(c *xdmstream.Cursor) error {
 			if d.strip != nil {
 				c.StripWhitespace(d.strip)
+			}
+			valid := func() error { return nil }
+			if d.vin != nil {
+				valid = d.vin.attach(c, d.strip) // streamvalidin.go
 			}
 			c.Handoff(func() func() { return xpathleaf.LockYield(rt.evalLock) })
 			in := d.in
@@ -412,6 +419,9 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 					}
 					return nil
 				}, nil)
+				if err == nil {
+					err = valid() // the document read to its end
+				}
 				if err != nil && err != errMergeStop {
 					in.err = err
 				}
@@ -436,7 +446,7 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 // wraps around the caller's, as executeStream looks through them (the
 // document recorded as read, for XTDE1500, and its whitespace stripped);
 // errMergeTree when it cannot be streamed.
-func mergeDocOf(rt *runtime, href, base string, unread *[]func()) (*mergeDoc, error) {
+func mergeDocOf(rt *runtime, href, base string, unread *[]func(), spec validationSpec) (*mergeDoc, error) {
 	if validSourceDocumentURI(href) != nil || strings.ContainsRune(href, '#') {
 		return nil, errMergeTree
 	}
@@ -461,8 +471,12 @@ func mergeDocOf(rt *runtime, href, base string, unread *[]func()) (*mergeDoc, er
 			return nil, errMergeTree
 		}
 	}
-	docURI, ok := br.wantsBursts(href, base)
+	vin, ok := spec.streamedValidation(rt, br, href, base, false) // streamvalidin.go
 	if !ok {
+		return nil, errMergeTree
+	}
+	docURI, ok := br.wantsBursts(href, base)
+	if !ok && (vin == nil || !vin.marked) {
 		return nil, errMergeTree
 	}
 	if rd != nil && docURI != "" {
@@ -476,7 +490,7 @@ func mergeDocOf(rt *runtime, href, base string, unread *[]func()) (*mergeDoc, er
 					"has already written", docURI)
 		}
 	}
-	return &mergeDoc{br: br, href: href, base: base, strip: strip}, nil
+	return &mergeDoc{br: br, href: href, base: base, strip: strip, vin: vin}, nil
 }
 
 // advance moves in to its next entry (head nil at its end), checking that

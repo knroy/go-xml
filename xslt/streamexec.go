@@ -1347,7 +1347,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 			return false, nil
 		}
 	}
-	vin, ok := i.validation.streamedValidation(rt, br, href, base) // streamvalidin.go
+	vin, ok := i.validation.streamedValidation(rt, br, href, base, true) // streamvalidin.go
 	if !ok {
 		return false, nil
 	}

@@ -178,8 +178,12 @@ func (s *Stylesheet) transformStream(ctx context.Context, r io.Reader, opts Tran
 	if len(s.strip) > 0 {
 		main.c.StripWhitespace(s.whitespaceStripper(0))
 	}
+	valid := s.validateMain(ctx, main.c) // streamvalidin.go
 	res, err := s.transform(ctx, nil, opts, main)
 	if err == nil {
+		if err := valid(); err != nil {
+			return nil, err
+		}
 		return res, nil
 	}
 	// Parse + Transform reports a malformed document first. A cancelled
@@ -187,6 +191,9 @@ func (s *Stylesheet) transformStream(ctx context.Context, r io.Reader, opts Tran
 	if ctx == nil || ctx.Err() == nil {
 		if perr := main.drain(); perr != nil {
 			return nil, perr
+		}
+		if verr := valid(); verr != nil {
+			return nil, verr
 		}
 		if aerr := main.acc.pending(); aerr != nil {
 			return nil, aerr

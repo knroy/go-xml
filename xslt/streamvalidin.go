@@ -25,14 +25,17 @@ package xslt
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/internal/xsdstream"
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 	"github.com/knroy/go-xml/v2/xsd"
 )
 
@@ -84,20 +87,26 @@ type streamValidation struct {
 	// marked says the resolver holds the tree the harness validated, which
 	// the stream reads again (wantsBursts would decline it).
 	marked bool
+	// strips is input-type-annotations="strip" on an xsl:source-document's
+	// document (stripInputAnnotations), applied once it is validated.
+	strips bool
 }
 
 // streamedValidation says how spec's validation of the document at href is
 // made on the stream: nil for none (validation="strip", the default); ok
 // false when it cannot be, and the tree does it.
-func (spec validationSpec) streamedValidation(rt *runtime, br burstResolver, href, base string) (sv *streamValidation, ok bool) {
+//
+// strips says the caller strips the validated document's annotations when
+// the stylesheet asks (xsl:source-document does; the tree's merge does not).
+func (spec validationSpec) streamedValidation(rt *runtime, br burstResolver, href, base string, strips bool) (sv *streamValidation, ok bool) {
 	if spec.isDefault() {
 		return nil, true
 	}
 	fr, isFile := br.(*FileResolver)
-	if !isFile || rt.sheet.stripTypeAnnotations || fr.prologMayHaveDTD(href, base) {
+	if !isFile || fr.prologMayHaveDTD(href, base) {
 		return nil, false
 	}
-	sv = &streamValidation{pre: fr.preValidation(href, base)}
+	sv = &streamValidation{pre: fr.preValidation(href, base), strips: strips && rt.sheet.stripTypeAnnotations}
 	sv.marked = sv.pre != nil
 	schema := any(nil)
 	if rt.sheet.schema != nil {
@@ -157,12 +166,16 @@ func (sv *streamValidation) attach(c *xdmstream.Cursor, strip func(*xdm.Node) bo
 	if sv.docIDs {
 		ids = &docIDs{owners: map[string]uint64{}}
 	}
+	stripped := error(nil)
 	c.Observe(func(n *xdm.Node, d int, end bool, ord uint64) {
 		for _, v := range vs {
 			v.Observe(n, d, end)
 		}
 		if ids != nil {
 			ids.observe(n, d, end, ord)
+		}
+		if sv.strips && stripped == nil {
+			stripped = stripAnnotationsOf(n, end)
 		}
 	})
 	c.StripWhitespace(validatedStripper(vs, strip, sv.pre != nil))
@@ -172,11 +185,43 @@ func (sv *streamValidation) attach(c *xdmstream.Cursor, strip func(*xdm.Node) bo
 				return fmt.Errorf("XTTE1510: the streamed document is not valid: %w", err)
 			}
 		}
-		if ids != nil {
+		if ids != nil && ids.err != nil {
 			return ids.err
 		}
+		return stripped
+	}
+}
+
+// stripAnnotationsOf is stripAnnotationCopy for n, an element of the parse
+// at its start tag or its end, once the validation has typed it: its typing
+// and its attributes' cleared but for is-id and is-idrefs, no type
+// environment, and xsi:nil taken off the start tag.
+func stripAnnotationsOf(n *xdm.Node, end bool) error {
+	if n == nil || n.Kind() != xdm.KindElement {
 		return nil
 	}
+	strip := func(x *xdm.Node) {
+		x.StripTyping()
+		x.SetTypeEnv(nil)
+	}
+	strip(n)
+	if end {
+		return nil
+	}
+	var nils []*xdm.Node
+	for a := range n.Attrs() {
+		if a.Name().URI == xdm.NSXSI && a.Name().Local == "nil" {
+			nils = append(nils, a)
+			continue
+		}
+		strip(a)
+	}
+	for _, a := range nils {
+		if !xdmburst.RemoveAttr(n, a) {
+			return fmt.Errorf("streaming: xsi:nil cannot be taken off the start tag")
+		}
+	}
+	return nil
 }
 
 // validatedStripper is the cursor's whitespace stripping under validation:
@@ -368,4 +413,52 @@ func groundAtomized(c *xdmstream.Cursor) (xdm.Sequence, error) {
 		return nil, err
 	}
 	return xdm.AtomizeChecked(xdm.One(g))
+}
+
+// A principal input read with TransformReader under a context carrying a
+// schema (xsdstream.WithSource) is validated against it, the document node
+// the root, as the conformance harness validates the tree it hands Transform:
+// on the stream when it streams, with the stylesheet's xsl:strip-space made
+// after the validation (validatedStripper's first); else on the tree.
+
+// mainValidationStreams reports whether the validation ctx asks for, if any,
+// can be made on the stream.
+func mainValidationStreams(ctx context.Context) bool {
+	sch := xsdstream.Source(ctx)
+	return sch == nil || xsdstream.Refusal(sch) == ""
+}
+
+// validatedMain is the principal input root as the validation ctx asks for
+// leaves it: xsd's typed copy of the document. An invalid document is an
+// error.
+func validatedMain(ctx context.Context, root *xdm.Node) (*xdm.Node, error) {
+	sch, _ := xsdstream.Source(ctx).(*xsd.Schema)
+	if sch == nil {
+		return root, nil
+	}
+	return sch.ValidateCopy(root, xsd.ValidateOptions{})
+}
+
+// validateMain attaches the validation ctx asks for to c, the principal
+// input's cursor, and returns what reports its outcome once c has been read
+// to its end.
+func (s *Stylesheet) validateMain(ctx context.Context, c *xdmstream.Cursor) func() error {
+	sch := xsdstream.Source(ctx)
+	if sch == nil {
+		return func() error { return nil }
+	}
+	var strip func(*xdm.Node) bool
+	if len(s.strip) > 0 {
+		strip = s.whitespaceStripper(0)
+	}
+	return (&streamValidation{pre: sch}).attach(c, strip)
+}
+
+// stream reads d on a cursor fn reads: as the tree's validated copy of it
+// is, with no document URI, when it is validated.
+func (d *mergeDoc) stream(ctx *xpath.Context, fn func(*xdmstream.Cursor) error) error {
+	if d.vin == nil {
+		return d.br.streamDoc(ctx, d.href, d.base, fn)
+	}
+	return d.br.(*FileResolver).streamDocAs(ctx, d.href, d.base, false, fn)
 }
