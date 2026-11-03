@@ -439,7 +439,7 @@ func fuzzMakeModes(seed int64) fuzzCase {
 		s.WriteString("/>\n")
 	}
 	gr := rand.New(rand.NewSource(seed*39916801 + 13)) // the grouping rule bodies' draws
-	tr := rand.New(rand.NewSource(seed*1000003 + 19)) // the try rule bodies' draws
+	tr := rand.New(rand.NewSource(seed*1000003 + 19))  // the try rule bodies' draws
 	calls := false
 	for i, n := 0, g.n(6); i < n; i++ {
 		s.WriteString(`<xsl:template match="` + strings.ReplaceAll(sub(g.pick(fuzzPatterns...)), "<", "&lt;") + `"`)
