@@ -86,6 +86,7 @@ func (c *compiler) compileTry(n *xdm.Node, ns xpath.NamespaceResolver) (Instruct
 			return nil, fmt.Errorf("in xsl:try/@select: %w", err)
 		}
 		instr.sel = comp
+		c.noteStreamSelect(n, instr, comp, ns)
 	}
 
 	// The children are the sequence constructor followed by the xsl:catch
@@ -218,13 +219,14 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// would not do: out may already have an open element whose attributes the
 	// body added, and there is no record of where the body's contribution
 	// began.
-	sub := newOutputBuilder(rt)
+	sub := tryBuffer(rt)
+	st := rt.streamTry()
 	err := i.run(rt, sub)
 	if err == nil {
 		return appendSequence(sub.Sequence(), out)
 	}
 
-	if !catchable(err) {
+	if !catchable(err) || st.failed() {
 		// An unwinding signal is not a failure of the body, so the body's
 		// output stands rather than being rolled back. xsl:break inside an
 		// xsl:try inside an xsl:iterate is the case iterate-035 writes: the
@@ -255,6 +257,9 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 				"constructor had already written output, so %s cannot be "+
 				"recovered from", xdm.ErrorCode(err))
 	}
+	if err := st.caught(); err != nil {
+		return err
+	}
 	// The err: variables are in scope for the catch body only.
 	crt := bindErrorVars(rt, err, i.module)
 	if cl.sel != nil {
@@ -270,7 +275,7 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 // run instantiates the try body, from @select or from the constructor.
 func (i *tryInstr) run(rt *runtime, out *outputBuilder) error {
 	if i.sel != nil {
-		seq, err := i.sel.Eval(rt.ctx)
+		seq, err := rt.evalSelect(i, i.sel)
 		if err != nil {
 			return err
 		}

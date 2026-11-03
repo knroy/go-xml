@@ -105,6 +105,8 @@ type streamExec struct {
 	// rule says it is a template rule's body (streamapply.go), whose
 	// context element may be, but need not be, the document element.
 	rule bool
+	// tries are the consumers of each streamed xsl:try's body (streamtry.go).
+	tries [][]*streamOp
 }
 
 func newStreamExec() *streamExec {
@@ -259,6 +261,9 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		return true
 	}
 	local := el.Name().Local
+	if local == "try" {
+		return b.tryOp(el, f)
+	}
 	if el.Attr("", "select") != nil {
 		switch local {
 		case "value-of", "copy-of", "sequence", "attribute", "break":
@@ -602,6 +607,9 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "apply-templates" {
 			return b.attrApply(el, f)
 		}
+		if local == "try" {
+			return b.tryMotionless(el, f)
+		}
 		if b.noIdent && (local == "sequence" || local == "variable") {
 			// They could hand the copy on as the node it stands for.
 			return b.refuse("xsl:" + local + " on a copied text, comment or PI node")
@@ -865,7 +873,10 @@ func (x *streamExec) ready() string {
 	if x.class == classElem {
 		minD = 1 // a rule's context element: the document element, or below
 	}
-	return x.readyOps(x.top, minD, &x.kinds)
+	if why := x.readyOps(x.top, minD, &x.kinds); why != "" {
+		return why
+	}
+	return x.readyTries()
 }
 
 // readyOps readies ops, whose context element is at depth minD or deeper
