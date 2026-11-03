@@ -23,7 +23,7 @@ func resultDocRun(t *testing.T, body, dir string, core bool) (string, streamtrac
 	}
 	s, err := Compile(tree.Root, CompileOptions{})
 	if err != nil {
-		t.Fatalf("%s: %v", body, err)
+		return "COMPILE " + xdm.ErrorCode(err), streamtrace.Counts{}
 	}
 	docs, _ := NewFileResolver(dir)
 	noBursts = !core
