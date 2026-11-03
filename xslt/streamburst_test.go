@@ -293,7 +293,8 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"value-of of the path", `<xsl:value-of select="doc/rec/@k" separator="|"/>`, recs, true, false},
 		{"value-of of text nodes", `<xsl:value-of select="doc/rec/x/text()"/>`, recs, false, false},
 		// refused (the rows above that expect no bursts keep the path's nodes)
-		{"distinct-values", `<xsl:value-of select="count(distinct-values(doc/rec/@k))"/>`, recs, false, false},
+		{"distinct-values", `<xsl:value-of select="count(distinct-values(doc/rec/@k))"/>`, recs, true, false}, // g5: a whole-argument call
+		{"sort", `<xsl:value-of select="count(sort(doc/rec/@k/string()))"/>`, recs, false, false},
 		{"reverse", `<xsl:value-of select="reverse(doc/rec/@k/string())"/>`, recs, false, false},
 		{"last()", `<xsl:value-of select="(doc/rec/@k)[last()]"/>`, recs, false, false},
 		{"union", `<xsl:value-of select="count(doc/rec union ())"/>`, recs, false, false},
