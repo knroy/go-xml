@@ -548,26 +548,21 @@ func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, b
 // declTrust.funcVerified.
 func functionBodyVerdict(f *streamFunc, funcs map[funcKey]*streamFunc, trust *declTrust) (props, bool, bool) {
 	var instr *xdm.Node
+	several := false
 	for _, c := range f.body.ChildElements() {
 		if isXSL(c, "param") {
 			continue
 		}
-		if instr != nil {
-			// More than one instruction in the body.
-			return roamingFreeRanging, false, false
-		}
+		several = several || instr != nil
 		instr = c
 	}
 	if instr == nil {
 		// An empty body returns the empty sequence: grounded and motionless.
 		return groundedMotionless, true, false
 	}
-	if !isXSL(instr, "sequence") && !isXSL(instr, "value-of") {
-		return roamingFreeRanging, false, false
-	}
 	sel := instr.Attr("", "select")
-	if sel == nil {
-		return roamingFreeRanging, false, false
+	if several || !isXSL(instr, "sequence") && !isXSL(instr, "value-of") || sel == nil {
+		return functionConstructorVerdict(f, funcs, trust)
 	}
 	ns := newNSResolver(instr, xpathDefaultNamespace(instr))
 	expr, err := xpath.ParseVersion(sel.Value(), ns, xpathVersionAt(instr))
@@ -647,6 +642,29 @@ func functionBodyVerdict(f *streamFunc, funcs map[funcKey]*streamFunc, trust *de
 	res := typeAdjust(p, f.asType, bodyAllowsChildren(instr, expr))
 
 	return res, true, a.unverified
+}
+
+// functionConstructorVerdict assesses a function body that is not one
+// xsl:sequence or xsl:value-of with a select: §19.8.5 takes "the
+// type-adjusted posture and sweep of the sequence constructor contained
+// within the xsl:function element", which the instruction rules (§19.8.3,
+// §19.8.4) give, with the streaming parameter in scope of every expression.
+// su-absorbing-205's xsl:copy is one.
+func functionConstructorVerdict(f *streamFunc, funcs map[funcKey]*streamFunc, trust *declTrust) (props, bool, bool) {
+	a := &instrAnalyzer{ctxPosture: postureRoaming, ctxAllowsChildren: true, known: true, funcs: funcs, trust: trust}
+	if trust != nil {
+		a.attrSets = trust.sets
+	}
+	if f.category.declaredStreamable() && f.arity() > 0 && typePermitsNodes(f.params[0]) {
+		if q, ok := firstParamName(f.body); ok {
+			a.param = &streamParam{name: q, category: f.category, several: typePermitsSeveralNodes(f.params[0])}
+		}
+	}
+	p := a.body(f.body)
+	if !a.known {
+		return roamingFreeRanging, false, false
+	}
+	return typeAdjust(p, f.asType, true), true, a.unverified
 }
 
 // satisfiesCategory reports whether a function result meets the body rule of

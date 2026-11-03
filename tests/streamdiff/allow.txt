@@ -41,3 +41,7 @@ xslt30 error/error-3160a \d{4}-\d\d-\d\d|"\d\d"
 # §19.8.8's table, StringConcatExpr "A || A": two consuming operands (§19.8.1).
 xslt30 si-fork/si-fork-902 (?s).+
 xslt30 si-fork/si-fork-952 (?s).+
+# §19.8.5's body rule over a sequence constructor: the streaming parameter
+# read in an xsl:copy's select and again in its content, a higher-order
+# operand (§19.8.4.12's note), is not singular (§19.8.5.2).
+xslt30 su-absorbing/su-absorbing-205 (?s).+

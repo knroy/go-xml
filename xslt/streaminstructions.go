@@ -89,6 +89,21 @@ type instrAnalyzer struct {
 	// value has known false, which leaves a call on fn:accumulator-after
 	// unmodelled wherever the enclosing sequence constructor was not walked.
 	accumAfter accumAfterState
+
+	// param is the streaming parameter of the declared-streamable function
+	// whose body this is (§19.8.5), or nil; higherOrder says the construct
+	// is inside a higher-order operand -- the body of a focus-changing
+	// construct (§19.8.4.18's note) or a sort key -- so a reference to the
+	// parameter is not singular (§19.8.5.2).
+	param       *streamParam
+	higherOrder bool
+}
+
+// streamParam is a declared-streamable function's streaming parameter.
+type streamParam struct {
+	name     xdm.QName
+	category streamCategory
+	several  bool
 }
 
 // analyzeInstruction returns the posture and sweep of an XSLT instruction (or
@@ -253,6 +268,8 @@ func (a *instrAnalyzer) sub(ctx posture, allowsChildren bool) *instrAnalyzer {
 		groupInScope:      a.groupInScope,
 		groupOutOfReach:   a.groupOutOfReach,
 		funcs:             a.funcs,
+		param:             a.param,
+		higherOrder:       a.higherOrder,
 	}
 }
 
@@ -296,6 +313,7 @@ func (a *instrAnalyzer) sub(ctx posture, allowsChildren bool) *instrAnalyzer {
 // the exemption is the house rule and not a special case.
 func (a *instrAnalyzer) subFocus(ctx posture, allowsChildren bool) *instrAnalyzer {
 	s := a.sub(ctx, allowsChildren)
+	s.higherOrder = true
 	if s.groupInScope && s.currentGroup.posture == postureGrounded {
 		return s
 	}
@@ -353,6 +371,11 @@ func (a *instrAnalyzer) exprOperandIn(src string, el *xdm.Node, ctx posture, all
 		currentAllowsChildren: allowsChildren,
 		currentInScope:        true,
 		accumAfter:            a.accumAfter,
+		higherOrder:           a.higherOrder,
+	}
+	if a.param != nil {
+		an.streamingParam, an.paramCategory = a.param.name, a.param.category
+		an.hasStreamParam, an.paramSeveral = true, a.param.several
 	}
 	p := an.expr(expr)
 	kids := an.allowsChildren(expr)
@@ -1394,6 +1417,7 @@ func (a *instrAnalyzer) sortOperands(el *xdm.Node, ctx posture) []operand {
 		ops = append(ops, a.avtOperands(c,
 			"lang", "order", "collation", "stable", "case-order", "data-type")...)
 		sub := a.sub(ctx, true)
+		sub.higherOrder = true
 		if at := c.Attr("", "select"); at != nil {
 			p, kids := sub.exprOperandIn(at.Value(), c, ctx, true)
 			ops = append(ops, operand{props: p, usage: usageAbsorption, allowsChildren: kids})

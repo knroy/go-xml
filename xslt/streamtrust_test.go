@@ -40,15 +40,20 @@ func TestStreamTrustReproducers(t *testing.T) {
 		main  string
 		in    string // the module holding the xsl:source-document, if not main
 	}{
-		// Declared-streamable functions whose bodies the check skipped.
-		{"F1 absorbing fn, where-populated body", "unverified", nil,
+		// Declared-streamable functions whose bodies the check skipped
+		// until M8 assessed bodies other than one xsl:sequence (§19.8.5):
+		// the three read a sibling or the last record, so are refused.
+		{"F1 absorbing fn, where-populated body", "XTSE3430", nil,
 			hdr + `<xsl:function name="f:g" streamability="absorbing"><xsl:param name="n" as="node()"/><xsl:where-populated><w><xsl:value-of select="$n/` + sib + `"/></w></xsl:where-populated></xsl:function>` +
 				sd(fe(`<v><xsl:copy-of select="f:g(.)"/></v>`)) + end, ""},
-		{"F1b absorbing fn, two-instruction body", "unverified", nil,
+		{"F1b absorbing fn, two-instruction body", "XTSE3430", nil,
 			hdr + `<xsl:function name="f:g" streamability="absorbing" as="xs:string"><xsl:param name="n" as="node()"/><xsl:variable name="v" select="1"/><xsl:sequence select="string($n/` + sib + `)"/></xsl:function>` +
 				sd(fe(`<v><xsl:value-of select="f:g(.)"/></v>`)) + end, ""},
-		{"F1c inspection fn, choose body", "unverified", nil,
+		{"F1c inspection fn, choose body", "XTSE3430", nil,
 			hdr + `<xsl:function name="f:g" streamability="inspection" as="xs:string"><xsl:param name="n" as="node()"/><xsl:choose><xsl:when test="true()"><xsl:sequence select="string($n/../rec[last()]/@k)"/></xsl:when></xsl:choose></xsl:function>` +
+				sd(fe(`<v><xsl:value-of select="f:g(.)"/></v>`)) + end, ""},
+		{"F1e absorbing fn, unmodelled two-instruction body", "unverified", nil,
+			hdr + `<xsl:function name="f:g" streamability="absorbing" as="xs:string"><xsl:param name="n" as="node()"/><xsl:variable name="v" select="1"/><xsl:sequence select="fold-right((), string($n/` + sib + `), concat#2)"/></xsl:function>` +
 				sd(fe(`<v><xsl:value-of select="f:g(.)"/></v>`)) + end, ""},
 		{"F1 control: absorbing fn, modelled body", "verified", nil,
 			hdr + `<xsl:function name="f:g" streamability="absorbing" as="xs:string"><xsl:param name="n" as="node()"/><xsl:sequence select="string($n/@k)"/></xsl:function>` +
