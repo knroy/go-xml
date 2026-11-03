@@ -586,6 +586,9 @@ func (g *fuzzGen) coreContent(esc func(string) string) (string, bool) {
 }
 
 func fuzzMake(seed int64) fuzzCase {
+	if fuzzIsG5(seed) {
+		return fuzzMakeG5(seed) // streamg5fuzz_test.go
+	}
 	if fuzzIsForks(seed) {
 		return fuzzMakeForks(seed) // streamforkfuzz_test.go
 	}
@@ -715,6 +718,7 @@ done:
 
 type fuzzRes struct {
 	out, err, panic string
+	msgs            string // Result.Messages (streamg5fuzz_test.go)
 	trace           streamtrace.Counts
 }
 
@@ -748,6 +752,7 @@ func fuzzRun(c fuzzCase, dir string, streamed bool) (r fuzzRes) {
 		return
 	}
 	r.out = res.String()
+	r.msgs = strings.Join(res.Messages, "\x00")
 	return
 }
 
@@ -788,6 +793,8 @@ func fuzzDiff(c fuzzCase, co, tr fuzzRes) string {
 		return "OUTPUT"
 	case co.err != tr.err:
 		return "ERROR " + fuzzCode(co) + " vs " + fuzzCode(tr)
+	case co.msgs != tr.msgs:
+		return "MESSAGES"
 	case co.trace.Reruns > 0 && tr.err == "" && !strings.Contains(c.sheet, "<xsl:try>"):
 		// The tree's answer hides what the stream did wrong. (Under an
 		// xsl:try the container may have failed on the tree too, the
@@ -857,6 +864,12 @@ func TestStreamFuzz(t *testing.T) {
 		}
 		if groups > 0 {
 			tally["streamed: a grouping ran"]++
+		}
+		if c.kind == "g5" {
+			tally["g5 shapes"]++
+			if co.trace.Streamed() > 0 {
+				tally["streamed: g5 shapes"]++
+			}
 		}
 		if c.kind == "try" {
 			tally["try shapes"]++
