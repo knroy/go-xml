@@ -125,6 +125,16 @@ type burster struct {
 	cur   *Node
 	curD  int
 	views *viewBatch
+	// paused is where a stream client paused the parse (errPause), for
+	// resume: at pel, an element's start or end or a leaf, at depth pd; the
+	// leaves were told by trimLeaves (pcur, pspaces, pnames) or by prolog
+	// (pcur the document node, prologPause).
+	paused      pauseAt
+	pel, pcur   *Node
+	pd          int
+	pspaces     *spaceTable
+	pnames      *nameCache
+	prologPause bool
 	// viewCopies counts the records views copied for ancestors, and
 	// viewScans the copies they looked past, for the test that keeps them
 	// in proportion to the elements viewed.
@@ -207,10 +217,58 @@ func (b *burster) start(el *Node, d int) error {
 	b.gen++
 	b.cur, b.curD = el, d
 	act, err := b.c.start(el, d)
-	b.cur = nil
 	if err != nil {
+		b.cur = nil
 		return err
 	}
+	if act == xdmburst.Pause {
+		b.paused, b.pel, b.pd = pausedStart, el, d
+		return errPause
+	}
+	b.started(el, d, act)
+	return nil
+}
+
+// errPause is a stream client's pause (xdmburst.Steps): the parse returns
+// it, and goes on once resume has finished what the pause interrupted.
+var errPause = xdmburst.ErrPause
+
+// pauseAt is what a pause interrupted.
+type pauseAt uint8
+
+const (
+	notPaused pauseAt = iota
+	pausedStart
+	pausedEnd
+	pausedLeaf
+)
+
+// resume finishes what the pause of the parse interrupted, act deciding the
+// element whose start it paused at; it may pause again (errPause).
+func (b *burster) resume(act xdmburst.Action) error {
+	p := b.paused
+	b.paused = notPaused
+	switch p {
+	case pausedStart:
+		b.started(b.pel, b.pd, act)
+	case pausedEnd:
+		return b.ended(b.pel, b.pd, b.pspaces, b.pnames)
+	case pausedLeaf:
+		if err := b.tellFrom(b.pel.NextSibling(), b.pd); err != nil {
+			return err
+		}
+		if b.prologPause {
+			b.prologDone(b.pcur)
+			return nil
+		}
+		return b.trimRest(b.pcur, b.pspaces, b.pnames)
+	}
+	return nil
+}
+
+// started is start's, once the client has said what becomes of el.
+func (b *burster) started(el *Node, d int, act xdmburst.Action) {
+	b.cur = nil
 	switch act {
 	case xdmburst.Ground, xdmburst.GroundLater:
 		b.drop, b.burst, b.later = d, true, act == xdmburst.GroundLater
@@ -224,7 +282,6 @@ func (b *burster) start(el *Node, d int) error {
 		b.drop = d
 		b.watched = el.self
 	}
-	return nil
 }
 
 // keep puts el, just opened at depth d, on the spine.
@@ -293,8 +350,16 @@ func (b *burster) end(el *Node, d int, spaces *spaceTable, names *nameCache) err
 	g := b.grounded
 	b.grounded = nil
 	if err := b.c.end(el, d, kept, g); err != nil {
+		if err == errPause {
+			b.paused, b.pel, b.pd, b.pspaces, b.pnames = pausedEnd, el, d, spaces, names
+		}
 		return err
 	}
+	return b.ended(el, d, spaces, names)
+}
+
+// ended is end's, once the client has been told of el's close.
+func (b *burster) ended(el *Node, d int, spaces *spaceTable, names *nameCache) error {
 	if d == 1 {
 		// The document element is done: so is the last batch.
 		if err := b.flush(); err != nil {
@@ -343,9 +408,17 @@ func (b *burster) trimLeaves(cur *Node, d int, spaces *spaceTable, names *nameCa
 	}
 	if b.leaves && b.quiet == 0 {
 		if err := b.tellLeaves(cur, d); err != nil {
+			if err == errPause {
+				b.prologPause, b.pcur, b.pspaces, b.pnames = false, cur, spaces, names
+			}
 			return err
 		}
 	}
+	return b.trimRest(cur, spaces, names)
+}
+
+// trimRest is trimLeaves', once the leaves have been told.
+func (b *burster) trimRest(cur *Node, spaces *spaceTable, names *nameCache) error {
 	for last := cur.LastChild(); last != nil && last.isLeaf(); last = cur.LastChild() {
 		b.discardLast(cur, spaces, names)
 	}
@@ -368,11 +441,20 @@ func (b *burster) tellLeaves(cur *Node, d int) error {
 	for p := first.PrevSibling(); p != nil && p.isLeaf(); p = p.PrevSibling() {
 		first = p
 	}
-	for n := first; n != nil; n = n.NextSibling() {
+	return b.tellFrom(first, d)
+}
+
+// tellFrom tells the client of n and the leaves after it, children of an
+// element at depth d.
+func (b *burster) tellFrom(n *Node, d int) error {
+	for ; n != nil; n = n.NextSibling() {
 		if b.watch != nil {
 			b.watch(n, d+1, false)
 		}
 		if err := b.c.leaf(n, d+1); err != nil {
+			if err == errPause {
+				b.paused, b.pel, b.pd = pausedLeaf, n, d
+			}
 			return err
 		}
 	}
@@ -382,20 +464,28 @@ func (b *burster) tellLeaves(cur *Node, d int) error {
 // prolog tells the client of the comments and processing instructions
 // before the document element, at its start tag, and drops them. They wait
 // until then because a parse that meets an entity with markup in the DOCTYPE
-// starts again (parseExpanded) and would meet them twice.
+// starts again (parseExpandedSteps) and would meet them twice.
 func (b *burster) prolog(root *Node) error {
 	if !b.leaves {
 		return nil
 	}
 	if err := b.tellLeaves(root, 0); err != nil {
+		if err == errPause {
+			b.prologPause, b.pcur = true, root
+		}
 		return err
 	}
+	b.prologDone(root)
+	return nil
+}
+
+// prologDone is prolog's, once the leaves have been told.
+func (b *burster) prologDone(root *Node) {
 	n := root.tree.n
 	for root.LastChild() != nil {
 		root.RemoveLastChild()
 	}
 	b.discarded += uint64(n - root.tree.n)
-	return nil
 }
 
 // textSince is how many bytes t's text store holds in blocks from the

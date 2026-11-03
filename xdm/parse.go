@@ -163,6 +163,18 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 // string): if decoding leaves it unchanged it is the source kept for
 // positions and for an entity re-parse, and no copy is made.
 func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
+	step, done := parseSteps(r, whole, opts)
+	defer done()
+	return step()
+}
+
+// parseSteps is parse in steps, for a stream client (bursts) that pauses
+// the parse at an event (errPause): step parses until the client pauses,
+// returning errPause, or the parse ends; the next call goes on from there,
+// once the burster has been resumed (burster.resume). A client that never
+// pauses has the whole parse done by one call. done releases the parse's
+// read windows, once, when it is over.
+func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tree, error), done func()) {
 	// The byte limit wraps the reader FIRST, ahead of every other wrapper,
 	// so that it bounds the raw source as ParseOptions.MaxBytes says it
 	// does: what is read, not what a caller remembered to check. One byte
@@ -209,11 +221,20 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	// in the text the decoder actually sees.
 	// The three read windows are reused parse to parse (see readBufs).
 	bufs := readBufPool.Get().(*readBufs)
-	defer bufs.release()
+	// The parse's state outlives a step: it is the read windows', so as not
+	// to be allocated every parse.
+	ps := &bufs.ps
+	ps.opts = opts
+	done = func() {
+		if ps.innerDone != nil {
+			ps.innerDone()
+		}
+		bufs.release()
+	}
 	bufs.br.Reset(r)
 	decoded, err := decodeReader(bufs.br)
 	if err != nil {
-		return nil, fmt.Errorf("parse XML: %w", err)
+		return func() (*Tree, error) { return nil, fmt.Errorf("parse XML: %w", err) }, done
 	}
 	r = decoded
 
@@ -224,7 +245,6 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	r = newLineEndReader(r, bufs.lineEnd)
 
 	trackPos := opts.TrackPositions
-	var srcBuf strings.Builder
 	// The source is copied when a DOCTYPE is permitted: an entity whose
 	// replacement text holds markup forces a re-parse of the substituted
 	// source, and by the time that is known the reader is partly consumed and
@@ -245,7 +265,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	if whole == "" && (trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded)) {
 		tee = &srcTee{r: r}
 		if opts.AllowDOCTYPE && !opts.entitiesExpanded {
-			tee.buf = &srcBuf
+			tee.buf = &ps.srcBuf
 		}
 		if trackPos {
 			tee.lines = &lineIndex{}
@@ -268,7 +288,8 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		r = charger
 	}
 
-	dec := xml.NewDecoderBuffer(r, bufs.dec)
+	ps.dec = *xml.NewDecoderBuffer(r, bufs.dec)
+	dec := &ps.dec
 	dec.Size = sizeHint
 	dec.CharsetReader = charsetReader
 	// Leave Strict on: a validator must not silently accept malformed input.
@@ -302,37 +323,15 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	if maxNodes == 0 {
 		maxNodes = DefaultMaxNodes
 	}
-	nodes := 0
 
 	// The records are appended in document order as the tokens arrive, so
 	// a parse builds the tree in its final layout and never walks it again.
 	tree := NewTree()
-	var spaces spaceTable
-	var run textRun
 	tree.Root.SetBaseURI(opts.BaseURI)
 	tree.Root.SetDocumentURI(opts.DocumentURI)
-	cur := tree.Root
-	var ns nsScope
-	var names nameCache
-	depth := 0
+	ps.cur = tree.Root
+	names := &ps.names
 	bs := opts.bursts
-	sawRoot := false
-	sawDecl := false
-	standalone := false // the XML declaration said standalone="yes"
-	sawPrologToken := false
-	sawDoctype := false
-	// Attribute defaults declared by an ATTLIST in the internal subset. Kept
-	// as a slice because a document rarely declares more than a handful, and
-	// the common case is none at all.
-	var attDefaults []attDefault
-	var attTypes []attDeclaredType
-	// The declarations by element name, built when the first element needs
-	// them, after the DOCTYPE has settled both lists.
-	var defIdx, typeIdx declIndex
-	// Element names whose DTD content model is element-only. Whitespace-only
-	// text in such an element is ignorable (XML §2.10) and is stripped
-	// regardless of what the stylesheet declares (XSLT 2.0 §4.4).
-	var elementOnly map[string]bool
 	// stripSpaceAt reports whether whitespace-only text directly inside el
 	// is dropped: ignorable whitespace in DTD element-only content first and
 	// unconditionally, since the DTD-derived rule outranks the
@@ -340,462 +339,500 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	// is complete when it is flushed, so the decision is made there and the
 	// node never joins the tree.
 	stripSpaceAt := func(el *Node) bool {
-		return (elementOnly != nil && ignorableWhitespaceIn(el, elementOnly)) ||
-			(opts.StripSpace != nil && stripsWhitespaceIn(el, opts.StripSpace)) ||
+		return (ps.elementOnly != nil && ignorableWhitespaceIn(el, ps.elementOnly)) ||
+			(ps.opts.StripSpace != nil && stripsWhitespaceIn(el, ps.opts.StripSpace)) ||
 			(bs != nil && bs.strip != nil && bs.strip(el))
 	}
 
-	for {
-		// InputOffset after Token() is the position *after* the token, so the
-		// start of the element must be taken before it is read.
-		start := dec.InputOffset()
-		// RawToken, not Token: Token resolves prefixes into Name.Space and
-		// throws the prefix away, which is unrecoverable (see buildElement).
-		// RawToken reports the name exactly as written.
-		//
-		// The one well-formedness check Token performs and RawToken does not
-		// is matching each end tag against its start tag, and that is done at
-		// xml.EndElement below. A duplicated attribute is refused by
-		// validateStartElement (wellformed.go), keyed on expanded names with
-		// namespace declarations kept out of the key.
-		tok, err := dec.RawToken()
-		if err == io.EOF {
-			break
+	step = func() (*Tree, error) {
+		if ps.inner != nil {
+			return ps.inner()
 		}
-		if err != nil {
-			return nil, fmt.Errorf("parse XML: %w", err)
+		if ps.ended {
+			goto finished
 		}
-		// Any other token ends a run of character data, and its node must
-		// hold its value before anything -- whitespace stripping at an end
-		// tag, a new sibling -- can look at it.
-		if _, text := tok.(*xml.CharData); !text {
-			run.flush(&spaces, stripSpaceAt)
-			if bs != nil {
-				if err := bs.trimLeaves(cur, depth, &spaces, &names); err != nil {
+		for {
+			var (
+				start int64
+				tok   xml.Token
+				err   error
+			)
+			if ps.held != nil {
+				start, tok, ps.held = ps.heldStart, ps.held, nil
+				goto told
+			}
+			// InputOffset after Token() is the position *after* the token, so the
+			// start of the element must be taken before it is read.
+			start = dec.InputOffset()
+			// RawToken, not Token: Token resolves prefixes into Name.Space and
+			// throws the prefix away, which is unrecoverable (see buildElement).
+			// RawToken reports the name exactly as written.
+			//
+			// The one well-formedness check Token performs and RawToken does not
+			// is matching each end tag against its start tag, and that is done at
+			// xml.EndElement below. A duplicated attribute is refused by
+			// validateStartElement (wellformed.go), keyed on expanded names with
+			// namespace declarations kept out of the key.
+			tok, err = dec.RawToken()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, fmt.Errorf("parse XML: %w", err)
+			}
+			// Any other token ends a run of character data, and its node must
+			// hold its value before anything -- whitespace stripping at an end
+			// tag, a new sibling -- can look at it.
+			if _, text := tok.(*xml.CharData); !text {
+				ps.run.flush(&ps.spaces, stripSpaceAt)
+				if bs != nil {
+					if err := bs.trimLeaves(ps.cur, ps.depth, &ps.spaces, names); err != nil {
+						if err == errPause {
+							ps.held, ps.heldStart = tok, start
+						}
+						return nil, err
+					}
+				}
+			}
+		told:
+
+			// Each token points into the decoder and is copied out here; it is
+			// valid only until the next RawToken.
+			switch tok := tok.(type) {
+			case *xml.StartElement:
+				t := *tok
+				if ps.prologHeld {
+					t, ps.prologHeld = ps.heldT, false
+					goto prologTold
+				}
+				ps.sawPrologToken = true
+				ps.depth++
+				if ps.depth > maxDepth {
+					return nil, fmt.Errorf("parse XML: nesting exceeds %d levels: %w",
+						maxDepth, ErrResourceLimit)
+				}
+				if ps.cur == tree.Root {
+					if ps.sawRoot {
+						return nil, fmt.Errorf("parse XML: multiple root elements")
+					}
+					ps.sawRoot = true
+					// Past the prolog: no re-parse can start now, so the copy
+					// kept for one is dropped; and with no entity table installed
+					// by now none ever will be, so the charge reader has nothing
+					// to buffer for.
+					if tee != nil {
+						tee.buf = nil
+						ps.srcBuf = strings.Builder{}
+					}
+					if charger != nil && charger.t == nil {
+						charger.off = true
+						charger.backlog = nil
+					}
+				}
+				if len(ps.attDefaults) > 0 {
+					if ps.defIdx == nil {
+						ps.defIdx = indexDecls(len(ps.attDefaults), func(i int) string { return ps.attDefaults[i].element })
+					}
+					t = applyAttDefaults(t, ps.attDefaults, ps.defIdx)
+				}
+				if len(ps.attTypes) > 0 {
+					if ps.typeIdx == nil {
+						ps.typeIdx = indexDecls(len(ps.attTypes), func(i int) string { return ps.attTypes[i].element })
+					}
+					t = normalizeAttTokens(t, ps.attTypes, ps.typeIdx)
+				}
+				if err := validateStartElement(t, &ps.ns, dec.IsVersion11()); err != nil {
 					return nil, err
+				}
+				if bs != nil && ps.cur == tree.Root {
+					if err := bs.prolog(tree.Root); err != nil {
+						if err == errPause {
+							ps.held, ps.heldStart, ps.heldT, ps.prologHeld = tok, start, t, true
+						}
+						return nil, err
+					}
+				}
+			prologTold:
+				if bs != nil && ps.cur == tree.Root {
+					bs.marks = append(bs.marks[:0], markOf(tree))
+					bs.v11 = dec.IsVersion11()
+				}
+				el, decls := buildElement(t, ps.cur, &ps.ns, names)
+				if off := encodeOffset(start, trackPos); off != 0 {
+					el.setOffset(off)
+				}
+				// A node written inside an external parsed entity takes its base
+				// URI from that entity, not from its parent in the tree — XML
+				// Base section 4.2 and the XDM base-uri accessor. The entity's
+				// text has already been spliced into this source, so the only
+				// record of where it came from is the byte offset.
+				//
+				// This runs after buildElement so that an xml:base ON the element
+				// still resolves against the entity's URI, which is the base in
+				// force where the attribute was written.
+				if b := baseAt(ps.opts.entityBases, int(start)); b != "" {
+					if xb := el.Attr(NSXML, "base"); xb != nil {
+						el.SetBaseURI(resolveBase(b, xb.Value()))
+					} else {
+						el.SetBaseURI(b)
+					}
+				}
+				if len(ps.attTypes) > 0 {
+					applyAttTypes(el, ps.attTypes, ps.typeIdx)
+				}
+				// Attributes and namespaces are nodes too, and a document made
+				// of elements carrying many attributes allocates most of its
+				// memory in them, so they count against the limit.
+				ps.nodes += 1 + el.NumAttrs() + decls
+				if maxNodes > 0 && ps.nodes > maxNodes {
+					return nil, fmt.Errorf(
+						"parse XML: document exceeds %d nodes: %w",
+						maxNodes, ErrResourceLimit)
+				}
+				ps.cur = el
+				if bs != nil {
+					if err := bs.start(el, ps.depth); err != nil {
+						return nil, err
+					}
+				}
+
+			case *xml.EndElement:
+				t := *tok
+				if ps.cur == tree.Root {
+					return nil, fmt.Errorf("parse XML: unbalanced end element %q", t.Name.Local)
+				}
+				// RawToken does not pair tags, so the pairing is checked here on
+				// the lexical name — which is what XML §3 requires anyway: the
+				// end tag must repeat the start tag's QName character for
+				// character, not merely resolve to the same expanded name.
+				if cn := ps.cur.Name(); t.Name.Space == cn.Prefix && t.Name.Local == cn.Local {
+					// The same QName, written the same way: nothing to build.
+				} else if got, want := lexicalName(t.Name), cn.Lexical(); got != want {
+					return nil, fmt.Errorf(
+						"parse XML: element %q closed by end element %q", want, got)
+				}
+				// Ignorable whitespace goes first and unconditionally: the
+				// DTD-derived rule outranks the stylesheet-declared one, so it
+				// must not be gated on a strip-space declaration existing.
+				tree.closeLast()
+				ps.ns.pop(len(ps.cur.frame()))
+				closed := ps.cur
+				ps.cur = ps.cur.Parent()
+				ps.depth--
+				if bs != nil {
+					if err := bs.end(closed, ps.depth+1, &ps.spaces, names); err != nil {
+						return nil, err
+					}
+				}
+
+			case *xml.CharData:
+				t := *tok
+				// CharData is only meaningful inside an element; whitespace at the
+				// document level is legal and carries no information. It must be
+				// written as such: [27] Misc admits no reference or CDATA section.
+				if ps.cur == tree.Root {
+					if !dec.Literal() || !isXMLWhitespace(string(t), dec.IsVersion11()) {
+						return nil, fmt.Errorf("parse XML: character data outside root element")
+					}
+					ps.sawPrologToken = true
+					continue
+				}
+				ps.run.add(ps.cur, t, dec)
+
+			case *xml.Comment:
+				t := *tok
+				ps.sawPrologToken = true
+				if bs != nil && ps.cur == tree.Root && !bs.leaves {
+					continue // a burst's tree holds no prolog (see bursts.go)
+				}
+				c := ps.cur.appendChild(KindComment)
+				c.v0, c.v1 = tree.text.addBytes(t, 0)
+
+			case *xml.ProcInst:
+				t := *tok
+				if strings.EqualFold(t.Target, "xml") {
+					if t.Target != "xml" {
+						return nil, fmt.Errorf("parse XML: processing-instruction target %q is reserved", t.Target)
+					}
+					if ps.sawDecl || ps.sawPrologToken || ps.sawRoot || ps.sawDoctype {
+						return nil, fmt.Errorf("parse XML: XML declaration must appear at the start of the document")
+					}
+					if err := validateXMLDecl(string(t.Inst)); err != nil {
+						return nil, err
+					}
+					ps.sawDecl = true
+					ps.standalone = declStandaloneYes(string(t.Inst))
+					continue // the XML declaration is not a PI node in the XDM
+				}
+				// Namespaces in XML §7: no PI target contains a colon.
+				if strings.Contains(t.Target, ":") {
+					return nil, fmt.Errorf("parse XML: processing-instruction target %q contains a colon", t.Target)
+				}
+				ps.sawPrologToken = true
+				if bs != nil && ps.cur == tree.Root && !bs.leaves {
+					continue
+				}
+				pi := ps.cur.appendChild(KindPI)
+				pi.name = tree.intern(QName{Local: t.Target})
+				pi.v0, pi.v1 = tree.text.addBytes(t.Inst, 0)
+				// Same entity rule as for elements: a PI pulled in from an
+				// external entity has that entity's URI as its base. This is
+				// exactly what resolve-uri-021 asserts.
+				if b := baseAt(ps.opts.entityBases, int(start)); b != "" {
+					pi.SetBaseURI(b)
+				}
+
+			case *xml.Directive:
+				t := *tok
+				d := strings.TrimSpace(string(t))
+				if !isDOCTYPEDirective(d) {
+					return nil, fmt.Errorf("parse XML: markup declaration %q is not a DOCTYPE", d)
+				}
+				if ps.sawDoctype || ps.sawRoot || ps.cur != tree.Root {
+					return nil, fmt.Errorf("parse XML: DOCTYPE declaration must appear once before the document element")
+				}
+				if !ps.opts.AllowDOCTYPE {
+					return nil, fmt.Errorf("parse XML: DOCTYPE declaration rejected " +
+						"(set AllowDOCTYPE to permit its internal declarations; " +
+						"reading external entities additionally requires " +
+						"ExternalEntities)")
+				}
+				// An ATTLIST may give an attribute a #FIXED or literal default,
+				// which a processor is required to add to every matching element
+				// — including a namespace declaration, since "xmlns:p CDATA
+				// #FIXED '...'" is how a DTD supplies a binding. Without this the
+				// prefix is simply absent from the tree.
+				//
+				// Only defaults are read. A default's references to internal
+				// entities are expanded once the entities are known (see
+				// normalizeAttDefaults); nothing resolves an external identifier
+				// or reads a file, so this does not widen what AllowDOCTYPE
+				// admits.
+				if isDOCTYPEDirective(d) {
+					ps.sawDoctype = true
+					ps.sawPrologToken = true
+					// Retained so a caller can validate against the document's
+					// own DTD; see Tree.DocType.
+					tree.DocType = d
+					// Without a resolver no parameter entity is read, so §5.1
+					// stops entity and ATTLIST processing at the first
+					// reference to one, unless the document is standalone.
+					declText := d
+					if ps.opts.ExternalEntities == nil && !ps.standalone {
+						declText = declsBeforeUnreadPE(d)
+					}
+					defs, types := parseAttList(declText)
+					ps.attDefaults = append(ps.attDefaults, defs...)
+					ps.attTypes = append(ps.attTypes, types...)
+					ps.elementOnly = parseElementOnlyDecls(d)
+					// Internal general entities are declared here and referenced
+					// in content, so the table has to be installed before the
+					// decoder reads any. encoding/xml consults dec.Entity lazily,
+					// which makes that possible: the DOCTYPE is always the first
+					// token.
+					//
+					// Only internal entities are expanded. One declared SYSTEM or
+					// PUBLIC is recorded as refused, so referencing it is an
+					// error rather than a fetch — this does not open XXE.
+					subset := d
+					var ents *entityTable
+					// Everything that reads outside the document happens only
+					// when a resolver was supplied. With none, this whole block
+					// is skipped and the subset is read exactly as before.
+					if ps.opts.ExternalEntities != nil && !ps.opts.entitiesExpanded {
+						ents = newEntityTable(ps.opts.BaseURI, ps.opts.entityBudget)
+						// The DOCTYPE follows the XML declaration, so by now the
+						// decoder has read the version and §4.3.4 can be enforced
+						// against it. See entityTable.checkEntityVersion.
+						ents.version11 = dec.IsVersion11()
+						ents.resolver = ps.opts.ExternalEntities
+						// A parameter entity in the INTERNAL subset is expanded
+						// first, since it is how a document pulls a module of
+						// declarations in: "<!ENTITY % ext SYSTEM 'e.ent'>%ext;"
+						// declares nothing by itself, and the declarations only
+						// exist once that reference is substituted.
+						expandedSubset, err := ents.expandParameterEntities(d, ps.opts.BaseURI, 0)
+						if err != nil {
+							return nil, fmt.Errorf("parse XML: %w", err)
+						}
+						subset = expandedSubset
+						ents.parseDecls(subset, ps.opts.BaseURI)
+						ents.subsetText = subset
+						if sys, pub, ok := externalSubsetOf(d); ok {
+							if err := ents.loadExternalSubset(sys, pub, ps.opts.BaseURI); err != nil {
+								return nil, fmt.Errorf("parse XML: %w", err)
+							}
+						}
+						if err := checkDTDComments(ents.subsetText); err != nil {
+							return nil, fmt.Errorf("parse XML: external DTD: %w", err)
+						}
+						if err := checkEntityCharRefs(ents.subsetText, dec.IsVersion11()); err != nil {
+							return nil, fmt.Errorf("parse XML: %w", err)
+						}
+						// Retained so fn:unparsed-entity-uri can see declarations
+						// that live outside the directive. The subset a document
+						// is governed by is not always the text it was written
+						// with.
+						tree.ownSource().externalSubset = ents.subsetText
+						// Declarations pulled in from the external subset are read
+						// before ents may be discarded below: loading one that
+						// declared no entities still nils ents out, and the
+						// <!ELEMENT> models it brought in would be lost with it.
+						if ents.subsetText != "" {
+							ps.elementOnly = parseElementOnlyDecls(ents.subsetText)
+						}
+						if len(ents.raw) == 0 && len(ents.external) == 0 {
+							ents = nil
+						}
+						// Substituting a parameter entity can bring in attribute
+						// defaults and declared types that were not in the
+						// directive as written, so those are re-read from the
+						// expanded text rather than the original.
+						if subset != d || ents != nil {
+							text := subset
+							if ents != nil {
+								text = ents.subsetText
+							}
+							defs, types := parseAttList(text)
+							ps.attDefaults = defs
+							ps.attTypes = types
+							ps.elementOnly = parseElementOnlyDecls(text)
+						}
+					} else {
+						ents = parseEntityDecls(declText, ps.opts.BaseURI, ps.opts.entityBudget)
+					}
+					if ents != nil {
+						ents.version11 = dec.IsVersion11()
+					}
+					if err := checkEntityCharRefs(d, dec.IsVersion11()); err != nil {
+						return nil, fmt.Errorf("parse XML: %w", err)
+					}
+					wfc := entityDeclaredIsWFC(d, ps.standalone)
+					if ps.attDefaults, err = normalizeAttDefaults(ps.attDefaults, ents, dec.IsVersion11(), wfc); err != nil {
+						return nil, fmt.Errorf("parse XML: %w", err)
+					}
+					// Each default lands in every matching element; store its
+					// value once so that they all alias it.
+					for _, d := range ps.attDefaults {
+						tree.text.share(d.value)
+					}
+					if !wfc {
+						declared := ents
+						dec.Undeclared = func(name string) bool { return !declared.declares(name) }
+					}
+					if ents != nil && !ps.opts.entitiesExpanded {
+						ents.version11 = dec.IsVersion11()
+						ents.resolver = ps.opts.ExternalEntities
+						// An entity whose replacement text holds markup cannot go
+						// through dec.Entity at all: encoding/xml substitutes that
+						// map's values as character data and never re-scans them,
+						// so <!ENTITY e "<b/>"> would reach the tree as the four
+						// characters "<b/>". XML says the replacement text is
+						// parsed, which is what makes an entity a way to factor
+						// out a fragment rather than only a phrase.
+						//
+						// So such a document is rewritten and parsed again. The
+						// check is cheap and almost always false, and the restart
+						// happens at the DOCTYPE — before any content has been
+						// built — so nothing is thrown away but the directive.
+						if ents.hasMarkup() {
+							// The decoder buffers ahead, so srcBuf holds an
+							// unpredictable prefix and the reader holds the
+							// remainder — but the decoder's own buffer holds the
+							// piece between them. Recovering that is fragile, so
+							// the source is re-read from the start instead: the
+							// caller's reader is spent, and the tee has whatever
+							// it consumed, which together with the rest of the
+							// reader is the whole document only if nothing was
+							// buffered. Reading the tee to completion first makes
+							// it so.
+							if _, err := io.Copy(io.Discard, r); err != nil {
+								return nil, fmt.Errorf("parse XML: %w", err)
+							}
+							if whole != "" {
+								ps.inner, ps.innerDone = parseExpandedSteps(whole, ents, ps.opts)
+								return ps.inner()
+							}
+							ps.inner, ps.innerDone = parseExpandedSteps(ps.srcBuf.String(), ents, ps.opts)
+							return ps.inner()
+						}
+						// Arm the charge reader now that the declarations are
+						// known. The decoder has already buffered ahead — possibly
+						// the entire document, if the declaration was large enough
+						// to fill its read-ahead window along with the body — so
+						// arming charges that backlog here rather than waiting for
+						// a further Read that may never come. The remainder, if
+						// any, streams through the reader. Either way every
+						// reference in the document body is charged before the
+						// decoder expands it.
+						if charger != nil {
+							if err := charger.arm(ents); err != nil {
+								return nil, fmt.Errorf("parse XML: %w", err)
+							}
+						}
+						if dec.Entity == nil {
+							dec.Entity = map[string]string{}
+						}
+						m := ents.entityMap()
+						for k, v := range m {
+							dec.Entity[k] = v
+						}
+						dec.AttrEntity = ents.attrEntityMap(m)
+					}
 				}
 			}
 		}
 
-		// Each token points into the decoder and is copied out here; it is
-		// valid only until the next RawToken.
-		switch tok := tok.(type) {
-		case *xml.StartElement:
-			t := *tok
-			sawPrologToken = true
-			depth++
-			if depth > maxDepth {
-				return nil, fmt.Errorf("parse XML: nesting exceeds %d levels: %w",
-					maxDepth, ErrResourceLimit)
-			}
-			if cur == tree.Root {
-				if sawRoot {
-					return nil, fmt.Errorf("parse XML: multiple root elements")
+		if !ps.sawRoot {
+			return nil, fmt.Errorf("parse XML: no root element")
+		}
+		if ps.cur != tree.Root {
+			return nil, fmt.Errorf("parse XML: unexpected EOF, %q left open", ps.cur.Name().Local)
+		}
+		if bs != nil {
+			// The comments and processing instructions after the document
+			// element.
+			if err := bs.trimLeaves(ps.cur, 0, &ps.spaces, names); err != nil {
+				if err == errPause {
+					ps.ended = true
 				}
-				sawRoot = true
-				// Past the prolog: no re-parse can start now, so the copy
-				// kept for one is dropped; and with no entity table installed
-				// by now none ever will be, so the charge reader has nothing
-				// to buffer for.
-				if tee != nil {
-					tee.buf = nil
-					srcBuf = strings.Builder{}
-				}
-				if charger != nil && charger.t == nil {
-					charger.off = true
-					charger.backlog = nil
-				}
-			}
-			if len(attDefaults) > 0 {
-				if defIdx == nil {
-					defIdx = indexDecls(len(attDefaults), func(i int) string { return attDefaults[i].element })
-				}
-				t = applyAttDefaults(t, attDefaults, defIdx)
-			}
-			if len(attTypes) > 0 {
-				if typeIdx == nil {
-					typeIdx = indexDecls(len(attTypes), func(i int) string { return attTypes[i].element })
-				}
-				t = normalizeAttTokens(t, attTypes, typeIdx)
-			}
-			if err := validateStartElement(t, &ns, dec.IsVersion11()); err != nil {
 				return nil, err
 			}
-			if bs != nil && cur == tree.Root {
-				if err := bs.prolog(tree.Root); err != nil {
-					return nil, err
-				}
-				bs.marks = append(bs.marks[:0], markOf(tree))
-				bs.v11 = dec.IsVersion11()
-			}
-			el, decls := buildElement(t, cur, &ns, &names)
-			if off := encodeOffset(start, trackPos); off != 0 {
-				el.setOffset(off)
-			}
-			// A node written inside an external parsed entity takes its base
-			// URI from that entity, not from its parent in the tree — XML
-			// Base section 4.2 and the XDM base-uri accessor. The entity's
-			// text has already been spliced into this source, so the only
-			// record of where it came from is the byte offset.
-			//
-			// This runs after buildElement so that an xml:base ON the element
-			// still resolves against the entity's URI, which is the base in
-			// force where the attribute was written.
-			if b := baseAt(opts.entityBases, int(start)); b != "" {
-				if xb := el.Attr(NSXML, "base"); xb != nil {
-					el.SetBaseURI(resolveBase(b, xb.Value()))
-				} else {
-					el.SetBaseURI(b)
-				}
-			}
-			if len(attTypes) > 0 {
-				applyAttTypes(el, attTypes, typeIdx)
-			}
-			// Attributes and namespaces are nodes too, and a document made
-			// of elements carrying many attributes allocates most of its
-			// memory in them, so they count against the limit.
-			nodes += 1 + el.NumAttrs() + decls
-			if maxNodes > 0 && nodes > maxNodes {
-				return nil, fmt.Errorf(
-					"parse XML: document exceeds %d nodes: %w",
-					maxNodes, ErrResourceLimit)
-			}
-			cur = el
-			if bs != nil {
-				if err := bs.start(el, depth); err != nil {
-					return nil, err
-				}
-			}
-
-		case *xml.EndElement:
-			t := *tok
-			if cur == tree.Root {
-				return nil, fmt.Errorf("parse XML: unbalanced end element %q", t.Name.Local)
-			}
-			// RawToken does not pair tags, so the pairing is checked here on
-			// the lexical name — which is what XML §3 requires anyway: the
-			// end tag must repeat the start tag's QName character for
-			// character, not merely resolve to the same expanded name.
-			if cn := cur.Name(); t.Name.Space == cn.Prefix && t.Name.Local == cn.Local {
-				// The same QName, written the same way: nothing to build.
-			} else if got, want := lexicalName(t.Name), cn.Lexical(); got != want {
-				return nil, fmt.Errorf(
-					"parse XML: element %q closed by end element %q", want, got)
-			}
-			// Ignorable whitespace goes first and unconditionally: the
-			// DTD-derived rule outranks the stylesheet-declared one, so it
-			// must not be gated on a strip-space declaration existing.
-			tree.closeLast()
-			ns.pop(len(cur.frame()))
-			closed := cur
-			cur = cur.Parent()
-			depth--
-			if bs != nil {
-				if err := bs.end(closed, depth+1, &spaces, &names); err != nil {
-					return nil, err
-				}
-			}
-
-		case *xml.CharData:
-			t := *tok
-			// CharData is only meaningful inside an element; whitespace at the
-			// document level is legal and carries no information. It must be
-			// written as such: [27] Misc admits no reference or CDATA section.
-			if cur == tree.Root {
-				if !dec.Literal() || !isXMLWhitespace(string(t), dec.IsVersion11()) {
-					return nil, fmt.Errorf("parse XML: character data outside root element")
-				}
-				sawPrologToken = true
-				continue
-			}
-			run.add(cur, t, dec)
-
-		case *xml.Comment:
-			t := *tok
-			sawPrologToken = true
-			if bs != nil && cur == tree.Root && !bs.leaves {
-				continue // a burst's tree holds no prolog (see bursts.go)
-			}
-			c := cur.appendChild(KindComment)
-			c.v0, c.v1 = tree.text.addBytes(t, 0)
-
-		case *xml.ProcInst:
-			t := *tok
-			if strings.EqualFold(t.Target, "xml") {
-				if t.Target != "xml" {
-					return nil, fmt.Errorf("parse XML: processing-instruction target %q is reserved", t.Target)
-				}
-				if sawDecl || sawPrologToken || sawRoot || sawDoctype {
-					return nil, fmt.Errorf("parse XML: XML declaration must appear at the start of the document")
-				}
-				if err := validateXMLDecl(string(t.Inst)); err != nil {
-					return nil, err
-				}
-				sawDecl = true
-				standalone = declStandaloneYes(string(t.Inst))
-				continue // the XML declaration is not a PI node in the XDM
-			}
-			// Namespaces in XML §7: no PI target contains a colon.
-			if strings.Contains(t.Target, ":") {
-				return nil, fmt.Errorf("parse XML: processing-instruction target %q contains a colon", t.Target)
-			}
-			sawPrologToken = true
-			if bs != nil && cur == tree.Root && !bs.leaves {
-				continue
-			}
-			pi := cur.appendChild(KindPI)
-			pi.name = tree.intern(QName{Local: t.Target})
-			pi.v0, pi.v1 = tree.text.addBytes(t.Inst, 0)
-			// Same entity rule as for elements: a PI pulled in from an
-			// external entity has that entity's URI as its base. This is
-			// exactly what resolve-uri-021 asserts.
-			if b := baseAt(opts.entityBases, int(start)); b != "" {
-				pi.SetBaseURI(b)
-			}
-
-		case *xml.Directive:
-			t := *tok
-			d := strings.TrimSpace(string(t))
-			if !isDOCTYPEDirective(d) {
-				return nil, fmt.Errorf("parse XML: markup declaration %q is not a DOCTYPE", d)
-			}
-			if sawDoctype || sawRoot || cur != tree.Root {
-				return nil, fmt.Errorf("parse XML: DOCTYPE declaration must appear once before the document element")
-			}
-			if !opts.AllowDOCTYPE {
-				return nil, fmt.Errorf("parse XML: DOCTYPE declaration rejected " +
-					"(set AllowDOCTYPE to permit its internal declarations; " +
-					"reading external entities additionally requires " +
-					"ExternalEntities)")
-			}
-			// An ATTLIST may give an attribute a #FIXED or literal default,
-			// which a processor is required to add to every matching element
-			// — including a namespace declaration, since "xmlns:p CDATA
-			// #FIXED '...'" is how a DTD supplies a binding. Without this the
-			// prefix is simply absent from the tree.
-			//
-			// Only defaults are read. A default's references to internal
-			// entities are expanded once the entities are known (see
-			// normalizeAttDefaults); nothing resolves an external identifier
-			// or reads a file, so this does not widen what AllowDOCTYPE
-			// admits.
-			if isDOCTYPEDirective(d) {
-				sawDoctype = true
-				sawPrologToken = true
-				// Retained so a caller can validate against the document's
-				// own DTD; see Tree.DocType.
-				tree.DocType = d
-				// Without a resolver no parameter entity is read, so §5.1
-				// stops entity and ATTLIST processing at the first
-				// reference to one, unless the document is standalone.
-				declText := d
-				if opts.ExternalEntities == nil && !standalone {
-					declText = declsBeforeUnreadPE(d)
-				}
-				defs, types := parseAttList(declText)
-				attDefaults = append(attDefaults, defs...)
-				attTypes = append(attTypes, types...)
-				elementOnly = parseElementOnlyDecls(d)
-				// Internal general entities are declared here and referenced
-				// in content, so the table has to be installed before the
-				// decoder reads any. encoding/xml consults dec.Entity lazily,
-				// which makes that possible: the DOCTYPE is always the first
-				// token.
-				//
-				// Only internal entities are expanded. One declared SYSTEM or
-				// PUBLIC is recorded as refused, so referencing it is an
-				// error rather than a fetch — this does not open XXE.
-				subset := d
-				var ents *entityTable
-				// Everything that reads outside the document happens only
-				// when a resolver was supplied. With none, this whole block
-				// is skipped and the subset is read exactly as before.
-				if opts.ExternalEntities != nil && !opts.entitiesExpanded {
-					ents = newEntityTable(opts.BaseURI, opts.entityBudget)
-					// The DOCTYPE follows the XML declaration, so by now the
-					// decoder has read the version and §4.3.4 can be enforced
-					// against it. See entityTable.checkEntityVersion.
-					ents.version11 = dec.IsVersion11()
-					ents.resolver = opts.ExternalEntities
-					// A parameter entity in the INTERNAL subset is expanded
-					// first, since it is how a document pulls a module of
-					// declarations in: "<!ENTITY % ext SYSTEM 'e.ent'>%ext;"
-					// declares nothing by itself, and the declarations only
-					// exist once that reference is substituted.
-					expandedSubset, err := ents.expandParameterEntities(d, opts.BaseURI, 0)
-					if err != nil {
-						return nil, fmt.Errorf("parse XML: %w", err)
-					}
-					subset = expandedSubset
-					ents.parseDecls(subset, opts.BaseURI)
-					ents.subsetText = subset
-					if sys, pub, ok := externalSubsetOf(d); ok {
-						if err := ents.loadExternalSubset(sys, pub, opts.BaseURI); err != nil {
-							return nil, fmt.Errorf("parse XML: %w", err)
-						}
-					}
-					if err := checkDTDComments(ents.subsetText); err != nil {
-						return nil, fmt.Errorf("parse XML: external DTD: %w", err)
-					}
-					if err := checkEntityCharRefs(ents.subsetText, dec.IsVersion11()); err != nil {
-						return nil, fmt.Errorf("parse XML: %w", err)
-					}
-					// Retained so fn:unparsed-entity-uri can see declarations
-					// that live outside the directive. The subset a document
-					// is governed by is not always the text it was written
-					// with.
-					tree.ownSource().externalSubset = ents.subsetText
-					// Declarations pulled in from the external subset are read
-					// before ents may be discarded below: loading one that
-					// declared no entities still nils ents out, and the
-					// <!ELEMENT> models it brought in would be lost with it.
-					if ents.subsetText != "" {
-						elementOnly = parseElementOnlyDecls(ents.subsetText)
-					}
-					if len(ents.raw) == 0 && len(ents.external) == 0 {
-						ents = nil
-					}
-					// Substituting a parameter entity can bring in attribute
-					// defaults and declared types that were not in the
-					// directive as written, so those are re-read from the
-					// expanded text rather than the original.
-					if subset != d || ents != nil {
-						text := subset
-						if ents != nil {
-							text = ents.subsetText
-						}
-						defs, types := parseAttList(text)
-						attDefaults = defs
-						attTypes = types
-						elementOnly = parseElementOnlyDecls(text)
-					}
-				} else {
-					ents = parseEntityDecls(declText, opts.BaseURI, opts.entityBudget)
-				}
-				if ents != nil {
-					ents.version11 = dec.IsVersion11()
-				}
-				if err := checkEntityCharRefs(d, dec.IsVersion11()); err != nil {
-					return nil, fmt.Errorf("parse XML: %w", err)
-				}
-				wfc := entityDeclaredIsWFC(d, standalone)
-				if attDefaults, err = normalizeAttDefaults(attDefaults, ents, dec.IsVersion11(), wfc); err != nil {
-					return nil, fmt.Errorf("parse XML: %w", err)
-				}
-				// Each default lands in every matching element; store its
-				// value once so that they all alias it.
-				for _, d := range attDefaults {
-					tree.text.share(d.value)
-				}
-				if !wfc {
-					declared := ents
-					dec.Undeclared = func(name string) bool { return !declared.declares(name) }
-				}
-				if ents != nil && !opts.entitiesExpanded {
-					ents.version11 = dec.IsVersion11()
-					ents.resolver = opts.ExternalEntities
-					// An entity whose replacement text holds markup cannot go
-					// through dec.Entity at all: encoding/xml substitutes that
-					// map's values as character data and never re-scans them,
-					// so <!ENTITY e "<b/>"> would reach the tree as the four
-					// characters "<b/>". XML says the replacement text is
-					// parsed, which is what makes an entity a way to factor
-					// out a fragment rather than only a phrase.
-					//
-					// So such a document is rewritten and parsed again. The
-					// check is cheap and almost always false, and the restart
-					// happens at the DOCTYPE — before any content has been
-					// built — so nothing is thrown away but the directive.
-					if ents.hasMarkup() {
-						// The decoder buffers ahead, so srcBuf holds an
-						// unpredictable prefix and the reader holds the
-						// remainder — but the decoder's own buffer holds the
-						// piece between them. Recovering that is fragile, so
-						// the source is re-read from the start instead: the
-						// caller's reader is spent, and the tee has whatever
-						// it consumed, which together with the rest of the
-						// reader is the whole document only if nothing was
-						// buffered. Reading the tee to completion first makes
-						// it so.
-						if _, err := io.Copy(io.Discard, r); err != nil {
-							return nil, fmt.Errorf("parse XML: %w", err)
-						}
-						if whole != "" {
-							return parseExpanded(whole, ents, opts)
-						}
-						return parseExpanded(srcBuf.String(), ents, opts)
-					}
-					// Arm the charge reader now that the declarations are
-					// known. The decoder has already buffered ahead — possibly
-					// the entire document, if the declaration was large enough
-					// to fill its read-ahead window along with the body — so
-					// arming charges that backlog here rather than waiting for
-					// a further Read that may never come. The remainder, if
-					// any, streams through the reader. Either way every
-					// reference in the document body is charged before the
-					// decoder expands it.
-					if charger != nil {
-						if err := charger.arm(ents); err != nil {
-							return nil, fmt.Errorf("parse XML: %w", err)
-						}
-					}
-					if dec.Entity == nil {
-						dec.Entity = map[string]string{}
-					}
-					m := ents.entityMap()
-					for k, v := range m {
-						dec.Entity[k] = v
-					}
-					dec.AttrEntity = ents.attrEntityMap(m)
-				}
-			}
 		}
-	}
+	finished:
+		tree.closeAll()
+		tree.frozen = true
+		tree.text.trim()
+		// The indexes only building uses go; a tree renamed or cloned later
+		// rebuilds the ones it needs.
+		tree.nameIx, tree.nameHot = nil, nil
+		tree.frameOne, tree.frameMany = nil, nil
+		tree.open = nil
 
-	if !sawRoot {
-		return nil, fmt.Errorf("parse XML: no root element")
-	}
-	if cur != tree.Root {
-		return nil, fmt.Errorf("parse XML: unexpected EOF, %q left open", cur.Name().Local)
-	}
-	if bs != nil {
-		// The comments and processing instructions after the document
-		// element.
-		if err := bs.trimLeaves(cur, 0, &spaces, &names); err != nil {
-			return nil, err
+		if trackPos {
+			// The decoder stops reading at the end of the root element, so the
+			// tee has seen everything up to there — which is all any offset can
+			// point into.
+			lines := &lineIndex{}
+			if whole != "" {
+				lines.add(unsafe.Slice(unsafe.StringData(whole), len(whole)))
+			} else {
+				lines = tee.lines
+			}
+			// append's doubling leaves up to a third of the index unused, kept
+			// for the life of the tree.
+			if cap(lines.starts) > len(lines.starts) {
+				lines.starts = append(make([]int32, 0, len(lines.starts)), lines.starts...)
+			}
+			tree.ownSource().lines = lines
 		}
-	}
-	tree.closeAll()
-	tree.frozen = true
-	tree.text.trim()
-	// The indexes only building uses go; a tree renamed or cloned later
-	// rebuilds the ones it needs.
-	tree.nameIx, tree.nameHot = nil, nil
-	tree.frameOne, tree.frameMany = nil, nil
-	tree.open = nil
-
-	if trackPos {
-		// The decoder stops reading at the end of the root element, so the
-		// tee has seen everything up to there — which is all any offset can
-		// point into.
-		lines := &lineIndex{}
-		if whole != "" {
-			lines.add(unsafe.Slice(unsafe.StringData(whole), len(whole)))
-		} else {
-			lines = tee.lines
+		tree.XMLVersion = "1.0"
+		if dec.IsVersion11() {
+			tree.XMLVersion = "1.1"
 		}
-		// append's doubling leaves up to a third of the index unused, kept
-		// for the life of the tree.
-		if cap(lines.starts) > len(lines.starts) {
-			lines.starts = append(make([]int32, 0, len(lines.starts)), lines.starts...)
-		}
-		tree.ownSource().lines = lines
+		return tree, nil
 	}
-	tree.XMLVersion = "1.0"
-	if dec.IsVersion11() {
-		tree.XMLVersion = "1.1"
-	}
-	return tree, nil
+	return step, done
 }
 
 // readBufs are a parse's read windows: decodeReader's look at the byte order
@@ -806,6 +843,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 type readBufs struct {
 	br           *bufio.Reader
 	lineEnd, dec []byte
+	ps           parseState
 }
 
 var readBufPool = sync.Pool{New: func() any {
@@ -816,9 +854,55 @@ var readBufPool = sync.Pool{New: func() any {
 	}
 }}
 
+// parseState is what a parse keeps from step to step (parseSteps).
+type parseState struct {
+	dec   xml.Decoder
+	opts  ParseOptions
+	nodes int
+	// The records are appended in document order as the tokens arrive, so
+	// a parse builds the tree in its final layout and never walks it again.
+	spaces           spaceTable
+	run              textRun
+	cur              *Node
+	ns               nsScope
+	names            nameCache
+	depth            int
+	sawRoot, sawDecl bool
+	standalone       bool // the XML declaration said standalone="yes"
+	sawPrologToken   bool
+	sawDoctype       bool
+	// Attribute defaults declared by an ATTLIST in the internal subset. Kept
+	// as a slice because a document rarely declares more than a handful, and
+	// the common case is none at all.
+	attDefaults []attDefault
+	attTypes    []attDeclaredType
+	// The declarations by element name, built when the first element needs
+	// them, after the DOCTYPE has settled both lists.
+	defIdx, typeIdx declIndex
+	// Element names whose DTD content model is element-only. Whitespace-only
+	// text in such an element is ignorable (XML §2.10) and is stripped
+	// regardless of what the stylesheet declares (XSLT 2.0 §4.4).
+	elementOnly map[string]bool
+	srcBuf      strings.Builder
+	// inner is the parse of the source rewritten when its entities hold
+	// markup (parseExpandedSteps), which goes on in this parse's place.
+	inner     func() (*Tree, error)
+	innerDone func()
+	// Where a pause left the parse (errPause): held is the token read
+	// before the leaves ahead of it were all told, read from heldStart; with
+	// prologHeld, the document element's start tag, heldT, paused at while
+	// the prolog was told; ended, the document read to its end.
+	held       xml.Token
+	heldStart  int64
+	heldT      xml.StartElement
+	prologHeld bool
+	ended      bool
+}
+
 // release returns b to the pool, without the caller's reader.
 func (b *readBufs) release() {
 	b.br.Reset(nil)
+	b.ps = parseState{} // nothing of the parse is kept by the pool
 	readBufPool.Put(b)
 }
 
@@ -1133,7 +1217,8 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// parseExpanded re-parses a document whose entities hold markup.
+// parseExpandedSteps re-parses a document whose entities hold markup, as
+// parseSteps parses one.
 //
 // It exists because encoding/xml cannot expand such an entity: dec.Entity maps
 // a name to a string and the decoder substitutes that string as character
@@ -1146,17 +1231,17 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // cannot recurse back into here, and a document that references an entity the
 // subset does not declare still fails in the decoder, where the error names
 // the reference.
-func parseExpanded(src string, ents *entityTable, opts ParseOptions) (*Tree, error) {
+func parseExpandedSteps(src string, ents *entityTable, opts ParseOptions) (func() (*Tree, error), func()) {
 	expanded, err := ents.substituteMarkupEntities(src)
 	if err != nil {
-		return nil, fmt.Errorf("parse XML: %w", err)
+		return func() (*Tree, error) { return nil, fmt.Errorf("parse XML: %w", err) }, func() {}
 	}
 	// The expansion bounds have already been applied by the substitution, so
 	// the re-parse is of text of a size this package has agreed to.
 	sub := opts
 	sub.entitiesExpanded = true
 	sub.entityBases = ents.baseSpans
-	return Parse(strings.NewReader(expanded), sub)
+	return parseSteps(strings.NewReader(expanded), "", sub)
 }
 
 // resolveBase resolves an xml:base value against the base already in force.

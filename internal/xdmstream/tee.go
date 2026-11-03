@@ -21,7 +21,7 @@ import (
 // been read, then the next consumer goes on. swap is called as consumer k
 // stops (in false) and goes on (in true), so that state the consumers share
 // can be set aside between turns (state a goroutine holds, such as a lock,
-// is c's Handoff's: a turn ends at a switch to a parse). A consumer runs on
+// is c's Handoff's: a turn ends as a parse waits for bytes). A consumer runs on
 // a goroutine of its own, but never at the same time as another or as the
 // caller: each turn starts and ends with a channel exchange.
 //
@@ -113,7 +113,7 @@ type teeBlock struct {
 // start runs consumer k on a goroutine; it returns once k's first turn has
 // begun, the caller then waiting for its end.
 func (t *tee) start(k int, c *Cursor, run func(int, *Cursor) error, errs []error) {
-	r := &teeReader{t: t, k: k}
+	r := &teeReader{t: t, k: k, handoff: c.handoff}
 	sub := Open(r, c.opts)
 	sub.strip, sub.handoff = c.strip, c.handoff
 	go func() {
@@ -138,6 +138,9 @@ type teeReader struct {
 	k   int
 	b   []byte
 	err error
+	// handoff is the cursors' Handoff: the turn ends here, inside the
+	// parse, on the consumer's goroutine.
+	handoff func() func()
 }
 
 func (r *teeReader) Read(p []byte) (int, error) {
@@ -145,8 +148,13 @@ func (r *teeReader) Read(p []byte) (int, error) {
 		if r.err != nil {
 			return 0, r.err
 		}
+		back := func() {}
+		if r.handoff != nil {
+			back = r.handoff()
+		}
 		r.t.ask <- teeMsg{}
 		blk := <-r.t.give[r.k]
+		back()
 		r.b, r.err = blk.b, blk.err
 	}
 	n := copy(p, r.b)
