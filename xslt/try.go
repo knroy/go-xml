@@ -226,7 +226,7 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return appendSequence(sub.Sequence(), out)
 	}
 
-	if !catchable(err) || st.failed() {
+	if !catchable(err) {
 		// An unwinding signal is not a failure of the body, so the body's
 		// output stands rather than being rolled back. xsl:break inside an
 		// xsl:try inside an xsl:iterate is the case iterate-035 writes: the

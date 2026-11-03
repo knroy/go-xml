@@ -162,10 +162,6 @@ func (c *Cursor) StripWhitespace(strip func(el *xdm.Node) bool) { c.strip = stri
 // Close stops the parse. The cursor is spent.
 func (c *Cursor) Close() { c.stop() }
 
-// Err is the parse's error once it has failed (a well-formedness, limit or
-// read error, or the error of a GroundLater function), nil before.
-func (c *Cursor) Err() error { return c.err }
-
 // At is the current event: the last one Next, NextTag, SkipTag, Skip,
 // Ground, GroundLater or Text returned (a Peek does not move it).
 func (c *Cursor) At() Event { return c.ev }

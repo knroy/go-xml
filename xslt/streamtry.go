@@ -16,9 +16,9 @@ package xslt
 // What the tree does that the stream must do the same:
 //
 //   - A parse, limit or read error is the document's, which the tree raises
-//     before the body runs and no xsl:try inside the body can catch: when
-//     the cursor has failed, nothing is caught (streamTry.failed), and an
-//     error the skip meets is the try's error.
+//     before the body runs and no xsl:try inside the body can catch. The
+//     cursor's errors carry no error code, so catchable refuses them as it
+//     does the engine's own; an error the skip meets is the try's.
 //   - Which error the catch sees (§2.14: the tree's first, in its order).
 //     The stream evaluates a consumer's parts in another order than the tree:
 //     a split walks P once, applying each match's predicates, tail and fold
@@ -344,10 +344,6 @@ func (rt *runtime) streamTry() streamTry {
 	}
 	return streamTry{}
 }
-
-// failed reports whether the cursor has failed: the document's error,
-// which no xsl:try inside the body may catch.
-func (t streamTry) failed() bool { return t.run != nil && t.run.c.Err() != nil }
 
 // caught is told the try's body failed with an error a catch takes: when
 // the body read the context, the rest of it is skipped, parsed and checked,
