@@ -105,6 +105,17 @@ func TestStreamClimbMatchesTree(t *testing.T) {
 			}
 		}
 	}
+	// A function of the match reading its attribute: $n/@k is ./@k on the
+	// view (viewCheck keeps the focus across "./").
+	fn := `<xsl:function name="p:g" streamability="absorbing" as="xs:string"><xsl:param name="n" as="node()"/>` +
+		`<xsl:sequence select="string($n/@k)"/></xsl:function>`
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		body := `<out><xsl:for-each select="/*/rec"><v><xsl:value-of select="p:g(.)"/></v></xsl:for-each></out>`
+		streamed += coreCheck(t, coreSheetWith(fn, body), dir, "doc "+name+", "+body, true, TransformOptions{})
+	}
 	if streamed == 0 {
 		t.Error("nothing streamed without a re-run")
 	}

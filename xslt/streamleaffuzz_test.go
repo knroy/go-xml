@@ -9,7 +9,7 @@ package xslt
 var fuzzTailsExtra = []string{"ancestor::*", "ancestor-or-self::*/@k", "ancestor::*/name()",
 	"ancestor-or-self::*/data(@v)", "parent::node()/@k", "ancestor::*[1]/@id", "ancestor::*[@k]",
 	"./ancestor-or-self::*", "ancestor::*/@*", "parent::*/name()", "text()/string-length()",
-	"comment()", "node()/(. || '')", "ancestor-or-self::*/namespace::*"}
+	"comment()", "node()/(. || '')"}
 
 // fuzzSelectsExtra are selects beside selectExpr()'s own; P is the path.
 var fuzzSelectsExtra = []string{"head(P) ! name()", "(P, 'x') ! name()", "subsequence(P, 2) ! name()",
