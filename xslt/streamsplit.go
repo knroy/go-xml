@@ -122,7 +122,10 @@ type streamSplit struct {
 	// matches (parent::, a positional predicate): they are held, and taken
 	// sorted, each once, at the context's end.
 	climb, climbElems, climbSort bool
-	climbNodes, climbEach        *xpath.Compiled
+	// mapClimb says the tail is the right of P ! R, R climbing: each
+	// match's nodes are its own, as a simple map gives them.
+	mapClimb              bool
+	climbNodes, climbEach *xpath.Compiled
 	// predFail and tailFail say a predicate of P, or the tail, may raise an
 	// error: the tree evaluates them all, so the split may not stop early.
 	predFail, tailFail bool
@@ -357,6 +360,12 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		return "a tail after text, comment or PI matches"
 	case !tailKindOK(tail):
 		return "tail " + tail.String() + ": may give both nodes and values (XPTY0018)"
+	case w.mapped:
+		if !(viewCheck{}).safe(tail, vElem, true) {
+			return "simple map " + tail.String() + ": not motionless on the match's view"
+		}
+		s.mode, s.mapClimb = matchView, true
+		s.climbElems = !endsInLeafNodes(tail) && !valueTail(tail)
 	case climbs(tail):
 		// Matches share ancestors: the tree makes each once, then what
 		// follows of it (//P/ancestor::*/data(@a) too); climbing takes
@@ -434,7 +443,7 @@ func (s *streamSplit) class() string {
 		return "subtree"
 	case s.red != "":
 		return "bounded"
-	case s.steps == nil || s.atomize || s.tailText != "" || s.leafOnly || s.climb ||
+	case s.steps == nil || s.atomize || s.tailText != "" || s.leafOnly || s.climb || s.mapClimb ||
 		(s.mode == matchView || s.mode == matchGround) && s.tail != nil && valueTail(s.tail.Expr()):
 		// A grounded match's copy is let go once its tail has made values;
 		// a kept leaf is a copy of it alone, its ancestors' copies shared;
@@ -711,7 +720,10 @@ type splitter struct {
 	// for current-group() in the path found.
 	group, key bool
 	groupStep  *xpath.Step
-	why        string
+	// mapped says the path found is P ! R, R climbing (streamleaf.go): R
+	// is the tail, a match at a time, its nodes not merged across matches.
+	mapped bool
+	why    string
 }
 
 // isCurrentGroup reports whether e is a call on fn:current-group().
@@ -864,6 +876,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 		}
 		return w.slot(x.Base, func(y xpath.Expr) { x.Base = y }, useKeep)
 	case *xpath.SimpleMap:
+		if !burstSafe(x.Right, false) && w.mapClimb(x, put, use) {
+			return true
+		}
 		if !burstSafe(x.Right, false) {
 			return w.refuse("simple map " + e.String())
 		}
@@ -1124,6 +1139,14 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 	case *xpath.QuantifiedExpr:
 		return vc.bound(x.Bindings, f) && vc.safe(x.Test, f, true)
 	case *xpath.SimpleMap:
+		if v, ok := x.Left.(*xpath.VarRef); ok && vc.items && isSplitItems(v) {
+			return vc.safe(x.Right, vElem, nodeOK) // the climbed views alone
+		}
+		if vc.items && !itemsOut(x.Left) && (f == vNone || endsInLeafNodes(x.Left)) {
+			// No view comes out of the left: its items are values, nodes
+			// of variables, or attributes and namespaces.
+			return vc.safe(x.Left, f, true) && vc.safe(x.Right, vLeaf, nodeOK)
+		}
 		return vc.safe(x.Left, f, true) && vc.safe(x.Right, vElem, nodeOK) && vc.safe(x.Right, vLeaf, nodeOK)
 	case *xpath.MapConstructor:
 		for i := range x.Keys {
@@ -1183,6 +1206,9 @@ func (vc viewCheck) path(steps []xpath.Expr, f vfocus, nodeOK bool) bool {
 			if i == 0 && vc.curOK && isCurrentCall(s) {
 				cur = vc.cur
 				continue
+			}
+			if isContextItem(s) && cur != vNone {
+				continue // ./x is x: the focus stays what it is
 			}
 			if !vc.safe(s, cur, nodeOK) {
 				return false

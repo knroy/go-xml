@@ -131,7 +131,7 @@ var coreBodies = []struct {
 	{`<out><xsl:value-of select="(//sub)[2]"/></out>`, true},
 	{`<e><xsl:attribute name="a" select="//sub/@x"/></e>`, true},
 	{`<e><xsl:attribute name="a" select="//rec" separator="-"/></e>`, true},
-	{`<out><xsl:value-of select="//rec/text()"/></out>`, false},
+	{`<out><xsl:value-of select="//rec/text()"/></out>`, true}, // kept leaves (G4)
 	{`<out><xsl:value-of select="//rec/node()"/></out>`, false},
 	// The burst plans' shapes the core took at M1.6: values made from each
 	// grounded match (sf-deep-equal, si-lre-C), a choice under simple
@@ -144,8 +144,8 @@ var coreBodies = []struct {
 	{`<out><xsl:sequence select="subsequence(data(*/rec/@v), 1, 2) ! (position(), .)"/></out>`, true},
 	{`<xsl:for-each select="outermost(//rec)"><r><xsl:sequence select="text()"/></r></xsl:for-each>`, true},
 	// A tail that climbs: the tree makes the ancestors once each before
-	// their values (sf-insert-before-035), a match at a time cannot.
-	{`<out><xsl:value-of select="//sub/ancestor-or-self::*/data(@k)" separator="|"/></out>`, false},
+	// their values (sf-insert-before-035), and so does the climbing split.
+	{`<out><xsl:value-of select="//sub/ancestor-or-self::*/data(@k)" separator="|"/></out>`, true},
 	// Nested container.
 	{`<out><xsl:source-document href="doc.xml" streamable="yes"><n><xsl:value-of select="count(//rec)"/></n></xsl:source-document>` +
 		`<xsl:value-of select="count(//sub)"/></out>`, true},

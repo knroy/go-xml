@@ -54,7 +54,7 @@ func (s *streamSplit) climbing(tail xpath.Expr, part func(xpath.Expr) *xpath.Com
 		s.climbNodes, s.climbEach = part(nodes), part(pe.Steps[n])
 		return ""
 	}
-	s.climbElems = !endsInAttribute(tail)
+	s.climbElems = !endsInLeafNodes(tail)
 	return ""
 }
 
@@ -177,4 +177,56 @@ func (r *splitRun) climbFinish() error {
 		}
 	}
 	return nil
+}
+
+// mapClimb takes P ! R, R climbing from P's matches (ancestor::*, a name of
+// one), as the consuming path P with R for its tail, evaluated on each
+// match's view; it reports whether it did.
+func (w *splitter) mapClimb(x *xpath.SimpleMap, put func(xpath.Expr), use splitUse) bool {
+	if w.pe != nil || w.why != "" || !climbs(x.Right) {
+		return false
+	}
+	pp, ok := w.pathOf(x.Left)
+	if !ok || pp.ctxItem || pp.group || len(pp.tail) > 0 {
+		w.why = ""
+		return false
+	}
+	pp.tail = []xpath.Expr{x.Right}
+	w.pe, w.put, w.use, w.path, w.mapped = x, put, use, pp, true
+	return true
+}
+
+// itemsOut reports, conservatively, whether what e gives may hold the
+// split's items.
+func itemsOut(e xpath.Expr) bool {
+	switch x := e.(type) {
+	case *xpath.Literal:
+		return false
+	case *xpath.Step:
+		return x.Axis != xpath.AxisAttribute && x.Axis != xpath.AxisNamespace
+	case *xpath.SimpleMap:
+		return itemsOut(x.Right)
+	case *xpath.PathExpr:
+		return len(x.Steps) == 0 || itemsOut(x.Steps[len(x.Steps)-1])
+	case *xpath.IfExpr:
+		return itemsOut(x.Then) || itemsOut(x.Else)
+	case *xpath.SequenceExpr:
+		for _, it := range x.Items {
+			if itemsOut(it) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+
+// endsInLeafNodes reports whether a path's last step gives attributes or
+// namespace nodes, which a view has whole.
+func endsInLeafNodes(e xpath.Expr) bool {
+	if pe, ok := e.(*xpath.PathExpr); ok && len(pe.Steps) > 0 {
+		e = pe.Steps[len(pe.Steps)-1]
+	}
+	st, ok := e.(*xpath.Step)
+	return ok && (st.Axis == xpath.AxisAttribute || st.Axis == xpath.AxisNamespace)
 }

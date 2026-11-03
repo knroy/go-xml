@@ -65,6 +65,7 @@ var climbBodies = []struct {
 }{
 	{`<out><xsl:copy-of select="head(//sub/ancestor::*) ! name()"/></out>`, true},
 	{`<out><xsl:copy-of select="(//sub/ancestor::*, 'x') ! name()"/></out>`, true},
+	{`<out><xsl:copy-of select="head(//sub/./ancestor-or-self::*) ! name()"/></out>`, true},
 	{`<out><xsl:copy-of select="subsequence(//rec/ancestor-or-self::*, 2) ! name()"/></out>`, true},
 	{`<out><xsl:value-of select="//sub/ancestor-or-self::*/@*" separator="|"/></out>`, true},
 	{`<out><xsl:value-of select="//rec/ancestor-or-self::*/data(@k)" separator="|"/></out>`, true},
@@ -73,6 +74,13 @@ var climbBodies = []struct {
 	{`<out><xsl:value-of select="count(/doc/rec/sub/parent::node())"/></out>`, true},
 	{`<out><xsl:value-of select="//sub/ancestor::*[1]/@k" separator="|"/></out>`, true},
 	{`<out><xsl:copy-of select="if (//sub/ancestor::rec) then 0 else 1"/></out>`, true},
+	// A simple map: each match's ancestors, as many times as matches.
+	{`<out><xsl:value-of select="(//sub ! ancestor::*) instance of element()+"/></out>`, true},
+	{`<out><xsl:copy-of select="((//sub ! ancestor::*) treat as element()*) ! name()"/></out>`, true},
+	{`<out><xsl:value-of select="//rec ! ancestor-or-self::*/data(@k)" separator="|"/></out>`, true},
+	{`<out><xsl:value-of select="//sub ! ancestor::* ! @* ! string()" separator="|"/></out>`, true},
+	{`<out><xsl:value-of select="(//sub ! ancestor-or-self::*/namespace::*) ! name()" separator="|"/></out>`, true},
+	{`<out><xsl:copy-of select="(if (//sub/ancestor::rec) then 0 else 1) ! string()"/></out>`, true},
 	{`<out><xsl:copy-of select="//sub/ancestor::*"/></out>`, false},
 	{`<out><xsl:value-of select="//sub/ancestor::rec ! string()"/></out>`, false},
 }
