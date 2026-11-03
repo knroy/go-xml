@@ -864,11 +864,15 @@ func (run *streamRun) element(rt *runtime, v *xdm.Node, md int, mode string, par
 		run.root.SetBaseURI(top.BaseURI())
 		run.root.SetDocumentURI(top.DocumentURI())
 	}
-	d := run.d
-	run.d, run.used = md, false
+	// The rule's focus is v, not a group's first item: nothing in a rule
+	// reads a group (its ops are not inGroup), and an accumulator-after of v
+	// may read v to its end (streamAccums.consume) as anywhere else, which
+	// it refuses while a group is the context (fuzz seed 92048).
+	d, grp := run.d, run.grp
+	run.d, run.used, run.grp = md, false, nil
 	err := run.dispatch(rt, v, mode, params, tunnels, out)
 	read := run.used
-	run.d, run.used = d, true
+	run.d, run.used, run.grp = d, true, grp
 	return read, err
 }
 
