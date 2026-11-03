@@ -39,6 +39,9 @@ type accumulatorDef struct {
 	// to break priority ties between two rules of the same accumulator the
 	// same way the template conflict rules do.
 	declOrder int
+	// el is the declaration, which the streamed run's check reads
+	// (streamaccum.go).
+	el *xdm.Node
 }
 
 // accumulatorRule is one xsl:accumulator-rule.
@@ -57,6 +60,7 @@ type accumulatorRule struct {
 	priority  float64
 	hasPrio   bool
 	declOrder int
+	el        *xdm.Node // the xsl:accumulator-rule
 }
 
 // accumulatorValues holds one accumulator's value at every node of one tree.
@@ -110,7 +114,7 @@ func (c *compiler) compileAccumulator(el *xdm.Node, precedence int) error {
 			qn.Lexical())
 	}
 	ns := newNSResolver(el, "")
-	def := &accumulatorDef{name: xdm.QName{URI: qn.URI, Local: qn.Local}}
+	def := &accumulatorDef{name: xdm.QName{URI: qn.URI, Local: qn.Local}, el: el}
 	if def.initial, err = compileExpr(initial.Value(), ns); err != nil {
 		return err
 	}
@@ -259,6 +263,7 @@ func (c *compiler) compileAccumulatorRule(el *xdm.Node) (*accumulatorRule, error
 		post:      strings.TrimSpace(el.AttrValue("phase")) == "end",
 		priority:  pat.Priority(),
 		declOrder: c.declOrder,
+		el:        el,
 	}
 	if p := el.Attr("", "priority"); p != nil {
 		var f float64
@@ -389,29 +394,8 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	// counts what is really stored, one entry per item beyond the first, so
 	// that a document of single-item values is not refused by an item bound
 	// that was meant for sequences.
-	var tip xdm.Sequence
-	var held int64
-	extend := func(prev, next xdm.Sequence) (xdm.Sequence, error) {
-		if len(next) == len(prev) && (len(next) == 0 || &next[0] == &prev[0]) {
-			return next, nil
-		}
-		k := len(prev)
-		if k > 0 && len(next) > k && len(tip) == k && &tip[0] == &prev[0] &&
-			sameItems(prev, next[:k]) {
-			held += int64(len(next) - k)
-			next = append(prev, next[k:]...)
-			tip = next
-		} else {
-			if len(next) > 1 {
-				held += int64(len(next))
-			}
-			// Clamped so that a later append reallocates instead of
-			// writing into spare room the rule's value may share.
-			next = next[:len(next):len(next)]
-			tip = next
-		}
-		return next, ctx.ItemsRefused(held)
-	}
+	var ext accumExtend
+	extend := func(prev, next xdm.Sequence) (xdm.Sequence, error) { return ext.extend(ctx, prev, next) }
 	var walk func(*xdm.Node) error
 	walk = func(n *xdm.Node) error {
 		next, err := rt.applyAccumRules(def, n, cur, ctx, false)
@@ -469,6 +453,38 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 
 	rt.accumValues[key] = vals
 	return vals, nil
+}
+
+// accumExtend is accumulatorValuesFor's step from one value to the next: a
+// value that grows by appending shares its predecessor's backing array, and
+// held counts what is really stored, one entry per item beyond the first,
+// against the item limit. A streamed run takes the same steps over the same
+// values (streamaccum.go), so it refuses where the tree does.
+type accumExtend struct {
+	tip  xdm.Sequence
+	held int64
+}
+
+func (x *accumExtend) extend(ctx *xpath.Context, prev, next xdm.Sequence) (xdm.Sequence, error) {
+	if len(next) == len(prev) && (len(next) == 0 || &next[0] == &prev[0]) {
+		return next, nil
+	}
+	k := len(prev)
+	if k > 0 && len(next) > k && len(x.tip) == k && &x.tip[0] == &prev[0] &&
+		sameItems(prev, next[:k]) {
+		x.held += int64(len(next) - k)
+		next = append(prev, next[k:]...)
+		x.tip = next
+	} else {
+		if len(next) > 1 {
+			x.held += int64(len(next))
+		}
+		// Clamped so that a later append reallocates instead of
+		// writing into spare room the rule's value may share.
+		next = next[:len(next):len(next)]
+		x.tip = next
+	}
+	return next, ctx.ItemsRefused(x.held)
 }
 
 // sameItems reports whether a and b hold the identical items. Only nodes and
@@ -636,6 +652,16 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	// value its original had, not with what the rules would compute over the
 	// copy's own tree.
 	node = rt.accumulatorOrigin(node)
+	// A node of a streamed document is answered by the run's observer
+	// (streamaccum.go), whose document stands for the tree's root below.
+	root := node.Root()
+	sa, err := rt.streamAccumsOf(node)
+	if err != nil {
+		return nil, err
+	}
+	if sa != nil {
+		root = sa.root
+	}
 	// 18.2.2 narrows the applicable set for a document read with an explicit
 	// use-accumulators list — an xsl:merge-source is where this engine can
 	// say so — and XTDE3362 is reading one the list leaves out. The check is
@@ -646,12 +672,12 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	// xsl:source-document asked to stream an error in its own right. This
 	// engine answers streamable="yes" by not streaming, which the spec
 	// permits, but the restriction the stylesheet asked for still stands.
-	if !def.streamable && rt.streamedTrees[node.Root()] {
+	if !def.streamable && rt.streamedTrees[root] {
 		return nil, fmt.Errorf(
 			"XTDE3362: accumulator %q is not declared streamable, so it "+
 				"cannot be read over a streamed document", lex)
 	}
-	if set, ok := rt.treeAccums[node.Root()]; ok && !set.all && !set.names[name] {
+	if set, ok := rt.treeAccums[root]; ok && !set.all && !set.names[name] {
 		return nil, fmt.Errorf(
 			"XTDE3362: accumulator %q is not applicable to this document, "+
 				"whose use-accumulators list does not name it", lex)
@@ -659,6 +685,9 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	// Section 18.2: an accumulator applies to the tree the node belongs to,
 	// so the walk starts at that tree's root even when the node is deep in
 	// it — the value at a node depends on everything that precedes it.
+	if sa != nil {
+		return sa.value(def, node, post)
+	}
 	vals, err := rt.accumulatorValuesFor(def, node.Root(), ctx)
 	if err != nil {
 		return nil, err

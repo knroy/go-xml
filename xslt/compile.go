@@ -23,9 +23,12 @@ type compiler struct {
 	ruleExecs   []*streamExec
 	rulePlans   map[*xdm.Node]*rulesPlan
 	streamLinks []streamLink
-	opts        CompileOptions
-	sheet       *Stylesheet
-	declOrder   int
+	// accumLinks are the streamed containers whose accumulators are checked
+	// once every one has compiled (streamaccum.go).
+	accumLinks []streamLink
+	opts       CompileOptions
+	sheet      *Stylesheet
+	declOrder  int
 	// seen guards against include cycles, which would otherwise recurse until
 	// the stack runs out. schemaSeen does the same for the xsl:import-schema
 	// pre-pass, which walks the module graph separately and must not visit a

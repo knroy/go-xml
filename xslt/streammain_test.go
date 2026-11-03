@@ -97,12 +97,13 @@ var mainCases = []struct {
 	{`<xsl:mode streamable="yes" on-no-match="deep-skip"/><xsl:template match="/"><o><xsl:apply-templates/></o></xsl:template>` +
 		`<xsl:template match="doc|rec"><xsl:apply-templates/></xsl:template><xsl:template match="sub"><s x="{@x}"/></xsl:template>`, true},
 	{`<xsl:mode streamable="yes"/><xsl:param name="g" select="'G'"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, true},
-	// A global that reads the context item, the global context item, an
-	// accumulator: the tree's document node is read outside the rules.
+	// A global that reads the context item, the global context item: the
+	// tree's document node is read outside the rules. An accumulator streams
+	// since M4 (streamaccum.go).
 	{`<xsl:mode streamable="yes"/><xsl:variable name="g" select="count(//rec)"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:variable name="g"><xsl:value-of select="name(/*)"/></xsl:variable><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:global-context-item use="required"/><xsl:template match="rec"><r/></xsl:template>`, false},
-	{`<xsl:mode streamable="yes"/><xsl:accumulator name="a" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>`, false},
+	{`<xsl:mode streamable="yes"/><xsl:accumulator name="a" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>`, true},
 	// At the top of the principal result the tree keeps the source's own
 	// nodes: the built-ins' copies of leaves, a deep-copy, an attribute rule.
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/"><xsl:apply-templates/></xsl:template>`, false},

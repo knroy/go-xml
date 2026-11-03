@@ -147,6 +147,9 @@ type streamOp struct {
 	// avt, for the consuming part of a literal result element's attribute
 	// value template, is that part's expression (avtOp).
 	avt string
+	// accAfter says it is an instruction that consumes its context only by
+	// reading accumulator-after of it, which runs as it is (streamaccum.go).
+	accAfter bool
 }
 
 // streamBuilder builds a plan from the source of a container.
@@ -163,6 +166,9 @@ type streamBuilder struct {
 	// (streamgroup.go), whose current-group() a consumer may read; key that
 	// current-grouping-key() is in scope, there or in a loop below.
 	grp, key bool
+	// after says accumulator-after of the focus may be read: a consumer
+	// before it in its sequence constructor has read the focus (streamaccum.go).
+	after bool
 }
 
 func (b *streamBuilder) refuse(why string) bool {
@@ -176,7 +182,7 @@ func (b *streamBuilder) refuse(why string) bool {
 // or returns nil and why not. shared says sd's module is not the whole
 // stylesheet (streamtrust.go).
 func planStream(sd *xdm.Node, shared bool) (*streamExec, string) {
-	for _, a := range []string{"validation", "type", "use-accumulators"} {
+	for _, a := range []string{"validation", "type"} {
 		if sd.Attr("", a) != nil {
 			return nil, "@" + a
 		}
@@ -207,6 +213,8 @@ func elName(el *xdm.Node) string {
 func (b *streamBuilder) seq(el *xdm.Node, f vfocus) bool {
 	b.kinds[streamtrace.KindSeq]++
 	consumers := 0
+	defer func(after bool) { b.after = after }(b.after)
+	b.after = false
 	for ch := range el.Children() {
 		switch ch.Kind() {
 		case xdm.KindText:
@@ -221,6 +229,11 @@ func (b *streamBuilder) seq(el *xdm.Node, f vfocus) bool {
 		r := b.pl.rec(ch)
 		if r == nil || !r.known || r.unverified {
 			return b.refuse("no trusted record for " + elName(ch))
+		}
+		b.after = consumers > 0 && !b.grp
+		if r.props.sweep == sweepConsuming && consumers == 0 && b.accumAfterOp(ch, f) {
+			consumers++
+			continue
 		}
 		switch r.props.sweep {
 		case sweepMotionless:
@@ -339,7 +352,7 @@ func (b *streamBuilder) avtOps(el *xdm.Node, f vfocus) bool {
 			return b.refuse("attribute value template " + a.Value())
 		}
 		for _, src := range exprs {
-			if e := parseAt(el, src); e != nil && (viewCheck{pos: true, noIdent: b.noIdent, key: b.key}).safe(e, f, false) {
+			if e := parseAt(el, src); e != nil && (viewCheck{pos: true, noIdent: b.noIdent, key: b.key, acc: !b.noIdent, after: b.after}).safe(e, f, false) {
 				continue
 			}
 			if op != nil {
@@ -526,10 +539,16 @@ func (b *streamBuilder) loopOp(el *xdm.Node, f vfocus) bool {
 func (b *streamBuilder) members(el *xdm.Node, body []*xdm.Node, f vfocus) bool {
 	b.kinds[streamtrace.KindSeq]++
 	consumers := 0
+	defer func(after bool) { b.after = after }(b.after)
 	for _, ch := range body {
 		r := b.pl.rec(ch)
 		if r == nil || !r.known || r.unverified {
 			return b.refuse("no trusted record for " + elName(ch))
+		}
+		b.after = consumers > 0 && !b.grp
+		if r.props.sweep == sweepConsuming && consumers == 0 && b.accumAfterOp(ch, f) {
+			consumers++
+			continue
 		}
 		if r.props.sweep == sweepMotionless {
 			if !b.motionless(ch, f) && !b.promote(ch) {
@@ -696,7 +715,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 // what f has, and returns nodes of it only where nodeOK.
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := parseAt(el, src)
-	if e == nil || !(viewCheck{pos: true, noIdent: b.noIdent, key: b.key}).safe(e, f, nodeOK) {
+	if e == nil || !(viewCheck{pos: true, noIdent: b.noIdent, key: b.key, acc: !b.noIdent, after: b.after}).safe(e, f, nodeOK) {
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
 	}
 	return true
@@ -873,6 +892,8 @@ func (x *streamExec) ready() string {
 func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.NumKinds]int64) string {
 	for _, op := range ops {
 		switch {
+		case op.accAfter:
+			continue
 		case op.instr == nil:
 			return "not compiled (use-when)"
 		case op.dead != "":
@@ -1320,6 +1341,8 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		}
 		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread, root: xdm.NewTree().Root, held: held}
 		defer func() { *kept = run.kept }()
+		acc := run.observeAccums(rt, i.accums, true)
+		defer acc.stop()
 		// The body's focus is the document node, which the stream does not
 		// build: the plan reads of it only what an empty one has.
 		sub := rt.withCurrent(run.root, 1, 1).clearCurrentRule()
@@ -1334,9 +1357,11 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 			return err
 		}
 		if !run.used {
-			return run.drain()
+			if err := run.drain(); err != nil {
+				return err
+			}
 		}
-		return nil
+		return acc.finish()
 	})
 }
 

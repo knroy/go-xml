@@ -109,6 +109,9 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 		}
 		instr.accums = accums
 	}
+	if core != nil {
+		c.accumLinks = append(c.accumLinks, streamLink{n, instr})
+	}
 	return instr, nil
 }
 
