@@ -204,7 +204,8 @@ func TestStreamableNumericPredicateFocusDependentCall(t *testing.T) {
 			t.Errorf("descendant::x[%s] calls a focus-dependent function; want XTSE3430, got: %v", pred, err)
 		}
 	}
-	// key#2 and unparsed-entity-uri#1 are not modelled as operands, so the
+	// key#2 and unparsed-entity-uri#1 default an argument to "/", which a
+	// crawling predicate does not model, so the
 	// verdict is no opinion rather than XTSE3430; what matters is that the
 	// numeric rule no longer answers striding for them without looking.
 	for _, pred := range []string{"count(key('k', '1'))", "count(unparsed-entity-uri('e'))"} {

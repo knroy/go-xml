@@ -383,7 +383,7 @@ func TestStreamPlanRules(t *testing.T) {
 		}
 	})
 	t.Run("unknown is recorded where it arises", func(t *testing.T) {
-		pl, sd := planOfSheet(t, sheet("", `<out><xsl:value-of select="@k"/><xsl:copy-of select="unparsed-text('d.txt')"/></out>`))
+		pl, sd := planOfSheet(t, sheet("", `<out><xsl:value-of select="@k"/><xsl:copy-of select="fold-right((), 'd', concat#2)"/></out>`))
 		if r := site(t, pl, firstXSL(sd, "value-of"), "select"); !r.known {
 			t.Errorf("value-of before the gap: %+v", r)
 		}

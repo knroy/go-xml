@@ -650,11 +650,11 @@ func TestAVTExpressionExtraction(t *testing.T) {
 func TestUnmodelledInstructionIsReportedUnknown(t *testing.T) {
 	// The guard the whole check rests on: a construct whose rule is not
 	// written must be reported unmodelled, so that streamcheck.go stays
-	// silent rather than rejecting a valid stylesheet. fn:unparsed-text()
-	// has no entry in the §19.8.9 table.
-	_, known := analyzeInstrSource(t, `<xsl:copy-of select="unparsed-text('d.txt')"/>`)
+	// silent rather than rejecting a valid stylesheet. fn:fold-right has a
+	// section of its own (§19.8.9.9) that is not implemented.
+	_, known := analyzeInstrSource(t, `<xsl:copy-of select="fold-right((), 'd', concat#2)"/>`)
 	if known {
-		t.Error("xsl:copy-of over unparsed-text() was reported as modelled")
+		t.Error("xsl:copy-of over fold-right() was reported as modelled")
 	}
 	// §19.8.4.42, §19.8.4.31, §19.8.4.32: xsl:where-populated is its
 	// content's posture and sweep; xsl:on-empty and xsl:on-non-empty are
@@ -684,12 +684,12 @@ func TestUnmodelledPredicateInAScanningPathIsReportedUnknown(t *testing.T) {
 	// implementation, not about the path, and the roaming verdict that
 	// follows must not be reported as an XTSE3430.
 	//
-	// fn:unparsed-text() has no entry in the §19.8.9 table, so a path
+	// fn:fold-right (§19.8.9.9) is not implemented, so a path
 	// filtered on it must come back unmodelled.
 	_, known := analyzeInstrSource(t,
-		`<xsl:value-of select="//transaction[@date = unparsed-text('d.txt')]"/>`)
+		`<xsl:value-of select="//transaction[@date = fold-right((), 'd', concat#2)]"/>`)
 	if known {
-		t.Error("a path whose predicate calls the unmodelled unparsed-text() was reported " +
+		t.Error("a path whose predicate calls the unmodelled fold-right() was reported " +
 			"as modelled; the roaming verdict would then be raised as a spurious XTSE3430")
 	}
 
@@ -705,7 +705,7 @@ func TestUnmodelledInstructionInABodyPropagates(t *testing.T) {
 	// known must propagate out of a nested sequence constructor, not just
 	// out of the instruction itself.
 	_, known := analyzeInstrSource(t, `<xsl:for-each select="a">
-	 <xsl:copy-of select="unparsed-text('d.txt')"/>
+	 <xsl:copy-of select="fold-right((), 'd', concat#2)"/>
 	</xsl:for-each>`)
 	if known {
 		t.Error("an unmodelled instruction inside xsl:for-each did not clear known")

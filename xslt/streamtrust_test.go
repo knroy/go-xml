@@ -54,14 +54,14 @@ func TestStreamTrustReproducers(t *testing.T) {
 			hdr + `<xsl:function name="f:g" streamability="absorbing" as="xs:string"><xsl:param name="n" as="node()"/><xsl:sequence select="string($n/@k)"/></xsl:function>` +
 				sd(fe(`<v><xsl:value-of select="f:g(.)"/></v>`)) + end, ""},
 		// A streamable attribute set and accumulators whose checks gave up.
-		{"F1d streamable attribute set via concat/2", "unverified", nil,
-			hdr + `<xsl:attribute-set name="as" streamable="yes"><xsl:attribute name="a" select="concat(string(` + sib + `), '')"/></xsl:attribute-set>` +
+		{"F1d streamable attribute set via fold-right", "unverified", nil,
+			hdr + `<xsl:attribute-set name="as" streamable="yes"><xsl:attribute name="a" select="fold-right((), string(` + sib + `), concat#2)"/></xsl:attribute-set>` +
 				sd(fe(`<v xsl:use-attribute-sets="as"/>`)) + end, ""},
 		{"F1d control: motionless attribute set", "verified", nil,
 			hdr + `<xsl:attribute-set name="as" streamable="yes"><xsl:attribute name="a" select="string(@k)"/></xsl:attribute-set>` +
 				sd(fe(`<v xsl:use-attribute-sets="as"/>`)) + end, ""},
 		{"F1e accumulator rule select via concat/2", "unverified", nil,
-			hdr + `<xsl:accumulator name="a" initial-value="''" streamable="yes"><xsl:accumulator-rule match="rec" select="concat(string(` + sib + `), '')"/></xsl:accumulator>` +
+			hdr + `<xsl:accumulator name="a" initial-value="''" streamable="yes"><xsl:accumulator-rule match="rec" select="fold-right((), string(` + sib + `), concat#2)"/></xsl:accumulator>` +
 				sdAcc(fe(`<v><xsl:value-of select="accumulator-before('a')"/></v>`)) + end, ""},
 		{"A1 accumulator rule with a sequence constructor", "unverified", nil,
 			hdr + `<xsl:accumulator name="a" initial-value="''" streamable="yes"><xsl:accumulator-rule match="rec"><xsl:sequence select="string(` + sib + `)"/></xsl:accumulator-rule></xsl:accumulator>` +
@@ -88,9 +88,9 @@ func TestStreamTrustReproducers(t *testing.T) {
 		{"M3 control: comparison with a numeric literal, motionless", "verified", nil,
 			hdr + mode + `<xsl:template match="rec[@k = 3]" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
 		{"M4 rule pattern unknown", "unverified", nil,
-			hdr + mode + `<xsl:template match="rec[concat(` + sib + `, '') = '3']" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
+			hdr + mode + `<xsl:template match="rec[fold-right((), ` + sib + `, concat#2) = '3']" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
 		{"M5 rule body unknown", "unverified", nil,
-			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="unparsed-entity-uri(string(` + sib + `))"/></v></xsl:template>` + apply + end, ""},
+			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="fold-right((), string(` + sib + `), concat#2)"/></v></xsl:template>` + apply + end, ""},
 		{"M5 control: grounded rule", "verified", nil,
 			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="@k"/></v></xsl:template>` + apply + end, ""},
 		// Another module can add rules or override declarations.

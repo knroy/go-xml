@@ -123,6 +123,13 @@ func TestAnalyzeExprFunctionCalls(t *testing.T) {
 		// consuming left side is not dropped by a motionless right one.
 		{"(a ! string(.)) ! number(.)", props{postureGrounded, sweepConsuming}, true},
 		{"@a ! string(.)", props{postureGrounded, sweepMotionless}, true},
+		// §19.8.9's proforma rows: fn:concat(A, A, A) at any arity from
+		// two, fn:trace(T, A), fn:tokenize(A), fn:contains-token(A, A).
+		{"concat(a, 'x')", props{postureGrounded, sweepConsuming}, true},
+		{"concat(@a, @b, @c, 'x')", props{postureGrounded, sweepMotionless}, true},
+		{"trace(a, 'x')", props{postureStriding, sweepConsuming}, true},
+		{"tokenize(a)", props{postureGrounded, sweepConsuming}, true},
+		{"contains-token(@a, 'x')", props{postureGrounded, sweepMotionless}, true},
 	}
 	for _, c := range cases {
 		got, known := analyze(t, c.expr)
