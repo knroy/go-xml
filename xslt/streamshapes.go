@@ -384,3 +384,63 @@ func (rt *runtime) evalStreamBool(test *xpath.Compiled) (bool, error) {
 	}
 	return test.EvalBool(rt.ctx)
 }
+
+// collection is walk for the constructors and functions of arrays and maps
+// and for lookups: their operands keep their items (a member is not
+// atomized, nor is a map's value), so the consuming path is a slot of one of
+// them as it is, and the outer builds the array or map at the end from the
+// items it collected. A map's keys, and a lookup's key, are atomized and
+// must not hold the path. done is false for any other expression.
+func (w *splitter) collection(e xpath.Expr) (done, ok bool) {
+	switch x := e.(type) {
+	case *xpath.ArrayConstructor:
+		for k := range x.Members {
+			if !w.slot(x.Members[k], func(y xpath.Expr) { x.Members[k] = y }, useKeep) {
+				return true, false
+			}
+		}
+		return true, true
+	case *xpath.MapConstructor:
+		for k := range x.Keys {
+			if !w.noPath(x.Keys[k], useAtomize, "the consuming path in a map key") ||
+				!w.slot(x.Values[k], func(y xpath.Expr) { x.Values[k] = y }, useKeep) {
+				return true, false
+			}
+		}
+		return true, true
+	case *xpath.LookupExpr:
+		if x.Base == nil {
+			return true, w.refuse("a unary lookup")
+		}
+		if x.Expr != nil && !w.noPath(x.Expr, useAtomize, "the consuming path in a lookup key") {
+			return true, false
+		}
+		return true, w.slot(x.Base, func(y xpath.Expr) { x.Base = y }, useKeep)
+	case *xpath.FuncCall:
+		if x.Name.URI != xdm.NSArray && x.Name.URI != xdm.NSMap {
+			return false, false
+		}
+		if len(x.Args) == 1 && x.Name.URI == xdm.NSArray && x.Name.Local == "size" {
+			for a, k := arrayOf(x.Args[0]), 0; a != nil && k < len(a.Members); k++ {
+				// The size of a square array is its number of members, whatever
+				// they hold: each member is still evaluated, but only counted.
+				a.Members[k] = &xpath.FuncCall{Name: xdm.QName{URI: fnNS, Local: "count"}, Args: []xpath.Expr{a.Members[k]}}
+			}
+		}
+		for k := range x.Args {
+			if !w.slot(x.Args[k], func(y xpath.Expr) { x.Args[k] = y }, useKeep) {
+				return true, false
+			}
+		}
+		return true, true
+	}
+	return false, false
+}
+
+// arrayOf is e as a square array constructor, or nil.
+func arrayOf(e xpath.Expr) *xpath.ArrayConstructor {
+	if a, ok := e.(*xpath.ArrayConstructor); ok && !a.Curly {
+		return a
+	}
+	return nil
+}

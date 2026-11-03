@@ -760,6 +760,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 	if w.why != "" {
 		return false
 	}
+	if done, ok := w.collection(e); done { // streamshapes.go
+		return ok
+	}
 	switch x := e.(type) {
 	case *xpath.FuncCall:
 		switch x.Name.URI {

@@ -56,6 +56,16 @@ var shapeBodies = []struct {
 	{`<o><xsl:if test="doc/rec"><xsl:value-of select="count(//sub)"/></xsl:if></o>`, false},
 	{`<xsl:choose><xsl:when test="//rec">a</xsl:when><xsl:when test="//sub">b</xsl:when></xsl:choose>`, false},
 	{`<xsl:choose><xsl:when test="//rec">a</xsl:when><xsl:otherwise><xsl:value-of select="count(//sub)"/></xsl:otherwise></xsl:choose>`, false},
+	// Arrays, maps and lookups over the path: the outer builds them.
+	{`<o><xsl:value-of select="[//rec/@v/data(), 'x']?*"/></o>`, true},
+	{`<o><xsl:value-of select="Q{http://www.w3.org/2005/xpath-functions/array}size([/doc/rec/copy-of(), 1, 2])"/></o>`, true},
+	{`<o><xsl:value-of select="map{'n': count(//rec), 'k': 1}?n"/></o>`, true},
+	{`<o><xsl:value-of select="array{/doc/rec/@k/string()}?2"/></o>`, true}, // FOAY0001 when fewer
+	{`<o><xsl:value-of select="Q{http://www.w3.org/2005/xpath-functions/array}join(([/doc/rec/@k/string()], ['z']))?*"/></o>`, true},
+	{`<o><xsl:value-of select="Q{http://www.w3.org/2005/xpath-functions/array}size(array{/doc/rec/@k/string()})"/></o>`, true},
+	{`<o><xsl:value-of select="[/doc/rec]?*/@k"/></o>`, false},
+	{`<o><xsl:value-of select="map{string(/doc/rec[1]/@k): 1}?*"/></o>`, false},
+	{`<o><xsl:value-of select="count([/doc/rec]?*)"/></o>`, false}, // grounded copies at the document node
 	// Text value templates: motionless parts, or one consuming part.
 	{`<o xsl:expand-text="yes">{count(//rec)}</o>`, true},
 	{`<o xsl:expand-text="yes">n={count(//rec)} k={1 + 1}, {name()}</o>`, true},
