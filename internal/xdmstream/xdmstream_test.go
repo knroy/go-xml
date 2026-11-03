@@ -361,7 +361,10 @@ func TestCursorObserve(t *testing.T) {
 	c := Open(strings.NewReader(src), opts)
 	defer c.Close()
 	var got []string
-	c.Observe(func(el *xdm.Node, d int, end bool) {
+	c.Observe(func(el *xdm.Node, d int, end bool, _ uint64) {
+		if el == nil || el.Kind() != xdm.KindElement {
+			return // leaves and the document's end: TestObserverSeesEverything
+		}
 		got = append(got, fmt.Sprintf("%d %s%v", d, map[bool]string{false: "<", true: "</"}[end], el.Name()))
 	})
 	k := 0
@@ -610,7 +613,11 @@ func TestCursorSkipDiscards(t *testing.T) {
 	held := 0
 	c := Open(strings.NewReader(src), opts)
 	defer c.Close()
-	c.Observe(func(el *xdm.Node, _ int, _ bool) { held = max(held, el.Tree().Len()) })
+	c.Observe(func(el *xdm.Node, _ int, _ bool, _ uint64) {
+		if el != nil {
+			held = max(held, el.Tree().Len())
+		}
+	})
 	if ev, err := c.Next(); err != nil || ev.Kind != StartElement {
 		t.Fatalf("first event %v, %v", ev, err)
 	}

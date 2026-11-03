@@ -58,10 +58,14 @@ type Event struct {
 	Closed int
 }
 
-// An Observer is told of every element's start and its end (end true), in
-// document order, those inside an element skipped, grounded or read by Text
-// too, before the cursor reports it. The node is valid only during the call.
-type Observer func(el *xdm.Node, depth int, end bool)
+// An Observer is told of every element's start and its end (end true), and
+// of every text, comment and processing instruction (end false), in document
+// order, those inside an element skipped, grounded or read by Text too,
+// before the cursor reports it; last, before EndDocument, of the document's
+// end (n nil, depth 0, end true). The node is valid only during the call,
+// and must not be kept; its ancestors are open, its name, attributes and
+// (for a leaf) value are complete. ord is the node's ordinal (Ordinal).
+type Observer func(n *xdm.Node, depth int, end bool, ord uint64)
 
 // Cursor reads one document. It is not safe for concurrent use.
 type Cursor struct {
@@ -85,6 +89,8 @@ type Cursor struct {
 	viewed *xdm.Node
 	// flush hands over the copies GroundLater holds (Flush).
 	flush func() error
+	// ordinal is Ordinal's answer, from the parse.
+	ordinal func(n any) (uint64, bool)
 	// strip says whitespace-only text inside an element is stripped
 	// (StripWhitespace).
 	strip func(el *xdm.Node) bool
@@ -145,6 +151,9 @@ func Open(r io.Reader, opts xdm.ParseOptions) *Cursor {
 		err := xdmburst.Drive(r, opts, &client{c, yield})
 		switch {
 		case err == nil:
+			for _, o := range c.obs {
+				o(nil, 0, true, 0)
+			}
 			yield(Event{Kind: EndDocument, Closed: c.closed})
 		case err != errStop:
 			c.err = err
@@ -164,6 +173,17 @@ func (c *Cursor) Close() { c.stop() }
 
 // Observe adds o to the cursor's observers, from the next element on.
 func (c *Cursor) Observe(o Observer) { c.obs = append(c.obs, o) }
+
+// Ordinal returns the ordinal of n when n is an element copied out of this
+// cursor's document (a view, or a node of a copy Ground or GroundLater
+// made): the index of its original in a tree-mode parse, which an Observer
+// is told with it. For any other node it returns false.
+func (c *Cursor) Ordinal(n *xdm.Node) (uint64, bool) {
+	if c.ordinal == nil || n == nil {
+		return 0, false
+	}
+	return c.ordinal(n)
+}
 
 // Next returns the next event, descending into the current element when it
 // is a start tag. After EndDocument it returns io.EOF; after a parse error,
@@ -463,8 +483,10 @@ func (k *client) Flusher(flush func() error) { k.c.flush = flush }
 
 func (k *client) Strips(el any) bool { return k.c.strip != nil && k.c.strip(el.(*xdm.Node)) }
 
-func (k *client) Watch(el any, d int, end bool) {
+func (k *client) Watch(n any, d int, end bool, ord uint64) {
 	for _, o := range k.c.obs {
-		o(el.(*xdm.Node), d, end)
+		o(n.(*xdm.Node), d, end, ord)
 	}
 }
+
+func (k *client) Originator(ord func(n any) (uint64, bool)) { k.c.ordinal = ord }

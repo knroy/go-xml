@@ -30,8 +30,8 @@ func (c *keepAll) End(_ any, _ int, g any) error {
 	}
 	return nil
 }
-func (c *keepAll) Watch(any, int, bool) {}
-func (c *keepAll) Later(any) error      { c.grounded++; return nil }
+func (c *keepAll) Watch(any, int, bool, uint64) {}
+func (c *keepAll) Later(any) error              { c.grounded++; return nil }
 
 // A stream read element by element keeps only the open elements: what each
 // element, leaf and grounded copy leaves in the parse's tree is taken back.
@@ -114,7 +114,7 @@ func (c *laterAll) Start(_ any, d int) (xdmburst.Action, error) {
 }
 func (c *laterAll) Leaf(any, int) error           { return nil }
 func (c *laterAll) End(_ any, _ int, _ any) error { return nil }
-func (c *laterAll) Watch(any, int, bool)          {}
+func (c *laterAll) Watch(any, int, bool, uint64)  {}
 func (c *laterAll) Later(g any) error             { c.fn(g.(*Node)); return nil }
 
 // viewAll keeps every element and views each one.
@@ -130,7 +130,7 @@ func (c *viewAll) Start(_ any, d int) (xdmburst.Action, error) {
 }
 func (c *viewAll) Leaf(any, int) error           { return nil }
 func (c *viewAll) End(_ any, _ int, _ any) error { return nil }
-func (c *viewAll) Watch(any, int, bool)          {}
+func (c *viewAll) Watch(any, int, bool, uint64)  {}
 func (c *viewAll) Later(any) error               { return nil }
 
 // Views under a deep spine share the copies of their ancestors: a view
