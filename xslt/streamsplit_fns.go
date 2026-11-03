@@ -114,7 +114,7 @@ func fallbackIgnored(el *xdm.Node) bool {
 func freeFilter(x *xpath.FilterExpr) bool {
 	// burstSafe too: current-group() and its kind are focus-free calls that
 	// return nodes of the stream.
-	if !constructorFocusFree(x.Base) || !burstSafe(x.Base, false) {
+	if !constructorFocusFree(x.Base) || !burstSafe(x.Base, false) || refsSplitItems(x.Base) {
 		return false
 	}
 	for _, p := range x.Predicates {
@@ -123,6 +123,19 @@ func freeFilter(x *xpath.FilterExpr) bool {
 		}
 	}
 	return true
+}
+
+// refsSplitItems reports whether e reads the split's $items or $value,
+// which hold the stream's own nodes (views, copies): a filter over them is
+// not free of the stream (G2: ($items)[. = 'x'] atomized climbed views).
+func refsSplitItems(e xpath.Expr) bool {
+	found := false
+	exprWalk(reflect.ValueOf(&e).Elem(), func(v reflect.Value) {
+		if r, ok := v.Interface().(*xpath.VarRef); ok && isSplitItems(r) {
+			found = true
+		}
+	})
+	return found
 }
 
 // callsCurrent reports whether e calls fn:current().
