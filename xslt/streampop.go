@@ -65,17 +65,24 @@ type streamPop struct {
 	off       bool              // the items are not the matches' views: the body runs off the cursor
 	values    bool              // the whole select is read as a select's, its values looped over
 	oneOrMore *xpath.Compiled   // one-or-more(()): raised when nothing was handed
+	// cut, for insert-before($t, n, P), is where $t (parts 0 and 2) is cut.
+	cut *popWin
 }
 
 // popWin is a window over the stream part's matches: of kind head, tail,
-// sub (positions round(a) to round(a)+round(b), b absent: on), remove (all
-// but position a), or ins (b's items before position a). check is the
-// function called on () with the window's arguments: its errors are the
-// tree's argument errors.
+// sub (positions from a to a+b, b absent: on), remove (all but position a),
+// or ins (b's items before position a). check is the function called on ()
+// with the window's arguments: its errors are the tree's argument errors.
+// The bounds are the tree's own (xpath/fn_seq.go): subsequence's arguments
+// as doubles (number()) rounded as its roundHalfEven does (floor(f + 0.5),
+// whatever its name); remove's and insert-before's
+// position clamped as clampPosition does -- truncated when it fits an
+// int64, before the first when negative, past the end otherwise.
 type popWin struct {
-	kind  string
-	a, b  *xpath.Compiled
-	check *xpath.Compiled
+	kind       string
+	a, b       *xpath.Compiled
+	anum, bnum *xpath.Compiled // number(a), number(b)
+	check      *xpath.Compiled
 }
 
 // popBuilder builds a population from a select's expression.
@@ -165,11 +172,14 @@ func (pb *popBuilder) pop(e xpath.Expr) *streamPop {
 				return nil
 			}
 			n := x.Args[1]
-			// Its argument errors first: insert-before itself, over nothing.
+			// Its argument errors first: insert-before itself, over nothing;
+			// then $t, cut where insert-before would put P (read).
 			p.wins = append(p.wins, popWin{kind: "check", check: pb.part(&xpath.FuncCall{Name: x.Name,
 				Args: []xpath.Expr{x.Args[0], n, &xpath.SequenceExpr{}}})})
-			p.parts[0] = pb.part(insertSide(x.Args[0], n, true))
-			p.parts[2] = pb.part(insertSide(x.Args[0], n, false))
+			p.cut = &popWin{kind: "ins", a: pb.part(n), anum: pb.part(fnCall("number", n)), b: pb.part(&xpath.SequenceExpr{}),
+				check: pb.part(&xpath.SequenceExpr{})}
+			p.parts[0] = pb.part(x.Args[0])
+			p.parts[2] = p.parts[0]
 			return p
 		}
 	}
@@ -181,20 +191,6 @@ func (pb *popBuilder) pop(e xpath.Expr) *streamPop {
 		return nil
 	}
 	return p
-}
-
-// insertSide is $t[position() lt max((n, 1))] (before) or the rest: the two
-// sides of insert-before's insertion point. A non-integer n raises the
-// error insert-before raises, by the check of the window that holds it.
-func insertSide(t, n xpath.Expr, before bool) xpath.Expr {
-	at := &xpath.FuncCall{Name: xdm.QName{URI: fnNS, Local: "max"}, Args: []xpath.Expr{
-		&xpath.SequenceExpr{Items: []xpath.Expr{n, &xpath.Literal{Val: xdm.NewInteger(1)}}}}}
-	op := "ge"
-	if before {
-		op = "lt"
-	}
-	pos := &xpath.FuncCall{Name: xdm.QName{URI: fnNS, Local: "position"}}
-	return &xpath.FilterExpr{Base: t, Predicates: []xpath.Expr{&xpath.BinaryOp{Op: op, Left: pos, Right: at}}}
 }
 
 func isFn(x *xpath.FuncCall, name string, n int) bool {
@@ -226,6 +222,12 @@ func (pb *popBuilder) stream(p *streamPop, e xpath.Expr) bool {
 			}
 			if kind == "ins" {
 				ck = []xpath.Expr{&xpath.SequenceExpr{}, a, b}
+			}
+			if a != nil {
+				w.anum = pb.part(fnCall("number", a))
+			}
+			if b != nil && kind == "sub" {
+				w.bnum = pb.part(fnCall("number", b))
 			}
 			w.check = pb.part(&xpath.FuncCall{Name: x.Name, Args: ck})
 			p.wins = append(p.wins, w)
@@ -335,44 +337,60 @@ func (r *popRun) ready(w *popWin, ctx *xpath.Context) error {
 	if _, err := w.check.Eval(ctx); err != nil {
 		return err
 	}
-	num := func(e *xpath.Compiled, round bool) (float64, error) {
+	one := func(e *xpath.Compiled) (*xdm.Atomic, error) {
 		seq, err := e.Eval(ctx)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		a, ok := firstAtomic(xdm.Atomize(seq))
 		if !ok {
-			return math.NaN(), nil
+			return nil, errStreamPlan // the check raised what the tree raises
 		}
-		f := a.Float64()
-		if round {
-			f = math.Floor(f + 0.5) // fn:round: half towards positive infinity
-		}
-		return f, nil
+		return a, nil
 	}
-	var err error
 	switch w.kind {
 	case "sub":
-		if r.lo, err = num(w.a, true); err != nil {
+		a, err := one(w.anum)
+		if err != nil {
 			return err
 		}
-		if w.b != nil {
-			var l float64
-			if l, err = num(w.b, true); err != nil {
+		r.lo = treeRound(a.Float64())
+		if w.bnum != nil {
+			b, err := one(w.bnum)
+			if err != nil {
 				return err
 			}
-			r.hi = r.lo + l
+			r.hi = r.lo + treeRound(b.Float64())
+		}
+		if math.IsNaN(r.lo) || math.IsNaN(r.hi) {
+			r.lo, r.hi = math.Inf(1), math.Inf(1) // nothing
 		}
 	case "remove", "ins":
-		if r.lo, err = num(w.a, false); err != nil {
+		a, err := one(w.a)
+		if err != nil {
 			return err
+		}
+		if a.Type == xdm.TypeUntypedAtomic {
+			if a, err = one(w.anum); err != nil {
+				return err
+			}
+		}
+		// clampPosition's rules (xpath/fn_seq.go).
+		switch {
+		case a.FitsInt64():
+			r.lo = float64(a.Int64())
+		case a.Rat() != nil && a.Rat().Sign() < 0:
+			r.lo = 0
+		default:
+			r.lo = math.Inf(1)
 		}
 		if w.kind == "ins" {
 			r.lo = math.Max(r.lo, 1)
 			r.ins, err = w.b.Eval(ctx)
+			return err
 		}
 	}
-	return err
+	return nil
 }
 
 func firstAtomic(seq xdm.Sequence) (*xdm.Atomic, bool) {
@@ -481,6 +499,15 @@ func (p *streamPop) read(run *streamRun, rt *runtime, op *streamOp, each func(xd
 		if err := wins[i].ready(&p.wins[i], rt.ctx); err != nil {
 			return err
 		}
+	}
+	if p.cut != nil {
+		var c popRun
+		if err := c.ready(p.cut, rt.ctx); err != nil {
+			return err
+		}
+		t := vals[0]
+		at := int(min(c.lo, float64(len(t)+1))) // c.lo >= 1
+		vals[0], vals[2] = t[:at-1], t[at-1:]
 	}
 	handed := false
 	gate := func() (bool, error) {
@@ -606,4 +633,13 @@ func (p *streamPop) gates(ctx *xpath.Context) (gate func() (bool, error), done f
 		return nil
 	}
 	return gate, done, nil
+}
+
+// treeRound is xpath's roundHalfEven, which subsequence uses: floor(f + 0.5),
+// NaN and infinities as they are.
+func treeRound(f float64) float64 {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return f
+	}
+	return math.Floor(f + 0.5)
 }

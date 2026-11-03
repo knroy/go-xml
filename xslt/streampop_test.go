@@ -117,6 +117,18 @@ var popBodies = []struct {
 	{`<out><xsl:iterate select="tail(doc/rec)"><xsl:param name="n" select="0"/><xsl:on-completion><n><xsl:value-of select="$n"/></n></xsl:on-completion><xsl:next-iteration><xsl:with-param name="n" select="$n + 1"/></xsl:next-iteration></xsl:iterate></out>`, true},
 	{`<out><xsl:for-each select="doc/rec"><xsl:value-of select="@v + 1 || ' '"/></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="doc/rec"><xsl:value-of select="string(.) || '|'"/></xsl:for-each></out>`, true},
+	// The windows' bounds as the tree's functions compute them (fuzz seeds 68223, 84524, 86826).
+	{`<out><xsl:for-each select="subsequence(doc/rec, 0.5, 1.6)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="subsequence(doc/rec, 2.5)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="subsequence(doc/rec, 1.5, 2.5)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="subsequence(doc/rec, xs:untypedAtomic('2'))"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="insert-before(doc/rec, 1.5, $extra)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="insert-before($extra, 1.5, doc/rec)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="insert-before(doc/rec/@k, xs:untypedAtomic('2'), $extra)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="insert-before(doc/rec, -1e30, $extra)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="insert-before(doc/rec, 1e30, $extra)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="remove(doc/rec, 1.0)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="insert-before(doc/rec, (), $extra)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
 	// Set operators with a variable's nodes (foreignSets).
 	{`<out><xsl:value-of select="count(//rec except $extra)"/></out>`, true},
 	{`<out><xsl:value-of select="count($extra except //rec)"/></out>`, true},
