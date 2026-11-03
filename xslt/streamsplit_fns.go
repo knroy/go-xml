@@ -5,6 +5,8 @@ package xslt
 // operand may hold (viewCheck.safe).
 
 import (
+	"reflect"
+
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -102,4 +104,34 @@ func constructorFocusFree(e xpath.Expr) bool {
 func fallbackIgnored(el *xdm.Node) bool {
 	p := el.Parent()
 	return isXSL(el, "fallback") && p != nil && p.Kind() == xdm.KindElement && p.Name().URI == xdm.NSXSL
+}
+
+// freeFilter reports whether a filter reads nothing of the focus: its base
+// is focus-free and holds no node of the stream, so the predicates' focus is each of the base's items -- a
+// value, or a node of a variable, never one of the stream (§19.8.4.41) --
+// and they read nothing else of the instruction's focus (no current(), no
+// accumulator, no function burst execution answers differently).
+func freeFilter(x *xpath.FilterExpr) bool {
+	// burstSafe too: current-group() and its kind are focus-free calls that
+	// return nodes of the stream.
+	if !constructorFocusFree(x.Base) || !burstSafe(x.Base, false) {
+		return false
+	}
+	for _, p := range x.Predicates {
+		if !burstSafe(p, false) || callsCurrent(p) {
+			return false
+		}
+	}
+	return true
+}
+
+// callsCurrent reports whether e calls fn:current().
+func callsCurrent(e xpath.Expr) bool {
+	found := false
+	exprWalk(reflect.ValueOf(&e).Elem(), func(v reflect.Value) {
+		if f, ok := v.Interface().(*xpath.FuncCall); ok && isCurrentCall(f) {
+			found = true
+		}
+	})
+	return found
 }

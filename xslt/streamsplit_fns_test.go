@@ -36,6 +36,10 @@ func TestStreamWholeFnsMatchTree(t *testing.T) {
 		// fn:trace(v, 'label') is v: a loop over it, a reducer of it.
 		{`<xsl:for-each select="trace(doc/rec, 'r')"><r k="{@k}"/></xsl:for-each>`, true},
 		{`<v><xsl:value-of select="count(trace(//rec, 'c'))"/></v>`, true},
+		// A filter of a focus-free base reads nothing of the focus.
+		{`<out><xsl:sequence select="(1 to 20)[. ge 19]"/><xsl:sequence select="doc/rec/@v/data()"/><xsl:on-empty>none</xsl:on-empty></out>`, true},
+		// current-group() is focus-free and holds the stream's nodes: no guard.
+		{`<xsl:for-each-group select="doc/rec" group-adjacent="string(@k)"><g n="{count(current-group()[@v])}"/></xsl:for-each-group>`, false},
 	}
 	n := 0
 	for name, doc := range coreDocs {

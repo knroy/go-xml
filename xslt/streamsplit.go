@@ -1050,6 +1050,9 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		}
 		return vc.path(x.Steps, f, nodeOK)
 	case *xpath.FilterExpr:
+		if freeFilter(x) { // streamsplit_fns.go
+			return true
+		}
 		for _, p := range x.Predicates {
 			if !vc.safe(p, vElem, true) || !vc.safe(p, vLeaf, true) {
 				return false
