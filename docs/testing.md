@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,067 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,095 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -569,21 +569,21 @@ generate-id numbering in docbook-002, si-fork-801, document-2011 and
 streamable-007/-022 (a principal input `TransformReader` streamed), the clock in
 evaluate-052, cvt-042, format-date-037 and error-3160a, and three cases whose
 wanted `XTSE3430` M8's analysis now raises where the base wrote output
-(si-fork-902, si-fork-952, su-absorbing-205), to be dropped once the base is
-past M8.
+(si-fork-902, si-fork-952, su-absorbing-205), which fire only against a base
+before M8.
 
 With `GOXSLT_RECORD_DIR` set, tests/xslts writes
 `<dir>/streams/<suite>.tsv`, one line per case that streamed. The runner
 fails when any of these is true:
 - a difference is unexplained;
 - fewer cases streamed than the floor (`-floor`, `GOXSLT_STREAM_FLOOR`,
-  default 1009);
+  default 2124);
 - a guard fired;
 - the off leg streamed.
 
-A principal input the catalog declares `streaming="true"` (no `@select`,
-content, XInclude or validation, no initial-mode selection) is handed to
-`TransformReader` unparsed; under `GOXSLT_STREAM_OFF=1` it is parsed and given
+A principal input the catalog declares `streaming="true"`, a file or inline
+`<content>` (no `@select`, XInclude or validation, no initial-mode selection),
+is handed to `TransformReader` unparsed; under `GOXSLT_STREAM_OFF=1` it is parsed and given
 to `Transform`, so the off leg compares Parse + Transform.
 
 `-output` runs a fourth leg with `GOXSLT_OUTPUT_CHECK`
@@ -593,15 +593,15 @@ compared byte for byte, error for error, with `Result.Serialize`. A case whose
 third, plain run also differs is counted unstable (the clock, generate-id);
 any other difference fails.
 
-At fe989cf3 (M8, the §19.8 analysis completed), with `-output`, it reads:
-- 1009 cases on the streamed path: runs core 961, main 39 (principal inputs
-  through `TransformReader`), merge 21; 2 with a fallback (si-element-218,
-  si-lre-218: an `xsl:sequence` copy that would ground the document element,
-  answered from the tree), 41 re-run on the tree; 0 guard hits;
-- zero unexplained differences (the three M8 rules above each hit once);
-- the output leg: all 1009 streamed cases byte-identical, 0 bytes or errors
-  differ; 11,505 of the 11,518 cases identical overall, 13 unstable between
-  two tree runs (the clock, generate-id, per-compilation namespace URIs).
+At c257efe2 (the gap lanes G1–G7 merged), with `-output` against c24ddc25, it
+reads:
+- 2,124 cases on the streamed path (1,009 at the base): runs core 2,049,
+  main 61 (principal inputs through `TransformReader`), merge 26; 66 with a
+  fallback (a held select past its cap, or one meeting the document element,
+  answered from the tree), 115 re-run on the tree; 0 guard hits;
+- zero unexplained differences;
+- the output leg: all 2,124 streamed cases byte-identical, 389 of them
+  writing output before the end.
 
 The TSV line holds the runs per strategy (core: containers; main: principal
 inputs `TransformReader` streamed; merge: streamed merge sources), fallbacks, guard hits, re-runs and
@@ -635,8 +635,19 @@ gives each case of the core and modes grammars random serialization
 parameters (method, indent, character maps, cdata-section-elements, now and
 then one that holds the result to the end) and a random shape around its
 output (an element, an html page, a try), and requires the bytes `Output`
-receives and the error to be `Result.Serialize`'s. A
-failing case prints its seed and the command that replays it.
+receives and the error to be `Result.Serialize`'s. The gap lanes added
+grammars of their own, each drawing its share of the seeds first, so per-grammar
+tallies at a seed are not comparable across them: held and counted selects,
+`xsl:copy` select, on-empty and validation (`GOXSLT_STREAM_FUZZ_HOLD=0` leaves
+them out); set operators, maps, positional steps and loop or apply windows
+(`GOXSLT_STREAM_FUZZ_PATHS=0`); maps making nodes, `tail()`, text value
+templates, consuming tests, arrays and maps (`GOXSLT_STREAM_FUZZ_SHAPES=0`);
+whole-argument functions, `trace`, `xsl:message` (messages compared too),
+tries over folds, `xsl:fallback` (`GOXSLT_STREAM_FUZZ_G5=0`); and climbing and
+leaf tails and patterns drawn inside the core grammars. `TestStreamFuzzG6`
+compares `xsl:result-document` (principal and secondary results), `.`
+groupings and copy populations with the tree. A failing case prints its seed
+and the command that replays it.
 
 At 7344aa13, 100,000 cases (seed 1) give 0 differences, 36,142 of them
 streamed and 11,523 of those mode shapes; 100,000 of the M1 grammar alone
@@ -650,7 +661,12 @@ of them running a streamed grouping; `TestStreamFuzzMain` 100,000 give 0,
 the cursor; `TestStreamFuzzMain` 100,000 give 0, 1,992 streamed with a try
 rule. At badba78b, 100,000 cases each (seed 11) of `TestStreamFuzz`,
 `TestStreamFuzzMain`, `TestStreamFuzzMerge` and `TestStreamOutFuzz` give 0
-differences, and at fe989cf3 100,000 each (seed 1) give 0 again.
+differences, and at fe989cf3 100,000 each (seed 1) give 0 again. Each gap
+lane ran the four at 100,000 (seed 1) with 0 differences on its own branch;
+the path grammar's first run found 6 faults its lane then fixed, and a run
+after the merge (seed 31) 5 more, in loops over kept leaves. At c257efe2
+`TestStreamFuzz` and `TestStreamFuzzMain`, 100,000 each (seed 51), give 0
+differences.
 
 `TestStreamFuzzMain` applies each case of the modes grammar to its document
 in an initial mode through `TransformReader` and through `xdm.Parse` +
@@ -675,7 +691,19 @@ compares forks, maps and merges with the tree, the tee's error order, host
 function items reaching a stream (a hang fails), dynamic calls, and, without
 `-short`, a merge's peak heap. `go test ./xslt -run TestStreamOut -v`
 compares `Output` with `Result.Serialize` over shapes, `MaxNodes` under
-`Output`, and, without `-short`, peak heap.
+`Output`, indented output held as bytes, and, without `-short`, peak heap.
+The gap lanes' differentials, each core or `TransformReader` against the tree:
+`go test ./xslt -run 'TestStreamHold|TestStreamResultValidation|TestStreamCopySelect|TestStreamOnEmpty'`
+(held and counted selects, validation, `xsl:copy` select, on-empty);
+`-run 'TestStreamUnion|TestStreamIdentity|TestStreamPop'` (set operators, the
+identity template, loop and apply populations); `-run TestStreamShapes`
+(maps, `tail()`, text value templates, consuming tests, arrays);
+`-run 'TestStreamLeaves|TestStreamClimb'` and `go test ./internal/xdmstream
+-run 'TestLeafMatchesTree|TestCursorParsesOnTheReader'` (kept leaves,
+climbing, the step-function cursor); `-run 'TestStreamWholeFns|TestStreamMessages|TestStreamTryFoldOrder|TestStreamFallback|TestStreamMainLiteralGlobals|TestStreamPatternMatchesNoNode'`;
+`-run 'TestStreamResultDoc|TestStreamGroupDotPattern|TestStreamForkFused'`;
+and `go test ./tests/xslts -run TestStreamedSourceInline` (the harness hands
+inline streaming sources to `TransformReader`).
 
 
 ## The ratchet

@@ -54,9 +54,10 @@ import (
 // (M3), 877 with streamed xsl:try, function calls and attribute sets (M6),
 // 922 with accumulators, fork, map, merge and streamed output (M4, M5, M7),
 // 1009 with the §19.8 analysis completed (M8): containers it used to leave
-// unknown or unverified.
+// unknown or unverified, 2124 with the gap lanes (G1-G7): held selects,
+// set operators, path algebra, kept leaves, climbing, and the rest.
 // A stage may only raise it.
-const defaultFloor = 1009
+const defaultFloor = 2124
 
 func main() {
 	floor := defaultFloor
