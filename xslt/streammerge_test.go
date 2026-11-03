@@ -27,7 +27,9 @@ func mergeSheet(sources, action string) string {
 	return `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
  xmlns:xs="http://www.w3.org/2001/XMLSchema" exclude-result-prefixes="xs">
 <xsl:template name="main"><out><xsl:merge>` + sources + `<xsl:merge-action>` + action +
-		`</xsl:merge-action></xsl:merge></out></xsl:template></xsl:stylesheet>`
+		`</xsl:merge-action></xsl:merge></out></xsl:template>` +
+		`<xsl:template name="mergeValue"><xsl:value-of select="current-merge-key()"/></xsl:template>` +
+		`<xsl:template name="mergeMessage"><xsl:message select="current-merge-key()"/></xsl:template></xsl:stylesheet>`
 }
 
 func mergeSrc(name, uris, sel, key string, extra string) string {
@@ -85,6 +87,14 @@ func TestStreamMergeMatchesTree(t *testing.T) {
 		// the template says "text" (checked before anything is read).
 		{strings.Replace(mergeSrc("A", "'a.xml'", "log/e", "@t", ""), `"/>`, `" data-type="{'te' || 'xt'}"/>`, 1) +
 			strings.Replace(mergeSrc("B", "'c.xml'", "log/g/e", "string(@t)", ""), `"/>`, `" data-type="text"/>`, 1), group, true},
+		// A named template the action calls is walked: a value is no effect a
+		// re-run repeats, a message is.
+		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""), `<g><xsl:call-template name="mergeValue"/></g>`, true},
+		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""), `<g><xsl:call-template name="mergeMessage"/></g>`, false},
+		// A secondary result is taken back with the failed run: the tree's
+		// error, not XTDE1490 on the re-run.
+		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""),
+			`<xsl:result-document href="r{position()}.xml"><x/></xsl:result-document><g v="{xs:integer(current-merge-group('B')/@t) div 0}"/>`, true},
 	}
 	streamed := 0
 	for i, c := range cases {
