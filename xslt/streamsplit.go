@@ -109,6 +109,10 @@ type streamSplit struct {
 	outermost, innermost bool
 	nests                bool // a match can lie inside another
 	noLeaves             bool // a text, comment or PI match gives nothing
+	// keepLeaves says a text, comment or PI match is kept as a node, a copy
+	// that is the original to order and identity (Cursor.Leaf), and
+	// leafOnly that no element is one.
+	keepLeaves, leafOnly bool
 	// predFail and tailFail say a predicate of P, or the tail, may raise an
 	// error: the tree evaluates them all, so the split may not stop early.
 	predFail, tailFail bool
@@ -334,10 +338,8 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 			s.mode = matchGround
 		}
 	case tail == nil:
-		if leaf {
-			return "text, comment or PI nodes kept: an event node has no identity"
-		}
 		s.mode = matchGround
+		s.keepLeaves, s.leafOnly = leaf, leaf && !elem
 	case leaf:
 		return "a tail after text, comment or PI matches"
 	case !tailKindOK(tail):
@@ -416,9 +418,10 @@ func (s *streamSplit) class() string {
 		return "subtree"
 	case s.red != "":
 		return "bounded"
-	case s.steps == nil || s.atomize || s.tailText != "" ||
+	case s.steps == nil || s.atomize || s.tailText != "" || s.leafOnly ||
 		(s.mode == matchView || s.mode == matchGround) && s.tail != nil && valueTail(s.tail.Expr()):
-		// A grounded match's copy is let go once its tail has made values.
+		// A grounded match's copy is let go once its tail has made values;
+		// a kept leaf is a copy of it alone, its ancestors' copies shared.
 		return "output"
 	}
 	return "nodes"
@@ -1759,7 +1762,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 			if match && !quiet {
 				r.seen++ // a leaf match makes its ancestors not innermost
 				if !s.noLeaves {
-					if err := r.leaf(ev.Node); err != nil {
+					if err := r.leaf(ev.Node, ev.Depth); err != nil {
 						return err
 					}
 				}
@@ -1932,14 +1935,29 @@ func (s *streamSplit) textAtomic(t string) *xdm.Atomic {
 }
 
 // leaf takes a text, comment or PI match n (live on the cursor, or in a
-// grounded copy): only counted or atomized (path refuses keeping one).
-func (r *splitRun) leaf(n *xdm.Node) error {
+// grounded copy, d 0): counted, atomized, or kept (keepLeaves) -- a live one,
+// at depth d, as its copy, the original to order and identity (Cursor.Leaf),
+// which a matchBody loop's body is handed as a match.
+func (r *splitRun) leaf(n *xdm.Node, d int) error {
 	s := r.s
 	switch {
 	case s.mode == matchCount || s.red == "nth" && !s.atomize && s.tailText == "" && r.idx+1 < s.nth:
 		return r.take(xdm.Sequence{nil})
 	case s.tailText == "string":
 		return r.take(xdm.One(xdm.NewString(n.StringValue())))
+	case s.keepLeaves && !s.atomize && s.tailText == "":
+		if d > 0 {
+			c, err := r.c.Leaf()
+			if err != nil {
+				return err
+			}
+			n = c
+		}
+		if r.body != nil {
+			_, err := r.body(n, d)
+			return err
+		}
+		return r.take(xdm.One(n))
 	}
 	return r.take(xdm.Atomize(xdm.One(n)))
 }
@@ -2008,7 +2026,7 @@ func (r *splitRun) walkTree(n *xdm.Node, pf *splitFrame) (found bool, err error)
 			if match && !quiet {
 				found = true
 				if !s.noLeaves {
-					if err := r.leaf(ch); err != nil {
+					if err := r.leaf(ch, 0); err != nil {
 						return found, err
 					}
 				}

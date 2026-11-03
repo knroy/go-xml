@@ -69,7 +69,11 @@ type originSeg struct {
 }
 
 // add records that the records from at on are the originals from ord on.
+// A run that goes on the last one's numbering needs no segment of its own.
 func (o *treeOrigin) add(at uint32, ord uint64) {
+	if k := len(o.segs) - 1; k >= 0 && at > o.segs[k].at && o.segs[k].ord+uint64(at-o.segs[k].at) == ord {
+		return
+	}
 	o.segs = append(o.segs, originSeg{at, ord})
 }
 
@@ -169,10 +173,17 @@ func (b *burster) view() *Node {
 	if v := b.views; v != nil && len(v.gens) == d+1 && v.gens[d] == b.gen {
 		return v.path[d] // asked again
 	}
-	t := el.tree
+	vb := b.viewUnder(el, d)
+	vb.push(el, b.ordOf(el), b.gen)
+	return vb.path[d]
+}
+
+// viewUnder returns the view batch, its path holding copies of the open
+// ancestors of n, a node of the parse at depth d, and nothing below them.
+func (b *burster) viewUnder(n *Node, d int) *viewBatch {
 	vb := b.views
 	if vb == nil || int(vb.t.n) >= max(viewBatchRecords, 4*vb.recs[len(vb.recs)-1]) {
-		vb = b.newViews(t)
+		vb = b.newViews(n.tree)
 	}
 	// The copies of the open elements this batch already has: a copy that
 	// is of the open element at its depth has its ancestors' copies above
@@ -184,7 +195,7 @@ func (b *burster) view() *Node {
 	}
 	vb.path, vb.gens, vb.recs = vb.path[:k], vb.gens[:k], vb.recs[:k]
 	anc := make([]*Node, d-k)
-	p := el
+	p := n
 	for i := len(anc) - 1; i >= 0; i-- {
 		p = p.Parent()
 		anc[i] = p
@@ -193,8 +204,22 @@ func (b *burster) view() *Node {
 		vb.push(a, b.ords[k+i], b.gens[k+i])
 		b.viewCopies += 1 + a.NumAttrs()
 	}
-	vb.push(el, b.ordOf(el), b.gen)
-	return vb.path[d]
+	return vb
+}
+
+// leafView returns a copy of n, a text, comment or processing instruction
+// of the parse at depth d that the client is being told of, that may be
+// kept: complete, in the view batch under the copies of its ancestors a
+// view has (so its parent, names and base URI are the original's), one node
+// with the original to order and identity. Its value is copied, not shared
+// with the parse's text, which the copy would pin.
+func (b *burster) leafView(n *Node, d int) *Node {
+	vb := b.viewUnder(n, d)
+	c := vb.path[d-1].appendLeaf(n.Kind(), n.Name(), n.Value())
+	vb.o.add(c.self, b.ordOf(n))
+	c.flags |= fOrigin
+	copyProps(c, n)
+	return c
 }
 
 // newViews starts a batch with a copy of t's document node.

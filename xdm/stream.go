@@ -61,6 +61,9 @@ func driver(c xdmburst.Client) *burster {
 			return nil // not a typed nil
 		})
 	}
+	if v, ok := c.(xdmburst.LeafViewing); ok {
+		v.LeafViewer(func(n any, d int) any { return b.leafView(n.(*Node), d) })
+	}
 	if f, ok := c.(xdmburst.Flushing); ok {
 		f.Flusher(b.flush)
 	}
