@@ -1374,8 +1374,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	}
 	i.stream.count()
 	sig, mark := signature(out), rt.localsMark()
-	msgs := rt.messagesMark()           // streammessage.go
-	undoSecondary := rt.secondaryMark() // streamresult.go
+	undoEffects := rt.effectsMark() // streammessage.go: secondary results and messages
 	n0, b0 := xpathleaf.Charged(rt.ctx)
 	// At the top of a sequence (the principal result's raw nodes, a
 	// variable's, a function's) the tree keeps the source's own nodes where
@@ -1421,8 +1420,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 		return true, fmt.Errorf("streaming: internal error after output was written: %w", err)
 	}
 	unread()
-	rt.dropMessages(msgs)
-	undoSecondary()
+	undoEffects()
 	terr := i.executeTree(rt, out, href)
 	if terr == nil && !clean {
 		streamtrace.Guard()

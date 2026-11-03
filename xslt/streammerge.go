@@ -274,7 +274,7 @@ func (i *mergeInstr) executeStream(rt *runtime, out *outputBuilder) (bool, error
 		return false, nil
 	}
 	sig, mark := signature(out), rt.localsMark()
-	undoSecondary := rt.secondaryMark() // streamresult.go
+	undoEffects := rt.effectsMark() // streammessage.go: secondary results and messages
 	n0, b0 := xpathleaf.Charged(rt.ctx)
 	var unread []func()
 	err := i.runStream(rt, out, &unread)
@@ -303,7 +303,7 @@ func (i *mergeInstr) executeStream(rt *runtime, out *outputBuilder) (bool, error
 	for _, u := range unread {
 		u()
 	}
-	undoSecondary()
+	undoEffects()
 	terr := i.executeTree(rt, out)
 	if terr == nil && !clean {
 		streamtrace.Guard()

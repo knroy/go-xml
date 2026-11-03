@@ -5,8 +5,8 @@ package xslt
 // A message has no effect on the result: its text is appended to
 // rt.messages, in the order the instructions run, which is the tree's. Two
 // things make the stream's messages the tree's:
-//   - A container re-run on the tree drops the messages the failed streamed
-//     run appended (executeStream, one hook), so none is told twice; the
+//   - A container or merge re-run on the tree drops the messages the failed
+//     streamed run appended (effectsMark), so none is told twice; the
 //     prongs of a tee each keep their own and they are appended in prong
 //     order, up to the first that failed (streamRun.fork, one hook).
 //   - XSLT 3.0 swallows an error of the message's content (instructions.go).
@@ -82,10 +82,21 @@ func (t streamTry) messageFailed(err error) error {
 	return t.caught()
 }
 
-// messagesMark is how many messages rt holds; dropMessages drops the ones
-// after mark, those of a streamed run the tree runs again.
-func (rt *runtime) messagesMark() int { return len(*rt.messages) }
+// effectsMark returns what takes back the effects a streamed run made after
+// it, before the tree runs it again: its secondary results (secondaryMark)
+// and its messages, which the tree tells again. Every re-run calls it: a
+// container's (executeStream) and a merge's (streammerge.go), whose action
+// may reach rules that tell messages through xsl:apply-templates.
+func (rt *runtime) effectsMark() func() {
+	undo := rt.secondaryMark()
+	n := len(*rt.messages)
+	return func() {
+		undo()
+		rt.dropMessages(n)
+	}
+}
 
+// dropMessages drops the messages after mark.
 func (rt *runtime) dropMessages(mark int) { *rt.messages = (*rt.messages)[:mark] }
 
 // subtreeMentions reports whether s occurs in an attribute or a text node of el or
