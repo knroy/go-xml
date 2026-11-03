@@ -1105,12 +1105,12 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		}
 		return true
 	case *xpath.DynamicCall:
-		// A map or function a variable holds ("$m('k')"): a variable holds
-		// no node of the stream (§19.8.4.41), so it reads what its arguments
-		// read.
-		// In an accumulator rule, $value only when it is a map or array.
-		if _, ok := x.Target.(*xpath.VarRef); !ok ||
-			vc.accum && !vc.lookup && isVarRef(x.Target, xdm.QName{Local: "value"}) {
+		// A function item a variable holds may read the focus or the stream
+		// (accumulator-after#1): only a call known to be a lookup is taken.
+		// A map or array variable's "$m('k')" was made map:get or array:get
+		// as it parsed (parseAt, mapCalls); in an accumulator rule,
+		// $value(k) where its type says it is a map or an array.
+		if !(vc.accum && vc.lookup && isVarRef(x.Target, xdm.QName{Local: "value"})) {
 			return false
 		}
 		for _, a := range x.Args {

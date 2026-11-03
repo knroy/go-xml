@@ -46,12 +46,14 @@ package xslt
 // back when its turn goes on (xpathleaf.LockYield).
 
 import (
+	"reflect"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // forkOp plans el, an xsl:fork that consumes its context, focus f.
@@ -279,4 +281,145 @@ func (run *streamRun) fork(rt *runtime, op *streamOp, body []Instruction, out *o
 		}
 	}
 	return nil
+}
+
+// mapCalls rewrites in e, an expression written on el that the streaming
+// checks parsed (parseAt), each dynamic call "$m(k)" whose $m is provably a
+// map or an array into map:get($m, k) or array:get($m, k), which give the
+// same value and errors and which the checks judge by their arguments. Any
+// other dynamic call is left, and the checks refuse it: a variable may hold
+// a function item that reads the focus or the stream (accumulator-after#1,
+// name#0, a partial application of one), whatever the call's arguments.
+// Provably: the variable, found by the XSLT scoping rules from el, is an
+// xsl:variable or xsl:param declared as="map(...)" or "array(...)", or an
+// xsl:variable bound to a map or array constructor or to an xsl:map; a name
+// the expression itself binds (for, let, some, every, an inline function's
+// parameter) is not rewritten.
+func mapCalls(e xpath.Expr, el *xdm.Node) xpath.Expr {
+	bound := map[xdm.QName]bool{}
+	exprWalk(reflect.ValueOf(&e).Elem(), func(v reflect.Value) {
+		switch x := v.Interface().(type) {
+		case xpath.Binding:
+			bound[x.Var] = true
+		case xpath.InlineParam:
+			bound[x.Name] = true
+		}
+	})
+	exprWalk(reflect.ValueOf(&e).Elem(), func(v reflect.Value) {
+		if v.Kind() != reflect.Interface || !v.CanSet() {
+			return
+		}
+		dc, ok := v.Interface().(*xpath.DynamicCall)
+		if !ok || len(dc.Args) != 1 {
+			return
+		}
+		vr, ok := dc.Target.(*xpath.VarRef)
+		if !ok || bound[vr.Name] {
+			return
+		}
+		if ns := mapVarKind(el, vr.Name); ns != "" {
+			v.Set(reflect.ValueOf(xpath.Expr(&xpath.FuncCall{Name: xdm.QName{URI: ns, Local: "get"},
+				Args: []xpath.Expr{dc.Target, dc.Args[0]}})))
+		}
+	})
+	return e
+}
+
+// exprWalk calls visit on v and on every value of the xpath package's AST
+// below it, interfaces before what they hold.
+func exprWalk(v reflect.Value, visit func(reflect.Value)) {
+	const pkg = "github.com/knroy/go-xml/v2/xpath"
+	switch v.Kind() {
+	case reflect.Interface:
+		if v.IsNil() {
+			return
+		}
+		visit(v)
+		exprWalk(v.Elem(), visit)
+	case reflect.Pointer:
+		if !v.IsNil() && v.Type().Elem().PkgPath() == pkg {
+			exprWalk(v.Elem(), visit)
+		}
+	case reflect.Struct:
+		if v.Type().PkgPath() != pkg {
+			return
+		}
+		visit(v)
+		for i := range v.NumField() {
+			if v.Type().Field(i).IsExported() {
+				exprWalk(v.Field(i), visit)
+			}
+		}
+	case reflect.Slice:
+		for i := range v.Len() {
+			exprWalk(v.Index(i), visit)
+		}
+	}
+}
+
+// mapVarKind is the function namespace of the get function for the variable
+// q in scope at el -- xdm.NSMap or xdm.NSArray -- when its declaration says
+// it is a map or an array, or "".
+func mapVarKind(el *xdm.Node, q xdm.QName) string {
+	for n := el; n != nil && n.Kind() == xdm.KindElement; n = n.Parent() {
+		p := n.Parent()
+		if p == nil || p.Kind() != xdm.KindElement {
+			return ""
+		}
+		top := isXSL(p, "stylesheet") || isXSL(p, "transform") || isXSL(p, "package")
+		var found *xdm.Node
+		for c := range p.Children() {
+			if c == n && !top {
+				break // only the declarations before n are in scope
+			}
+			if c.Kind() == xdm.KindElement && (isXSL(c, "variable") || isXSL(c, "param")) && c != n {
+				if name, err := resolveQNameAttr(c, c.AttrValue("name")); err == nil && name == q {
+					found = c
+				}
+			}
+		}
+		if found != nil {
+			return mapDeclKind(found)
+		}
+		if top {
+			return ""
+		}
+	}
+	return ""
+}
+
+// mapDeclKind reads a variable's declaration: map or array by its type, or,
+// for an xsl:variable, by its value's constructor.
+func mapDeclKind(d *xdm.Node) string {
+	as := strings.ReplaceAll(d.AttrValue("as"), " ", "")
+	switch {
+	case strings.HasPrefix(as, "map("):
+		return xdm.NSMap
+	case strings.HasPrefix(as, "array("):
+		return xdm.NSArray
+	case isXSL(d, "param") || as != "":
+		return ""
+	}
+	if s := d.AttrValue("select"); s != "" {
+		switch e, _ := xpath.ParseVersion(s, newNSResolver(d, xpathDefaultNamespace(d)), xpathVersionAt(d)); e.(type) {
+		case *xpath.MapConstructor:
+			return xdm.NSMap
+		case *xpath.ArrayConstructor:
+			return xdm.NSArray
+		}
+		return ""
+	}
+	var kids []*xdm.Node
+	for c := range d.Children() {
+		switch {
+		case c.Kind() == xdm.KindElement:
+			kids = append(kids, c)
+		case c.Kind() == xdm.KindText && strings.TrimSpace(c.Value()) != "":
+			return ""
+		}
+	}
+	if len(kids) == 1 && isXSL(kids[0], "map") {
+		return xdm.NSMap
+	}
+	return ""
 }

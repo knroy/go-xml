@@ -226,7 +226,7 @@ func parseAt(el *xdm.Node, src string) xpath.Expr {
 	if err != nil {
 		return nil
 	}
-	return e
+	return mapCalls(e, el) // streamfork.go
 }
 
 // booleanShaped reports whether a predicate is certainly not numeric, so not
@@ -527,11 +527,6 @@ func burstSafe(e xpath.Expr, noPos bool) bool {
 		return allBurstSafe(x.Keys, noPos) && allBurstSafe(x.Values, noPos)
 	case *xpath.ArrayConstructor:
 		return allBurstSafe(x.Members, noPos)
-	case *xpath.DynamicCall:
-		// A map or function a variable holds, "$m('k')": it reads of the
-		// burst only what its arguments do.
-		_, v := x.Target.(*xpath.VarRef)
-		return v && allBurstSafe(x.Args, noPos)
 	case *xpath.LookupExpr:
 		return x.Base != nil && burstSafe(x.Base, noPos) && (x.Expr == nil || burstSafe(x.Expr, noPos))
 	}

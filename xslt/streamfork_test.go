@@ -148,10 +148,13 @@ func TestStreamForkHostCalls(t *testing.T) {
 	decls := `<xsl:param name="f" required="yes"/><xsl:param name="m" select="map{}"/>
 <xsl:variable name="g" select="$f"/><xsl:variable name="p" select="$f(?)"/><xsl:variable name="late" select="string-length('abc')"/>
 <xsl:variable name="mf" select="$m?f"/><xsl:variable name="hg" select="$f('g')"/>
+<xsl:variable name="h1" select="$f(1)"/><xsl:variable name="hm" select="$mf(1)"/><xsl:variable name="hgv" select="$g(1)"/><xsl:variable name="hp" select="$p(1)"/>
 <xsl:variable name="late2" select="concat('x', 'y')"/>
 <xsl:function name="p:k"><xsl:param name="x"/><xsl:sequence select="$f($x)"/></xsl:function>`
-	// A prong that reads the document and calls host code, one that forces a
-	// global after it, and a global forced after the fork.
+	// A prong that reads the document and calls host code (a global whose
+	// value calls it, forced there: a dynamic call on a function variable is
+	// not motionless), one that forces a global after it, and a global forced
+	// after the fork.
 	fork := func(call string) string {
 		return `<out><xsl:fork><xsl:sequence><a><xsl:value-of select="count(//rec)"/><xsl:value-of select="` + call + `"/></a></xsl:sequence>` +
 			`<xsl:sequence><b><xsl:value-of select="sum(//rec/@v)"/><xsl:value-of select="$late2"/></b></xsl:sequence></xsl:fork><c v="{$late}"/></out>`
@@ -169,12 +172,12 @@ func TestStreamForkHostCalls(t *testing.T) {
 	}
 	withMap["m"] = xdm.One(b.Build())
 	routes := []route{
-		{"static parameter", fork("$f(1)"), true, nil, false},
-		{"parameter", fork("$f(1)"), false, map[string]xdm.Sequence{"f": host}, false},
-		{"map in a parameter", fork("$mf(1)"), false, withMap, false},
+		{"static parameter", fork("$h1"), true, nil, false},
+		{"parameter", fork("$h1"), false, map[string]xdm.Sequence{"f": host}, false},
+		{"map in a parameter", fork("$hm"), false, withMap, false},
 		{"global forced in a prong", fork("$hg"), false, map[string]xdm.Sequence{"f": host}, false},
-		{"global variable", fork("$g(1)"), false, map[string]xdm.Sequence{"f": host}, false},
-		{"partial application", fork("$p(1)"), false, map[string]xdm.Sequence{"f": host}, false},
+		{"global variable", fork("$hgv"), false, map[string]xdm.Sequence{"f": host}, false},
+		{"partial application", fork("$hp"), false, map[string]xdm.Sequence{"f": host}, false},
 		{"stylesheet function", fork("p:k(1)"), false, map[string]xdm.Sequence{"f": host}, false},
 		{"function reference", fork("p:k#1(1)"), false, map[string]xdm.Sequence{"f": host}, false},
 		// One cursor, no fork: the predicate runs on the parse's goroutine.
@@ -257,5 +260,73 @@ func TestStreamForkHostCalls(t *testing.T) {
 		if !ran && r.name != "stylesheet function" && r.name != "function reference" {
 			t.Errorf("%s: the tee or merge did not run (%+v)", r.name, st)
 		}
+	}
+}
+
+// TestStreamDynamicCallTargets: a dynamic call on a variable is motionless
+// only when the variable is provably a map or an array (mapCalls): a
+// variable may hold a function item that reads the focus or the stream.
+// accumulator-061's shape -- $aa bound to accumulator-after#1, called on a
+// streamed node in a rule -- must give through TransformReader what Parse +
+// Transform gives, with no guard hit (it streamed, and failed with "a context
+// read twice", before the fix). On the core (a
+// source-document container; TransformReader refuses map-valued globals by
+// its own rule), a map or array variable's lookup, declared by type, by
+// constructor or by xsl:map, still streams, and a function variable's call
+// does not.
+func TestStreamDynamicCallTargets(t *testing.T) {
+	accum := `<xsl:accumulator name="p:n" as="xs:decimal" initial-value="0" streamable="yes">
+<xsl:accumulator-rule match="chap" select="0"/><xsl:accumulator-rule match="fig" select="$value + 1"/></xsl:accumulator>
+<xsl:mode streamable="yes" on-no-match="shallow-skip" use-accumulators="p:n"/>`
+	doc := `<doc><chap><fig/><fig><diag/></fig></chap><chap><fig/></chap></doc>`
+	for _, c := range []struct {
+		decls  string
+		stream bool
+	}{
+		{`<xsl:param name="aa" select="accumulator-after#1"/>` + accum +
+			`<xsl:template match="fig"><p n="{accumulator-before('p:n')}"/><xsl:apply-templates/><p><xsl:value-of select="../$aa('p:n')"/></p></xsl:template>`, false},
+		{`<xsl:param name="aa" select="accumulator-before#1"/>` + accum +
+			`<xsl:template match="fig"><p><xsl:value-of select="$aa('p:n')"/></p></xsl:template>`, false},
+		{`<xsl:param name="nm" select="name#1"/><xsl:mode streamable="yes" on-no-match="shallow-skip"/>` +
+			`<xsl:template match="fig"><p n="{$nm(.)}"/></xsl:template>`, false},
+		// A param without a map type may be given a function: refused.
+		{`<xsl:param name="m" select="map{'fig': 1}"/><xsl:mode streamable="yes" on-no-match="shallow-skip"/>` +
+			`<xsl:template match="fig"><p n="{$m(name())}"/></xsl:template>`, false},
+	} {
+		sheet := mainSheet(c.decls)
+		opts := TransformOptions{}
+		so, st := mainRun(sheet, doc, true, opts)
+		to, _ := mainRun(sheet, doc, false, opts)
+		if so != to {
+			t.Errorf("%s:\nstreamed %s\ntree     %s", c.decls, so, to)
+		}
+		if st.Guards != 0 {
+			t.Errorf("%s: %d guard hits", c.decls, st.Guards)
+		}
+		if got := st.Runs[streamtrace.Main] > 0; got != c.stream {
+			t.Errorf("%s: streamed %v, want %v", c.decls, got, c.stream)
+		}
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["flat"]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loop := `<out><xsl:for-each select="doc/rec"><r n="{CALL}"/></xsl:for-each></out>`
+	for _, c := range []struct {
+		decls, call string
+		stream      bool
+	}{
+		{`<xsl:param name="m" as="map(*)" select="map{'a': 1}"/>`, `$m(string(@k))`, true},
+		{`<xsl:variable name="m" select="map{'a': 2, 'b': 3}"/>`, `$m(string(@k))`, true},
+		{`<xsl:variable name="m"><xsl:map><xsl:map-entry key="'b'" select="4"/></xsl:map></xsl:variable>`, `$m(string(@k))`, true},
+		{`<xsl:variable name="a" select="['x', 'y']"/>`, `$a(1)`, true},
+		{`<xsl:variable name="a" as="array(*)" select="['x']"/>`, `$a(xs:integer(@v))`, true}, // FOAY0001 at v="2"
+		{`<xsl:param name="nm" select="name#1"/>`, `$nm(.)`, false},
+		{`<xsl:param name="m" select="map{'a': 1}"/>`, `$m(string(@k))`, false},
+		// A range variable of the same name is not the map.
+		{`<xsl:variable name="m" select="map{'a': 1}"/>`, `for $m in name#1 return $m(.)`, false},
+	} {
+		where := c.decls + " " + c.call
+		coreCheck(t, coreSheetWith(c.decls, strings.Replace(loop, "CALL", c.call, 1)), dir, where, c.stream, TransformOptions{})
 	}
 }
