@@ -123,6 +123,13 @@ func (b *streamBuilder) groupOp(el *xdm.Node, f vfocus) bool {
 	return true
 }
 
+// dotPattern reports whether p is the pattern ".", which matches every
+// item (§5.5.2) and reads nothing of it: motionless (§19.8.10), decided on
+// any view (patternClasses).
+func dotPattern(p *Pattern) bool {
+	return strings.TrimSpace(p.src) == "." && len(p.alts) == 0 && len(p.general) == 1
+}
+
 // groundedSelect reports whether the analysis assessed the select of el, an
 // xsl:for-each-group, as grounded: a population of copies or values
 // (§19.8.4.19's first rule), which the tree's grouping takes whole.
