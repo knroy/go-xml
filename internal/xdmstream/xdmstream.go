@@ -4,8 +4,8 @@
 // MaxDepth counted over the whole document. Only the open elements are
 // held; each element the consumer moves past is dropped.
 //
-// The parse runs as a coroutine (iter.Pull) over xdm's stream driver
-// (xdmburst.Drive), resumed by each call that needs the next event.
+// The parse runs in steps on the reader's goroutine (xdmburst.Steps): each
+// call that needs the next event parses on to it, and the parse pauses there.
 //
 // What a consumer may read at each event, through Event.Node:
 //
@@ -28,7 +28,6 @@ package xdmstream
 import (
 	"errors"
 	"io"
-	"iter"
 
 	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/xdm"
@@ -69,15 +68,20 @@ type Observer func(n *xdm.Node, depth int, end bool, ord uint64)
 
 // Cursor reads one document. It is not safe for concurrent use.
 type Cursor struct {
-	next func() (Event, bool)
-	stop func()
-	ev   Event // the last event Next returned
+	// step parses on to the next event, out, which the client sets
+	// (xdmburst.Steps); nil before the first call and once the parse is
+	// over. done releases the parse; begun says it was started.
+	step  func(xdmburst.Action) error
+	done  func()
+	begun bool
+	out   Event
+	// startD is the depth of the start tag the parse paused at, 0 when it
+	// paused elsewhere: the next step decides it.
+	startD int
+	ev     Event // the last event Next returned
 	// peeked holds the event Peek read ahead, and peekErr its error.
-	peeked  *Event
-	peekErr error
-	// act is what the parse is to do with ev, when ev is a start tag, once
-	// resumed.
-	act      xdmburst.Action
+	peeked   *Event
+	peekErr  error
 	grounded *xdm.Node
 	// later are GroundLater's functions waiting for their copies, in order.
 	later []func(*xdm.Node) error
@@ -105,7 +109,7 @@ type Cursor struct {
 	quiet, hide bool
 	open        []openState
 	closed      int
-	// resumes counts the switches to the parse, for the tests.
+	// resumes counts the steps of the parse, for the tests.
 	resumes int
 	// src and opts are what Open was given, for Tee; teed says Tee has
 	// taken src over.
@@ -142,9 +146,6 @@ const (
 	openDecided                  // reported, and skipped or grounded
 )
 
-// errStop ends the parse when the cursor is closed.
-var errStop = errors.New("xdmstream: closed")
-
 // errNotAtEnd is Flush's error away from an end tag.
 var errNotAtEnd = errors.New("xdmstream: not at an end tag")
 
@@ -158,34 +159,16 @@ var errNotAtStart = errors.New("xdmstream: not at a start tag")
 // Open returns a cursor over r, parsed with opts. Nothing is read until the
 // first call. Close releases it.
 func Open(r io.Reader, opts xdm.ParseOptions) *Cursor {
-	c := &Cursor{src: r, opts: opts}
-	c.next, c.stop = iter.Pull(func(yield func(Event) bool) {
-		err := xdmburst.Drive(r, opts, &client{c, yield})
-		switch {
-		case err == nil:
-			// The observers first: they may take the lock the handoff lets go.
-			for _, o := range c.obs {
-				o(nil, 0, true, 0)
-			}
-			if c.handoff != nil {
-				c.handoff()
-			}
-			yield(Event{Kind: EndDocument, Closed: c.closed})
-		case err != errStop:
-			c.err = err
-		}
-	})
-	return c
+	return &Cursor{src: r, opts: opts}
 }
 
-// Handoff has f called at each switch between the reader and the parse,
-// which run on goroutines of their own and take turns: by the reader before
-// it switches to the parse (what f returns is called when the parse is
-// back), and by the parse before it hands an event over (what f returns is
-// dropped). A filter's Accept runs on the parse's side, the reader's code
-// on the other, so state either took that a goroutine holds (xpath's
-// EvalLock, once a host call has shared it) can be let go before the other
-// needs it. A Tee's cursors have c's. It must be set before the first call.
+// Handoff has f called where the cursor's parse waits for another
+// goroutine: a Tee's cursors, which take turns, call it as a turn ends
+// (what f returns is called when the turn goes on), so that state the
+// reader's goroutine holds (xpath's EvalLock, once a host call has shared
+// it) can be let go before the next reader needs it. The parse itself runs
+// on the reader's goroutine, so a cursor read alone hands nothing off. A
+// Tee's cursors have c's. It must be set before the first call.
 func (c *Cursor) Handoff(f func() func()) { c.handoff = f }
 
 // StripWhitespace has the parse drop whitespace-only text directly inside
@@ -195,7 +178,12 @@ func (c *Cursor) Handoff(f func() func()) { c.handoff = f }
 func (c *Cursor) StripWhitespace(strip func(el *xdm.Node) bool) { c.strip = strip }
 
 // Close stops the parse. The cursor is spent.
-func (c *Cursor) Close() { c.stop() }
+func (c *Cursor) Close() {
+	c.begun, c.step = true, nil
+	if c.done != nil {
+		c.done()
+	}
+}
 
 // At is the current event: the last one Next, NextTag, SkipTag, Skip,
 // Ground, GroundLater or Text returned (a Peek does not move it).
@@ -427,36 +415,59 @@ func (c *Cursor) resume(act xdmburst.Action) (Event, error) {
 	if c.teed {
 		return Event{}, errTeed
 	}
-	c.act = act
 	c.resumes++
-	if c.handoff != nil {
-		back := c.handoff()
-		defer back()
+	if !c.begun {
+		c.begun = true
+		c.step, c.done = xdmburst.Steps(c.src, c.opts, &client{c})
 	}
-	ev, ok := c.next()
-	if !ok {
+	if d := c.startD; d > 0 {
+		// What the parse paused at the start tag of becomes of it.
+		c.startD = 0
+		switch {
+		case c.hide:
+			// NextTag dropped it after a Peek had read it.
+			c.hide, c.open[d] = false, openHidden
+		case act == xdmburst.Keep:
+			c.open[d] = openKept
+		default:
+			c.open[d] = openDecided
+		}
+	}
+	if c.step == nil {
 		if c.err != nil {
 			return Event{}, c.err
 		}
 		return Event{}, io.EOF
 	}
-	return ev, nil
+	step := c.step
+	c.step = nil // until the step is back: a panic in it spends the cursor
+	switch err := step(act); err {
+	case nil:
+		c.step = step
+		return c.out, nil
+	case io.EOF:
+		c.done()
+		for _, o := range c.obs {
+			o(nil, 0, true, 0)
+		}
+		return Event{Kind: EndDocument, Closed: c.closed}, nil
+	default:
+		c.done()
+		c.err = err
+		return Event{}, err
+	}
 }
 
-// client is the cursor's side of xdmburst.Drive: each call hands the parse's
-// event to the consumer and waits for it to ask for the next.
+// client is the cursor's side of xdmburst.Steps: each event it hands to the
+// consumer pauses the parse.
 type client struct {
-	c     *Cursor
-	yield func(Event) bool
+	c *Cursor
 }
 
 // send hands ev to the consumer, with what was closed unseen before it.
-func (k *client) send(ev Event) bool {
-	if k.c.handoff != nil {
-		k.c.handoff()
-	}
+func (k *client) send(ev Event) {
 	ev.Closed, k.c.closed = k.c.closed, 0
-	return k.yield(ev)
+	k.c.out = ev
 }
 
 func (k *client) Start(el any, d int) (xdmburst.Action, error) {
@@ -468,19 +479,9 @@ func (k *client) Start(el any, d int) (xdmburst.Action, error) {
 		c.open[d] = openHidden
 		return xdmburst.Keep, nil
 	}
-	if !k.send(Event{Kind: StartElement, Depth: d, Node: n}) {
-		return 0, errStop
-	}
-	switch {
-	case c.hide:
-		// NextTag dropped it after a Peek had read it.
-		c.hide, c.open[d] = false, openHidden
-	case c.act == xdmburst.Keep:
-		c.open[d] = openKept
-	default:
-		c.open[d] = openDecided
-	}
-	return c.act, nil
+	k.send(Event{Kind: StartElement, Depth: d, Node: n})
+	c.startD = d
+	return xdmburst.Pause, nil
 }
 
 func (k *client) Leaf(n any, d int) error {
@@ -495,10 +496,8 @@ func (k *client) Leaf(n any, d int) error {
 	case xdm.KindPI:
 		kind = PI
 	}
-	if !k.send(Event{Kind: kind, Depth: d, Node: x}) {
-		return errStop
-	}
-	return nil
+	k.send(Event{Kind: kind, Depth: d, Node: x})
+	return xdmburst.ErrPause
 }
 
 func (k *client) End(el any, d int, grounded any) error {
@@ -521,10 +520,8 @@ func (k *client) End(el any, d int, grounded any) error {
 			return nil
 		}
 	}
-	if !k.send(Event{Kind: EndElement, Depth: d, Node: el.(*xdm.Node)}) {
-		return errStop
-	}
-	return nil
+	k.send(Event{Kind: EndElement, Depth: d, Node: el.(*xdm.Node)})
+	return xdmburst.ErrPause
 }
 
 func (k *client) Later(g any) error {

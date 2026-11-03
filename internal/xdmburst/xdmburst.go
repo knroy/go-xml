@@ -4,7 +4,10 @@
 // xdm types: this package cannot import xdm, which imports it.
 package xdmburst
 
-import "io"
+import (
+	"errors"
+	"io"
+)
 
 // Step is one step of a burst pattern: an element name test, reached from
 // the step before it (or the document node) as a child or, with Descendant,
@@ -37,7 +40,14 @@ const (
 	// is parsed, each child once it closes, so that the parse holds no more
 	// of it than its open path: End sees the element without its content.
 	Discard
+	// Pause, from Start under Steps, stops the parse at the element's start
+	// tag: the step returns, and the next is handed what to do with it.
+	Pause
 )
+
+// ErrPause, from Leaf or End under Steps, stops the parse after the event:
+// the step returns, and the next goes on from there.
+var ErrPause = errors.New("xdmburst: pause")
 
 // Client is told what a stream parse (Drive) meets. Its nodes are
 // *xdm.Node in the parse's own tree, whose records are reused once the
@@ -71,6 +81,15 @@ type Client interface {
 // Drive parses r as xdm.Parse does, with opts an xdm.ParseOptions, telling
 // c what it meets. An error from c stops the parse and is returned.
 var Drive func(r io.Reader, opts any, c Client) error
+
+// Steps is Drive in steps, on the caller's goroutine, for a client that
+// pauses (Pause, ErrPause): each call of step parses until c pauses, and
+// returns nil, or until the parse ends: io.EOF once the document is read,
+// its error otherwise (step is then not called again). act is what to do
+// with the element whose Start paused the step before; the first call's is
+// ignored. Nothing is read before the first call. done releases the parse,
+// once, whether it ended or not.
+var Steps func(r io.Reader, opts any, c Client) (step func(act Action) error, done func())
 
 // FromStream reports whether n, a *xdm.Node, was copied out of a stream: a
 // view, or a node of a grounded copy (its order and identity are its

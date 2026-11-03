@@ -7,7 +7,7 @@ import (
 )
 
 // The stream driver (burster) serves an outside client through
-// xdmburst.Drive: every element it is asked about is kept, grounded or
+// xdmburst.Drive, or, in steps the client pauses, xdmburst.Steps: every element it is asked about is kept, grounded or
 // skipped as the client says, and every leaf of a kept element is reported.
 func init() {
 	xdmburst.Drive = func(r io.Reader, opts any, c xdmburst.Client) error {
@@ -15,6 +15,30 @@ func init() {
 		o.bursts = driver(c)
 		_, err := parse(r, "", o)
 		return err
+	}
+	xdmburst.Steps = func(r io.Reader, opts any, c xdmburst.Client) (func(xdmburst.Action) error, func()) {
+		var b *burster
+		var parsed func() (*Tree, error)
+		done := func() {}
+		step := func(act xdmburst.Action) error {
+			if parsed == nil {
+				// Nothing is read before the first step.
+				o := opts.(ParseOptions)
+				b = driver(c)
+				o.bursts = b
+				parsed, done = parseSteps(r, "", o)
+			} else if err := b.resume(act); err != nil {
+				return stepEnd(err)
+			}
+			_, err := parsed()
+			return stepEnd(err)
+		}
+		release := func() {
+			d := done
+			done = func() {}
+			d()
+		}
+		return step, release
 	}
 	xdmburst.FromStream = func(n any) bool { return n.(*Node).flags&fOrigin != 0 }
 }
@@ -85,4 +109,16 @@ func (a *driveClient) end(el *Node, d int, _ bool, g *Node) error {
 		return a.c.End(el, d, nil) // not a typed nil
 	}
 	return a.c.End(el, d, g)
+}
+
+// stepEnd is a step's outcome as xdmburst.Steps reports it: nil at a pause,
+// io.EOF at the parse's end, or its error.
+func stepEnd(err error) error {
+	switch err {
+	case errPause:
+		return nil
+	case nil:
+		return io.EOF
+	}
+	return err
 }

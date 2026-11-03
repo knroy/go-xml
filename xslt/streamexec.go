@@ -1172,6 +1172,9 @@ type streamRun struct {
 	i      *sourceDocumentInstr
 	href   string
 	unread func()
+	// pre, for a prong of a fused fork, is what the walk read for its op
+	// (streamfuse.go).
+	pre *fusedValue
 }
 
 // feed returns the feed that drives instr from the cursor, or nil when instr
@@ -1254,6 +1257,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 // evalOp evaluates the select of op, a consuming instruction that is not a
 // loop, on the cursor.
 func (run *streamRun) evalOp(rt *runtime, op *streamOp) (xdm.Sequence, error) {
+	if run.pre != nil {
+		return run.preEval(rt, op)
+	}
 	g := run.groupAt(op)
 	if run.used || op.inGroup && g == nil {
 		return nil, errStreamPlan
