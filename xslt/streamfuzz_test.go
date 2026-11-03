@@ -289,6 +289,9 @@ func (g *fuzzGen) tail() string {
 	if g.p(25) {
 		return ""
 	}
+	if len(fuzzTailsExtra) > 0 && g.p(12) {
+		return "/" + g.pick(fuzzTailsExtra...) // streamleaffuzz_test.go
+	}
 	return "/" + g.pick("@v", "@v", "@k", "@k", "@*", "sub", "sub/@x", "name", "text()", "x", "@v/data()",
 		"@v/xs:decimal(.)", "@v/xs:double(.)", "@v/number()", "@v/xs:integer(.)", "@v/xs:float(.)",
 		"(if (@k) then xs:decimal(@v) else xs:double(@v))", "(if (@k = 'a') then xs:float(@v) else xs:integer(@v))",
@@ -321,6 +324,9 @@ func (g *fuzzGen) selectExpr() string {
 	)
 	if g.p(15) {
 		return p // bare: the whole select is the path
+	}
+	if len(fuzzSelectsExtra) > 0 && g.p(10) {
+		t = g.pick(fuzzSelectsExtra...) // streamleaffuzz_test.go
 	}
 	return strings.ReplaceAll(t, "P", "("+p+")")
 }
