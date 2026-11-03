@@ -38,6 +38,10 @@ func init() {
 	xpathleaf.CallItem = func(c any, fn *xdm.FunctionItem, args []xdm.Sequence) (xdm.Sequence, error) {
 		return callItem(c.(*Context), fn, args)
 	}
+	xpathleaf.LockShared = func(l any) bool {
+		g, _ := l.(*EvalLock)
+		return g != nil && g.shared.Load()
+	}
 	xpathleaf.WithExpr = func(c, e any) any {
 		n := *c.(*Compiled)
 		n.expr = optimize(e.(Expr))

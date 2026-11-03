@@ -1084,6 +1084,21 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 			}
 		}
 		return true
+	case *xpath.DynamicCall:
+		// A map or function a variable holds ("$m('k')"): a variable holds
+		// no node of the stream (§19.8.4.41), so it reads what its arguments
+		// read.
+		if _, ok := x.Target.(*xpath.VarRef); !ok {
+			return false
+		}
+		for _, a := range x.Args {
+			if !vc.safe(a, f, false) {
+				return false
+			}
+		}
+		return true
+	case *xpath.LookupExpr:
+		return x.Base != nil && vc.safe(x.Base, f, false) && (x.Expr == nil || vc.safe(x.Expr, f, false))
 	case *xpath.ArrayConstructor:
 		for _, m := range x.Members {
 			if !vc.safe(m, f, false) {

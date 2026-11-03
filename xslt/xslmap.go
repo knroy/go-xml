@@ -33,7 +33,13 @@ type mapInstr struct {
 // error code differs: a duplicate is XTDE3365 in this context.
 func (i *mapInstr) Execute(rt *runtime, out *outputBuilder) error {
 	sub := newOutputBuilder(rt)
-	if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
+	if op := rt.forkOf(i); op != nil {
+		// Its entries read a streamed document each on a cursor of its own
+		// (streamfork.go).
+		if err := rt.bursts.run.fork(rt.temporaryOutput(), op, i.body, sub); err != nil {
+			return err
+		}
+	} else if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
 		return err
 	}
 
@@ -121,7 +127,7 @@ func (i *mapEntryInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 	var value xdm.Sequence
 	if i.sel != nil {
-		if value, err = i.sel.Eval(rt.ctx); err != nil {
+		if value, err = rt.evalStreamExpr(i.sel); err != nil {
 			return err
 		}
 	} else {
@@ -146,7 +152,9 @@ func (c *compiler) compileMap(n *xdm.Node, ns xpath.NamespaceResolver) (Instruct
 		if err != nil {
 			return nil, err
 		}
-		return &mapInstr{body: body}, nil
+		instr := &mapInstr{body: body}
+		c.noteStreamFork(n, instr, body)
+		return instr, nil
 	}
 
 	key, err := requiredExpr(n, "key", ns)
@@ -158,6 +166,7 @@ func (c *compiler) compileMap(n *xdm.Node, ns xpath.NamespaceResolver) (Instruct
 		if instr.sel, err = compileExpr(a.Value(), ns); err != nil {
 			return nil, err
 		}
+		c.noteStreamParam(n, instr.sel, ns)
 	}
 	if instr.body, err = c.compileSequence(n, n); err != nil {
 		return nil, err

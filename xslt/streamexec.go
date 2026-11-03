@@ -147,6 +147,11 @@ type streamOp struct {
 	// avt, for the consuming part of a literal result element's attribute
 	// value template, is that part's expression (avtOp).
 	avt string
+	// fork says it is an xsl:fork or xsl:map whose prongs consume the
+	// document node on a tee (streamfork.go); prongs are each prong's
+	// consuming instructions, empty for one that reads nothing.
+	fork   bool
+	prongs [][]*streamOp
 }
 
 // streamBuilder builds a plan from the source of a container.
@@ -259,6 +264,14 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		return true
 	}
 	local := el.Name().Local
+	switch local {
+	case "fork":
+		return b.forkOp(el, f)
+	case "map":
+		return b.mapOp(el, f)
+	case "map-entry":
+		return b.mapEntryOp(el, f)
+	}
 	if el.Attr("", "select") != nil {
 		switch local {
 		case "value-of", "copy-of", "sequence", "attribute", "break":
@@ -583,6 +596,7 @@ var streamMotionless = map[string]bool{
 	"element": true, "if": true, "choose": true, "when": true, "otherwise": true,
 	"where-populated": true, "on-empty": true, "on-non-empty": true, "document": true,
 	"copy": true, "next-iteration": true, "with-param": true, "break": true,
+	"fork": true, "map": true, "map-entry": true,
 }
 
 // motionless checks an instruction the analysis found motionless: it, and
@@ -644,7 +658,7 @@ var streamAttrsOK = map[string]bool{
 	"use-when": true, "default-mode": true, "copy-namespaces": true, "inherit-namespaces": true,
 	"name": true, "namespace": true, "separator": true, "as": true, "select": true, "test": true,
 	"disable-output-escaping": true, "href": true, "streamable": true,
-	"mode": true, "tunnel": true, "required": true,
+	"mode": true, "tunnel": true, "required": true, "key": true,
 }
 
 // attrs checks el's own expressions: the select (values only: what it
@@ -680,6 +694,10 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 			}
 		case "test":
 			if !b.expr(el, a.Value(), f, true) {
+				return false
+			}
+		case "key": // xsl:map-entry's
+			if !b.expr(el, a.Value(), f, false) {
 				return false
 			}
 		case "as":
@@ -877,6 +895,11 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 			return "not compiled (use-when)"
 		case op.dead != "":
 			return op.dead
+		case op.fork:
+			if why := x.readyFork(op, kinds); why != "" {
+				return why
+			}
+			continue
 		case op.apply != applyNone:
 			if why := op.readyApply(); why != "" {
 				return why
@@ -970,7 +993,7 @@ func inElement(el *xdm.Node) bool {
 		switch n.Name().Local {
 		case "element", "copy":
 			return true
-		case "if", "choose", "when", "otherwise", "for-each", "for-each-group", "iterate":
+		case "if", "choose", "when", "otherwise", "for-each", "for-each-group", "iterate", "fork":
 		default:
 			return false
 		}

@@ -37,6 +37,9 @@ type forkInstr struct {
 }
 
 func (i *forkInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if op := rt.forkOf(i); op != nil {
+		return rt.bursts.run.fork(rt, op, i.body, out) // streamfork.go
+	}
 	return execSequence(i.body, rt, out)
 }
 
@@ -69,7 +72,9 @@ func (c *compiler) compileFork(n *xdm.Node) (Instruction, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &forkInstr{body: body}, nil
+	instr := &forkInstr{body: body}
+	c.noteStreamFork(n, instr, body)
+	return instr, nil
 }
 
 // forkContentError reports a child that the section 16.1 content model does
