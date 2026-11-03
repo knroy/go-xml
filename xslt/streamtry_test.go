@@ -64,6 +64,7 @@ var tryBodies = []struct {
 	{`<o><xsl:try><xsl:for-each select="doc/rec[xs:integer(@v) gt 0]"><r/></xsl:for-each><xsl:catch>c</xsl:catch></xsl:try></o>`, false},
 	{`<o><xsl:try><xsl:apply-templates select="doc/rec"/><xsl:catch>c</xsl:catch></xsl:try></o>`, false},
 	{`<o><xsl:try><xsl:value-of select="sum(doc/rec/@v)"/><xsl:catch><xsl:value-of select="count(doc/rec)"/></xsl:catch></xsl:try></o>`, false},
+	{`<o><xsl:for-each select="doc/rec"><xsl:try><r><xsl:value-of select="1 div xs:integer(@v)"/></r><xsl:catch><xsl:value-of select="count(*)"/></xsl:catch></xsl:try></xsl:for-each></o>`, false},
 	{`<o><xsl:try rollback-output="no"><xsl:copy-of select="doc/rec[xs:integer(@v) gt 0]"/><xsl:catch>c</xsl:catch></xsl:try></o>`, false},
 }
 

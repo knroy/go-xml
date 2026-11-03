@@ -135,10 +135,14 @@ func (b *streamBuilder) catchOK(el *xdm.Node, f vfocus) bool {
 	if !b.tryAttrs(el, "errors") {
 		return false
 	}
-	if sel := el.Attr("", "select"); sel != nil && !b.expr(el, sel.Value(), f, false) {
-		return false
+	// Checked strictly, every select by the view: the analysis's records
+	// would let a consuming one through as some split's, and a catch has
+	// none.
+	sb := b.strict()
+	if sel := el.Attr("", "select"); sel != nil && !sb.expr(el, sel.Value(), f, false) || !sb.content(el, f) {
+		return b.refuse(sb.why)
 	}
-	return b.content(el, f)
+	return true
 }
 
 // tryAttrs checks the attributes of el beside its select and own: those
