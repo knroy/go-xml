@@ -23,10 +23,13 @@ const (
 	// (xslt/streammain.go): the initial mode's dispatch of the document
 	// node, run on the cursor as the core runs an apply op.
 	Main
+	// Merge is an xsl:merge whose streamable sources are each read on a
+	// cursor of their own (xslt/streammerge.go).
+	Merge
 	NumStrategies
 )
 
-var names = [NumStrategies]string{"core", "main"}
+var names = [NumStrategies]string{"core", "main", "merge"}
 
 func (s Strategy) String() string { return names[s] }
 
@@ -50,11 +53,14 @@ const (
 	KindApply
 	// KindGroup is a streamed xsl:for-each-group (xslt/streamgroup.go).
 	KindGroup
+	// KindFork is an xsl:fork or xsl:map whose prongs each read the
+	// document, on a cursor of their own (xslt/streamfork.go).
+	KindFork
 	NumKinds
 )
 
 var kindNames = [NumKinds]string{"tree", "ground", "seq", "element", "choose", "for-each",
-	"where-pop", "source-doc", "select", "apply", "group"}
+	"where-pop", "source-doc", "select", "apply", "group", "fork"}
 
 func (k Kind) String() string { return kindNames[k] }
 

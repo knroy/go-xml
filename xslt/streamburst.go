@@ -298,7 +298,7 @@ var burstInstructions = map[string]bool{
 	"variable": true, "comment": true, "processing-instruction": true,
 	"namespace": true, "param": true, "next-iteration": true,
 	"with-param": true, "break": true, "on-completion": true, "sort": true,
-	"map": true, "map-entry": true,
+	"map": true, "map-entry": true, "fork": true,
 }
 
 func burstElement(el, target *xdm.Node) bool {
@@ -527,6 +527,13 @@ func burstSafe(e xpath.Expr, noPos bool) bool {
 		return allBurstSafe(x.Keys, noPos) && allBurstSafe(x.Values, noPos)
 	case *xpath.ArrayConstructor:
 		return allBurstSafe(x.Members, noPos)
+	case *xpath.DynamicCall:
+		// A map or function a variable holds, "$m('k')": it reads of the
+		// burst only what its arguments do.
+		_, v := x.Target.(*xpath.VarRef)
+		return v && allBurstSafe(x.Args, noPos)
+	case *xpath.LookupExpr:
+		return x.Base != nil && burstSafe(x.Base, noPos) && (x.Expr == nil || burstSafe(x.Expr, noPos))
 	}
 	return false
 }

@@ -441,6 +441,7 @@ func fuzzMakeModes(seed int64) fuzzCase {
 	gr := rand.New(rand.NewSource(seed*39916801 + 13)) // the grouping rule bodies' draws
 	tr := rand.New(rand.NewSource(seed*1000003 + 19))  // the try rule bodies' draws
 	calls := false
+	fr := rand.New(rand.NewSource(seed*524287 + 19)) // the fork rule bodies' (streamforkfuzz_test.go)
 	for i, n := 0, g.n(6); i < n; i++ {
 		s.WriteString(`<xsl:template match="` + strings.ReplaceAll(sub(g.pick(fuzzPatterns...)), "<", "&lt;") + `"`)
 		if g.p(40) || len(modes) > 1 && g.p(50) {
@@ -458,8 +459,13 @@ func fuzzMakeModes(seed int64) fuzzCase {
 		if gb := fuzzGroupRule(gr, g.rec, modes[len(modes)-1]); gb != "" {
 			body = gb
 		}
-		if tb := fuzzTryRule(tr, g.rec); tb != "" {
+		// Both streams draw for every rule, so each lane's seeds keep their
+		// draws; a try body wins over a fork body.
+		tb, fb := fuzzTryRule(tr, g.rec), fuzzForkRule(fr, g.rec)
+		if tb != "" {
 			body, calls = tb, true
+		} else if fb != "" {
+			body = fb
 		}
 		s.WriteString(">" + body + "</xsl:template>\n")
 	}
@@ -580,6 +586,9 @@ func (g *fuzzGen) coreContent(esc func(string) string) (string, bool) {
 }
 
 func fuzzMake(seed int64) fuzzCase {
+	if fuzzIsForks(seed) {
+		return fuzzMakeForks(seed) // streamforkfuzz_test.go
+	}
 	if fuzzIsGroups(seed) {
 		return fuzzMakeGroups(seed)
 	}
@@ -854,6 +863,15 @@ func TestStreamFuzz(t *testing.T) {
 		}
 		if tries > 0 {
 			tally["streamed: a try caught on the cursor"]++
+		}
+		if c.kind == "forks" {
+			tally["fork shapes"]++
+			if co.trace.Streamed() > 0 {
+				tally["streamed: fork shapes"]++
+			}
+			if co.trace.Kinds[streamtrace.KindFork] > 0 {
+				tally["streamed: a tee"]++
+			}
 		}
 		if c.kind == "modes" {
 			tally["mode shapes"]++

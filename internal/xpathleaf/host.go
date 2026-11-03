@@ -107,3 +107,10 @@ var (
 	Charged   func(ctx any) (nodes, bytes int64)
 	Refund    func(ctx any, nodes, bytes int64)
 )
+
+// LockShared reports whether l, an *xpath.EvalLock, is shared: from then on
+// it is held by the goroutine evaluating, which evaluation on another
+// goroutine would wait for (xslt's streamed xsl:fork, which runs its prongs
+// on goroutines of their own, one at a time). Package xpath sets it in its
+// init.
+var LockShared func(l any) bool
