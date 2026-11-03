@@ -934,6 +934,10 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 	if c := s.class(); copies && (c == "nodes" || c == "subtree") &&
 		s.cond == nil && s.red == "" && isVarRef(s.outer.Expr(), splitItems) {
 		switch {
+		case s.group && minD+s.minDepth() < 2:
+			// A group of the document element: the fallback a container's
+			// select has at the document node is not open to a group's.
+			return "copy-of may ground the document element"
 		case s.ctxItem && (minD == 0 || minD < 2 && !x.rule):
 			return "copy-of(.) of the document element"
 		case s.ctxItem:
@@ -1002,7 +1006,7 @@ func (s *streamSplit) memory(minD int) string {
 		return "collects grounded copies (" + c + ") of the current group"
 	case (c == "nodes" || c == "subtree") && minD < 2:
 		return "collects grounded copies (" + c + ") of the document element"
-	case (s.red == "min" || s.red == "max") && minD > 0:
+	case (s.red == "min" || s.red == "max") && (minD > 0 || s.group):
 		return s.red + "() below the document node cannot fall back to the tree"
 	}
 	return ""

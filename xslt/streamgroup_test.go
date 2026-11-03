@@ -99,6 +99,12 @@ var groupBodies = []struct {
 	// parent.
 	{`<out><xsl:for-each-group select="*/g/t" group-adjacent="@d"><g n="{count(current-group())}" k="{@k}"/></xsl:for-each-group></out>`, true},
 	{`<out><xsl:for-each-group select="*/g/t[1]" group-starting-with="*[@v &lt; 0]"><g><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></out>`, true},
+	// A group of the document element: a copy of it, or a min or max over
+	// it, would give up, which only a container's select at the document
+	// node may (it falls back to the tree): refused.
+	{`<xsl:for-each-group select="*" group-starting-with="*[@k = 'a']"><g><xsl:sequence select="current-group()"/></g></xsl:for-each-group>`, false},
+	{`<xsl:for-each-group select="*" group-adjacent="name()"><g><xsl:value-of select="max(current-group()/@v)"/></g></xsl:for-each-group>`, false},
+	{`<xsl:for-each-group select="*" group-adjacent="name()"><g><xsl:value-of select="count(current-group()/t)"/></g></xsl:for-each-group>`, true},
 	// Refused by the memory rule: the members collected as grounded
 	// copies (a group may be all of the document element's children).
 	{`<out><xsl:for-each-group select="*/g/t" group-adjacent="@d"><g><xsl:value-of select="string-join(current-group() ! name(), ',')"/></g></xsl:for-each-group></out>`, false},
