@@ -96,6 +96,8 @@ type Builder struct {
 	// sink, when set, streams what this builder builds (sink.go); a builder
 	// StartElement makes shares it.
 	sink *sink
+	// fwd, when set, makes this builder an xsl:try's buffer (tryfwd.go).
+	fwd *tryFwd
 }
 
 // Refused reports the first budget refusal this construction met, or nil.

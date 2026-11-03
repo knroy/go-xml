@@ -13,8 +13,9 @@
 //
 // A builder made any other way (a variable's, an xsl:try body's, a sort's) has
 // no Writer: what it builds is held until it is appended to a streaming
-// builder, where it arrives complete. That is how output under a rollback
-// xsl:try stays buffered without the try knowing about streaming.
+// builder, where it arrives complete. An xsl:try's buffer (Try) is the one
+// exception: it hands its complete items to the builder it writes for as
+// they are made, under a checkpoint that a caught error rolls back.
 package xdmsink
 
 import (
@@ -26,6 +27,10 @@ import (
 // Opened counts the elements and document nodes streaming builders have
 // opened (written the start of before their end), for the differentials.
 var Opened atomic.Int64
+
+// Forwarded counts the items xsl:try buffers (Try) have handed on before
+// their try ended, for the differentials.
+var Forwarded atomic.Int64
 
 // Writer is the serializer side of a streamed principal result.
 type Writer interface {
@@ -57,6 +62,17 @@ type Writer interface {
 	End(seq xdm.Sequence) error
 }
 
+// Checkpointer is a Writer whose output can be made provisional: what it
+// writes after Mark is held until the matching Commit, and Rollback puts
+// it, and its own state, back as they were at Mark. Marks nest; each is
+// committed or rolled back, innermost first. A Writer that is not one
+// keeps an xsl:try's output held to the try's end.
+type Checkpointer interface {
+	Mark() any
+	Commit(mark any)
+	Rollback(mark any)
+}
+
 // Hooks, set by package xdmbuild.
 var (
 	// Attach makes b, a builder of the principal result with nothing in it
@@ -81,6 +97,20 @@ var (
 	// writes or is appended to; 0 for any other builder.
 	Stamp func(out any) int64
 	// Items returns how many items out's sequence has had, those written
-	// included.
+	// (or, for a Try buffer, handed on) included.
 	Items func(out any) int
+	// Try returns the builder an xsl:try writes its body into when out
+	// streams, or nil: a sequence builder (policy p) that hands each item
+	// it completes on to out, as appending its sequence to out at the end
+	// would, while out's output since is provisional (rollback, true for
+	// rollback-output="yes") or written through (false: given only when
+	// every error the body raises is caught by the try, so none can reach
+	// an outer one). What it has not handed on is its Sequence, which the
+	// try appends to out when it succeeds.
+	Try func(out any, p any, rollback bool) any
+	// TryEnd ends b, a Try buffer: commit (the body succeeded, or stopped
+	// with a signal whose output stands) or roll back what it handed on.
+	// It returns the result nodes rolling back left charged that tree mode
+	// would not have charged, for the caller to hand back.
+	TryEnd func(b any, commit bool) int64
 )

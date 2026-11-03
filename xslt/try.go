@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -219,10 +220,21 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// would not do: out may already have an open element whose attributes the
 	// body added, and there is no record of where the body's contribution
 	// began.
-	sub := tryBuffer(rt)
+	//
+	// Under streamed output the builder hands what it completes on to out
+	// as it goes, provisionally (streamtry_out.go): tryEnd commits that or
+	// rolls it back, before the rest is appended or the catch runs.
+	sub := tryBuffer(rt, i, out)
+	defer func() {
+		if p := recover(); p != nil {
+			tryEnd(rt, sub, false)
+			panic(p)
+		}
+	}()
 	st := rt.streamTry()
 	err := i.run(rt.inTryBody(), sub) // secondaryout.go
 	if err == nil {
+		tryEnd(rt, sub, true)
 		return appendSequence(sub.Sequence(), out)
 	}
 
@@ -237,15 +249,21 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// propagated: this path exists to preserve the output the body
 			// had already produced, and the signal is what the caller is
 			// waiting for.
+			tryEnd(rt, sub, true)
 			_ = appendSequence(sub.Sequence(), out)
+		} else {
+			tryEnd(rt, sub, false)
 		}
 		return err
 	}
 	cl, ok := i.selectCatch(errorQName(err))
+	tryEnd(rt, sub, false)
 	if !ok {
 		return err
 	}
-	if i.noRollback && len(sub.Sequence()) > 0 {
+	// The items the body produced, those a buffer handed on included
+	// (streamtry_out.go): tree mode's len(sub.Sequence()).
+	if i.noRollback && xdmsink.Items(sub) > 0 {
 		// rollback-output="no" waives the guarantee that the failed body's
 		// output is discarded. This engine could discard it anyway, but the
 		// stylesheet has declared it does not need to be able to, and 8.3.1
