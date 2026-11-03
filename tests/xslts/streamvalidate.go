@@ -62,3 +62,67 @@ func (r *Runner) principalValidation(set *TestSet, tc *TestCase) xslt.SourceVali
 	}
 	return 0
 }
+
+// sameValidation reports whether sheet, the stylesheet's schema (its imports
+// with the environment's merged in), types the case's principal source
+// exactly as annotate's environment schema does: the field validates against
+// the one, annotate against the other.
+func (r *Runner) sameValidation(set *TestSet, tc *TestCase, sheet *xsd.Schema) bool {
+	env := r.environment(set, tc)
+	if env == nil || sheet == nil {
+		return false
+	}
+	for _, s := range env.Sources {
+		if s.Role != "." {
+			continue
+		}
+		es := r.streamValidated(set, env, s)
+		if es == nil {
+			return false
+		}
+		p := filepath.Join(set.Dir, filepath.FromSlash(s.File))
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return false
+		}
+		tree, err := xdm.ParseString(string(stripBOM(data)), r.sourceParseOptions(p))
+		if err != nil {
+			return false
+		}
+		a, err1 := es.ValidateCopy(tree.Root, xsd.ValidateOptions{})
+		b, err2 := sheet.ValidateCopy(tree.Root, xsd.ValidateOptions{})
+		return err1 == nil && err2 == nil && sameTyping(a, b)
+	}
+	return false
+}
+
+// sameTyping reports whether a and b, two typed copies of one document, are
+// the same nodes with the same typing.
+func sameTyping(a, b *xdm.Node) bool {
+	if a.Kind() != b.Kind() || a.Name() != b.Name() || a.Value() != b.Value() && a.Kind() != xdm.KindElement && a.Kind() != xdm.KindDocument ||
+		xdm.TypingOf(a) != xdm.TypingOf(b) {
+		return false
+	}
+	var aa, ba []*xdm.Node
+	for x := range a.Attrs() {
+		aa = append(aa, x)
+	}
+	for x := range b.Attrs() {
+		ba = append(ba, x)
+	}
+	if len(aa) != len(ba) {
+		return false
+	}
+	for i := range aa {
+		if !sameTyping(aa[i], ba[i]) {
+			return false
+		}
+	}
+	ac, bc := a.FirstChild(), b.FirstChild()
+	for ; ac != nil && bc != nil; ac, bc = ac.NextSibling(), bc.NextSibling() {
+		if !sameTyping(ac, bc) {
+			return false
+		}
+	}
+	return ac == nil && bc == nil
+}

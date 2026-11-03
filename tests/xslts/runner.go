@@ -530,9 +530,10 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	streamPath, streamContent, streamOpts := r.streamedSource(set, tc)
 	// A validated principal input streams with TransformOptions.SourceValidation,
 	// which validates against the stylesheet's schema: the one annotate uses
-	// only when the stylesheet imports none (streamvalidate.go).
+	// when the stylesheet imports none, or one typing the document as it
+	// does (streamvalidate.go).
 	validation := r.principalValidation(set, tc)
-	if validation != 0 && (!envOnly || streamPath == "") {
+	if validation != 0 && (!envOnly && !r.sameValidation(set, tc, ss.Schema()) || streamPath == "") {
 		streamPath, streamContent, validation = "", "", 0
 	}
 	var src *xdm.Node
