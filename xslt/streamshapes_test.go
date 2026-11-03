@@ -44,6 +44,16 @@ var shapeBodies = []struct {
 	{`<o><xsl:value-of select="count(if ($c) then () else //rec)"/></o>`, true},
 	{`<o><xsl:value-of select="sum(if (not($c)) then //rec/@v else //sub/@x)"/></o>`, true},
 	{`<o><xsl:value-of select="string(count(if ($c) then //rec else /doc/rec/sub))"/></o>`, true},
+	// Text value templates: motionless parts, or one consuming part.
+	{`<o xsl:expand-text="yes">{count(//rec)}</o>`, true},
+	{`<o xsl:expand-text="yes">n={count(//rec)} k={1 + 1}, {name()}</o>`, true},
+	{`<xsl:for-each select="//rec" expand-text="yes"><r>{@k}:{position()}</r></xsl:for-each>`, true},
+	{`<xsl:for-each select="/doc/rec" expand-text="yes"><xsl:text>[{@k}]</xsl:text><xsl:value-of select="."/></xsl:for-each>`, true},
+	{`<o>{literal}<xsl:value-of select="count(//rec)"/></o>`, true},
+	{`<o xsl:expand-text="yes">{{x}}<xsl:value-of select="count(//rec)"/></o>`, true},
+	{`<o xsl:expand-text="yes">{count(//rec)}{sum(//rec/@v)}</o>`, false},
+	{`<o xsl:expand-text="yes">{count(//rec)}<xsl:value-of select="count(//sub)"/></o>`, false},
+	{`<xsl:for-each select="/doc/rec" expand-text="yes"><xsl:text>[{sub}]</xsl:text></xsl:for-each>`, false},
 }
 
 // TestStreamShapesMatchTree: the shapes streamshapes.go adds to the split

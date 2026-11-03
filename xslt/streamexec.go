@@ -226,7 +226,16 @@ func (b *streamBuilder) seq(el *xdm.Node, f vfocus) bool {
 		switch ch.Kind() {
 		case xdm.KindText:
 			if strings.ContainsAny(ch.Value(), "{}") {
-				return b.refuse("text with a brace") // perhaps a text value template
+				op, ok := b.textTemplate(ch, el, f) // streamshapes.go
+				if !ok {
+					return false
+				}
+				if op != nil {
+					if consumers++; consumers > 1 {
+						return b.refuse("two consuming instructions in one sequence constructor")
+					}
+					b.addTextOp(op)
+				}
 			}
 			continue
 		case xdm.KindElement:
@@ -664,7 +673,9 @@ func (b *streamBuilder) content(el *xdm.Node, f vfocus) bool {
 		switch ch.Kind() {
 		case xdm.KindText:
 			if strings.ContainsAny(ch.Value(), "{}") {
-				return b.refuse("text with a brace")
+				if op, ok := b.textTemplate(ch, el, f); !ok || op != nil {
+					return b.refuse("text with a brace") // streamshapes.go
+				}
 			}
 		case xdm.KindElement:
 			if !b.motionless(ch, f) {

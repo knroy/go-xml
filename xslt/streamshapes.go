@@ -21,6 +21,7 @@ package xslt
 // distinct nodes where the tree's are one).
 
 import (
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -226,4 +227,41 @@ func hoistChoice(e xpath.Expr, focus vfocus, key bool) xpath.Expr {
 	return &xpath.IfExpr{Cond: x.Cond,
 		Then: &xpath.FuncCall{Name: f.Name, Args: []xpath.Expr{x.Then}},
 		Else: &xpath.FuncCall{Name: f.Name, Args: []xpath.Expr{x.Else}}}
+}
+
+// textTemplate plans a text node t with a brace, a child of el, focus f. It
+// is literal text unless expand-text is in force (compileText's rule); then
+// a text value template, whose parts are evaluated as an attribute value
+// template's are (avt.eval, through evalStreamExpr): each motionless at the
+// focus, or one the consumer, an expression op split as the text compiles
+// (compileText calls noteStreamAVT). The §19.8 analysis does not see text
+// value templates (bodyRule reads child elements only), so the plan judges
+// the parts itself and counts a consuming one as a consumer of el's
+// sequence constructor. It returns the op, nil when nothing consumes.
+func (b *streamBuilder) textTemplate(t, el *xdm.Node, f vfocus) (*streamOp, bool) {
+	if !expandTextAt(el) {
+		return nil, true
+	}
+	exprs, ok := avtExpressions(emptyBracesRemoved(t.Value()))
+	if !ok {
+		return nil, b.refuse("text value template " + t.Value())
+	}
+	var op *streamOp
+	for _, src := range exprs {
+		if e := parseAt(el, src); e != nil && (viewCheck{pos: true, noIdent: b.noIdent, key: b.key, acc: !b.noIdent && !b.grp, after: b.after}).safe(e, f, false) {
+			continue
+		}
+		if op != nil {
+			return nil, b.refuse("two consuming parts of a text value template")
+		}
+		op = &streamOp{x: b.x, el: el, doc: f == vNone, inGroup: b.grp, key: b.key, avt: src}
+	}
+	return op, true
+}
+
+// addTextOp adds a text value template's consuming part to the plan.
+func (b *streamBuilder) addTextOp(op *streamOp) {
+	*b.ops = append(*b.ops, op)
+	b.x.exprOps = append(b.x.exprOps, op)
+	b.kinds[streamtrace.KindSelect]++
 }
