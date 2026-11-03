@@ -157,6 +157,9 @@ type streamOp struct {
 	// accAfter says it is an instruction that consumes its context only by
 	// reading accumulator-after of it, which runs as it is (streamaccum.go).
 	accAfter bool
+	// pop, for a loop whose select is not a bare path, is its population
+	// (streampop.go); split is then its stream part's.
+	pop *streamPop
 }
 
 // streamBuilder builds a plan from the source of a container.
@@ -798,8 +801,9 @@ func (c *compiler) noteStreamLoop(n *xdm.Node, instr Instruction, sel *xpath.Com
 			continue
 		}
 		if !op.split.bare() {
-			op.dead = "loop select is not a bare path"
-			continue
+			if op.pop, op.split, op.dead = c.popFor(op, ns); op.dead != "" {
+				continue
+			}
 		}
 		op.x.byInstr[instr] = op
 	}
@@ -959,6 +963,12 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 		}
 		s := op.split
 		k := op.ctxDepth(minD) + s.minDepth()
+		if why, ok := x.readyPop(op, op.ctxDepth(minD), k, kinds); ok {
+			if why != "" {
+				return why
+			}
+			continue
+		}
 		switch {
 		case op.planned && len(op.inner) == 0:
 			// A motionless body reads its match's view only: matches below
@@ -1158,6 +1168,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 	}
 	if !op.loop {
 		return &burstFeed{instr: instr, eval: func(rt *runtime) (xdm.Sequence, error) { return run.evalOp(rt, op) }}
+	}
+	if op.pop != nil {
+		return run.popFeed(instr, rt, op, g)
 	}
 	return &burstFeed{instr: instr, read: func(each func(xdm.Item) error) error {
 		if run.used {

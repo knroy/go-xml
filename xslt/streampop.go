@@ -1,9 +1,27 @@
 package xslt
 
-// Populations (lane G2): what an xsl:apply-templates, xsl:for-each or
-// grouping hands its body, beyond a bare path of the stream.
+// Populations (lane G2): what an xsl:for-each or xsl:iterate hands its
+// body, beyond a bare path of the stream.
+//
+// A loop's select is normalised into the split's walk (streamPop): one
+// stream part -- a path of the stream, its matches handed over as the bare
+// loop hands them -- with motionless parts around it (($extra, P),
+// (100, 101, P), (P, $v/@a)), windows over its matches (head, tail,
+// subsequence, remove, unordered, one-or-more, insert-before), a function
+// of each match that makes it a complete node or a value (copy-of(P),
+// data(P/@a)), attributes as the matches' tail (P/@a), or a motionless
+// choice between two populations (if ($c) then () else P). The motionless
+// parts and the windows' arguments are evaluated first, as the tree
+// evaluates the whole select before the body; then the parts are handed
+// over in order. A select that gives only values (if (P) then 0 else 1,
+// data(P/@a), 101) is read off the cursor as a select is, and the loop runs
+// over its values (values).
 
 import (
+	"math"
+
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -32,4 +50,516 @@ func oneStep(e xpath.Expr) xpath.Expr {
 		return pe.Steps[0]
 	}
 	return e
+}
+
+// streamPop is a loop's population: parts in order, one of them (at) the
+// stream part; or a choice between then and els on cond; or values.
+type streamPop struct {
+	cond      *xpath.Compiled
+	then, els *streamPop
+	parts     []*xpath.Compiled // nil at the stream part
+	at        int               // index of the stream part, -1 for none
+	wins      []popWin          // over the stream part's matches, innermost first
+	fn        *xpath.Compiled   // applied to each match ($splitItems), or nil
+	ground    bool              // the matches are handed as grounded copies
+	off       bool              // the items are not the matches' views: the body runs off the cursor
+	values    bool              // the whole select is read as a select's, its values looped over
+	oneOrMore *xpath.Compiled   // one-or-more(()): raised when nothing was handed
+}
+
+// popWin is a window over the stream part's matches: of kind head, tail,
+// sub (positions round(a) to round(a)+round(b), b absent: on), remove (all
+// but position a), or ins (b's items before position a). check is the
+// function called on () with the window's arguments: its errors are the
+// tree's argument errors.
+type popWin struct {
+	kind  string
+	a, b  *xpath.Compiled
+	check *xpath.Compiled
+}
+
+// popBuilder builds a population from a select's expression.
+type popBuilder struct {
+	c          *compiler
+	sel        *xpath.Compiled
+	ns         xpath.NamespaceResolver
+	doc        bool
+	group, key bool
+	focus      vfocus
+	split      *streamSplit // the stream part's, once found
+	why        string
+}
+
+func (pb *popBuilder) part(x xpath.Expr) *xpath.Compiled {
+	return xpathleaf.WithExpr(pb.sel, x).(*xpath.Compiled)
+}
+
+// motionless reports whether x reads of the loop's focus only what it has.
+func (pb *popBuilder) motionless(x xpath.Expr) bool {
+	return (viewCheck{key: pb.key}).safe(x, pb.focus, true)
+}
+
+// popFor normalises the select of a loop op whose split is not a bare path,
+// or says why not.
+func (c *compiler) popFor(op *streamOp, ns xpath.NamespaceResolver) (*streamPop, *streamSplit, string) {
+	e := reparse(op.sel, ns)
+	if e == nil {
+		return nil, nil, "select does not parse again"
+	}
+	pb := &popBuilder{c: c, sel: op.sel, ns: ns, doc: op.doc, group: op.inGroup, key: op.key, focus: vElem}
+	if op.doc {
+		pb.focus = vNone
+	}
+	if p := pb.pop(c.inlineCalls(e)); p != nil && pb.split != nil {
+		return p, pb.split, ""
+	}
+	if pb.why == "" {
+		pb.why = "loop select is not a bare path"
+	}
+	if s := op.split; s.valuesOnly() {
+		return &streamPop{values: true, off: true}, s, ""
+	}
+	return nil, nil, pb.why
+}
+
+// valuesOnly reports whether what s gives holds no node of the stream: a
+// fold, atomized items or string values, in every branch of a choice.
+func (s *streamSplit) valuesOnly() bool {
+	if s.cond != nil {
+		return s.then.valuesOnly() && s.els.valuesOnly()
+	}
+	return s.steps == nil && !s.ctxItem || s.red != "" && s.red != "nth" || s.atomize || s.tailText != ""
+}
+
+// pop builds the population e, or returns nil.
+func (pb *popBuilder) pop(e xpath.Expr) *streamPop {
+	switch x := e.(type) {
+	case *xpath.IfExpr:
+		if !pb.motionless(x.Cond) {
+			return nil
+		}
+		t, f := pb.pop(x.Then), pb.pop(x.Else)
+		if t == nil || f == nil {
+			return nil
+		}
+		return &streamPop{cond: pb.part(x.Cond), then: t, els: f, off: t.off || f.off}
+	case *xpath.SequenceExpr:
+		p := &streamPop{at: -1}
+		for _, it := range x.Items {
+			if pb.motionless(it) {
+				p.parts = append(p.parts, pb.part(it))
+				continue
+			}
+			if p.at >= 0 || !pb.stream(p, it) {
+				return nil
+			}
+			p.at = len(p.parts)
+			p.parts = append(p.parts, nil)
+		}
+		return p
+	case *xpath.FuncCall:
+		if isFn(x, "insert-before", 3) && pb.motionless(x.Args[0]) && pb.motionless(x.Args[1]) && !pb.motionless(x.Args[2]) {
+			// insert-before($t, n, P): $t's items before n, P, the rest.
+			p := &streamPop{at: 1, parts: []*xpath.Compiled{nil, nil, nil}}
+			if !pb.stream(p, x.Args[2]) {
+				return nil
+			}
+			n := x.Args[1]
+			// Its argument errors first: insert-before itself, over nothing.
+			p.wins = append(p.wins, popWin{kind: "check", check: pb.part(&xpath.FuncCall{Name: x.Name,
+				Args: []xpath.Expr{x.Args[0], n, &xpath.SequenceExpr{}}})})
+			p.parts[0] = pb.part(insertSide(x.Args[0], n, true))
+			p.parts[2] = pb.part(insertSide(x.Args[0], n, false))
+			return p
+		}
+	}
+	if pb.motionless(e) {
+		return &streamPop{at: -1, parts: []*xpath.Compiled{pb.part(e)}}
+	}
+	p := &streamPop{at: 0, parts: []*xpath.Compiled{nil}}
+	if !pb.stream(p, e) {
+		return nil
+	}
+	return p
+}
+
+// insertSide is $t[position() lt max((n, 1))] (before) or the rest: the two
+// sides of insert-before's insertion point. A non-integer n raises the
+// error insert-before raises, by the check of the window that holds it.
+func insertSide(t, n xpath.Expr, before bool) xpath.Expr {
+	at := &xpath.FuncCall{Name: xdm.QName{URI: fnNS, Local: "max"}, Args: []xpath.Expr{
+		&xpath.SequenceExpr{Items: []xpath.Expr{n, &xpath.Literal{Val: xdm.NewInteger(1)}}}}}
+	op := "ge"
+	if before {
+		op = "lt"
+	}
+	pos := &xpath.FuncCall{Name: xdm.QName{URI: fnNS, Local: "position"}}
+	return &xpath.FilterExpr{Base: t, Predicates: []xpath.Expr{&xpath.BinaryOp{Op: op, Left: pos, Right: at}}}
+}
+
+func isFn(x *xpath.FuncCall, name string, n int) bool {
+	return x.Name.URI == fnNS && x.Name.Local == name && len(x.Args) == n
+}
+
+// stream makes e p's stream part: windows and a function over a path.
+func (pb *popBuilder) stream(p *streamPop, e xpath.Expr) bool {
+	if x, ok := e.(*xpath.FuncCall); ok && x.Name.URI == fnNS {
+		args := x.Args
+		win := func(kind string, a, b xpath.Expr) bool {
+			for _, v := range []xpath.Expr{a, b} {
+				if v != nil && !pb.motionless(v) {
+					return false
+				}
+			}
+			if !pb.stream(p, args[0]) {
+				return false
+			}
+			w := popWin{kind: kind}
+			ck := []xpath.Expr{&xpath.SequenceExpr{}}
+			if a != nil {
+				w.a = pb.part(a)
+				ck = append(ck, a)
+			}
+			if b != nil {
+				w.b = pb.part(b)
+				ck = append(ck, b)
+			}
+			if kind == "ins" {
+				ck = []xpath.Expr{&xpath.SequenceExpr{}, a, b}
+			}
+			w.check = pb.part(&xpath.FuncCall{Name: x.Name, Args: ck})
+			p.wins = append(p.wins, w)
+			return true
+		}
+		switch {
+		case isFn(x, "head", 1):
+			return win("head", nil, nil)
+		case isFn(x, "tail", 1):
+			return win("tail", nil, nil)
+		case isFn(x, "subsequence", 2):
+			return win("sub", args[1], nil)
+		case isFn(x, "subsequence", 3):
+			return win("sub", args[1], args[2])
+		case isFn(x, "remove", 2):
+			return win("remove", args[1], nil)
+		case isFn(x, "insert-before", 3) && pb.motionless(args[2]):
+			return win("ins", args[1], args[2])
+		case isFn(x, "unordered", 1):
+			return pb.stream(p, args[0])
+		case isFn(x, "one-or-more", 1) && p.oneOrMore == nil:
+			p.oneOrMore = pb.part(&xpath.FuncCall{Name: x.Name, Args: []xpath.Expr{&xpath.SequenceExpr{}}})
+			return pb.stream(p, args[0])
+		case (isFn(x, "copy-of", 1) || isFn(x, "data", 1)) && p.fn == nil && len(p.wins) == 0:
+			p.fn = pb.part(&xpath.FuncCall{Name: x.Name, Args: []xpath.Expr{&xpath.VarRef{Name: splitItems}}})
+			if !pb.stream(p, args[0]) {
+				return false
+			}
+			return x.Name.Local == "data" && p.off || x.Name.Local == "copy-of" && p.ground
+		}
+	}
+	if pb.split != nil {
+		return false
+	}
+	// The expression itself, taken apart (splitFor would parse the whole
+	// select again from its source).
+	s, why := splitStreamIn(e, pb.sel, pb.doc, pb.group, pb.key)
+	if s == nil {
+		pb.why = "split: " + why
+		return false
+	}
+	switch {
+	case s.bare() && p.fn != nil:
+		// copy-of(P): each match grounded, then copied.
+		_, elem := testKinds(s.steps[len(s.steps)-1].test)
+		if !elem || s.leaves {
+			return false
+		}
+		p.ground, p.off = true, true
+	case s.bare():
+	case s.cond == nil && !s.ctxItem && s.red == "" && s.mode == matchView && s.tail != nil && s.attr == nil &&
+		isVarRef(s.outer.Expr(), splitItems) && endsInAttribute(s.tail.Expr()) && ownAttrTail(s.tail.Expr()):
+		p.off = true // P/@a: the attributes of each match's view
+	default:
+		return false
+	}
+	pb.split = s
+	return true
+}
+
+// ownAttrTail reports whether a tail is one attribute step of the match.
+func ownAttrTail(e xpath.Expr) bool {
+	st, ok := oneStep(e).(*xpath.Step)
+	return ok && st.Axis == xpath.AxisAttribute
+}
+
+// readyPop readies a loop op with a population that runs its body off the
+// cursor (p.off): the split keeps the mode it was made with, or grounds
+// each match; ok says it is readied.
+func (x *streamExec) readyPop(op *streamOp, ctxD, k int, kinds *[streamtrace.NumKinds]int64) (string, bool) {
+	p := op.pop
+	if p == nil || !p.off {
+		return "", false
+	}
+	if p.values {
+		if why := x.readySelect(op, ctxD); why != "" {
+			return why, true
+		}
+		kinds[streamtrace.KindForEach]++
+		return "", true
+	}
+	if p.ground {
+		if k < 1 {
+			return "loop body: neither streamed nor grounded (a match may be the document node)", true
+		}
+		op.split.mode = matchGround
+		kinds[streamtrace.KindGround]++
+	}
+	kinds[streamtrace.KindForEach]++
+	return "", true
+}
+
+// popRun is a window's state in one run: the matches it has seen, its
+// bounds, and for an insertion its items and whether they went out.
+type popRun struct {
+	w      *popWin
+	n      float64
+	lo, hi float64
+	ins    xdm.Sequence
+	done   bool
+}
+
+// ready evaluates the window's arguments: the check first, whose errors are
+// the function's own.
+func (r *popRun) ready(w *popWin, ctx *xpath.Context) error {
+	r.w, r.lo, r.hi = w, math.Inf(-1), math.Inf(1)
+	if _, err := w.check.Eval(ctx); err != nil {
+		return err
+	}
+	num := func(e *xpath.Compiled, round bool) (float64, error) {
+		seq, err := e.Eval(ctx)
+		if err != nil {
+			return 0, err
+		}
+		a, ok := firstAtomic(xdm.Atomize(seq))
+		if !ok {
+			return math.NaN(), nil
+		}
+		f := a.Float64()
+		if round {
+			f = math.Floor(f + 0.5) // fn:round: half towards positive infinity
+		}
+		return f, nil
+	}
+	var err error
+	switch w.kind {
+	case "sub":
+		if r.lo, err = num(w.a, true); err != nil {
+			return err
+		}
+		if w.b != nil {
+			var l float64
+			if l, err = num(w.b, true); err != nil {
+				return err
+			}
+			r.hi = r.lo + l
+		}
+	case "remove", "ins":
+		if r.lo, err = num(w.a, false); err != nil {
+			return err
+		}
+		if w.kind == "ins" {
+			r.lo = math.Max(r.lo, 1)
+			r.ins, err = w.b.Eval(ctx)
+		}
+	}
+	return err
+}
+
+func firstAtomic(seq xdm.Sequence) (*xdm.Atomic, bool) {
+	if len(seq) != 1 {
+		return nil, false
+	}
+	a, ok := seq[0].(*xdm.Atomic)
+	return a, ok
+}
+
+// pass reports whether the next match passes the window; an insertion at
+// its position is handed to each first.
+func (r *popRun) pass(each func(xdm.Item) error) (bool, error) {
+	r.n++
+	switch r.w.kind {
+	case "head":
+		return r.n == 1, nil
+	case "tail":
+		return r.n > 1, nil
+	case "sub":
+		return r.n >= r.lo && r.n < r.hi, nil // NaN bounds: never
+	case "remove":
+		return r.n != r.lo, nil
+	}
+	if !r.done && r.n == r.lo {
+		r.done = true
+		for _, it := range r.ins {
+			if err := each(it); err != nil {
+				return false, err
+			}
+		}
+	}
+	return true, nil
+}
+
+// end hands an insertion that no position reached, after the matches.
+func (r *popRun) end(each func(xdm.Item) error) error {
+	if r.w.kind != "ins" || r.done {
+		return nil
+	}
+	r.done = true
+	for _, it := range r.ins {
+		if err := each(it); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// read hands the population's items to each, as a loop feed's read does:
+// the stream part's matches through stream (the loop's own walk, which asks
+// gate whether a match is handed at all, at its start tag), every other
+// item with the body off the cursor.
+func (p *streamPop) read(run *streamRun, rt *runtime, op *streamOp, each func(xdm.Item) error,
+	stream func(item func(xdm.Item) error, gate func() (bool, error)) error) error {
+
+	offEach := func(it xdm.Item) error {
+		off := run.off
+		run.off = true
+		err := each(it)
+		run.off = off
+		return err
+	}
+	if p.values {
+		seq, err := run.evalOp(rt, op)
+		if err != nil {
+			return err
+		}
+		for _, it := range seq {
+			if err := offEach(it); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for p.cond != nil {
+		seq, err := p.cond.Eval(rt.ctx)
+		if err != nil {
+			return err
+		}
+		ok, err := xpath.EffectiveBooleanValue(seq)
+		if err != nil {
+			return err
+		}
+		if ok {
+			p = p.then
+		} else {
+			p = p.els
+		}
+	}
+	// The motionless parts and the windows' arguments first, as the tree
+	// evaluates the whole select before the body.
+	vals := make([]xdm.Sequence, len(p.parts))
+	for i, e := range p.parts {
+		if e == nil {
+			continue
+		}
+		seq, err := e.Eval(rt.ctx)
+		if err != nil {
+			return err
+		}
+		vals[i] = seq
+	}
+	wins := make([]popRun, len(p.wins))
+	for i := range p.wins {
+		if err := wins[i].ready(&p.wins[i], rt.ctx); err != nil {
+			return err
+		}
+	}
+	handed := false
+	gate := func() (bool, error) {
+		for j := range wins {
+			ok, err := wins[j].pass(offEach)
+			if err != nil || !ok {
+				return false, err
+			}
+		}
+		handed = true
+		return true, nil
+	}
+	item := func(it xdm.Item) error {
+		if ok, err := gate(); err != nil || !ok {
+			return err
+		}
+		if p.fn == nil {
+			return offEach(it)
+		}
+		seq, err := p.fn.Eval(rt.ctx.WithVar(splitItems, xdm.One(it)))
+		if err != nil {
+			return err
+		}
+		for _, v := range seq {
+			if err := offEach(v); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for i := range p.parts {
+		if i != p.at {
+			for _, it := range vals[i] {
+				handed = true
+				if err := offEach(it); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if err := stream(item, gate); err != nil {
+			return err
+		}
+		for j := range wins {
+			if err := wins[j].end(offEach); err != nil {
+				return err
+			}
+		}
+	}
+	if !handed && p.oneOrMore != nil {
+		_, err := p.oneOrMore.Eval(rt.ctx)
+		return err
+	}
+	return nil
+}
+
+// popFeed is the feed of a loop op with a population: the loop feed's
+// reading of its split (streamexec.go), the matches gated by the windows.
+func (run *streamRun) popFeed(instr Instruction, rt *runtime, op *streamOp, g *groupAt) *burstFeed {
+	return &burstFeed{instr: instr, read: func(each func(xdm.Item) error) error {
+		if run.used {
+			return errStreamPlan
+		}
+		return op.pop.read(run, rt, op, each, func(item func(xdm.Item) error, gate func() (bool, error)) error {
+			run.used = true
+			d := run.d
+			if op.split.mode == matchBody {
+				return op.split.loopAt(rt.ctx, run.c, d, g, nil, func(v *xdm.Node, md int) (bool, error) {
+					if ok, err := gate(); err != nil || !ok {
+						return false, err
+					}
+					run.d, run.used = md, false
+					err := each(v)
+					read := run.used
+					run.d, run.used = d, true
+					return read, err
+				})
+			}
+			return op.split.loopAt(rt.ctx, run.c, d, g, item, nil)
+		})
+	}}
 }

@@ -837,6 +837,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 			w.slot(x.Right, func(y xpath.Expr) { x.Right = y }, useAtomize)
 	case *xpath.UnaryOp:
 		return w.slot(x.Operand, func(y xpath.Expr) { x.Operand = y }, useAtomize)
+	case *xpath.StringConcat: // A || A: both absorbed (G2)
+		return w.slot(x.Left, func(y xpath.Expr) { x.Left = y }, useAtomize) &&
+			w.slot(x.Right, func(y xpath.Expr) { x.Right = y }, useAtomize)
 	case *xpath.CastExpr:
 		return w.slot(x.Operand, func(y xpath.Expr) { x.Operand = y }, useAtomize)
 	case *xpath.InstanceOfExpr:
