@@ -648,14 +648,30 @@ func TestAVTExpressionExtraction(t *testing.T) {
 // --- the known guard --------------------------------------------------------
 
 func TestUnmodelledInstructionIsReportedUnknown(t *testing.T) {
-	// The guard the whole check rests on: an instruction whose §19.8.4 rule
-	// is not written must be reported unmodelled, so that streamcheck.go
-	// stays silent rather than rejecting a valid stylesheet.
-	// xsl:where-populated is one such instruction.
-	_, known := analyzeInstrSource(t, `<xsl:where-populated><a/></xsl:where-populated>`)
+	// The guard the whole check rests on: a construct whose rule is not
+	// written must be reported unmodelled, so that streamcheck.go stays
+	// silent rather than rejecting a valid stylesheet. fn:unparsed-text()
+	// has no entry in the §19.8.9 table.
+	_, known := analyzeInstrSource(t, `<xsl:copy-of select="unparsed-text('d.txt')"/>`)
 	if known {
-		t.Error("xsl:where-populated was reported as modelled; its §19.8.4 rule is not " +
-			"implemented, so treating it as modelled risks a spurious XTSE3430")
+		t.Error("xsl:copy-of over unparsed-text() was reported as modelled")
+	}
+	// §19.8.4.42, §19.8.4.31, §19.8.4.32: xsl:where-populated is its
+	// content's posture and sweep; xsl:on-empty and xsl:on-non-empty are
+	// xsl:sequence. Each is modelled, and a refusal inside is not hidden.
+	for _, c := range []struct {
+		src  string
+		want props
+	}{
+		{`<xsl:where-populated><a><xsl:copy-of select="b"/></a></xsl:where-populated>`, props{postureGrounded, sweepConsuming}},
+		{`<xsl:where-populated><a><xsl:value-of select="b - c"/></a></xsl:where-populated>`, roamingFreeRanging},
+		{`<xsl:on-empty select="@a"/>`, props{postureStriding, sweepMotionless}},
+		{`<xsl:on-non-empty><a><xsl:copy-of select="b"/></a></xsl:on-non-empty>`, props{postureGrounded, sweepConsuming}},
+	} {
+		p, known := analyzeInstrSource(t, c.src)
+		if !known || p != c.want {
+			t.Errorf("%s: %v/%v known %v, want %v/%v", c.src, p.posture, p.sweep, known, c.want.posture, c.want.sweep)
+		}
 	}
 }
 
@@ -689,7 +705,7 @@ func TestUnmodelledInstructionInABodyPropagates(t *testing.T) {
 	// known must propagate out of a nested sequence constructor, not just
 	// out of the instruction itself.
 	_, known := analyzeInstrSource(t, `<xsl:for-each select="a">
-	 <xsl:where-populated><b/></xsl:where-populated>
+	 <xsl:copy-of select="unparsed-text('d.txt')"/>
 	</xsl:for-each>`)
 	if known {
 		t.Error("an unmodelled instruction inside xsl:for-each did not clear known")

@@ -90,7 +90,7 @@ func TestStreamTrustReproducers(t *testing.T) {
 		{"M4 rule pattern unknown", "unverified", nil,
 			hdr + mode + `<xsl:template match="rec[concat(` + sib + `, '') = '3']" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
 		{"M5 rule body unknown", "unverified", nil,
-			hdr + mode + `<xsl:template match="rec" mode="s"><xsl:where-populated><v><xsl:value-of select="` + sib + `"/></v></xsl:where-populated></xsl:template>` + apply + end, ""},
+			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="unparsed-entity-uri(string(` + sib + `))"/></v></xsl:template>` + apply + end, ""},
 		{"M5 control: grounded rule", "verified", nil,
 			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="@k"/></v></xsl:template>` + apply + end, ""},
 		// Another module can add rules or override declarations.

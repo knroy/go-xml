@@ -584,8 +584,12 @@ func (a *instrAnalyzer) instructionRule(el *xdm.Node) props {
 		}
 		return groundedMotionless
 
-	case "sequence":
-		// §19.8.4.36: select and body both transmit.
+	case "sequence", "on-empty", "on-non-empty":
+		// §19.8.4.36: select and body both transmit. §19.8.4.31 and
+		// §19.8.4.32 give xsl:on-empty and xsl:on-non-empty the same rules,
+		// and §19.8.3 makes them ordinary transmission operands of the
+		// enclosing sequence constructor: no account is taken of their
+		// being exclusive.
 		var ops []operand
 		if o, ok := a.selectOperand(el, usageTransmission); ok {
 			ops = append(ops, o)
@@ -986,10 +990,14 @@ func (a *instrAnalyzer) instructionRule(el *xdm.Node) props {
 		href, _ := a.avtProps(el, "href")
 		return props{postureGrounded, href.sweep}
 
+	case "where-populated":
+		// §19.8.4.42: "the posture and sweep of the contained sequence
+		// constructor".
+		return a.body(el)
+
 	default:
-		// xsl:where-populated, xsl:on-empty, xsl:on-non-empty and the
-		// declarations. Each needs a rule not written here; the first three
-		// are recorded in docs/known-gaps.md.
+		// The declarations, and anything else this switch has not been
+		// taught.
 		return a.unknown()
 	}
 }

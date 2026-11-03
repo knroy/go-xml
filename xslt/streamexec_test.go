@@ -89,7 +89,8 @@ var coreBodies = []struct {
 	{`<out><in><xsl:copy-of select="count(//rec[@k = 'a'])"/></in></out>`, true},
 	{`<xsl:if test="true()"><out><xsl:value-of select="count(//rec)"/></out></xsl:if>`, true},
 	{`<xsl:choose><xsl:when test="false()"><a/></xsl:when><xsl:otherwise><b><xsl:value-of select="count(//sub)"/></b></xsl:otherwise></xsl:choose>`, true},
-	{`<out><xsl:where-populated><w><xsl:value-of select="count(//rec[@k = 'zz'])"/></w></xsl:where-populated></out>`, false},
+	{`<out><xsl:where-populated><w><xsl:value-of select="count(//rec[@k = 'zz'])"/></w></xsl:where-populated></out>`, true},
+	{`<out><xsl:where-populated><w><xsl:value-of select="count(//rec[@k = 'a'])"/></w></xsl:where-populated></out>`, true},
 	{`<out><xsl:value-of select="(//rec)[2]"/>|<xsl:value-of select="'x'"/></out>`, true},
 	// Loops: body on the view, motionless.
 	{`<xsl:for-each select="//rec"><r k="{@k}" p="{position()}"/></xsl:for-each>`, true},
