@@ -1091,6 +1091,9 @@ func (n *Node) ownTyping() *nodeTyping {
 	if t.typing[k] == nil {
 		t.typing[k] = make([]nodeTyping, chunkLen(k))
 	}
+	if n.flags&fTyped == 0 {
+		t.typing[k][off] = nodeTyping{} // a stream reuses record slots (bursts.go): not a former node's
+	}
 	n.flags |= fTyped
 	return &t.typing[k][off]
 }

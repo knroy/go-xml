@@ -435,12 +435,16 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 // for xdm.Parse; set them for fn:base-uri, fn:document-uri and relative
 // fn:doc references from the document to answer.
 func (s *Stylesheet) TransformReader(ctx context.Context, r io.Reader, opts TransformOptions) (*Result, error) {
-	if !s.streamsMain(opts) {
+	if !s.streamsMain(opts) || !mainValidationStreams(ctx) {
 		tree, err := xdm.Parse(r, opts.SourceParseOptions)
 		if err != nil {
 			return nil, err
 		}
-		return s.Transform(ctx, tree.Root, opts)
+		root, err := validatedMain(ctx, tree.Root) // streamvalidin.go
+		if err != nil {
+			return nil, err
+		}
+		return s.Transform(ctx, root, opts)
 	}
 	return s.transformStream(ctx, r, opts)
 }

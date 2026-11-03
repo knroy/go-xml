@@ -194,11 +194,7 @@ func (b *streamBuilder) refuse(why string) bool {
 // or returns nil and why not. shared says sd's module is not the whole
 // stylesheet (streamtrust.go).
 func planStream(sd *xdm.Node, shared bool) (*streamExec, string) {
-	for _, a := range []string{"validation", "type"} {
-		if sd.Attr("", a) != nil {
-			return nil, "@" + a
-		}
-	}
+	// @validation and @type: decided when the document is read (streamvalidin.go).
 	pl := buildStreamPlan(sd, shared)
 	if !pl.trusted() {
 		return nil, "verdict not trusted"
@@ -1351,8 +1347,12 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 			return false, nil
 		}
 	}
-	docURI, ok := br.wantsBursts(href, base)
+	vin, ok := i.validation.streamedValidation(rt, br, href, base, true) // streamvalidin.go
 	if !ok {
+		return false, nil
+	}
+	docURI, ok := br.wantsBursts(href, base)
+	if !ok && (vin == nil || !vin.marked) {
 		return false, nil
 	}
 	// Tree mode records the document only once it has loaded; a document
@@ -1390,7 +1390,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 		target = held
 	}
 	kept := false
-	err := i.runStream(rt, target, br, href, base, strip, unread, held, &kept)
+	err := i.runStream(rt, target, br, href, base, strip, unread, held, &kept, vin)
 	if err == nil && held != nil {
 		err = held.Refused()
 	}
@@ -1449,7 +1449,8 @@ func keepsStreamNode(seq xdm.Sequence) bool {
 // built-in rule appended a node of the stream at the top of held, the
 // container's own result when that is a sequence (streamapply.go).
 func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burstResolver,
-	href, base string, strip func(*xdm.Node) bool, unread func(), held *outputBuilder, kept *bool) (err error) {
+	href, base string, strip func(*xdm.Node) bool, unread func(), held *outputBuilder, kept *bool,
+	vin *streamValidation) (err error) {
 
 	defer func() {
 		if p := recover(); p != nil {
@@ -1460,9 +1461,19 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 			err = pe
 		}
 	}()
-	return br.streamDoc(rt.ctx, href, base, func(c *xdmstream.Cursor) error {
+	stream := br.streamDoc
+	if vin != nil {
+		stream = func(ctx *xpath.Context, uri, base string, fn func(*xdmstream.Cursor) error) error {
+			return br.(*FileResolver).streamDocAs(ctx, uri, base, false, fn) // the copy's: no document URI
+		}
+	}
+	return stream(rt.ctx, href, base, func(c *xdmstream.Cursor) error {
 		if strip != nil {
 			c.StripWhitespace(strip)
+		}
+		valid := func() error { return nil }
+		if vin != nil {
+			valid = vin.attach(c, strip) // streamvalidin.go
 		}
 		c.Handoff(func() func() { return xpathleaf.LockYield(rt.evalLock) }) // streamfork.go
 		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread, root: xdm.NewTree().Root, held: held}
@@ -1486,6 +1497,12 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 			if err := run.drain(); err != nil {
 				return err
 			}
+		}
+		// The document has been read to its end (a consuming op reads its
+		// context to its end; run.drain reads what nothing did): whether it
+		// is valid is known.
+		if err := valid(); err != nil {
+			return err
 		}
 		return acc.finish()
 	})
@@ -1515,11 +1532,20 @@ func (s *Stylesheet) whitespaceStripper(pkg int) func(*xdm.Node) bool {
 // and the same errors -- on a cursor fn reads, and caches nothing: there is
 // no tree.
 func (r *FileResolver) streamDoc(ctx *xpath.Context, uri, base string, fn func(*xdmstream.Cursor) error) error {
+	return r.streamDocAs(ctx, uri, base, true, fn)
+}
+
+// streamDocAs is streamDoc, the document given no document URI unless
+// docURI: what a validation's copy of it has (streamvalidin.go).
+func (r *FileResolver) streamDocAs(ctx *xpath.Context, uri, base string, docURI bool, fn func(*xdmstream.Cursor) error) error {
 	path, err := r.resolvePath(uri, base)
 	if err != nil {
 		return err
 	}
 	opts := r.parseOptions(path, false).WithEntityBudget(ctx.EntityBudget())
+	if !docURI {
+		opts.DocumentURI = ""
+	}
 	return r.openConfined(path, func(f *os.File) error {
 		max, lim := r.byteLimit()
 		tooBig := fmt.Errorf("%s exceeds the %d byte limit", path, max)

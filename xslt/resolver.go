@@ -100,6 +100,9 @@ type FileResolver struct {
 
 	mu    sync.Mutex
 	cache map[string]*xdm.Tree
+	// preValid, under mu, holds the schema of each cached document the
+	// conformance harness gave as validated (streamvalidin.go).
+	preValid map[string]any
 	// sizes is the source size charged for each cache entry, and cacheBytes
 	// their sum, both under mu. A Preload entry is charged nothing: the host
 	// parsed it and holds it already.

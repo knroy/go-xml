@@ -12,6 +12,7 @@ import (
 
 	"github.com/knroy/go-xml/v2/internal/fileuri"
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/internal/xsdstream"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 	"github.com/knroy/go-xml/v2/xsd"
@@ -747,6 +748,9 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		opts.SourceParseOptions = streamOpts
 		opts.Output = r.output
 		opts.SecondaryOutput = r.secondary
+		if sch := r.principalValidated(set, tc); sch != nil {
+			ctx = xsdstream.WithSource(ctx, sch) // the annotate the tree has, on the stream
+		}
 		return ss.TransformReader(ctx, strings.NewReader(string(stripBOM(data))), opts)
 	}
 	opts.Output = r.output
@@ -770,7 +774,7 @@ func (r *Runner) streamedSource(set *TestSet, tc *TestCase) (path, content strin
 			continue
 		}
 		if s.Streaming != "true" || s.Select != "" || s.Content == "" && s.File == "" ||
-			s.XInclude == "true" || s.Validation == "strict" || s.Validation == "lax" {
+			s.XInclude == "true" || (s.Validation == "strict" || s.Validation == "lax") && r.streamValidated(set, env, s) == nil {
 			return "", "", xdm.ParseOptions{}
 		}
 		if s.Content != "" {
@@ -881,7 +885,16 @@ func (r *Runner) preloadSources(set *TestSet, tc *TestCase, docs *xslt.FileResol
 		// Under the path the declared URI resolves to. The suite writes the
 		// uri relative to the test-set directory and the stylesheet names it
 		// the same way, so both arrive at the same file.
-		docs.Preload(fileURI(filepath.Join(set.Dir, filepath.FromSlash(s.URI))), root.Tree())
+		uri := fileURI(filepath.Join(set.Dir, filepath.FromSlash(s.URI)))
+		docs.Preload(uri, root.Tree())
+		// A source declared streaming="true" may still be streamed by a
+		// validating xsl:source-document, which repeats this validation on
+		// the stream (streamvalidate.go).
+		if s.Streaming == "true" && !streamtrace.Off() {
+			if sch := envSchema(set, env); sch != nil {
+				xsdstream.MarkSource(docs, uri, sch)
+			}
+		}
 	}
 }
 

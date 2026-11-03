@@ -1,0 +1,299 @@
+package xsd
+
+import (
+	"fmt"
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/xdmstream"
+	"github.com/knroy/go-xml/v2/internal/xsdstream"
+	"github.com/knroy/go-xml/v2/xdm"
+)
+
+// The validation of a stream against the tree's: for each schema and
+// document, the copy the cursor grounds of the document element carries
+// exactly the typing, the attributes (defaults among them) and the text of
+// the typed copy ValidateCopy (or ValidateAgainstTypeCopy, or
+// ValidateElementLaxCopy) makes, and the stream finds the document invalid
+// exactly when the tree does.
+
+const svBooks = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+ <xs:element name="BOOKLIST" type="BOOKLIST-type"/>
+ <xs:complexType name="BOOKLIST-type"><xs:sequence>
+   <xs:element ref="BOOKS"/><xs:element ref="CATEGORIES"/></xs:sequence></xs:complexType>
+ <xs:element name="BOOKS"><xs:complexType><xs:sequence>
+   <xs:element ref="ITEM" maxOccurs="unbounded"/></xs:sequence>
+   <xs:assert test="count(ITEM) le 3"/></xs:complexType></xs:element>
+ <xs:element name="CATEGORIES"><xs:complexType mixed="true">
+   <xs:sequence minOccurs="0" maxOccurs="unbounded"><xs:element ref="CATEGORY"/></xs:sequence>
+   <xs:attribute name="DESC" type="xs:string" use="required"/></xs:complexType></xs:element>
+ <xs:element name="CATEGORY"><xs:complexType>
+   <xs:attribute name="CODE" type="xs:ID" use="required"/>
+   <xs:attribute name="DESC" type="xs:string" use="required"/></xs:complexType></xs:element>
+ <xs:element name="ITEM"><xs:complexType><xs:sequence>
+    <xs:element name="TITLE" type="xs:string"/>
+    <xs:element name="PRICE" type="money"/>
+    <xs:element name="DIM" type="dims" minOccurs="0"/>
+    <xs:element name="QTY" type="xs:integer" minOccurs="0" maxOccurs="3"/>
+   </xs:sequence>
+   <xs:attribute name="CAT" type="xs:IDREF" use="required"/>
+   <xs:attribute name="TAX" type="xs:NMTOKEN" default="V"/>
+   <xs:attribute name="RATE" type="xs:decimal" default="1.50"/></xs:complexType></xs:element>
+ <xs:complexType name="money"><xs:simpleContent><xs:extension base="xs:decimal">
+   <xs:attribute name="cur" type="cur"/></xs:extension></xs:simpleContent></xs:complexType>
+ <xs:simpleType name="cur"><xs:restriction base="xs:string">
+   <xs:enumeration value="USD"/><xs:enumeration value="GBP"/></xs:restriction></xs:simpleType>
+ <xs:simpleType name="dims"><xs:restriction><xs:simpleType><xs:list itemType="xs:decimal"/></xs:simpleType>
+   <xs:length value="3"/></xs:restriction></xs:simpleType>
+</xs:schema>`
+
+const svBooksDoc = `<BOOKLIST>
+ <BOOKS>
+  <ITEM CAT="P"><TITLE>One</TITLE><PRICE cur="USD">4.50</PRICE><DIM>1 2 3</DIM><QTY>1</QTY><QTY>2</QTY></ITEM>
+  <ITEM CAT="H" TAX="Z"><TITLE>Two</TITLE><PRICE>10</PRICE></ITEM>
+ </BOOKS>
+ <CATEGORIES DESC="all">text <CATEGORY CODE="P" DESC="p"/> more <CATEGORY CODE="H" DESC="h"/></CATEGORIES>
+</BOOKLIST>`
+
+const svMisc = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+   xmlns:m="urn:m" targetNamespace="urn:m" elementFormDefault="qualified">
+ <xs:element name="doc"><xs:complexType><xs:sequence>
+   <xs:element name="u" type="m:u" minOccurs="0" maxOccurs="unbounded"/>
+   <xs:element name="n" type="xs:int" nillable="true" minOccurs="0" maxOccurs="unbounded"/>
+   <xs:element ref="m:shape" minOccurs="0" maxOccurs="unbounded"/>
+   <xs:element name="b" type="m:base" minOccurs="0" maxOccurs="unbounded"/>
+   <xs:element name="all" minOccurs="0"><xs:complexType><xs:all>
+     <xs:element name="x" type="xs:date"/><xs:element name="y" type="xs:boolean" minOccurs="0"/></xs:all>
+   </xs:complexType></xs:element>
+   <xs:element name="ch" minOccurs="0"><xs:complexType><xs:choice maxOccurs="2">
+     <xs:element name="p" type="xs:string"/><xs:element name="q" type="m:lst"/></xs:choice>
+   </xs:complexType></xs:element>
+   <xs:element name="w" minOccurs="0"><xs:complexType><xs:sequence>
+     <xs:any namespace="urn:o urn:m" processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+     <xs:any namespace="urn:skip" processContents="skip" minOccurs="0"/></xs:sequence>
+     <xs:anyAttribute processContents="lax"/></xs:complexType></xs:element>
+   <xs:element name="e" minOccurs="0"><xs:complexType/></xs:element>
+   <xs:element name="mx" minOccurs="0"><xs:complexType mixed="true"><xs:sequence>
+     <xs:element name="i" type="xs:integer" minOccurs="0" maxOccurs="unbounded"/></xs:sequence></xs:complexType></xs:element>
+ </xs:sequence></xs:complexType></xs:element>
+ <xs:simpleType name="u"><xs:union memberTypes="xs:integer xs:date xs:string"/></xs:simpleType>
+ <xs:simpleType name="lst"><xs:list itemType="xs:integer"/></xs:simpleType>
+ <xs:element name="shape" type="m:shapeT" abstract="true"/>
+ <xs:element name="circle" substitutionGroup="m:shape"><xs:complexType><xs:complexContent>
+   <xs:extension base="m:shapeT"><xs:attribute name="r" type="xs:double"/></xs:extension></xs:complexContent></xs:complexType></xs:element>
+ <xs:element name="square" substitutionGroup="m:shape" type="m:shapeT"/>
+ <xs:complexType name="shapeT"><xs:attribute name="id" type="xs:ID"/></xs:complexType>
+ <xs:complexType name="base"><xs:sequence><xs:element name="v" type="xs:decimal"/></xs:sequence></xs:complexType>
+ <xs:complexType name="ext"><xs:complexContent><xs:extension base="m:base"><xs:sequence>
+   <xs:element name="w" type="xs:token"/></xs:sequence></xs:extension></xs:complexContent></xs:complexType>
+ <xs:element name="g" type="xs:gYear"/>
+</xs:schema>`
+
+const svMiscDoc = `<doc xmlns="urn:m" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:o="urn:o" xmlns:m="urn:m">
+  <u>12</u><u>2001-02-03</u><u>abc</u>
+  <n>5</n><n xsi:nil="true"/>
+  <circle r="2" id="c1"/><square id="s1"/>
+  <b><v>1.5</v></b><b xsi:type="m:ext"><v>2</v><w>  a  b </w></b>
+  <all><y>true</y><x>2020-01-01</x></all>
+  <ch><q>1 2 3</q><p>z</p></ch>
+  <w o:at="1" m:g="1999"><o:x a="1"><o:y/></o:x><m:g>2002</m:g><s:k xmlns:s="urn:skip"><s:any/></s:k></w>
+  <e/>
+  <mx>a<i>1</i>b<i>2</i></mx>
+</doc>`
+
+// svRun streams doc and returns the grounded document element, the
+// validator's verdict, and whether it ran.
+func svRun(t *testing.T, s *Schema, doc string, m xsdstream.Mode, ground bool) (*xdm.Node, error) {
+	t.Helper()
+	sv := xsdstream.Open(s, m)
+	c := xdmstream.Open(strings.NewReader(doc), xdm.ParseOptions{})
+	defer c.Close()
+	c.Observe(func(n *xdm.Node, d int, end bool, _ uint64) { sv.Observe(n, d, end) })
+	c.StripWhitespace(sv.Drops)
+	var g *xdm.Node
+	for {
+		ev, err := c.Next()
+		if err == io.EOF || err == nil && ev.Kind == xdmstream.EndDocument {
+			break
+		}
+		if err != nil {
+			t.Fatalf("stream: %v", err)
+		}
+		if ground && ev.Kind == xdmstream.StartElement && ev.Depth == 1 {
+			if g, err = c.Ground(); err != nil {
+				t.Fatalf("ground: %v", err)
+			}
+		}
+	}
+	return g, sv.Err()
+}
+
+// svTree is the tree's typed copy of doc's element (or document, for
+// m.Doc), and its error, as the XSLT layer asks for it.
+func svTree(t *testing.T, s *Schema, doc string, m xsdstream.Mode) (*xdm.Node, error) {
+	t.Helper()
+	tree, err := xdm.ParseString(doc, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	el := tree.Root.ChildElements()[0]
+	switch {
+	case m.Doc:
+		c, err := s.ValidateCopy(tree.Root, ValidateOptions{})
+		return c.ChildElements()[0], err
+	case m.Root == xsdstream.Type:
+		return s.ValidateAgainstTypeCopy(el, m.Type, ValidateOptions{})
+	case m.Root == xsdstream.Lax:
+		return s.ValidateElementLaxCopy(el, ValidateOptions{})
+	}
+	return s.ValidateCopy(el, ValidateOptions{})
+}
+
+// svSame compares a and b, nodes of the tree's copy and the stream's.
+func svSame(a, b *xdm.Node, path string) string {
+	if a.Kind() != b.Kind() || a.Name() != b.Name() {
+		return fmt.Sprintf("%s: %v %v, stream %v %v", path, a.Kind(), a.Name(), b.Kind(), b.Name())
+	}
+	if ta, tb := xdm.TypingOf(a), xdm.TypingOf(b); ta != tb {
+		return fmt.Sprintf("%s: typing %+v, stream %+v", path, ta, tb)
+	}
+	if (a.TypeEnv() == nil) != (b.TypeEnv() == nil) {
+		return fmt.Sprintf("%s: type environment %v, stream %v", path, a.TypeEnv() != nil, b.TypeEnv() != nil)
+	}
+	if a.Kind() != xdm.KindElement {
+		if a.Value() != b.Value() {
+			return fmt.Sprintf("%s: value %q, stream %q", path, a.Value(), b.Value())
+		}
+		return ""
+	}
+	var aa, ba []*xdm.Node
+	for x := range a.Attrs() {
+		aa = append(aa, x)
+	}
+	for x := range b.Attrs() {
+		ba = append(ba, x)
+	}
+	if len(aa) != len(ba) {
+		return fmt.Sprintf("%s: %d attributes, stream %d", path, len(aa), len(ba))
+	}
+	for i := range aa {
+		if w := svSame(aa[i], ba[i], path+"/@"+aa[i].Name().Local); w != "" {
+			return w
+		}
+	}
+	ac, bc := a.FirstChild(), b.FirstChild()
+	for i := 1; ac != nil || bc != nil; i++ {
+		if ac == nil || bc == nil {
+			return fmt.Sprintf("%s: children differ in number at %d", path, i)
+		}
+		if w := svSame(ac, bc, fmt.Sprintf("%s/%d", path, i)); w != "" {
+			return w
+		}
+		ac, bc = ac.NextSibling(), bc.NextSibling()
+	}
+	return ""
+}
+
+func svLoad(t *testing.T, src string) *Schema {
+	t.Helper()
+	tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(tree.Root, "s.xsd", Options{Version: Version11})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestStreamValidationMatchesTree(t *testing.T) {
+	books, misc := svLoad(t, svBooks), svLoad(t, svMisc)
+	strict, doc := xsdstream.Mode{Root: xsdstream.Strict}, xsdstream.Mode{Root: xsdstream.Strict, Doc: true}
+	lax := xsdstream.Mode{Root: xsdstream.Lax}
+	typed := xsdstream.Mode{Root: xsdstream.Type, Type: xdm.QName{Local: "BOOKLIST-type"}}
+	rows := []struct {
+		name string
+		s    *Schema
+		doc  string
+		m    xsdstream.Mode
+		bad  bool
+	}{
+		{"books strict", books, svBooksDoc, strict, false},
+		{"books doc", books, svBooksDoc, doc, false},
+		{"books type", books, svBooksDoc, typed, false},
+		{"books lax", books, svBooksDoc, lax, false},
+		{"books lax undeclared", books, `<X><BOOKS/></X>`, lax, false},
+		{"misc strict", misc, svMiscDoc, strict, false},
+		{"misc doc", misc, svMiscDoc, doc, false},
+		{"empty with whitespace", misc, strings.Replace(svMiscDoc, `<e/>`, `<e> </e>`, 1), strict, false},
+		{"misc root xsi:type", misc, `<r xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:m="urn:m" xsi:type="m:base"><v xmlns="urn:m">3</v></r>`, strict, false},
+		// Invalid, each for one reason the tree finds.
+		{"order", books, strings.Replace(svBooksDoc, "<TITLE>One</TITLE><PRICE cur=\"USD\">4.50</PRICE>", "<PRICE>4.50</PRICE><TITLE>One</TITLE>", 1), strict, true},
+		{"required attribute", books, strings.Replace(svBooksDoc, ` CAT="H"`, "", 1), strict, true},
+		{"bad decimal", books, strings.Replace(svBooksDoc, ">10<", ">ten<", 1), strict, true},
+		{"bad enumeration", books, strings.Replace(svBooksDoc, `cur="USD"`, `cur="EUR"`, 1), strict, true},
+		{"list length", books, strings.Replace(svBooksDoc, "1 2 3", "1 2", 1), strict, true},
+		{"too many", books, strings.Replace(svBooksDoc, "<QTY>2</QTY>", "<QTY>2</QTY><QTY>3</QTY><QTY>4</QTY>", 1), strict, true},
+		{"dangling IDREF", books, strings.Replace(svBooksDoc, `CAT="H"`, `CAT="Q"`, 1), strict, true},
+		{"duplicate ID", books, strings.Replace(svBooksDoc, `CODE="H"`, `CODE="P"`, 1), strict, true},
+		{"duplicate ID adjacent", books, strings.Replace(svBooksDoc, ` more <CATEGORY CODE="H" DESC="h"/>`, `<CATEGORY CODE="H" DESC="h"/><CATEGORY CODE="H" DESC="i"/>`, 1), strict, true},
+		{"assertion", books, strings.Replace(svBooksDoc, "</BOOKS>", "<ITEM CAT='P'><TITLE/><PRICE>1</PRICE></ITEM><ITEM CAT='P'><TITLE/><PRICE>1</PRICE></ITEM></BOOKS>", 1), strict, true},
+		{"element-only text", books, strings.Replace(svBooksDoc, "<BOOKS>", "<BOOKS>x", 1), strict, true},
+		{"undeclared root", books, `<NOPE/>`, strict, true},
+		{"type mismatch", books, `<BOOKLIST><CATEGORIES DESC="d"/></BOOKLIST>`, typed, true},
+		{"nil with content", misc, strings.Replace(svMiscDoc, `<n xsi:nil="true"/>`, `<n xsi:nil="true">1</n>`, 1), strict, true},
+		{"abstract", misc, strings.Replace(svMiscDoc, `<square id="s1"/>`, `<shape/>`, 1), strict, true},
+		{"union", misc, strings.Replace(svMiscDoc, `<u>12</u>`, `<u><x/></u>`, 1), strict, true},
+		{"all missing", misc, strings.Replace(svMiscDoc, `<x>2020-01-01</x>`, ``, 1), strict, true},
+		{"all twice", misc, strings.Replace(svMiscDoc, `<x>2020-01-01</x>`, `<x>2020-01-01</x><x>2020-01-01</x>`, 1), strict, true},
+		{"choice", misc, strings.Replace(svMiscDoc, `<p>z</p>`, `<p>z</p><p>z</p>`, 1), strict, true},
+		{"lax invalid", misc, strings.Replace(svMiscDoc, `<m:g>2002</m:g>`, `<m:g>never</m:g>`, 1), strict, true},
+		{"empty with text", misc, strings.Replace(svMiscDoc, `<e/>`, `<e>x</e>`, 1), strict, true},
+		{"xsi:type not derived", misc, strings.Replace(svMiscDoc, `xsi:type="m:ext"`, `xsi:type="m:shapeT"`, 1), strict, true},
+	}
+	for _, r := range rows {
+		want, werr := svTree(t, r.s, r.doc, r.m)
+		got, gerr := svRun(t, r.s, r.doc, r.m, true)
+		// Read without grounding, the parse reuses the records of what
+		// it has dropped: the verdict must not change.
+		if _, err := svRun(t, r.s, r.doc, r.m, false); (err == nil) != (werr == nil) {
+			t.Errorf("%s (not grounded): tree error %v, stream error %v", r.name, werr, err)
+		}
+		if (werr == nil) != (gerr == nil) {
+			t.Errorf("%s: tree error %v, stream error %v", r.name, werr, gerr)
+			continue
+		}
+		if r.bad != (werr != nil) {
+			t.Errorf("%s: tree error %v, want invalid %v", r.name, werr, r.bad)
+		}
+		if werr != nil {
+			continue // the tree answers an invalid document
+		}
+		if w := svSame(want, got, ""); w != "" {
+			t.Errorf("%s: %s", r.name, w)
+		}
+	}
+}
+
+func TestStreamValidationRefusals(t *testing.T) {
+	for _, r := range []struct{ name, schema, want string }{
+		{"key", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType><xs:sequence>
+			<xs:element name="k" maxOccurs="unbounded"><xs:complexType><xs:attribute name="id"/></xs:complexType></xs:element></xs:sequence></xs:complexType>
+			<xs:key name="K"><xs:selector xpath="k"/><xs:field xpath="@id"/></xs:key>
+			<xs:keyref name="R" refer="K"><xs:selector xpath="k"/><xs:field xpath="@id"/></xs:keyref></xs:element></xs:schema>`,
+			"element r has identity constraints"},
+		{"element default", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r" type="xs:int" default="1"/></xs:schema>`,
+			"element r has a value constraint"},
+		{"open content", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType>
+			<xs:openContent><xs:any/></xs:openContent><xs:sequence/></xs:complexType></xs:element></xs:schema>`,
+			"has open content"},
+		{"plain", svBooks, ""},
+	} {
+		got := xsdstream.Refusal(svLoad(t, r.schema))
+		if !strings.Contains(got, r.want) || r.want == "" && got != "" {
+			t.Errorf("%s: refusal %q, want %q", r.name, got, r.want)
+		}
+	}
+}
