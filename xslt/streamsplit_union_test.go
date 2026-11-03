@@ -25,6 +25,10 @@ var unionBodies = []struct {
 	{`<out><xsl:value-of select="count(/doc/rec[1] | /doc/rec[2]/sub)"/></out>`, true},
 	{`<out><xsl:value-of select="count(.//text() | .//sub)"/></out>`, true},
 	{`<out><xsl:copy-of select="//rec | //sub"/></out>`, true},
+	// Child steps only, but branches of different lengths: matches nest.
+	{`<out><xsl:copy-of select="/doc/rec | /doc/rec/sub"/></out>`, true},
+	// ... so a loop whose body reads its match is refused.
+	{`<out><xsl:for-each select="/doc/rec | /doc/rec/sub"><e><xsl:value-of select="."/></e></xsl:for-each></out>`, false},
 	{`<out><xsl:copy-of select="/doc/rec except /doc/rec[@k = 'b']"/></out>`, true},
 	{`<out><xsl:value-of select="(//rec | //sub)/@k" separator=","/></out>`, true},
 	{`<out><xsl:for-each select="/doc/rec | /doc/other"><e n="{name()}"/></xsl:for-each></out>`, true},

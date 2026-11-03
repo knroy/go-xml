@@ -183,6 +183,22 @@ func (s *streamSplit) branched(p splitPathParts) string {
 		}
 	}
 	s.self, s.set = b.self, b.set
+	// Child steps alone nest when branches end at different depths (rec |
+	// rec/sub); at one depth they cannot. A descendant step nests anyway.
+	depth := map[uint8]int{}
+	for _, k := range b.bits {
+		depth[k]++
+	}
+	if b.self != 0 {
+		depth[255] = 0
+	}
+	for _, d := range depth {
+		for _, e := range depth {
+			if d != e {
+				s.nests = true
+			}
+		}
+	}
 	return ""
 }
 
