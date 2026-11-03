@@ -3,8 +3,8 @@ package xdm
 import "github.com/knroy/go-xml/v2/internal/xdmtrim"
 
 func init() {
-	xdmtrim.TextBlocks = func(t any) int { return len(t.(*Tree).text.blocks) }
-	xdmtrim.CompactText = func(t any) { t.(*Tree).compactText() }
+	xdmtrim.TextBlocks = func(n any) int { return len(n.(*Node).tree.text.blocks) }
+	xdmtrim.CompactText = func(n any) { n.(*Node).tree.compactText() }
 }
 
 // compactText stores the value of each of t's records in a new store and

@@ -45,7 +45,7 @@ type sink struct {
 	faults       xdm.Sequence // attributes and namespaces at the top of a sequence document
 	stamp        int64
 	items        int
-	ctree        *xdm.Tree // the tree last compacted, and its block count after
+	cnode        *xdm.Node // the root of the tree last compacted, and its block count after
 	cblocks      int
 	scratchSeq   xdm.Sequence
 	path         []*Builder
@@ -234,7 +234,7 @@ func (s *sink) popTo(a *Builder) {
 		switch {
 		case p.open != nil && p == a:
 			p.open.RemoveLastChild()
-			s.trim(p.open.Tree())
+			s.trim(p.open)
 		case p.open != nil:
 			done = t.open
 		case t.open != nil:
@@ -280,7 +280,7 @@ func (s *sink) flush(t *Builder) {
 	for t.open.LastChild() != nil {
 		t.open.RemoveLastChild()
 	}
-	s.trim(t.open.Tree())
+	s.trim(t.open)
 }
 
 // items_ writes the items of l, a level, up to keep (the item still being
@@ -315,18 +315,15 @@ func (s *sink) items_(l *Builder, keep *xdm.Node) {
 	}
 }
 
-// trim compacts t's text when the blocks written nodes left behind are most
-// of it.
-func (s *sink) trim(t *xdm.Tree) {
-	if t == nil {
+// trim compacts the text of n's tree when the blocks written nodes left
+// behind are most of it. (n, not its Tree: a fragment has none to name.)
+func (s *sink) trim(n *xdm.Node) {
+	k, r := xdmtrim.TextBlocks(n), n.Root()
+	if r == s.cnode && k < 2*s.cblocks+32 || r != s.cnode && k < 32 {
 		return
 	}
-	n := xdmtrim.TextBlocks(t)
-	if t == s.ctree && n < 2*s.cblocks+32 || t != s.ctree && n < 32 {
-		return
-	}
-	xdmtrim.CompactText(t)
-	s.ctree, s.cblocks = t, xdmtrim.TextBlocks(t)
+	xdmtrim.CompactText(n)
+	s.cnode, s.cblocks = r, xdmtrim.TextBlocks(n)
 }
 
 // toDocument is ToDocument for b, a sequence document level that has been

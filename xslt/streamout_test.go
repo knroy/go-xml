@@ -193,6 +193,9 @@ func TestStreamOutMemory(t *testing.T) {
 		frac        float64 // the most of the held run's peak Output may take
 	}{
 		{"identity", `<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`, 0.5},
+		// The result in a fragment (a literal result element at its top),
+		// whose text is compacted too.
+		{"wrapped", `<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/"><out><xsl:apply-templates/></out></xsl:template>`, 0.5},
 		{"filter", `<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="r[@k mod 10 ne 0]"/>`, 1},
 	} {
 		sheet := outSheet(t, c.decls, ``)
