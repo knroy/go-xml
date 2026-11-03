@@ -393,6 +393,9 @@ func (c *compiler) readyRule(r *rulePlan) {
 // attributes -- with no position among siblings, and a text, comment or PI
 // node by itself alone (a copy of one has no parent).
 func patternClasses(p *Pattern) (can [numClasses]bool, why string) {
+	if matchesNoNode(p) { // streampattern_g5.go
+		return can, ""
+	}
 	if len(p.general) > 0 {
 		return can, "pattern " + p.src + ": an XSLT 3.0 form"
 	}
