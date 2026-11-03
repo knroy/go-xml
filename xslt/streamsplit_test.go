@@ -450,8 +450,8 @@ var splitRefused = map[string]string{
 	`//rec[$n]`:                                         "predicate",
 	`//rec/following-sibling::*`:                        "tail",
 	`count(//rec) + count(//item)`:                      "second",
-	`//text()`:                                          "identity",
-	`//rec/text()`:                                      "identity",
+	`//text()`:                                          "",
+	`//rec/text()`:                                      "",
 	`generate-id(//rec)`:                                "function",
 	`count(//rec[generate-id() = 'x'])`:                 "predicate",
 	`root(.)//rec`:                                      "path",
@@ -463,11 +463,11 @@ var splitRefused = map[string]string{
 	`concat('a', if (@k) then sum(rec/@v) else 0)`:      "branch",
 	`//rec/(item | @k)`:                                 "",
 	`count(//node()[self::text()][normalize-space(.)])`: "predicate",
-	`head(//text())`:                                    "identity",
+	`head(//text())`:                                    "",
 	`distinct-values(//rec/@k)`:                         "function",
-	`//item/..`:                                         "tail",
+	`//item/..`:                                         "climbed",
 	`sum(//rec/@v) div count(*)`:                        "second",
-	`node()`:                                            "identity",
+	`node()`:                                            "",
 }
 
 func TestStreamSplitMatchesTree(t *testing.T) {

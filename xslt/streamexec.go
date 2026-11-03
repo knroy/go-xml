@@ -170,8 +170,10 @@ type streamBuilder struct {
 	kinds *[streamtrace.NumKinds]int64
 	why   string
 	// noIdent says the focus is a copy standing in for a node of the
-	// document: nothing may ask for its identity (streamapply.go).
-	noIdent bool
+	// document: nothing may ask for its identity (streamapply.go); up that
+	// it is a leaf's copy with its ancestors' (streamleaf.go), so upward
+	// steps from it are admitted, to an element as from a view.
+	noIdent, up bool
 	// grp says the instructions planned are those of a streamed group's body
 	// (streamgroup.go), whose current-group() a consumer may read; key that
 	// current-grouping-key() is in scope, there or in a loop below.
@@ -376,7 +378,7 @@ func (b *streamBuilder) avtOps(el *xdm.Node, f vfocus) bool {
 			return b.refuse("attribute value template " + a.Value())
 		}
 		for _, src := range exprs {
-			if e := parseAt(el, src); e != nil && (viewCheck{pos: true, noIdent: b.noIdent, key: b.key, acc: !b.noIdent && !b.grp, after: b.after}).safe(e, f, false) {
+			if e := parseAt(el, src); e != nil && (viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after}).safe(e, f, false) {
 				continue
 			}
 			if op != nil {
@@ -747,7 +749,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 // what f has, and returns nodes of it only where nodeOK.
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := parseAt(el, src)
-	if e == nil || !(viewCheck{pos: true, noIdent: b.noIdent, key: b.key, acc: !b.noIdent && !b.grp, after: b.after}).safe(e, f, nodeOK) {
+	if e == nil || !(viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after}).safe(e, f, nodeOK) {
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
 	}
 	return true
@@ -1189,6 +1191,10 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 		d := run.d
 		if op.split.mode == matchBody {
 			return op.split.loopAt(rt.ctx, run.c, d, g, nil, func(v *xdm.Node, md int) (bool, error) {
+				if v.Kind() != xdm.KindElement {
+					// A kept leaf's copy, complete: off the cursor (streamleaf.go).
+					return true, run.offEach(each, v)
+				}
 				run.d, run.used = md, false
 				err := each(v)
 				read := run.used

@@ -186,7 +186,8 @@ func TestStreamTrustReproducers(t *testing.T) {
 			mustStream := tc.name == "control: record loop" || tc.name == "A1 control: motionless accumulator" ||
 				tc.name == "S1 control: xsl:map-entry with a grounded value" ||
 				strings.HasPrefix(tc.name, "M") && strings.Contains(tc.name, "control") ||
-				tc.name == "F1d control: motionless attribute set" // since M6
+				tc.name == "F1d control: motionless attribute set" || // since M6
+				tc.name == "F1 control: absorbing fn, modelled body" // since G4: $n/@k is ./@k on the view
 			if burstRuns != mustStream {
 				t.Fatalf("streamed path taken: %v", burstRuns)
 			}

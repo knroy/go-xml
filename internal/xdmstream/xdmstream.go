@@ -87,6 +87,8 @@ type Cursor struct {
 	// viewed is the one built for ev.
 	view   func() any
 	viewed *xdm.Node
+	// leafView copies the leaf the parse is stopped at (Leaf).
+	leafView func(n any, d int) any
 	// flush hands over the copies GroundLater holds (Flush).
 	flush func() error
 	// ordinal is Ordinal's answer, from the parse.
@@ -145,6 +147,9 @@ var errStop = errors.New("xdmstream: closed")
 
 // errNotAtEnd is Flush's error away from an end tag.
 var errNotAtEnd = errors.New("xdmstream: not at an end tag")
+
+// errNotAtLeaf is Leaf's error away from a leaf, or after Peek.
+var errNotAtLeaf = errors.New("xdmstream: not at a leaf")
 
 // errNotAtStart is the error of Skip, Ground and Text away from an
 // undecided start tag.
@@ -248,6 +253,22 @@ func (c *Cursor) View() (*xdm.Node, error) {
 			return nil, errNotAtStart // Peek built it, or there was none to build
 		}
 		c.viewed = c.view().(*xdm.Node)
+	}
+	return c.viewed, nil
+}
+
+// Leaf returns the current event's text, comment or processing
+// instruction as a node that may be kept: a copy, complete, under copies of
+// its ancestors as a view has them (names, attributes, namespaces, base URI;
+// no content), which is the original to Is, Identity, Compare and
+// generate-id, as views and grounded copies are. It may be asked again
+// until the cursor moves on, but not after Peek.
+func (c *Cursor) Leaf() (*xdm.Node, error) {
+	if c.ev.Kind < Text || c.ev.Kind > PI || c.peeked != nil || c.peekErr != nil || c.leafView == nil {
+		return nil, errNotAtLeaf
+	}
+	if c.viewed == nil {
+		c.viewed = c.leafView(c.ev.Node, c.ev.Depth).(*xdm.Node)
 	}
 	return c.viewed, nil
 }
@@ -513,6 +534,8 @@ func (k *client) Later(g any) error {
 }
 
 func (k *client) Viewer(view func() any) { k.c.view = view }
+
+func (k *client) LeafViewer(view func(n any, d int) any) { k.c.leafView = view }
 
 func (k *client) Flusher(flush func() error) { k.c.flush = flush }
 

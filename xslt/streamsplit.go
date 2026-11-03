@@ -113,6 +113,23 @@ type streamSplit struct {
 	outermost, innermost bool
 	nests                bool // a match can lie inside another
 	noLeaves             bool // a text, comment or PI match gives nothing
+	// keepLeaves says a text, comment or PI match is kept as a node, a copy
+	// that is the original to order and identity (Cursor.Leaf), and
+	// leafOnly that no element is one.
+	keepLeaves, leafOnly bool
+	// climb says the tail climbs to ancestors (streamleaf.go): its nodes are
+	// those of the match's view, taken once each across the matches;
+	// climbNodes and climbEach split a tail whose last step makes values
+	// into the nodes and what each gives; climbElems says the nodes kept
+	// may be elements, which only a view's properties may be read of.
+	// climbSort says the tail's nodes are not in document order across the
+	// matches (parent::, a positional predicate): they are held, and taken
+	// sorted, each once, at the context's end.
+	climb, climbElems, climbSort bool
+	// mapClimb says the tail is the right of P ! R, R climbing: each
+	// match's nodes are its own, as a simple map gives them.
+	mapClimb              bool
+	climbNodes, climbEach *xpath.Compiled
 	// predFail and tailFail say a predicate of P, or the tail, may raise an
 	// error: the tree evaluates them all, so the split may not stop early.
 	predFail, tailFail bool
@@ -208,6 +225,9 @@ func splitStreamIn(e xpath.Expr, base *xpath.Compiled, doc, group, key bool) (*s
 		w.put(&xpath.VarRef{Name: splitItems})
 	}
 	s.outer = part(root)
+	if s.climbElems && (s.red == "" || s.red == "nth") && !(viewCheck{items: true}).safe(root, focus, false) {
+		return nil, "ancestors climbed to read beyond their views: " + root.String()
+	}
 	s.kids = readsKids(s.outer)
 	if s.kids && s.ctxItem {
 		return nil, "has-children(.) beside the context's own content"
@@ -367,19 +387,30 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 			s.mode = matchGround
 		}
 	case tail == nil:
-		if leaf {
-			return "text, comment or PI nodes kept: an event node has no identity"
-		}
 		s.mode = matchGround
+		s.keepLeaves, s.leafOnly = leaf, leaf && !elem
 	case leaf:
-		return "a tail after text, comment or PI matches"
+		// Only leaves match: the tail runs on each one's copy, whole.
+		if elem || !(viewCheck{}).safe(tail, vLeaf, splitCounts[s.red]) {
+			return "a tail after text, comment or PI matches"
+		}
+		s.mode, s.keepLeaves, s.leafOnly = matchView, true, true
 	case !tailKindOK(tail):
 		return "tail " + tail.String() + ": may give both nodes and values (XPTY0018)"
+	case w.mapped:
+		if !(viewCheck{}).safe(tail, vElem, true) {
+			return "simple map " + tail.String() + ": not motionless on the match's view"
+		}
+		s.mode, s.mapClimb = matchView, true
+		s.climbElems = !endsInLeafNodes(tail) && !valueTail(tail)
 	case climbs(tail):
 		// Matches share ancestors: the tree makes each once, then what
-		// follows of it (//P/ancestor::*/data(@a) too), a match at a time
-		// would make it once per match.
-		return "tail " + tail.String() + ": climbs to ancestors' nodes"
+		// follows of it (//P/ancestor::*/data(@a) too); climbing takes
+		// each once, in document order, off the matches' views.
+		if why := s.climbing(tail, part); why != "" {
+			return "tail " + tail.String() + ": " + why
+		}
+		s.mode = matchView
 	case (viewCheck{}).safe(tail, vElem, splitCounts[s.red]):
 		s.mode = matchView
 	case (pathTail(p.tail) || burstSafe(tail, true)) && (!s.nests || tailValue(tail) || ownAttributes(p.tail)):
@@ -454,9 +485,11 @@ func (s *streamSplit) class() string {
 		return "subtree"
 	case s.red != "":
 		return "bounded"
-	case s.steps == nil || s.atomize || s.tailText != "" ||
+	case s.steps == nil || s.atomize || s.tailText != "" || s.leafOnly || s.climb || s.mapClimb ||
 		(s.mode == matchView || s.mode == matchGround) && s.tail != nil && valueTail(s.tail.Expr()):
-		// A grounded match's copy is let go once its tail has made values.
+		// A grounded match's copy is let go once its tail has made values;
+		// a kept leaf is a copy of it alone, its ancestors' copies shared;
+		// climbed nodes are the result's own, each once.
 		return "output"
 	}
 	return "nodes"
@@ -730,7 +763,10 @@ type splitter struct {
 	// for current-group() in the path found.
 	group, key bool
 	groupStep  *xpath.Step
-	why        string
+	// mapped says the path found is P ! R, R climbing (streamleaf.go): R
+	// is the tail, a match at a time, its nodes not merged across matches.
+	mapped bool
+	why    string
 }
 
 // isCurrentGroup reports whether e is a call on fn:current-group().
@@ -886,6 +922,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 		}
 		return w.slot(x.Base, func(y xpath.Expr) { x.Base = y }, useKeep)
 	case *xpath.SimpleMap:
+		if !burstSafe(x.Right, false) && w.mapClimb(x, put, use) {
+			return true
+		}
 		if !burstSafe(x.Right, false) {
 			return w.refuse("simple map " + e.String())
 		}
@@ -1076,13 +1115,18 @@ type viewCheck struct {
 	lookup bool
 	// accum says the expression is an accumulator rule's (streamaccum.go).
 	accum bool
+	// items says the split's $items (or its nth, $value) are views of
+	// elements, read as a focus of kind vElem is (streamleaf.go).
+	items bool
 }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
 // nodes e returns are not atomized by what holds e.
 func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 	switch x := e.(type) {
-	case *xpath.Literal, *xpath.VarRef:
+	case *xpath.VarRef:
+		return !vc.items || !isSplitItems(x) || nodeOK
+	case *xpath.Literal:
 		return true
 	case *xpath.ContextItem:
 		return f == vLeaf || f == vElem && nodeOK
@@ -1091,6 +1135,9 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 	case *xpath.PathExpr:
 		if x.Root {
 			return false
+		}
+		if v, ok := firstVar(x.Steps); ok && vc.items && isSplitItems(v) {
+			return vc.path(x.Steps[1:], vElem, nodeOK)
 		}
 		if len(x.Steps) > 0 && focusFree(x.Steps[0]) {
 			// $v/...: the rest reads the variable's nodes, not the focus.
@@ -1144,6 +1191,14 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 	case *xpath.QuantifiedExpr:
 		return vc.bound(x.Bindings, f) && vc.safe(x.Test, f, true)
 	case *xpath.SimpleMap:
+		if v, ok := x.Left.(*xpath.VarRef); ok && vc.items && isSplitItems(v) {
+			return vc.safe(x.Right, vElem, nodeOK) // the climbed views alone
+		}
+		if vc.items && !itemsOut(x.Left) && (f == vNone || endsInLeafNodes(x.Left)) {
+			// No view comes out of the left: its items are values, nodes
+			// of variables, or attributes and namespaces.
+			return vc.safe(x.Left, f, true) && vc.safe(x.Right, vLeaf, nodeOK)
+		}
 		return vc.safe(x.Left, f, true) && vc.safe(x.Right, vElem, nodeOK) && vc.safe(x.Right, vLeaf, nodeOK)
 	case *xpath.MapConstructor:
 		for i := range x.Keys {
@@ -1203,6 +1258,9 @@ func (vc viewCheck) path(steps []xpath.Expr, f vfocus, nodeOK bool) bool {
 			if i == 0 && vc.curOK && isCurrentCall(s) {
 				cur = vc.cur
 				continue
+			}
+			if isContextItem(s) && cur != vNone {
+				continue // ./x is x: the focus stays what it is
 			}
 			if !vc.safe(s, cur, nodeOK) {
 				return false
@@ -1278,7 +1336,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 			return ok && lit.Val != nil && (f == vElem || f == vNone)
 		}
 		if (n == "copy-of" || n == "snapshot") && len(x.Args) == 1 && focusFree(x.Args[0]) {
-			return true // a copy of a variable's value: nothing of the focus
+			// A copy of a variable's value: nothing of the focus; but a
+			// copy of climbed views would copy their content.
+			return !vc.items || vc.safe(x.Args[0], f, false)
 		}
 		if burstFnBanned[n] || n == "copy-of" || n == "snapshot" || n == "current" ||
 			n == "has-children" && f != vLeaf || vc.noIdent && identFns[n] {
@@ -1288,7 +1348,7 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 			return false
 		}
 		for _, a := range x.Args {
-			if !vc.safe(a, f, splitNodeFns[n]) {
+			if !vc.safe(a, f, splitNodeFns[n] || vc.items && nodeOK && splitPassFns[n]) {
 				return false
 			}
 		}
@@ -1549,6 +1609,10 @@ type splitRun struct {
 	src memberSource
 	// hold is what a holding split has collected (streamhold.go).
 	hold *splitHold
+	// climbed is the last node a climbing tail gave, and held what a
+	// climbSort one gave (streamleaf.go).
+	climbed *xdm.Node
+	held    []*xdm.Node
 }
 
 // read is the walk's next event: the cursor's, through the filter f
@@ -1700,7 +1764,7 @@ func (r *splitRun) run(v *xdm.Node, d int) error {
 	var root splitFrame
 	if s.steps != nil && s.rootFrame(&root) && !s.doc {
 		// .//@a: the context is a match (path admits only a view tail).
-		items, err := s.tail.Eval(r.ctx.WithFocus(v, 1, 1))
+		items, err := r.tailOf(v)
 		if err != nil {
 			return err
 		}
@@ -1832,7 +1896,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 			if match && !quiet {
 				r.seen++ // a leaf match makes its ancestors not innermost
 				if !s.noLeaves {
-					if err := r.leaf(ev.Node); err != nil {
+					if err := r.leaf(ev.Node, ev.Depth); err != nil {
 						return err
 					}
 				}
@@ -1901,7 +1965,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 				}
 				items := xdm.One(v) // a loop's: the match itself
 				if s.tail != nil {
-					if items, err = s.tail.Eval(r.ctx.WithFocus(v, 1, 1)); err != nil {
+					if items, err = r.tailOf(v); err != nil {
 						return err
 					}
 				}
@@ -2005,14 +2069,36 @@ func (s *streamSplit) textAtomic(t string) *xdm.Atomic {
 }
 
 // leaf takes a text, comment or PI match n (live on the cursor, or in a
-// grounded copy): only counted or atomized (path refuses keeping one).
-func (r *splitRun) leaf(n *xdm.Node) error {
+// grounded copy, d 0): counted, atomized, or kept (keepLeaves) -- a live one,
+// at depth d, as its copy, the original to order and identity (Cursor.Leaf),
+// which a matchBody loop's body is handed as a match.
+func (r *splitRun) leaf(n *xdm.Node, d int) error {
 	s := r.s
 	switch {
-	case s.mode == matchCount || s.red == "nth" && !s.atomize && s.tailText == "" && r.idx+1 < s.nth:
+	case s.mode == matchCount || s.red == "nth" && !s.atomize && s.tailText == "" && s.tail == nil && r.idx+1 < s.nth:
 		return r.take(xdm.Sequence{nil})
 	case s.tailText == "string":
 		return r.take(xdm.One(xdm.NewString(n.StringValue())))
+	case s.keepLeaves && (s.tail != nil || !s.atomize && s.tailText == ""):
+		if d > 0 {
+			c, err := r.c.Leaf()
+			if err != nil {
+				return err
+			}
+			n = c
+		}
+		if r.body != nil {
+			_, err := r.body(n, d)
+			return err
+		}
+		if s.tail != nil {
+			items, err := s.tail.Eval(r.ctx.WithFocus(n, 1, 1))
+			if err != nil {
+				return err
+			}
+			return r.take(items)
+		}
+		return r.take(xdm.One(n))
 	}
 	return r.take(xdm.Atomize(xdm.One(n)))
 }
@@ -2081,7 +2167,7 @@ func (r *splitRun) walkTree(n *xdm.Node, pf *splitFrame) (found bool, err error)
 			if match && !quiet {
 				found = true
 				if !s.noLeaves {
-					if err := r.leaf(ch); err != nil {
+					if err := r.leaf(ch, 0); err != nil {
 						return found, err
 					}
 				}
@@ -2223,6 +2309,9 @@ func (r *splitRun) fold() error {
 
 // finish is the value the outer is given: the items, or the reducer's.
 func (r *splitRun) finish() (xdm.Sequence, error) {
+	if err := r.climbFinish(); err != nil {
+		return nil, err
+	}
 	b := func(v bool) (xdm.Sequence, error) { return xdm.One(xdm.NewBoolean(v)), nil }
 	switch r.s.red {
 	case "", "nth":

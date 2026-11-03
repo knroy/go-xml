@@ -86,6 +86,16 @@ type Viewing interface {
 	Viewer(view func() any)
 }
 
+// LeafViewing is a Client that copies leaves out of the stream: Drive hands
+// it, before the first event, the function that returns a copy of n (a
+// *xdm.Node), a text, comment or processing instruction at depth d that
+// Leaf is telling it of, valid only during Leaf: complete, under shallow
+// copies of its ancestors as a view has them, the original to order and
+// identity, that may be kept.
+type LeafViewing interface {
+	LeafViewer(view func(n any, d int) any)
+}
+
 // Stripping is a Client that strips whitespace as XSLT's xsl:strip-space
 // does: Strips reports whether whitespace-only text directly inside el (an
 // *xdm.Node open in the parse's tree, its ancestors with it) is dropped. The

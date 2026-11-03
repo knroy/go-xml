@@ -80,7 +80,7 @@ var classNames = [numClasses]string{"element", "document node", "text, comment o
 // strict is b with no records: every expression is checked.
 func (b *streamBuilder) strict() *streamBuilder {
 	return &streamBuilder{pl: &streamPlan{recs: map[any]*planRec{}}, x: b.x, ops: b.ops,
-		kinds: b.kinds, noIdent: b.noIdent, key: b.key}
+		kinds: b.kinds, noIdent: b.noIdent, up: b.up, key: b.key}
 }
 
 // applyOp plans an xsl:apply-templates that reads its context, focus f.
@@ -241,6 +241,9 @@ func (op *streamOp) readyApply() string {
 			// A rule may read a match whole, and with it the matches inside.
 			return "apply-templates select: matches may lie inside each other"
 		}
+		if why := leafApplyRefusal(s); why != "" {
+			return why
+		}
 		s.mode = matchBody
 	}
 	return ""
@@ -335,7 +338,7 @@ func (c *compiler) planRule(el *xdm.Node, p *Pattern, from int) *rulePlan {
 		}
 		x := newStreamExec()
 		x.class, x.modes, x.rule = cl, templateModeNames(el), true
-		b := &streamBuilder{pl: rs.pl, x: x, ops: &x.top, kinds: &x.kinds, noIdent: cl == classLeaf}
+		b := &streamBuilder{pl: rs.pl, x: x, ops: &x.top, kinds: &x.kinds, noIdent: cl == classLeaf, up: cl == classLeaf}
 		f := vElem
 		switch cl {
 		case classDoc:
@@ -399,8 +402,9 @@ func (c *compiler) readyRule(r *rulePlan) {
 // patternClasses reports which classes of node p may match, and why a
 // view cannot decide it ("" when it can): it must name its candidate and
 // the candidate's ancestors by what their views have -- names, kinds,
-// attributes -- with no position among siblings, and a text, comment or PI
-// node by itself alone (a copy of one has no parent).
+// attributes -- with no position among siblings; a text, comment or PI
+// node is matched live, its ancestors open, and so may be named through
+// them as well.
 func patternClasses(p *Pattern) (can [numClasses]bool, why string) {
 	if len(p.general) > 0 {
 		return can, "pattern " + p.src + ": an XSLT 3.0 form"
@@ -443,7 +447,9 @@ func patternClasses(p *Pattern) (can [numClasses]bool, why string) {
 		default:
 			return can, "pattern " + p.src
 		}
-		if (c[classLeaf] || c[classDoc]) && (len(a.steps) > 1 || last.descendant) || c[classLeaf] && a.absolute {
+		// A leaf is matched live on the cursor, its ancestors open, and its
+		// rule runs on its copy (Cursor.Leaf), which has their copies.
+		if c[classDoc] && (len(a.steps) > 1 || last.descendant) {
 			return can, "pattern " + p.src + ": a step above a node with no view of its parent"
 		}
 		for i, st := range a.steps {
@@ -456,7 +462,7 @@ func patternClasses(p *Pattern) (can [numClasses]bool, why string) {
 					ok = (viewCheck{}).safe(pr, vElem, true)
 				}
 				if i == len(a.steps)-1 && (c[classLeaf] || c[classAttr]) {
-					ok = ok && (viewCheck{noIdent: c[classLeaf]}).safe(pr, vLeaf, true)
+					ok = ok && (viewCheck{noIdent: c[classLeaf], up: c[classLeaf]}).safe(pr, vLeaf, true)
 				}
 				if !ok || i == len(a.steps)-1 && c[classDoc] {
 					return can, "pattern " + p.src + ": predicate " + pr.String() + " not motionless on the view"
@@ -862,8 +868,10 @@ func (run *streamRun) element(rt *runtime, v *xdm.Node, md int, mode string, par
 
 // leaf dispatches a text, comment or PI node n, live on the cursor until
 // its next call, at position pos: matched as it is (a pattern that may match
-// one reads the node alone: patternClasses), and copied for a rule's body to
-// run on, which reads only what a copy has (rulePlan). A built-in rule
+// one reads the node and the names and attributes of its open ancestors:
+// patternClasses), and copied (Cursor.Leaf: the original to identity, under
+// its ancestors' copies) for a rule's body to run on, which reads only what
+// a copy has (rulePlan). A built-in rule
 // copies what it keeps (detached).
 func (run *streamRun) leaf(focus focuser, pos int, n *xdm.Node, mode string,
 	params, tunnels paramValues, out *outputBuilder) error {
@@ -880,7 +888,10 @@ func (run *streamRun) leaf(focus focuser, pos int, n *xdm.Node, mode string,
 		rt.sheet.warnNoMatch(rt, n, mode)
 		return run.builtIn(rt, n, mode, params, tunnels, out)
 	}
-	c := xdm.Copy(n)
+	c, err := run.c.Leaf()
+	if err != nil {
+		return err
+	}
 	rt = focus.at(c, pos)
 	if err := rt.sheet.warnMultipleMatch(rt, c, mode, t, next, rt.ctx); err != nil {
 		return err
