@@ -37,8 +37,10 @@ type mergeInstr struct {
 	sources []*mergeSource
 	action  []Instruction
 	// streams says the merge reads its streamable sources each on a cursor
-	// of its own (streammerge.go).
-	streams bool
+	// of its own (streammerge.go); textKeys are the key positions whose
+	// data-type, an attribute value template, must resolve to "text".
+	streams  bool
+	textKeys []int
 }
 
 // mergeSource is a compiled xsl:merge-source: one merge source definition.
@@ -240,7 +242,7 @@ func (c *compiler) compileMerge(n *xdm.Node, ns xpath.NamespaceResolver) (Instru
 		return nil, err
 	}
 	instr.action = action
-	instr.streams = mergeStreams(instr, actionElem)
+	instr.streams, instr.textKeys = mergeStreams(instr, actionElem)
 	return instr, nil
 }
 

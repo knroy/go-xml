@@ -63,7 +63,7 @@ func (c *compiler) mergeSplit(n *xdm.Node, sel *xpath.Compiled, ns xpath.Namespa
 
 // mergeStreams reports whether i may read its streamable sources each on a
 // cursor of its own (see the file comment).
-func mergeStreams(i *mergeInstr, action *xdm.Node) bool {
+func mergeStreams(i *mergeInstr, action *xdm.Node) (bool, []int) {
 	any := false
 	for _, src := range i.sources {
 		if !src.streamed || src.sourceURIs == nil {
@@ -71,16 +71,110 @@ func mergeStreams(i *mergeInstr, action *xdm.Node) bool {
 				// Collected after a streamed one: its nodes would be made
 				// before that one's, where the tree makes them after
 				// (mergeInput.take).
-				return false
+				return false, nil
 			}
 			continue
 		}
 		if src.split == nil || src.accums != nil || !src.validation.isDefault() || src.sortBeforeMerge {
-			return false
+			return false, nil
 		}
 		any = true
 	}
-	return any && mergeActionOK(action)
+	text, ok := mergeKeysOneType(i)
+	if !any || !ok || !mergeActionOK(action) {
+		return false, nil
+	}
+	return true, text
+}
+
+// mergeKeysOneType reports whether every key position holds values of one
+// type across all sources, decided from how each key is written. The tree
+// orders all items by one stable sort, whose comparator is no consistent
+// order across types (an untyped value against a number, NaN against
+// anything) and which raises XTTE2230 only for the pairs it happens to
+// compare: a merge of heads cannot follow it there (found by the fuzzer).
+// The key positions whose data-type is an attribute value template are
+// returned: it must resolve to "text" (runStream checks, before anything is
+// read), which compares every value as a string.
+func mergeKeysOneType(i *mergeInstr) ([]int, bool) {
+	var text []int
+	for k := range i.sources[0].keyElems {
+		class := ""
+		for _, src := range i.sources {
+			c := mergeKeyClass(src.keyElems[k], src.streamed && src.sourceURIs != nil)
+			if c == "" || class != "" && c != class {
+				return nil, false
+			}
+			class = c
+		}
+		if class == "avt" {
+			text = append(text, k)
+		}
+	}
+	return text, true
+}
+
+// mergeStringFns are the fn functions whose value is one xs:string.
+var mergeStringFns = map[string]bool{"string": true, "translate": true, "concat": true, "substring": true,
+	"substring-before": true, "substring-after": true, "lower-case": true, "upper-case": true,
+	"normalize-space": true, "string-join": true, "name": true, "local-name": true}
+
+// mergeKeyClass is the type of the values the merge key el gives: a
+// constructor function's (fn:dateTime's), "string" for a function that
+// makes a string or a path into a streamed
+// document (never validated: untyped, ordered as strings), or "" when it
+// cannot be told.
+func mergeKeyClass(el *xdm.Node, streamed bool) string {
+	if el.Attr("", "select") == nil {
+		return ""
+	}
+	if a := el.Attr("", "data-type"); a != nil {
+		switch v := strings.TrimSpace(a.Value()); {
+		case v == "text":
+			return "text"
+		case strings.ContainsAny(v, "{}"):
+			return "avt"
+		}
+		return ""
+	}
+	e := parseAt(el, el.AttrValue("select"))
+	switch x := e.(type) {
+	case *xpath.FuncCall:
+		switch {
+		case x.Name.URI == xdm.NSXS && (x.Name.Local == "integer" || x.Name.Local == "decimal" ||
+			x.Name.Local == "date" || x.Name.Local == "dateTime" || x.Name.Local == "time"):
+			return "xs:" + x.Name.Local
+		case x.Name.URI == xdm.NSXS && x.Name.Local == "string":
+			return "string"
+		case x.Name.URI == fnNS && x.Name.Local == "dateTime":
+			return "xs:dateTime"
+		case x.Name.URI == fnNS && mergeStringFns[x.Name.Local]:
+			return "string"
+		}
+	}
+	if streamed && nodesOnly(e) {
+		return "string"
+	}
+	return ""
+}
+
+// nodesOnly reports, conservatively, whether e returns only elements or
+// attributes (of a streamed document: untyped).
+func nodesOnly(e xpath.Expr) bool {
+	switch x := e.(type) {
+	case *xpath.Step, *xpath.PathExpr:
+		return noTextNodes(e)
+	case *xpath.FilterExpr:
+		return nodesOnly(x.Base)
+	case *xpath.SequenceExpr:
+		for _, it := range x.Items {
+			if !nodesOnly(it) {
+				return false
+			}
+		}
+		return len(x.Items) > 0
+	}
+	return false
 }
 
 // mergeActionOK checks the merge action: nothing in it asks for the context
@@ -203,6 +297,13 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 	resolved, colls, err := i.resolveKeys(rt)
 	if err != nil {
 		return err
+	}
+	for _, k := range i.textKeys {
+		for s := range resolved {
+			if resolved[s][k].dataType != "text" {
+				return errMergeTree
+			}
+		}
 	}
 	var inputs []*mergeInput
 	var docs []*mergeDoc

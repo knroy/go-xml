@@ -72,11 +72,13 @@ func TestStreamMergeMatchesTree(t *testing.T) {
 		// order (XTDE2220), keys that cannot be compared (XTTE2230), a
 		// malformed document, a document not there; the action's own.
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'uns.xml'", "log/e", num, ""), group, true},
-		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'str.xml'", "log/e", "string(@t)", ""), group, true},
+		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'str.xml'", "log/e", "string(@t)", ""), group, false}, // keys of two types: the tree's
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'bad.xml'", "log/e", num, ""), group, true},
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'none.xml'", "log/e", num, ""), group, true},
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""), `<g v="{xs:integer(current-merge-group('B')/@t) div 0}"/>`, true},
-		// Refused: last(), sort-before-merge, a crawling select.
+		// Refused: last(), sort-before-merge, keys of two types (the tree's
+		// sort is no consistent order across them).
+		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", "@t", ""), group, false},
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""), `<g n="{last()}"/>`, false},
 		{mergeSrc("A", "'uns.xml'", "log/e", num, `sort-before-merge="yes"`), group, false},
 	}
