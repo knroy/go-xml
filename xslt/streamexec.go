@@ -989,6 +989,9 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 // it holds one at a time; one that would ground the document element gives
 // up there, which at the document node falls back to the tree.
 func (x *streamExec) readySelect(op *streamOp, minD int) string {
+	if copiedPopulation(op) {
+		return "" // streamgroup.go
+	}
 	s := op.split
 	copies := isXSL(op.el, "copy-of") || isXSL(op.el, "sequence") && inElement(op.el)
 	if c := s.class(); copies && (c == "nodes" || c == "subtree") &&
@@ -1188,6 +1191,9 @@ func (run *streamRun) evalOp(rt *runtime, op *streamOp) (xdm.Sequence, error) {
 	seq, err := op.split.evalAt(rt.ctx, run.c, run.d, g)
 	if err == errSplitGiveUp && run.d == 0 && run.i != nil {
 		return run.fallback(rt, op.sel)
+	}
+	if err == nil && copiedPopulation(op) {
+		seq = numberCopies(op, seq) // streamgroup.go
 	}
 	return seq, err
 }
