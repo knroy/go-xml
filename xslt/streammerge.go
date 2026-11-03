@@ -103,6 +103,11 @@ func mergeKeysOneType(i *mergeInstr) ([]int, bool) {
 		class := ""
 		for _, src := range i.sources {
 			c := mergeKeyClass(src.keyElems[k], src.streamed && src.sourceURIs != nil)
+			if c == "avt" && class == "text" || c == "text" && class == "avt" {
+				// The template must resolve to "text" (runStream checks it),
+				// as the other is written: one type.
+				c, class = "avt", "avt"
+			}
 			if c == "" || class != "" && c != class {
 				return nil, false
 			}

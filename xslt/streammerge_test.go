@@ -81,6 +81,10 @@ func TestStreamMergeMatchesTree(t *testing.T) {
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", "@t", ""), group, false},
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""), `<g n="{last()}"/>`, false},
 		{mergeSrc("A", "'uns.xml'", "log/e", num, `sort-before-merge="yes"`), group, false},
+		// data-type="{...}" on one source, "text" on the other: one type when
+		// the template says "text" (checked before anything is read).
+		{strings.Replace(mergeSrc("A", "'a.xml'", "log/e", "@t", ""), `"/>`, `" data-type="{'te' || 'xt'}"/>`, 1) +
+			strings.Replace(mergeSrc("B", "'c.xml'", "log/g/e", "string(@t)", ""), `"/>`, `" data-type="text"/>`, 1), group, true},
 	}
 	streamed := 0
 	for i, c := range cases {
