@@ -193,10 +193,8 @@ true here:
    made (922 W3C cases stream; see [known gaps](docs/known-gaps.md)). Otherwise the streaming cases are in
    scope and counted: the stylesheet-level half of streaming, the §19.8
    streamability analysis that refuses a construct with `XTSE3430`, is
-   implemented and measured. What is absent is streamed *execution*, not the
-   vocabulary or the analysis:
-   `xsl:stream`, `xsl:fork`, `xsl:source-document`, `xsl:merge` and
-   `xsl:accumulator` all execute, by building the tree instead. §19.1 allows
+   implemented and measured. A construct the streamed core does not take
+   still executes, by building the tree instead. §19.1 allows
    exactly that — a processor not claiming the streaming option "must still
    process a stylesheet and deliver the correct results, but is not required to
    use streaming algorithms". What a streamable stylesheet *computes* is
