@@ -170,6 +170,10 @@ type streamSplit struct {
 	// checks are evaluated before the walk: the type checks of a set
 	// operator's foreign operand (foreignSets, streamsplit_union.go).
 	checks []*xpath.Compiled
+	// fresh says the tail makes no node of a match's copy, and skip how many
+	// matches give nothing (streamshapes.go).
+	fresh bool
+	skip  int64
 }
 
 // splitStream splits e, an expression whose context item is the document
@@ -191,6 +195,7 @@ func splitStreamIn(e xpath.Expr, base *xpath.Compiled, doc, group, key bool) (*s
 	if doc {
 		focus = vNone
 	}
+	e = hoistChoice(e, focus, key)
 	if x, ok := e.(*xpath.IfExpr); ok {
 		vc := viewCheck{kids: true, key: key}
 		if vc.safe(x.Cond, focus, true) && !(vc.safe(x.Then, focus, false) && vc.safe(x.Else, focus, false)) {
@@ -257,6 +262,7 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 			return why
 		}
 	}
+	s.skip = p.skip
 	if s.group = p.group; s.group && p.oi != "" {
 		return p.oi + "() of the current group"
 	}
@@ -367,6 +373,9 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		tail = p.tail[0]
 	default:
 		tail = &xpath.PathExpr{Steps: p.tail}
+	}
+	if p.mapR != nil {
+		return s.mapPath(w, mapTail(tail, p.mapR), p.mapR, leaf, last.Axis, part)
 	}
 	nodes := tail == nil || endsInAttribute(tail)
 	if !nodes && (s.red == "boolean" || s.red == "not") {
@@ -736,6 +745,8 @@ type splitPathParts struct {
 	ctxItem bool           // the path is "." itself
 	group   bool           // its first step is current-group()'s members
 	br      *splitBranches // the operands of a set operator (streamsplit_union.go)
+	mapR    xpath.Expr     // "P ! R": R, mapped over each match (streamshapes.go)
+	skip    int64          // "tail(P)": P's first matches left out (streamshapes.go)
 }
 
 // splitter finds the one consuming path of an expression and checks that
@@ -823,6 +834,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 	}
 	if w.why != "" {
 		return false
+	}
+	if done, ok := w.collection(e); done { // streamshapes.go
+		return ok
 	}
 	switch x := e.(type) {
 	case *xpath.FuncCall:
@@ -995,6 +1009,11 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 	case *xpath.BinaryOp:
 		return w.setOf(x)
 	case *xpath.SimpleMap:
+		// R over each match as its tail (streamshapes.go) is the map exactly;
+		// a map read as a path (streamsplit_union.go) only where that declines.
+		if pp, ok := w.mapPathOf(x); ok {
+			return pp, true
+		}
 		return w.mapOf(x)
 	case *xpath.FuncCall:
 		if w.group && isCurrentGroup(x) {
@@ -1002,10 +1021,16 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 			pp.group = true
 			break
 		}
+		if t, ok := w.tailCallOf(x); ok {
+			return t, true
+		}
 		if !outerInner(x) {
 			return pp, false
 		}
 		inner, ok := w.pathOf(x.Args[0])
+		if ok && (inner.mapR != nil || inner.skip > 0) {
+			return pp, false
+		}
 		if !ok || inner.oi != "" || inner.ctxItem || len(inner.tail) > 0 {
 			if ok {
 				w.refuse(x.Name.Local + "() of a path with a tail")
@@ -1035,6 +1060,10 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 					list = append([]xpath.Expr{w.newGroupStep(nil)}, list[1:]...)
 					pp.group = true
 					break
+				}
+				if t, ok := w.tailCallOf(f); ok {
+					t.tail = list[1:]
+					return t, true
 				}
 				if outerInner(f) {
 					inner, ok := w.pathOf(f)
@@ -1596,8 +1625,8 @@ type splitRun struct {
 	// regions (inside an outermost match) whose matches are not results.
 	done   bool
 	silent int
-	// seen counts matches, for innermost.
-	seen int64
+	// seen counts matches, for innermost; skipped those s.skip left out.
+	seen, skipped int64
 	// each, for a loop (loop), is handed every match in place of take: a
 	// view (matchView) or a copy (matchGround). body runs a matchBody loop's
 	// body at a match's start tag, at depth d, and reports whether it read
@@ -2237,6 +2266,10 @@ func (r *splitRun) yield(n *xdm.Node) error {
 // a match that is only counted.
 func (r *splitRun) take(items xdm.Sequence) error {
 	s := r.s
+	if r.skipped < s.skip {
+		r.skipped++
+		return nil
+	}
 	if r.each != nil {
 		for _, it := range items {
 			if err := r.each(it); err != nil {

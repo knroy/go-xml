@@ -1654,7 +1654,7 @@ type ifInstr struct {
 }
 
 func (i *ifInstr) Execute(rt *runtime, out *outputBuilder) error {
-	ok, err := i.test.EvalBool(rt.ctx)
+	ok, err := rt.evalStreamBool(i.test)
 	if err != nil {
 		return err
 	}
@@ -1677,7 +1677,7 @@ type chooseBranch struct {
 
 func (i *chooseInstr) Execute(rt *runtime, out *outputBuilder) error {
 	for _, w := range i.whens {
-		ok, err := w.test.EvalBool(rt.ctx)
+		ok, err := rt.evalStreamBool(w.test)
 		if err != nil {
 			return err
 		}

@@ -126,6 +126,13 @@ func splitSame(got, want xdm.Sequence, t *xdm.Tree) string {
 			if !ok || g.TypeName() != w.TypeName() || g.String() != w.String() {
 				return fmt.Sprintf("item %d: %v, tree %v (%s)", i, got[i], w, w.TypeName())
 			}
+		case *xdm.MapItem, *xdm.ArrayItem:
+			// Built by the outer from collected items (streamshapes.go).
+			r, err := splitDeepEqual.Eval(xpath.NewContext(nil, xpath.Builtins()).
+				WithVar(xdm.QName{Local: "a"}, xdm.One(got[i])).WithVar(xdm.QName{Local: "b"}, xdm.One(w)))
+			if err != nil || len(r) != 1 || r[0].(*xdm.Atomic).String() != "true" {
+				return fmt.Sprintf("item %d: %T differs (%v)", i, w, err)
+			}
 		default:
 			return fmt.Sprintf("item %d: %T in the tree's answer", i, w)
 		}

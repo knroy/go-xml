@@ -48,7 +48,7 @@ var callBodies = []struct {
 	// The simple map of atomic values as a path, with no function.
 	{`<o><xsl:value-of select="/doc/rec ! name()"/></o>`, true},
 	{`<o><xsl:value-of select="sum(/doc/rec ! string-length(@k))"/></o>`, true},
-	{`<o><xsl:value-of select="/doc/rec ! (@k || '-')"/></o>`, false},
+	{`<o><xsl:value-of select="/doc/rec ! (@k || '-')"/></o>`, true}, // R the per-match tail (streamshapes.go)
 	// Refused: a result that may be empty where the type wants one (p:num),
 	// a recursive call, a global, a cache, an atomic parameter given a
 	// path, a node result kept.

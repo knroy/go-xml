@@ -607,6 +607,9 @@ func fuzzMake(seed int64) fuzzCase {
 	if fuzzIsTry(seed) {
 		return fuzzMakeTry(seed)
 	}
+	if fuzzIsShapes(seed) {
+		return fuzzMakeShapes(seed) // streamshapesfuzz_test.go
+	}
 	if fuzzIsAccums(seed) {
 		return fuzzMakeAccums(seed)
 	}
@@ -874,6 +877,12 @@ func TestStreamFuzz(t *testing.T) {
 			tally["hold shapes"]++ // streamholdfuzz_test.go
 			if co.trace.Streamed() > 0 {
 				tally["streamed: hold shapes"]++
+			}
+		}
+		if c.kind == "shapes" { // streamshapesfuzz_test.go
+			tally["G3 shapes"]++
+			if co.trace.Streamed() > 0 {
+				tally["streamed: G3 shapes"]++
 			}
 		}
 		if c.kind == "try" {

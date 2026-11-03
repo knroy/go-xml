@@ -503,6 +503,8 @@ func burstSafe(e xpath.Expr, noPos bool) bool {
 		return burstSafe(x.Left, noPos) && burstSafe(x.Right, noPos)
 	case *xpath.UnaryOp:
 		return burstSafe(x.Operand, noPos)
+	case *xpath.StringConcat:
+		return burstSafe(x.Left, noPos) && burstSafe(x.Right, noPos) // concat(a, b)
 	case *xpath.FuncCall:
 		return callSafe(x, noPos)
 	case *xpath.IfExpr:

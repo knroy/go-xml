@@ -231,7 +231,16 @@ func (b *streamBuilder) seq(el *xdm.Node, f vfocus) bool {
 		switch ch.Kind() {
 		case xdm.KindText:
 			if strings.ContainsAny(ch.Value(), "{}") {
-				return b.refuse("text with a brace") // perhaps a text value template
+				op, ok := b.textTemplate(ch, el, f) // streamshapes.go
+				if !ok {
+					return false
+				}
+				if op != nil {
+					if consumers++; consumers > 1 {
+						return b.refuse("two consuming instructions in one sequence constructor")
+					}
+					b.addTextOp(op)
+				}
 			}
 			continue
 		case xdm.KindElement:
@@ -329,12 +338,18 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		b.kinds[k]++
 		return b.seq(el, f)
 	case "if":
+		if done, ok := b.consumingIf(el, f); done { // streamshapes.go
+			return ok
+		}
 		if !b.attrs(el, f) {
 			return false
 		}
 		b.kinds[streamtrace.KindChoose]++
 		return b.seq(el, f)
 	case "choose":
+		if done, ok := b.consumingChoose(el, f); done { // streamshapes.go
+			return ok
+		}
 		b.kinds[streamtrace.KindChoose]++
 		for ch := range el.Children() {
 			switch {
@@ -673,7 +688,9 @@ func (b *streamBuilder) content(el *xdm.Node, f vfocus) bool {
 		switch ch.Kind() {
 		case xdm.KindText:
 			if strings.ContainsAny(ch.Value(), "{}") {
-				return b.refuse("text with a brace")
+				if op, ok := b.textTemplate(ch, el, f); !ok || op != nil {
+					return b.refuse("text with a brace") // streamshapes.go
+				}
 			}
 		case xdm.KindElement:
 			if !b.motionless(ch, f) {
@@ -819,7 +836,7 @@ func (c *compiler) noteStreamLoop(n *xdm.Node, instr Instruction, sel *xpath.Com
 // reducer or outer, the matches what it returns.
 func (s *streamSplit) bare() bool {
 	return s.cond == nil && !s.ctxItem && s.red == "" && s.tail == nil && s.tailText == "" &&
-		s.steps != nil && isVarRef(s.outer.Expr(), splitItems)
+		s.steps != nil && isVarRef(s.outer.Expr(), splitItems) && s.skip == 0
 }
 
 // streamOps returns the ops of the plans being compiled -- the container's,
@@ -1087,6 +1104,8 @@ func (s *streamSplit) memory(minD int) string {
 		return s.els.memory(minD)
 	}
 	switch c := s.class(); {
+	case c == "nodes" && s.fresh:
+		// The tail's own nodes, not copies of the stream (streamshapes.go).
 	case (c == "nodes" || c == "subtree") && s.group:
 		// A group's members may be all of the document element's children.
 		return "collects grounded copies (" + c + ") of the current group"
