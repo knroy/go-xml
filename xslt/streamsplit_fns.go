@@ -135,3 +135,15 @@ func callsCurrent(e xpath.Expr) bool {
 	})
 	return found
 }
+
+// copiedItems reports whether an outer is snapshot($items): written where
+// its result is copied (readySelect's copies: xsl:copy-of, or xsl:sequence
+// in an element), it writes what $items' copies write -- a snapshot's
+// ancestors are not copied with it -- so the matches can be copied out as
+// they are read. (copy-of($items) would be the same; grounded copies are
+// lane G1's.)
+func copiedItems(e xpath.Expr) bool {
+	f, ok := e.(*xpath.FuncCall)
+	return ok && f.Name.URI == fnNS && f.Name.Local == "snapshot" &&
+		len(f.Args) == 1 && isVarRef(f.Args[0], splitItems)
+}

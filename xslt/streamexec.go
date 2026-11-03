@@ -998,7 +998,7 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 	s := op.split
 	copies := isXSL(op.el, "copy-of") || isXSL(op.el, "sequence") && inElement(op.el)
 	if c := s.class(); copies && (c == "nodes" || c == "subtree") &&
-		s.cond == nil && s.red == "" && isVarRef(s.outer.Expr(), splitItems) {
+		s.cond == nil && s.red == "" && (isVarRef(s.outer.Expr(), splitItems) || copiedItems(s.outer.Expr())) { // streamsplit_fns.go
 		switch {
 		case s.group && minD+s.minDepth() < 2:
 			// A group of the document element: the fallback a container's
@@ -1036,7 +1036,8 @@ func inElement(el *xdm.Node) bool {
 		switch n.Name().Local {
 		case "element", "copy":
 			return true
-		case "if", "choose", "when", "otherwise", "for-each", "for-each-group", "iterate", "fork":
+		case "if", "choose", "when", "otherwise", "for-each", "for-each-group", "iterate", "fork",
+			"source-document": // g5: its result is written where it is, as an xsl:if's
 		default:
 			return false
 		}
