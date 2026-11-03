@@ -28,10 +28,9 @@ import (
 // XTDE2220 scan below is what keeps the unsorted case an error rather than a
 // silent re-sort.
 //
-// Streaming is not implemented. streamable="yes" is a statement about memory,
-// not about the answer: 19.10 leaves a processor that does not stream free to
-// evaluate conventionally, and the sole visible consequence — that last() is
-// absent inside the action — is honoured.
+// This is the tree's merge (executeTree), and the oracle of the streamed one
+// (streammerge.go), which reads the streamable for-each-source documents
+// each on a cursor and interleaves them by the same keys, ties and errors.
 
 // mergeInstr is a compiled xsl:merge.
 type mergeInstr struct {
