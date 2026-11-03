@@ -166,8 +166,9 @@ func TestStreamTrustReproducers(t *testing.T) {
 				t.Fatalf("compile or run: %v", err)
 			}
 			// The record loop streams, and since M2 so do the controls that
-			// apply templates in a verified streamable mode.
-			mustStream := tc.name == "control: record loop" ||
+			// apply templates in a verified streamable mode; since M5 the
+			// xsl:map control.
+			mustStream := tc.name == "control: record loop" || tc.name == "S1 control: xsl:map-entry with a grounded value" ||
 				strings.HasPrefix(tc.name, "M") && strings.Contains(tc.name, "control")
 			if burstRuns != mustStream {
 				t.Fatalf("streamed path taken: %v", burstRuns)
