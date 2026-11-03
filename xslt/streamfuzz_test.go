@@ -592,6 +592,9 @@ func fuzzMake(seed int64) fuzzCase {
 	if fuzzIsGroups(seed) {
 		return fuzzMakeGroups(seed)
 	}
+	if fuzzIsPaths(seed) {
+		return fuzzMakePaths(seed) // streampopfuzz_test.go
+	}
 	if fuzzIsTry(seed) {
 		return fuzzMakeTry(seed)
 	}
