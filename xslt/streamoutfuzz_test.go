@@ -28,6 +28,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -199,6 +200,7 @@ func TestStreamOutFuzz(t *testing.T) {
 		}
 		decls, method := fuzzOutDecls(r)
 		sheet := fuzzOutShape(r, c.sheet, decls, method)
+		sheet = fuzzTryOutShape(seed, sheet) // streamtryoutfuzz_test.go
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(c.doc), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -210,7 +212,11 @@ func TestStreamOutFuzz(t *testing.T) {
 			want, _ = fuzzOutRun(sheet, c.doc, dir, main, false, c.maxNodes, c.maxBytes)
 			tally["not streamable"]++
 		}
+		f0 := xdmsink.Forwarded.Load()
 		got, opened := fuzzOutRun(sheet, c.doc, dir, main, true, c.maxNodes, c.maxBytes)
+		if xdmsink.Forwarded.Load() > f0 {
+			tally["try handed items on"]++
+		}
 		tally["cases"]++
 		if main {
 			tally["applied to a principal input"]++

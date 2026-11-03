@@ -219,10 +219,21 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// would not do: out may already have an open element whose attributes the
 	// body added, and there is no record of where the body's contribution
 	// began.
-	sub := tryBuffer(rt)
+	//
+	// Under streamed output the builder hands what it completes on to out
+	// as it goes, provisionally (streamtry_out.go): tryEnd commits that or
+	// rolls it back, before the rest is appended or the catch runs.
+	sub := tryBuffer(rt, i, out)
+	defer func() {
+		if p := recover(); p != nil {
+			tryEnd(rt, sub, false)
+			panic(p)
+		}
+	}()
 	st := rt.streamTry()
 	err := i.run(rt, sub)
 	if err == nil {
+		tryEnd(rt, sub, true)
 		return appendSequence(sub.Sequence(), out)
 	}
 
@@ -237,14 +248,20 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// propagated: this path exists to preserve the output the body
 			// had already produced, and the signal is what the caller is
 			// waiting for.
+			tryEnd(rt, sub, true)
 			_ = appendSequence(sub.Sequence(), out)
+		} else {
+			tryEnd(rt, sub, false)
 		}
 		return err
 	}
 	cl, ok := i.selectCatch(errorQName(err))
+	tryEnd(rt, sub, false)
 	if !ok {
 		return err
 	}
+	// A buffer that hands items on keeps the newest (streamtry_out.go), so
+	// it is empty exactly when the body produced nothing, as in tree mode.
 	if i.noRollback && len(sub.Sequence()) > 0 {
 		// rollback-output="no" waives the guarantee that the failed body's
 		// output is discarded. This engine could discard it anyway, but the

@@ -54,9 +54,7 @@ import (
 // traceTry, when set, is told of each streamed try that caught an error.
 var traceTry func()
 
-// tryBuffer is the builder xsl:try writes its body into, which a failure
-// discards (rollback-output="yes"). It is the one place a try buffers.
-func tryBuffer(rt *runtime) *outputBuilder { return newOutputBuilder(rt) }
+// tryBuffer is in streamtry_out.go.
 
 // tryOp plans el, an xsl:try that consumes its context, focus f.
 func (b *streamBuilder) tryOp(el *xdm.Node, f vfocus) bool {

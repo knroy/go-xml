@@ -78,6 +78,12 @@ type streamOut struct {
 	// the outermost of them (frames[recAt]) on; recAt is -1 when none is.
 	rec   indentRec
 	recAt int
+	// pv holds what is written under an xsl:try's checkpoints, cps of them
+	// open (streamtry_out.go); pvOwed the result nodes written there, handed
+	// back to MaxNodes when it is written out.
+	pv     chunkBuf
+	cps    int
+	pvOwed int64
 }
 
 // indentRec is the buffer an undecided element is written into, and the
@@ -348,8 +354,12 @@ func (o *streamOut) flatten() {
 // without the indents taken out, and ends the recording.
 func (o *streamOut) emit() {
 	s := o.s
-	s.rec, s.w = nil, o.w
+	s.rec, s.w = nil, o.dst()
 	r := &o.rec
+	if o.cps > 0 {
+		// A checkpoint may hold the start of dels: sort a copy.
+		r.dels = slices.Clone(r.dels)
+	}
 	slices.SortFunc(r.dels, func(a, b [2]int) int { return a[0] - b[0] })
 	at, pos, end, d, upTo := 0, 0, 0, 0, 0
 	for i := range r.n {
@@ -368,11 +378,17 @@ func (o *streamOut) emit() {
 		}
 	}
 	r.buf.writeRange(s, at, r.buf.n)
-	r.buf.reset()
-	r.spans, r.n, r.end, r.dels = r.spans[:0], 0, 0, r.dels[:0]
+	owed := r.owed
+	if o.cps > 0 {
+		// A checkpoint may hold the record: start a new one.
+		o.rec = indentRec{}
+	} else {
+		r.buf.reset()
+		r.spans, r.n, r.end, r.dels = r.spans[:0], 0, 0, r.dels[:0]
+		r.owed = 0
+	}
 	o.recAt = -1
-	o.handBack(o.rec.owed)
-	o.rec.owed = 0
+	o.handBack(owed)
 }
 
 // textNode writes c under the text method: its text.
@@ -503,6 +519,8 @@ func (o *streamOut) handBack(k int64) {
 	case k <= 0:
 	case o.recAt >= 0:
 		o.rec.owed += k
+	case o.cps > 0:
+		o.pvOwed += k
 	default:
 		xpathleaf.Refund(o.rt.ctx, k, 0)
 	}
