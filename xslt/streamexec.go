@@ -141,6 +141,9 @@ type streamOp struct {
 	// and key that current-grouping-key() is in scope.
 	group, fromGroup, inGroup, key bool
 	keyAttr                        *xdm.QName // a grouping's key attribute (keyAttribute)
+	// groundPop says a grouping's population is grounded: its select is
+	// read as a select op's, the tree's code groups it (groundedGroup).
+	groundPop bool
 	// avt, for the consuming part of a literal result element's attribute
 	// value template, is that part's expression (avtOp).
 	avt string
@@ -879,7 +882,7 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 				return why
 			}
 			continue
-		case op.group:
+		case op.group && !op.groundPop:
 			if why := x.readyGroup(op, minD, kinds); why != "" {
 				return why
 			}
@@ -1050,7 +1053,7 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 	if op.apply != applyNone {
 		return &burstFeed{instr: instr, run: run, apply: op}
 	}
-	if op.group {
+	if op.group && !op.groundPop {
 		return &burstFeed{instr: instr, run: run, group: op}
 	}
 	g := run.groupAt(op)

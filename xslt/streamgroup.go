@@ -67,6 +67,9 @@ type memberSource interface {
 
 // groupOp plans an xsl:for-each-group whose select consumes, its focus f.
 func (b *streamBuilder) groupOp(el *xdm.Node, f vfocus) bool {
+	if b.groundedSelect(el) {
+		return b.groundedGroup(el, f)
+	}
 	for a := range el.Attrs() {
 		n := a.Name()
 		if n.URI != "" {
@@ -120,6 +123,58 @@ func (b *streamBuilder) groupOp(el *xdm.Node, f vfocus) bool {
 	return true
 }
 
+// groundedSelect reports whether the analysis assessed the select of el, an
+// xsl:for-each-group, as grounded: a population of copies or values
+// (§19.8.4.19's first rule), which the tree's grouping takes whole.
+func (b *streamBuilder) groundedSelect(el *xdm.Node) bool {
+	root := b.pl.root(planSite{el, el.AttrValue("select")})
+	if root == nil {
+		return false
+	}
+	r := b.pl.rec(root)
+	return r != nil && r.known && !r.unverified && r.props.posture == postureGrounded
+}
+
+// groundedGroup plans an xsl:for-each-group whose population is grounded:
+// its select is read off the cursor, and the grouping -- any of its forms,
+// group-by and xsl:sort too -- runs on the tree's code over the items (the
+// design's "group-by over grounded items"), atomic values (noteStreamGroup).
+func (b *streamBuilder) groundedGroup(el *xdm.Node, f vfocus) bool {
+	for a := range el.Attrs() {
+		n := a.Name()
+		switch {
+		case n.URI != "":
+		case n.Local == "collation":
+			// Evaluated in the instruction's focus, the context.
+			if !b.avt(el, a.Value(), f) {
+				return false
+			}
+		case n.Local == "select", n.Local == "group-by", n.Local == "group-adjacent",
+			n.Local == "group-starting-with", n.Local == "group-ending-with", n.Local == "composite":
+			// Of the items: tree code over values and copies.
+		case !streamAttrsOK[n.Local]:
+			return b.refuse("attribute " + n.Local + " of " + elName(el))
+		}
+	}
+	for ch := range el.Children() {
+		if !isXSL(ch, "sort") {
+			continue
+		}
+		// A sort's attribute value templates are evaluated in the
+		// instruction's focus; its key, of each group's items.
+		for a := range ch.Attrs() {
+			if a.Name().URI == "" && a.Name().Local != "select" && !b.avt(ch, a.Value(), f) {
+				return false
+			}
+		}
+	}
+	op := &streamOp{x: b.x, el: el, doc: f == vNone, group: true, groundPop: true, inGroup: b.grp, key: b.key}
+	b.x.ops[el] = op
+	*b.ops = append(*b.ops, op)
+	b.kinds[streamtrace.KindSelect]++
+	return true
+}
+
 // noteStreamGroup records the compiled form of n, an xsl:for-each-group of
 // the plans being compiled, and splits its select.
 func (c *compiler) noteStreamGroup(n *xdm.Node, instr *forEachGroupInstr, ns xpath.NamespaceResolver) {
@@ -128,6 +183,21 @@ func (c *compiler) noteStreamGroup(n *xdm.Node, instr *forEachGroupInstr, ns xpa
 			continue
 		}
 		op.instr, op.sel = instr, instr.sel
+		if op.groundPop {
+			// A select op: the tree groups its value. Of values only: copies
+			// would be grouped as the tree groups its own, but they are in
+			// trees of their own, whose order (current-group()/@a sorts by
+			// it) follows when each tree was first numbered, which differs.
+			if op.split, op.dead = c.splitFor(instr.sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" {
+				continue
+			}
+			if c := op.split.class(); c != "output" && c != "bounded" {
+				op.dead = "grouping population of nodes (" + c + ")"
+				continue
+			}
+			op.x.byInstr[instr] = op
+			continue
+		}
 		if op.dead = groupRefusal(instr); op.dead != "" {
 			continue
 		}

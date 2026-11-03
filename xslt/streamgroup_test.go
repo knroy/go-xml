@@ -102,6 +102,16 @@ var groupBodies = []struct {
 	// Refused by the memory rule: the members collected as grounded
 	// copies (a group may be all of the document element's children).
 	{`<out><xsl:for-each-group select="*/g/t" group-adjacent="@d"><g><xsl:value-of select="string-join(current-group() ! name(), ',')"/></g></xsl:for-each-group></out>`, false},
+	// A grounded population (§19.8.4.19's first rule) of values, grouped by
+	// the tree's code, group-by and xsl:sort too; of copies, refused (their
+	// order across their trees is not the tree's).
+	{`<out><xsl:for-each-group select="/doc/t/@k/string()" group-by="."><xsl:sort select="current-grouping-key()" order="descending"/>` +
+		`<g k="{.}" n="{count(current-group())}" p="{position()}"/></xsl:for-each-group></out>`, true},
+	{`<out><xsl:for-each-group select="/doc/t/@v/number()" group-adjacent=". gt 0"><g n="{current-group()}" k="{current-grouping-key()}"/></xsl:for-each-group></out>`, true},
+	{`<out><xsl:for-each-group select="data(/doc/*/@d)" group-by=". mod 2" collation="http://www.w3.org/2005/xpath-functions/collation/codepoint"><g v="{current-group()}"/></xsl:for-each-group></out>`, true},
+	{`<out><xsl:for-each-group select="/doc/t/copy-of()" group-adjacent="@v idiv 5"><g d="{current-group()/@d}" v="{current-group()/@v}"/></xsl:for-each-group></out>`, false},
+	{`<out><xsl:for-each-group select="copy-of(/doc/t)" group-by="@d"><g n="{count(current-group())}"/></xsl:for-each-group></out>`, false},
+	{`<out><xsl:for-each select="/doc/g"><xsl:for-each-group select="t/copy-of()" group-adjacent="@v idiv 5"><g d="{current-group()/@d}" v="{current-group()/@v}"/></xsl:for-each-group></xsl:for-each></out>`, false},
 	// Refused: group-by, sort, a crawling population, a key a view cannot
 	// decide, current-group() read twice.
 	{`<out><xsl:for-each-group select="/doc/t" group-by="@d"><g/></xsl:for-each-group></out>`, false},

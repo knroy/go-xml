@@ -52,7 +52,9 @@ func (i *forEachGroupInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// Streamed (streamgroup.go): each group as the cursor reaches it.
 		return f.run.group(rt, out, i, f.group)
 	}
-	seq, err := i.sel.Eval(rt.ctx)
+	// A grounded population of a streamed container is read off the cursor
+	// (streamgroup.go, groundedGroup).
+	seq, err := rt.evalSelect(i, i.sel)
 	if err != nil {
 		return err
 	}
