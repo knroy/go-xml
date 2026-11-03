@@ -61,8 +61,11 @@ type Client interface {
 	// when the parse fails first.
 	Later(grounded any) error
 	// Watch is told of every element's start (end false) and end, those
-	// inside a grounded or skipped element too, before Start or End.
-	Watch(el any, d int, end bool)
+	// inside a grounded or skipped element too, before Start or End; and
+	// (end false) of every text, comment and processing instruction once it
+	// is complete, inside such an element too, before the next start or end.
+	// ord is the node's ordinal: its index in a tree-mode parse.
+	Watch(n any, d int, end bool, ord uint64)
 }
 
 // Drive parses r as xdm.Parse does, with opts an xdm.ParseOptions, telling
@@ -98,4 +101,12 @@ type Stripping interface {
 // may be called only while End is telling the client of an element's close.
 type Flushing interface {
 	Flusher(flush func() error)
+}
+
+// Originating is a Client that can tell its own copies: Drive hands it,
+// before the first event, the function that returns the ordinal of n (a
+// *xdm.Node) when n is an element copied out of this very stream -- a view,
+// or a node of a grounded copy -- and false for anything else.
+type Originating interface {
+	Originator(ord func(n any) (uint64, bool))
 }

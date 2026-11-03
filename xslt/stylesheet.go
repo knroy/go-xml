@@ -952,6 +952,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	c.sheet.sortTemplates()
 	c.sheet.buildRuleIndex()
 	c.linkStreams()
+	c.linkStreamAccums()
 	// A global variable overridden by a higher-precedence declaration is not
 	// evaluated at all, so the overridden bindings are dropped before the
 	// stylesheet is handed back.

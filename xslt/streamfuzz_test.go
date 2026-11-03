@@ -495,7 +495,7 @@ func fuzzMakeModes(seed int64) fuzzCase {
 		s.WriteString(fuzzCallDecls)
 	}
 	s.WriteString("</xsl:stylesheet>\n")
-	c := fuzzCase{seed: seed, sheet: s.String(), doc: doc, malform: g.malform, kind: "modes"}
+	c := fuzzCase{seed: seed, sheet: fuzzAccumize(seed, s.String(), g.rec), doc: doc, malform: g.malform, kind: "modes"}
 	if g.p(3) {
 		c.maxNodes = 5 + g.n(60)
 	}
@@ -594,6 +594,9 @@ func fuzzMake(seed int64) fuzzCase {
 	}
 	if fuzzIsTry(seed) {
 		return fuzzMakeTry(seed)
+	}
+	if fuzzIsAccums(seed) {
+		return fuzzMakeAccums(seed)
 	}
 	if fuzzIsModes(seed) {
 		return fuzzMakeModes(seed)
@@ -873,6 +876,12 @@ func TestStreamFuzz(t *testing.T) {
 				tally["streamed: a tee"]++
 			}
 		}
+		if strings.Contains(c.sheet, "<xsl:accumulator ") {
+			tally["accumulator shapes"]++
+			if co.trace.Streamed() > 0 {
+				tally["streamed: accumulator shapes"]++
+			}
+		}
 		if c.kind == "modes" {
 			tally["mode shapes"]++
 			if co.trace.Streamed() > 0 {
@@ -973,6 +982,9 @@ func TestStreamFuzzMain(t *testing.T) {
 			tally["streamed: with a try rule"]++
 		}
 		tally["cases"]++
+		if ct.Runs[streamtrace.Main] > 0 && strings.Contains(c.sheet, "<xsl:accumulator ") {
+			tally["streamed: with accumulators"]++
+		}
 		if ct.Runs[streamtrace.Main] > 0 && strings.Contains(c.sheet, "for-each-group") {
 			tally["streamed: with a grouping rule"]++
 		}

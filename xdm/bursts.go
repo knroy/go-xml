@@ -71,8 +71,13 @@ type burster struct {
 	// element is dropped as it is parsed (xdmburst.Stripping).
 	strip func(el *Node) bool
 	// watch, when set, is told of every element's start and end, those
-	// inside a burst or a dropped element too.
+	// inside a burst or a dropped element too, and (end false) of every
+	// text, comment and processing instruction, once complete, before the
+	// next start or end it is told of. Only the stream driver sets it.
 	watch func(el *Node, d int, end bool)
+	// watched is the record of the last leaf watch was told of inside the
+	// element being built whole (drop).
+	watched uint32
 	// spine is how many levels of the open chain could lead to a match and
 	// are kept.
 	spine int
@@ -209,6 +214,7 @@ func (b *burster) start(el *Node, d int) error {
 	switch act {
 	case xdmburst.Ground, xdmburst.GroundLater:
 		b.drop, b.burst, b.later = d, true, act == xdmburst.GroundLater
+		b.watched = el.self
 	case xdmburst.Keep:
 		b.keep(el, d)
 	case xdmburst.Discard:
@@ -216,6 +222,7 @@ func (b *burster) start(el *Node, d int) error {
 		b.keep(el, d)
 	default:
 		b.drop = d
+		b.watched = el.self
 	}
 	return nil
 }
@@ -308,6 +315,29 @@ func (b *burster) end(el *Node, d int, spaces *spaceTable, names *nameCache) err
 // cur's mark is all garbage now, and once a child of cur opens it cannot be
 // taken back until cur closes, so it is not let grow past burstFrozen.
 func (b *burster) trimLeaves(cur *Node, d int, spaces *spaceTable, names *nameCache) error {
+	if b.watch != nil && (b.drop != 0 || b.quiet != 0 && d == b.spine) {
+		// Inside an element built whole or discarded the client is told
+		// nothing, the watch is: of the leaves completed at the end of
+		// cur's children since it was last told, which in a discarded
+		// element are all of them (they are taken back below), and in one
+		// built whole those past the last told (watched: records there are
+		// not reused before it closes).
+		first := cur.LastChild()
+		if first == nil || !first.isLeaf() || b.drop != 0 && first.self <= b.watched {
+			first = nil
+		}
+		for first != nil {
+			p := first.PrevSibling()
+			if p == nil || !p.isLeaf() || b.drop != 0 && p.self <= b.watched {
+				break
+			}
+			first = p
+		}
+		for n := first; n != nil; n = n.NextSibling() {
+			b.watch(n, d+1, false)
+			b.watched = n.self
+		}
+	}
 	if b.drop != 0 || d != b.spine || d == 0 && (!b.leaves || len(b.marks) == 0) {
 		return nil
 	}
@@ -339,6 +369,9 @@ func (b *burster) tellLeaves(cur *Node, d int) error {
 		first = p
 	}
 	for n := first; n != nil; n = n.NextSibling() {
+		if b.watch != nil {
+			b.watch(n, d+1, false)
+		}
 		if err := b.c.leaf(n, d+1); err != nil {
 			return err
 		}

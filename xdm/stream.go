@@ -25,9 +25,33 @@ func driver(c xdmburst.Client) *burster {
 		c:      &driveClient{c},
 		fn:     func(n *Node) error { return c.Later(n) },
 		leaves: true,
-		watch:  func(el *Node, d int, end bool) { c.Watch(el, d, end) },
 		gens:   []uint64{0},
 		ords:   []uint64{0},
+	}
+	// An element's ordinal is taken at its start: records under it may be
+	// taken back before its end, which shifts what ordOf would say then.
+	var open []uint64
+	b.watch = func(n *Node, d int, end bool) {
+		switch {
+		case end:
+			c.Watch(n, d, true, open[d])
+		case n.Kind() == KindElement:
+			open = append(open[:min(d, len(open))], make([]uint64, d+1-min(d, len(open)))...)
+			open[d] = b.ordOf(n)
+			c.Watch(n, d, false, open[d])
+		default:
+			c.Watch(n, d, false, b.ordOf(n))
+		}
+	}
+	if o, ok := c.(xdmburst.Originating); ok {
+		o.Originator(func(n any) (uint64, bool) {
+			x := n.(*Node)
+			if x.flags&fOrigin == 0 || x.flags&fSide != 0 || x.Kind() != KindElement ||
+				b.origin == nil || x.origin().s != b.origin {
+				return 0, false
+			}
+			return x.originKey() >> 16, true
+		})
 	}
 	if v, ok := c.(xdmburst.Viewing); ok {
 		v.Viewer(func() any {

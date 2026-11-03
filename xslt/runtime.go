@@ -244,6 +244,10 @@ type transformState struct {
 	// from being read over.
 	streamedTrees map[*xdm.Node]bool
 
+	// streamAccums are the accumulator observers of the streamed runs in
+	// progress, innermost last (streamaccum.go).
+	streamAccums []*streamAccums
+
 	// maxDepth is the ceiling depth may reach, from TransformOptions.
 	maxDepth int
 

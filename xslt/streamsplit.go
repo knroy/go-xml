@@ -1011,7 +1011,24 @@ const (
 // document through one (C6: a copy of a text node stands in for it). With
 // key, current-grouping-key() is admitted: it is a value the focus has, in
 // the body of a streamed xsl:for-each-group (streamgroup.go).
-type viewCheck struct{ kids, pos, noIdent, key bool }
+//
+// For accumulators (streamaccum.go): with acc, accumulator-before of a
+// named accumulator is admitted on an element's view or the document node,
+// which the run's observer answers, and with after accumulator-after (the
+// focus read to its end first, or read by the call); with up, a leaf has its
+// parent (a live node of the parse, not a copy), so upward steps from it
+// are admitted, to an element as from a view; with curOK, current() is
+// admitted as a node of kind cur (an accumulator rule's matched node).
+type viewCheck struct {
+	kids, pos, noIdent, key bool
+	acc, after, up, curOK   bool
+	cur                     vfocus
+	// lookup admits $value(k): a lookup in an accumulator's value, a map or
+	// an array by its declared type, which atomizes k.
+	lookup bool
+	// accum says the expression is an accumulator rule's (streamaccum.go).
+	accum bool
+}
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
 // nodes e returns are not atomized by what holds e.
@@ -1055,6 +1072,8 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		return vc.safe(x.Left, f, false) && vc.safe(x.Right, f, false)
 	case *xpath.UnaryOp:
 		return vc.safe(x.Operand, f, false)
+	case *xpath.StringConcat:
+		return vc.safe(x.Left, f, false) && vc.safe(x.Right, f, false)
 	case *xpath.CastExpr:
 		return vc.safe(x.Operand, f, false)
 	case *xpath.InstanceOfExpr:
@@ -1089,7 +1108,9 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		// A map or function a variable holds ("$m('k')"): a variable holds
 		// no node of the stream (§19.8.4.41), so it reads what its arguments
 		// read.
-		if _, ok := x.Target.(*xpath.VarRef); !ok {
+		// In an accumulator rule, $value only when it is a map or array.
+		if _, ok := x.Target.(*xpath.VarRef); !ok ||
+			vc.accum && !vc.lookup && isVarRef(x.Target, xdm.QName{Local: "value"}) {
 			return false
 		}
 		for _, a := range x.Args {
@@ -1128,22 +1149,30 @@ func (vc viewCheck) bound(bs []xpath.Binding, f vfocus) bool {
 // atomized (nodeOK).
 func (vc viewCheck) path(steps []xpath.Expr, f vfocus, nodeOK bool) bool {
 	cur := f
-	for _, s := range steps {
+	for i, s := range steps {
 		st, ok := s.(*xpath.Step)
 		if !ok {
+			if i == 0 && vc.curOK && isCurrentCall(s) {
+				cur = vc.cur
+				continue
+			}
 			if !vc.safe(s, cur, nodeOK) {
 				return false
 			}
 			cur = vLeaf // its items: values, or nodes it returned
 			continue
 		}
-		if cur == vNone || cur == vLeaf && st.Axis != xpath.AxisSelf {
+		up := st.Axis == xpath.AxisParent || st.Axis == xpath.AxisAncestor || st.Axis == xpath.AxisAncestorOrSelf
+		if cur == vNone || cur == vLeaf && st.Axis != xpath.AxisSelf && !(vc.up && up) {
 			return false
 		}
 		switch st.Axis {
 		case xpath.AxisAttribute, xpath.AxisNamespace:
 			cur = vLeaf
 		case xpath.AxisParent, xpath.AxisAncestor, xpath.AxisAncestorOrSelf, xpath.AxisSelf:
+			if up {
+				cur = vElem // a live leaf's ancestors (up), read as views
+			}
 		default:
 			return false
 		}
@@ -1193,6 +1222,13 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		if n == "position" && vc.pos && len(x.Args) == 0 || n == "current-grouping-key" && vc.key && len(x.Args) == 0 {
 			return true
 		}
+		if n == "current" && vc.curOK && len(x.Args) == 0 {
+			return vc.cur == vLeaf || vc.cur == vElem && nodeOK
+		}
+		if (n == "accumulator-before" && vc.acc || n == "accumulator-after" && vc.after) && len(x.Args) == 1 {
+			lit, ok := x.Args[0].(*xpath.Literal)
+			return ok && lit.Val != nil && (f == vElem || f == vNone)
+		}
 		if (n == "copy-of" || n == "snapshot") && len(x.Args) == 1 && focusFree(x.Args[0]) {
 			return true // a copy of a variable's value: nothing of the focus
 		}
@@ -1226,6 +1262,12 @@ var identFns = map[string]bool{"generate-id": true, "path": true, "root": true, 
 	"document-uri": true, "lang": true, "has-children": true, "id": true, "idref": true,
 	"element-with-id": true, "in-scope-prefixes": true, "namespace-uri-for-prefix": true,
 	"unparsed-entity-uri": true, "unparsed-entity-public-id": true, "deep-equal": true}
+
+// isCurrentCall reports whether e is a call on fn:current().
+func isCurrentCall(e xpath.Expr) bool {
+	x, ok := e.(*xpath.FuncCall)
+	return ok && x.Name.URI == fnNS && x.Name.Local == "current" && len(x.Args) == 0
+}
 
 func isContextItem(e xpath.Expr) bool {
 	_, ok := e.(*xpath.ContextItem)

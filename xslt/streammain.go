@@ -75,6 +75,9 @@ func (c *compiler) planMainStreams() {
 	for _, m := range slices.Sorted(maps.Keys(rs.modes)) {
 		w := why
 		if w == "" {
+			w = s.mainAccumRefusal(m)
+		}
+		if w == "" {
 			w = s.linkMain(m, rs)
 		}
 		if w == "" {
@@ -95,8 +98,6 @@ func (s *Stylesheet) mainRefusal() string {
 	switch {
 	case s.globalContextItem != nil:
 		return "xsl:global-context-item"
-	case len(s.accumulators) > 0:
-		return "an accumulator"
 	case s.stripTypeAnnotations:
 		return "input-type-annotations"
 	}
@@ -163,6 +164,7 @@ func (s *Stylesheet) streamsMain(opts TransformOptions) bool {
 type mainInput struct {
 	c    *xdmstream.Cursor
 	root *xdm.Node
+	acc  *streamAccums // its accumulators (streamaccum.go)
 }
 
 // transformStream is TransformReader streaming r.
@@ -184,6 +186,9 @@ func (s *Stylesheet) transformStream(ctx context.Context, r io.Reader, opts Tran
 	if ctx == nil || ctx.Err() == nil {
 		if perr := main.drain(); perr != nil {
 			return nil, perr
+		}
+		if aerr := main.acc.pending(); aerr != nil {
+			return nil, aerr
 		}
 	}
 	return nil, err
@@ -232,6 +237,9 @@ func (m *mainInput) run(rt *runtime, mode string, params, tunnels paramValues, o
 	x := newStreamExec()
 	x.class = classDoc
 	run := &streamRun{x: x, c: m.c, root: m.root, held: out}
+	noteInitialAccumulators(rt, mode, m.root)
+	m.acc = run.observeAccums(rt, rt.treeAccums[m.root], false)
+	defer m.acc.stop()
 	sub := *rt
 	sub.bursts = &burstFeed{run: run}
 	if err := run.dispatch(&sub, m.root, mode, params, tunnels, out); err != nil {
@@ -240,7 +248,10 @@ func (m *mainInput) run(rt *runtime, mode string, params, tunnels paramValues, o
 	if run.kept || keepsStreamNode(out.Sequence()) {
 		return errMainKept
 	}
-	return m.drain()
+	if err := m.drain(); err != nil {
+		return err
+	}
+	return m.acc.pending()
 }
 
 // isStreamDefect reports whether err is a fault of the plans, not an error
