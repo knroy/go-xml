@@ -126,7 +126,7 @@ func (i *resultDocumentInstr) stream(rt *runtime, href, resolved string, setting
 	if so.hold > 0 || rt.inTry || !i.validation.isDefault() || !settings.buildsTree() ||
 		settings.ItemSeparator != nil || so.opened[key] || (*rt.resultHrefs)[href] ||
 		resolved != "" && (rt.writtenDocs != nil && (*rt.writtenDocs)[resolved] ||
-			rt.readDocs != nil && (*rt.readDocs)[resolved]) {
+			rt.readDocs != nil && hasDoc(*rt.readDocs, resolved)) {
 		return false, nil
 	}
 	cm, err := rt.sheet.flattenCharacterMaps(i.pkg, settings.UseCharacterMaps)

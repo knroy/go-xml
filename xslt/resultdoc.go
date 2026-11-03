@@ -367,7 +367,7 @@ func checkResultURI(rt *runtime, href, resolvedHref string) error {
 func recordResultURI(rt *runtime, href, resolvedHref string) {
 	(*rt.resultHrefs)[href] = true
 	if resolvedHref != "" {
-		(*rt.writtenDocs)[resolvedHref] = true
+		addDoc(*rt.writtenDocs, resolvedHref) // readdocs.go
 	}
 }
 

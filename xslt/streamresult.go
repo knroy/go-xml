@@ -90,7 +90,7 @@ func (rt *runtime) secondaryMark() func() {
 		for _, s := range (*rt.secondary)[n:] {
 			delete(*rt.resultHrefs, s.Href)
 			if rt.writtenDocs != nil && s.BaseURI != "" {
-				delete(*rt.writtenDocs, s.BaseURI)
+				delDoc(*rt.writtenDocs, s.BaseURI)
 			}
 		}
 		*rt.secondary = (*rt.secondary)[:n]

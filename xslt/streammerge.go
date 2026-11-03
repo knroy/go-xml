@@ -481,11 +481,11 @@ func mergeDocOf(rt *runtime, href, base string, unread *[]func(), spec validatio
 		return nil, errMergeTree
 	}
 	if rd != nil && docURI != "" {
-		if !rd.read[docURI] {
-			*unread = append(*unread, func() { delete(rd.read, docURI) })
+		if !hasDoc(rd.read, docURI) {
+			*unread = append(*unread, func() { delDoc(rd.read, docURI) })
 		}
-		rd.read[docURI] = true
-		if rd.written[docURI] {
+		addDoc(rd.read, docURI)
+		if hasDoc(rd.written, docURI) {
 			return nil, fmt.Errorf(
 				"XTDE1500: this transformation reads %q, which xsl:result-document "+
 					"has already written", docURI)
