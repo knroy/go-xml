@@ -931,6 +931,15 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		// is callable.
 		return a.combine([]operand{a.operandOf(x.Args[0], usageAbsorption)}, false)
 	}
+	if us, ok := nsBuiltinOperandUsages(x.Name.URI, x.Name.Local, len(x.Args)); ok {
+		// The map:, array: and math: rows of §19.8.9's table, under the
+		// general rules.
+		ops := make([]operand, len(x.Args))
+		for i, arg := range x.Args {
+			ops[i] = a.operandOf(arg, us[i])
+		}
+		return a.combine(ops, false)
+	}
 	if x.Name.URI != fnNS {
 		// A stylesheet function is assessed under §19.8.5 (streamfunctions.go).
 		// An extension function, or a stylesheet function this analysis did
@@ -1360,6 +1369,51 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 		}
 	}
 	return nil, false
+}
+
+// nsBuiltinOperandUsages is §19.8.9's proforma for the functions in the
+// map, array and math namespaces, by name and arity.
+func nsBuiltinOperandUsages(uri, name string, arity int) ([]usage, bool) {
+	const (
+		A = usageAbsorption
+		I = usageInspection
+		N = usageNavigation
+	)
+	var table map[string]map[int][]usage
+	switch uri {
+	case xdm.NSMap:
+		table = map[string]map[int][]usage{
+			"contains": {2: {I, A}}, "entry": {2: {A, N}}, "find": {2: {I, A}},
+			"for-each": {2: {I, I}}, "get": {2: {I, A}}, "keys": {1: {I}},
+			"merge": {1: {I}, 2: {I, I}}, "put": {3: {I, A, N}},
+			"remove": {2: {I, A}}, "size": {1: {I}},
+		}
+	case xdm.NSArray:
+		table = map[string]map[int][]usage{
+			"append": {2: {I, N}}, "filter": {2: {I, I}}, "flatten": {1: {A}},
+			"fold-left": {3: {I, N, I}}, "fold-right": {3: {I, N, I}},
+			"for-each": {2: {I, I}}, "for-each-pair": {3: {I, I, I}},
+			"get": {2: {I, A}}, "head": {1: {I}}, "insert-before": {3: {I, A, N}},
+			"join": {1: {I}}, "put": {3: {I, I, N}}, "remove": {2: {I, A}},
+			"reverse": {1: {I}}, "size": {1: {I}},
+			"sort":     {1: {I}, 2: {I, A}, 3: {I, A, I}},
+			"subarray": {2: {I, A}, 3: {I, A, A}}, "tail": {1: {I}},
+		}
+	case xdm.NSMath:
+		if name == "pi" {
+			return nil, arity == 0
+		}
+		table = map[string]map[int][]usage{
+			"atan2": {2: {A, A}}, "pow": {2: {A, A}},
+		}
+		for _, f := range []string{"acos", "asin", "atan", "cos", "exp", "exp10", "log", "log10", "sin", "sqrt", "tan"} {
+			table[f] = map[int][]usage{1: {A}}
+		}
+	default:
+		return nil, false
+	}
+	us, ok := table[name][arity]
+	return us, ok
 }
 
 func contains(xs []int, x int) bool {
