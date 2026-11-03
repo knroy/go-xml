@@ -248,6 +248,9 @@ func (a *analyzer) exprRule(e xpath.Expr) props {
 	case *xpath.BinaryOp:
 		return a.binary(x)
 
+	case *xpath.StringConcat:
+		return a.stringConcat(x)
+
 	case *xpath.LookupExpr:
 		// §19.8.8.18: E?K -- E inspection, a parenthesised K absorption;
 		// unary ?K is .?K.
@@ -467,6 +470,37 @@ func (a *analyzer) binary(x *xpath.BinaryOp) props {
 		// "!" has its own rule in §19.8.8.7.
 		return a.unknown()
 	}
+}
+
+// stringConcat applies §19.8.8's operand-usage table to "A || B"
+// (StringConcatExpr: "A || A"): the general rules, both operands absorbed.
+// si-fork-902's TITLE||PRICE and si-fork-952's current-group()/(AUTHOR||TITLE)
+// are two consuming operands, so roaming and free-ranging.
+//
+// One verdict is withheld: a consuming, not free-ranging, "||" in a crawling
+// focus or over a crawling operand. Its only refusal would come from an
+// enclosing rule meeting that crawling focus,
+// and in the corpus that focus comes from §19.8.8.4 widening two striding
+// operands to crawling, which sx-union-C contradicts in 18 cases asserting
+// output (".+1 || ' '" in a for-each over PRICE union QUANTITY). Withholding
+// is the old answer for every "||"; see docs/conformance-gaps.md, "The ||
+// operator".
+func (a *analyzer) stringConcat(x *xpath.StringConcat) props {
+	ops := []operand{
+		a.operandOf(x.Left, usageAbsorption),
+		a.operandOf(x.Right, usageAbsorption),
+	}
+	p := a.combine(ops, false)
+	if p.streamable() && p.sweep != sweepMotionless {
+		crawls := a.ctxPosture == postureCrawling
+		for _, o := range ops {
+			crawls = crawls || o.props.posture == postureCrawling
+		}
+		if crawls {
+			return a.unknown()
+		}
+	}
+	return p
 }
 
 // filter applies §19.8.8.10 to a filter expression.

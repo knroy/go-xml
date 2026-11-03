@@ -253,10 +253,15 @@ func TestStreamabilityRaisesOnReorderingAxis(t *testing.T) {
 }
 
 func TestStreamabilityRaisesOnTwoConsumingOperands(t *testing.T) {
-	err := compileSrc(t, stylesheetWith(
-		`<xsl:value-of select="price - discount"/>`))
-	if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
-		t.Fatalf("two consuming operands should be XTSE3430, got: %v", err)
+	for _, b := range []string{
+		`<xsl:value-of select="price - discount"/>`,
+		// §19.8.8's table gives "||" two absorbed operands: si-fork-902.
+		`<xsl:for-each select="ITEM"><xsl:sequence select="TITLE || PRICE"/></xsl:for-each>`,
+	} {
+		err := compileSrc(t, stylesheetWith(b))
+		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
+			t.Errorf("%s: two consuming operands should be XTSE3430, got: %v", b, err)
+		}
 	}
 }
 
@@ -289,6 +294,10 @@ func TestStreamabilityAcceptsStreamableConstructs(t *testing.T) {
 		// is grounded". The streamed-operand half is asserted in
 		// TestNavigationFromStreamedArgumentIsNotStreamable.
 		`<xsl:sequence select="reverse((1, 2, 3))"/>`,
+		// "||" with one consuming operand, and sx-union-315's shape, which
+		// stringConcat withholds (a crawling focus from a union).
+		`<xsl:value-of select="@a || TITLE"/>`,
+		`<xsl:for-each select="(ITEM/PRICE union ITEM/QUANTITY)"><xsl:value-of select=".+1 || ' '"/></xsl:for-each>`,
 	}
 	for _, b := range bodies {
 		if err := compileSrc(t, stylesheetWith(b)); err != nil &&
