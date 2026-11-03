@@ -24,6 +24,7 @@ const callDecls = `<xsl:variable name="g" select="'k'"/>
 <xsl:function name="p:rec" as="xs:integer" streamability="inspection"><xsl:param name="e" as="node()"/><xsl:sequence select="if ($e/.. instance of document-node()) then 1 else p:rec($e/..) + 1"/></xsl:function>
 <xsl:function name="p:glob" as="xs:boolean" streamability="inspection"><xsl:param name="e" as="node()"/><xsl:sequence select="exists($e/@*[name() = $g])"/></xsl:function>
 <xsl:function name="p:cached" as="xs:integer" streamability="inspection" cache="yes"><xsl:param name="e" as="node()"/><xsl:sequence select="count($e/ancestor::*)"/></xsl:function>
+<xsl:function name="p:wrong" as="xs:string" streamability="inspection"><xsl:param name="e" as="node()"/><xsl:sequence select="count($e/ancestor::*)"/></xsl:function>
 <xsl:function name="p:sum" as="xs:double" streamability="unclassified"><xsl:param name="in" as="xs:double*"/><xsl:sequence select="sum($in)"/></xsl:function>`
 
 // callBodies are container bodies calling them; stream says the core must
@@ -52,6 +53,7 @@ var callBodies = []struct {
 	// path, a node result kept.
 	{`<o><xsl:value-of select="/doc/rec ! p:num(.)"/></o>`, false},
 	{`<o><xsl:value-of select="/doc/rec ! p:rec(.)"/></o>`, false},
+	{`<o><xsl:value-of select="/doc/rec ! p:wrong(.)"/></o>`, false},
 	{`<o><xsl:value-of select="/doc/rec ! p:glob(.)"/></o>`, false},
 	{`<o><xsl:value-of select="/doc/rec ! p:cached(.)"/></o>`, false},
 	{`<o><xsl:value-of select="p:sum(/doc/rec/@v)"/></o>`, false},
