@@ -217,6 +217,11 @@ func (run *streamRun) fork(rt *runtime, op *streamOp, body []Instruction, out *o
 			errs[k] = body[k].Execute(rt, outs[k])
 		}
 	}
+	if fusable(op, cons, run.c) {
+		// The reading prongs are folds: one walk reads for all (streamfuse.go).
+		run.kept = run.forkFused(rt, op, body, cons, outs, errs) || run.kept
+		return forkOut(body, outs, errs, out)
+	}
 	// What a prong binds is set aside between its turns, above mark, and
 	// so is the base of the frame it is in.
 	st := rt.localStack()
@@ -267,6 +272,12 @@ func (run *streamRun) fork(rt *runtime, op *streamOp, body []Instruction, out *o
 	for j, k := range cons {
 		errs[k] = cerrs[j]
 	}
+	return forkOut(body, outs, errs, out)
+}
+
+// forkOut ends a fork: the first prong's error in prong order, or what the
+// prongs wrote, appended to out in prong order.
+func forkOut(body []Instruction, outs []*outputBuilder, errs []error, out *outputBuilder) error {
 	for k := range body {
 		if errs[k] != nil {
 			return errs[k]

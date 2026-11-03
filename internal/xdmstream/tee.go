@@ -32,7 +32,7 @@ import (
 // anything has been read from c; c is spent afterwards.
 func (c *Cursor) Tee(n int, run func(k int, sub *Cursor) error, swap func(k int, in bool)) []error {
 	errs := make([]error, n)
-	if c.resumes > 0 || c.peeked != nil || c.peekErr != nil || c.teed || len(c.obs) > 0 {
+	if !c.Fresh() {
 		for k := range errs {
 			errs[k] = errTeeRead
 		}
@@ -85,6 +85,12 @@ func (c *Cursor) Tee(n int, run func(k int, sub *Cursor) error, swap func(k int,
 		}
 	}
 	return errs
+}
+
+// Fresh reports whether c can still be teed: nothing has been read from it
+// and it has no observers.
+func (c *Cursor) Fresh() bool {
+	return c.resumes == 0 && c.peeked == nil && c.peekErr == nil && !c.teed && len(c.obs) == 0
 }
 
 // errTeeRead is Tee's error for a cursor that has been read from, or has
