@@ -1548,6 +1548,13 @@ func (a *analyzer) allowsChildren(e xpath.Expr) bool {
 			return a.allowsChildren(x.Left) || a.allowsChildren(x.Right)
 		}
 		return true
+	case *xpath.SimpleMap:
+		// What "a ! b" returns is what b returns, with a's items as its
+		// context item (§19.8.8.7): "$input ! @name" delivers attributes
+		// (su-absorbing-204's AVT).
+		in := *a
+		in.ctxAllowsChildren = a.allowsChildren(x.Left)
+		return in.allowsChildren(x.Right)
 	default:
 		return true
 	}
