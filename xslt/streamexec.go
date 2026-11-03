@@ -1373,6 +1373,7 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		if strip != nil {
 			c.StripWhitespace(strip)
 		}
+		c.Handoff(func() func() { return xpathleaf.LockYield(rt.evalLock) }) // streamfork.go
 		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread, root: xdm.NewTree().Root, held: held}
 		defer func() { *kept = run.kept }()
 		acc := run.observeAccums(rt, i.accums, true)

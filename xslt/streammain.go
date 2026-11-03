@@ -49,6 +49,7 @@ import (
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -232,6 +233,7 @@ func (m *mainInput) run(rt *runtime, mode string, params, tunnels paramValues, o
 			err = fmt.Errorf("streaming: internal error: %w", err)
 		}
 	}()
+	m.c.Handoff(func() func() { return xpathleaf.LockYield(rt.evalLock) }) // streamfork.go
 	streamtrace.Run(streamtrace.Main)
 	streamtrace.Node(streamtrace.KindApply, 1)
 	x := newStreamExec()
