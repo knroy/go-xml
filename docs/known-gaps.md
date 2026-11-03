@@ -312,10 +312,47 @@ result. A nested `fn:transform` does not inherit it. Under `indent="yes"` an
 element whose content may be indented is held as its serialized bytes (its
 indents recorded, about 1× the output rather than a tree's 4–9×) until its end
 or a text child decides, by the serializer's rule, whether it is indented: an
-indented document is still written only at its end. `xsl:result-document`
-streams in a container, but each secondary result is built in memory and
-returned in `Result.Secondary`, as in tree mode: there is no API that writes a
-secondary result as it is produced.
+indented document is still written only at its end.
+
+An `xsl:try` under `Output` writes each item its body completes provisionally:
+the sink and serializer take a checkpoint and the bytes go to a chunked buffer
+(about 1× the try's output), committed when the try succeeds and rolled back
+when it catches an error. With `rollback-output="no"` and a catch for every
+error the output is written through, and XTDE3530 is raised exactly when the
+tree raises it (the body produced an item). A try's output is still held to its
+end when the try is the first output of a result whose method its first
+element decides, when text precedes it in its element, when its element is
+held (below) or is a document node's content, when its body starts with an
+attribute, namespace or function item, with `rollback-output="no"` and catches
+narrower than every error, and, as a tree, while its body's one top-level item
+is being built: a try around one large element holds that element, as the tree
+does. A consuming try in the streamed core still needs `rollback-output="yes"`.
+
+`TransformOptions.SecondaryOutput` serializes each `xsl:result-document` to the
+writer the caller returns for its absolute URI, as it is made (the principal
+result's sink, per result), closes it at its end, and keeps nothing in
+`Result.Secondary`. A result is held, then written once final, inside an
+`xsl:try` body (written when it completes), inside a streamed
+`xsl:source-document` or `xsl:merge` (when that ends: a re-run must be able to
+take it back), when its URI was already produced, read or is open, and when its
+settings need all of it (validation or type, `build-tree="no"`,
+`item-separator`, and `Output`'s own fallbacks). `MaxNodes` counts what a
+secondary result holds, as under `Output`. Without the option, secondary
+results are built in memory and returned in `Result.Secondary`, as in tree
+mode.
+
+A validated input streams: `validation`/`type` on `xsl:source-document`, a
+merge source with validation, and a principal input with
+`TransformOptions.SourceValidation`. The schema validator runs on the cursor's
+events and types the records it reads as the tree's typed copy types its nodes
+(defaults appended, ignorable whitespace dropped where the typed copy drops
+it); an invalid document re-runs a container on the tree for the tree's error,
+and gives a principal input XTTE1510 (lax XTTE1515) with the same text on both
+paths. An element with an assertion is held as the subtree the assertion reads.
+Refused per schema, and run on the tree: identity constraints
+(`xs:key`/`xs:unique`/`xs:keyref`), element default or fixed values, open
+content, a defaulted attribute in a namespace; and a document whose prolog may
+hold a DOCTYPE.
 
 Figures for the core, on this machine:
 - a 1 GB file totalled by `xsl:iterate`: 26 MB RSS against the tree's
@@ -376,7 +413,19 @@ Figures for the core, on this machine:
   2.23 s and 2.8 MB against 1.61 s and 860 MB;
 - an indented identity under `Output` over 100 MB: 4.84 s and 209 MB peak
   (the held bytes) against the tree's 3.01 s and 1,029 MB, where the held
-  tree took 535 MB.
+  tree took 535 MB;
+- an `xsl:try` around a record loop over 100 MB under `Output`: 40.7 MB heap
+  (the provisional bytes) against 430 MB when the try was held as a tree and
+  the tree's 1,310 MB;
+- splitting a document per group with `SecondaryOutput` through
+  `TransformReader`: 100 MB into 717 files in 2.67 s and 2.5 MB heap against
+  the tree's 2.50 s and 815 MB (525 MB with the results held); 1 GB into 7,018
+  files in 26.1 s and 5.6 MB;
+- a validated 100 MB document summed, `validation="strict"` on
+  `xsl:source-document`: 6.25 s and 147 MB against the tree's 9.24 s and
+  4,195 MB (the tree makes a typed copy of the whole document); a validated
+  principal input through `TransformReader`: 6.00 s and 151 MB against
+  10.43 s and 4,001 MB.
 
 CPU against the tree since the cursor parses without a coroutine, at 100 MB
 on a loaded machine: `count` 1.1×, `count(//e)` 1.14×, group-adjacent
@@ -415,7 +464,8 @@ stream may raise it later); a dynamic call `$v(...)` unless `$v` is provably a
 map or an array; a consuming `xsl:variable` (one holding `copy-of(.)` of the
 document, say), several consuming map entries or two consumers in a rule body;
 `xml-to-json(.)` of the document node (it grounds the whole document); an
-`xsl:merge` source with `use-accumulators`, validation or `sort-before-merge`,
+`xsl:merge` source with `use-accumulators` or `sort-before-merge`, a path merge
+key on a validated source,
 a select that is not child steps, keys of different types at one position
 across sources, a collected source after a streamed one, or an action that
 mentions `last()` or `trace()`, holds `xsl:message`, `xsl:assert` or
@@ -432,27 +482,23 @@ expects exactly that refusal and Saxon-EE gives it. The two-instruction form,
 and streams. `sx-union-315`, whose same-depth union the catalog expects to be
 accepted, runs on the tree.
 
-**Not built**, so these run as the tree runs them: streaming the output of
-`xsl:try` (its body's output is buffered, whatever `rollback-output` says);
-`rollback-output="no"` streaming its body; secondary results written as they
-are produced; input-side validation (`validation`/`type` on
-`xsl:source-document`, a merge source, or a principal input).
-
-Of the 2,823 W3C cases that ask for streaming, 2,124 stream and 149 are
-correctly refused or decided statically; about 550 still run on the tree, 62
-of them for input-side validation. The rest are the refusals above: chiefly
+Of the 2,823 W3C cases that ask for streaming, 2,180 stream and 149 are
+correctly refused or decided statically; about 494 still run on the tree, for
+the refusals above (the validated cases left among them are refused for
+another shape, as they would be unvalidated): chiefly
 consuming variables and two consumers of one context, apply-templates and
 grouping populations that are not windows of a bare path, accumulators that
 read accumulators or values on copies, user functions beyond one-level
 inlining, a fork at an element, and merges the list names.
 
-In the W3C XSLT 3.0 run 2,124 cases stream (9 before the second burst shape,
+In the W3C XSLT 3.0 run 2,180 cases stream (9 before the second burst shape,
 364 before `//` record paths, 450 before the core, 576 before streamable
 modes, 606 before `TransformReader`, 629 before grouping, 707 before `xsl:try` and functions,
 877 before accumulators, fork, merge and streamed output, 922 before the
-§19.8 analysis was completed, 1,009 before the gap lanes): core 2,049 runs,
-main 61, merge 26; 66 fall back and 115 re-run on the tree. 61 cases with a
-streamed principal input stream (39 before the gap lanes); the rest need
+§19.8 analysis was completed, 1,009 before the gap lanes, 2,124 before
+validated inputs): core 2,091 runs, main 75, merge 26; 66 fall back and 120
+re-run on the tree. 75 cases with a streamed principal input stream (39 before
+the gap lanes); the rest need
 constructs still refused above, or their mode is not verified.
 Also:
 
@@ -466,9 +512,9 @@ Also:
   `indent="yes"` (the html and xhtml default) an element at the top whose
   content is indented, so an indented document with no text in its document
   element is held whole, as its bytes (above); html `head` and `meta`;
-  elements with `inherit-namespaces="no"` or validation; anything under
-  `xsl:try` (both `rollback-output` values buffer); a variable's or
-  function's content; secondary results. A namespace node added to an element
+  elements with `inherit-namespaces="no"` or validation; a try's output in
+  the cases listed above; a variable's or function's content; secondary
+  results without `SecondaryOutput`. A namespace node added to an element
   after its content raises XTDE0410 (§5.7.1) under `Output`, where the tree
   builder admits it and `Result.Serialize` succeeds: the start tag is already
   written. Temporary work per record is not
@@ -486,16 +532,24 @@ Also:
   in the tree's order. The cost is a second read of the document, and the
   1 GiB string budget charges the strings both attempts built. Under
   `xsl:try rollback-output="no"`, output already written can turn a caught
-  error into `XTDE3530` where the tree fails before writing; no case shows it.
+  error into `XTDE3530` where the tree fails before writing; no case shows it
+  (a consuming try with `rollback-output="no"` is refused, so it runs on the
+  tree; under `Output` the try's own XTDE3530 is the tree's).
   A container whose result is a sequence that would hold a node of the stream
   at its top runs on the tree, as the tree keeps the source's own nodes there.
+  A built-in rule's copy of a text, comment or PI node at the top of an
+  `xsl:result-document` body is a new node, in a container and under
+  `TransformReader`: `SecondaryResult.Nodes` holds the copy where the tree
+  holds the source's node (the bytes are the same).
   Differential fuzzers (`TestStreamFuzz` with a grammar per stage and lane,
   `TestStreamFuzzMain`, `TestStreamFuzzMerge`, `TestStreamOutFuzz`,
-  `TestStreamFuzzG6`, 100,000 cases each) compare streamed and tree runs
+  `TestStreamFuzzG6`, `TestSecondaryOutputFuzz`, 100,000 cases each) compare streamed and tree runs
   exactly and find no difference.
 - **`TransformReader` reads its document once**, so it cannot re-run on the
   tree as a container does. Everything that would need the tree is refused
-  when the stylesheet compiles, and its errors are the tree's as they come. A
+  when the stylesheet compiles (a node of the stream at the top of an
+  `xsl:result-document` body, which `SecondaryResult.Nodes` would hold,
+  included), and its errors are the tree's as they come. A
   malformed document or a parse limit is reported as `xdm.Parse` reports it
   even when the transform failed first: the rest of the document is read
   before the error is returned (not after a cancelled context). A defect of

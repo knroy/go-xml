@@ -1545,7 +1545,9 @@ root holding one XML data file and one private key leaks the key. An earlier
 revision of this document said the function was disabled *unconditionally*;
 that was true when written and is no longer, and the distinction matters to
 anyone deciding what a root may contain. `xsl:result-document` never writes to
-disk; the engine returns secondary results to the caller as data. XInclude is
+disk; the engine returns secondary results to the caller as data, or writes
+them to the writers `TransformOptions.SecondaryOutput` returns, which the
+caller opens. XInclude is
 off unless a caller runs `xdm.ProcessXInclude` and names the roots it may read
 — see *XInclude: a new reader on the old gate* above.
 
@@ -1811,7 +1813,9 @@ No `unsafe`, no `cgo`, no `reflect` in any non-test file.
    controlled, so if the stylesheet is not yours it is attacker-controlled, and
    handing it to `os.Create` unchecked is a directory traversal — `../../` in
    an href reaches wherever the process can write. The library avoiding the bug
-   does not mean an embedder inherits the avoidance.
+   does not mean an embedder inherits the avoidance. The same applies to the
+   URI `TransformOptions.SecondaryOutput` is called with: it is the
+   stylesheet's href, resolved against the base output URI.
 
    `cmd/go-xml`'s `writeSecondary` is the reference implementation, and none of
    what it does is redundant. It refuses an href absolute on *any* platform,

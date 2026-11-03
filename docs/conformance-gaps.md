@@ -49,7 +49,7 @@ W3C disagreements: 0 + 0 + 0 + 1 + 8 + 19 + 30 + 31 + 0 = 89. Measured 2026-09-1
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 3,095 tests.
+The unit-test suite is 3,106 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -460,7 +460,7 @@ above; no W3C case that wants the error goes without it. It should still be
 taken construct family by construct family, each with the negative arm the
 existing tests establish as the pattern.
 
-Streamed *execution* runs beside the analysis: 2,124 W3C cases take the
+Streamed *execution* runs beside the analysis: 2,180 W3C cases take the
 streamed path (see *Streamed execution covers ...* in
 [known-gaps.md](known-gaps.md)), and a construct the streamed core does not
 take is evaluated on the tree. With the analysis refusing every W3C case that

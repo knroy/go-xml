@@ -468,7 +468,7 @@ defaults deserve stating explicitly for a server:
 | `fn:doc` / `document()` | **refused** — every URI | `TransformOptions.Documents` |
 | `xsl:include` / `import` | **refused** | `CompileOptions.Resolver` |
 | network access | **none, at all** | not available |
-| `xsl:result-document` | returned on `Result.Secondary`, never written to disk | you write them |
+| `xsl:result-document` | returned on `Result.Secondary`, or handed to `SecondaryOutput`'s writers; never written to disk | you write them |
 
 Resource limits are on by default too, and a server should tighten them to what
 its documents actually look like rather than leave the general-purpose numbers:

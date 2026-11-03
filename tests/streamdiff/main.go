@@ -55,9 +55,10 @@ import (
 // 922 with accumulators, fork, map, merge and streamed output (M4, M5, M7),
 // 1009 with the §19.8 analysis completed (M8): containers it used to leave
 // unknown or unverified, 2124 with the gap lanes (G1-G7): held selects,
-// set operators, path algebra, kept leaves, climbing, and the rest.
+// set operators, path algebra, kept leaves, climbing, and the rest, 2180
+// with validated inputs (H1).
 // A stage may only raise it.
-const defaultFloor = 2124
+const defaultFloor = 2180
 
 func main() {
 	floor := defaultFloor

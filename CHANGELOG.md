@@ -11,7 +11,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | What it does | Commit |
 |---|---|---|
 | Streamed record paths with `//`, wildcards and `outermost()` | `//rec`, `doc//rec`, `/*/*/rec`, `*:rec`, `p:*` stream; nested matches ride inside their outermost record. Small records share one tree: 900-deep `count(//rec)` 2.0 s CPU. | [`df9677e`][df9677e], [`fd31bb3`][fd31bb3], [`382983c`][382983c], [`22af5f4`][22af5f4] |
-| Streamed core for `xsl:source-document` | One streamed path for every trusted container: wrappers, choose, loops, split selects; any error re-runs on the tree, so errors are the tree's. W3C streamed cases 450 → 2,124. | [`ff0c463`][ff0c463], [`44db07f`][44db07f], [`096a587`][096a587], [`d1a98a8`][d1a98a8] |
+| Streamed core for `xsl:source-document` | One streamed path for every trusted container: wrappers, choose, loops, split selects; any error re-runs on the tree, so errors are the tree's. W3C streamed cases 450 → 2,180. | [`ff0c463`][ff0c463], [`44db07f`][44db07f], [`096a587`][096a587], [`d1a98a8`][d1a98a8] |
 | `Stylesheet.TransformReader`, `TransformOptions.SourceParseOptions` | Applies a stylesheet to a reader, streaming it when the initial mode is streamable and verified (a 1 GB filter in 620 MB heap, not 7.3 GB); otherwise exactly Parse + Transform. | [`bdf45d8`][bdf45d8] |
 | Streamed `xsl:apply-templates` | Template rules, built-in rules, `next-match`, `apply-imports` and tunnels run on the cursor in a streamable container: a 1 GB filter in 624 MB, not 7.4 GB. | [`c8c0a01`][c8c0a01] |
 | Streamed `xsl:for-each-group` | group-adjacent, -starting-with and -ending-with over a child path stream in a streamable container or rule, each group as it closes, `current-group()` read once off the cursor: a 1 GB log grouped in 158 MB heap, not 6.0 GB. | [`fe1eb18`][fe1eb18] |
@@ -22,6 +22,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Streamed `xsl:fork` and `xsl:map` | Several prongs or entries reading one streamed document each run on a parse of their own over one read of its bytes, in turn; outputs in prong order, the first error the tree's. | [`2a1d6ad`][2a1d6ad] |
 | Streamed `xsl:merge` | Each `for-each-source` document of a streamable merge source is read on its own cursor and merged by key as the tree merges: two 512 MB logs in 3.9 MB of heap. | [`2089255`][2089255] |
 | `TransformOptions.Output` | Serializes the principal result to a writer as it is built: a 1 GB identity in 4.5 MB heap, not 9.4 GB. Written nodes no longer count toward `MaxNodes`; buffered results keep the cumulative count. | [`34e6b36`][34e6b36] |
+| `TransformOptions.SecondaryOutput` | Each `xsl:result-document` is serialized to the writer the function returns for its URI, as it is made, and closed at its end; a 1 GB split into 7,018 files in 5.6 MB heap. | [`e94d4e0`][e94d4e0] |
+| `TransformOptions.SourceValidation` (`SourceStrict`, `SourceLax`) | Validates the principal input against the stylesheet's schema; `TransformReader` validates it while streaming, with the tree's typing, defaults and error. | [`081c9d3`][081c9d3] |
 | `TransformOptions` `MaxNodes`, `MaxBytes`, `MaxNodesBuilt`, `MaxBytesBuilt` | Held and total-work bounds for result and temporary trees and strings. Zero keeps the defaults; negative removes the bound. | [`294b965`][294b965] |
 
 ### Changed
@@ -79,6 +81,12 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `fn:transform` reported a nested XTSE3430 as FOXT0002 (fn-transform-77) | A static error code written as a trailing `(XTSE3430)` is kept, as F&O 3.1 §16.3.2 says. | [`5c154ba`][5c154ba] |
 | A rule applied to a streamed group's member that read `accumulator-after` of it gave `TransformReader` an internal error | It reads the value as anywhere else. | [`d0ed436`][d0ed436] |
 | A streamed merge's re-run took back secondary results but not messages, so a merge under `xsl:try` told each message twice | The re-run takes back the messages its failed run told. | [`c257efe`][c257efe] |
+| An `xsl:source-document` with validation or type ran on the tree (parse, then validate a copy) | The document is validated as the cursor reads it; views and copies carry the tree's typing and defaults; an invalid one gets the tree's error. | [`d79951f`][d79951f] |
+| A streamed merge source with validation, and a validated principal input, ran on the tree | Both validate on their cursor; `input-type-annotations="strip"` strips on the stream. | [`5772ca2`][5772ca2] |
+| An `xsl:try` under `TransformOptions.Output` held its whole output as a tree until it ended | Each item it completes is written provisionally and rolled back on a caught error: a 100 MB loop in 41 MB heap, not 430 MB. | [`4cce5af`][4cce5af] |
+| `rollback-output="no"` under `Output` buffered like "yes" | With a catch for every error its output is written through; XTDE3530 exactly as the tree raises it. | [`ba1fbb6`][ba1fbb6] |
+| `TransformReader` gave "streaming: internal error" when a result-document body held a node of the stream | The stylesheet compiles to the tree path instead: the refusal is made at compile time. | [`971e795`][971e795] |
+| XTDE1500 was missed when a read and a written `file:` URI named one file through a symlink (macOS `/var`) | Both sides compare by the file's real path. | [`c5dbb81`][c5dbb81] |
 | `system-property('xsl:supports-streaming')` answered `no` | It answers `yes`, and `fn:transform` requested-properties match it; `streaming-fallback` is not claimed. | [`de7aab2`][de7aab2] |
 | `\|\|` was unmodelled in the §19.8 analysis, so si-fork-902 and -952 compiled | Modelled per §19.8.8 (`A \|\| A`), withheld in a crawling focus; both now get XTSE3430. | [`1f6576d`][1f6576d] |
 | A streamable function whose body was not one `xsl:sequence` was never checked | Its sequence constructor is assessed (§19.8.5); su-absorbing-205 gets XTSE3430. All 151 W3C XTSE3430 cases now refuse. | [`6e960b7`][6e960b7] |
@@ -2029,6 +2037,14 @@ here so every entry in this file sits under a release.
 [5c154ba]: https://github.com/knroy/go-xml/commit/5c154ba
 [d0ed436]: https://github.com/knroy/go-xml/commit/d0ed436
 [c257efe]: https://github.com/knroy/go-xml/commit/c257efe
+[e94d4e0]: https://github.com/knroy/go-xml/commit/e94d4e0
+[081c9d3]: https://github.com/knroy/go-xml/commit/081c9d3
+[d79951f]: https://github.com/knroy/go-xml/commit/d79951f
+[5772ca2]: https://github.com/knroy/go-xml/commit/5772ca2
+[4cce5af]: https://github.com/knroy/go-xml/commit/4cce5af
+[ba1fbb6]: https://github.com/knroy/go-xml/commit/ba1fbb6
+[971e795]: https://github.com/knroy/go-xml/commit/971e795
+[c5dbb81]: https://github.com/knroy/go-xml/commit/c5dbb81
 [de7aab2]: https://github.com/knroy/go-xml/commit/de7aab2
 [1f6576d]: https://github.com/knroy/go-xml/commit/1f6576d
 [6e960b7]: https://github.com/knroy/go-xml/commit/6e960b7
