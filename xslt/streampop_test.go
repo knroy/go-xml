@@ -129,6 +129,13 @@ var popBodies = []struct {
 	{`<out><xsl:for-each select="insert-before(doc/rec, 1e30, $extra)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="remove(doc/rec, 1.0)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="insert-before(doc/rec, (), $extra)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	// Populations of kept leaves (G4): each a complete copy, its body off the
+	// cursor (fuzz seed 31: 9679, 16992, 23798, 30006, 75161).
+	{`<out><xsl:for-each select="tail(doc/rec/node())"><e p="{position()}"><xsl:value-of select=". || '|'"/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="remove(doc/rec/text(), 1)"><e p="{position()}"><xsl:value-of select=". || '|'"/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="($extra, //comment())"><e p="{position()}"><xsl:value-of select=". || '|'"/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="unordered(//rec/sub/text())"><e p="{position()}"><xsl:value-of select=". || '|'"/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="insert-before(doc/rec/node(), 2, $extra)"><e p="{position()}"><xsl:value-of select=". || '|'"/></e></xsl:for-each></out>`, true},
 	// Set operators with a variable's nodes (foreignSets).
 	{`<out><xsl:value-of select="count(//rec except $extra)"/></out>`, true},
 	{`<out><xsl:value-of select="count($extra except //rec)"/></out>`, true},
