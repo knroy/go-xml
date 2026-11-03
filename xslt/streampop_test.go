@@ -131,6 +131,8 @@ var popBodies = []struct {
 	{`<out><xsl:for-each select="doc/rec except $extra"><e><xsl:value-of select="@k"/></e></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="doc/rec"><xsl:copy-of select="sub except $extra"/></xsl:for-each></out>`, true},
 	{`<out><xsl:value-of select="count(//rec except $three)"/></out>`, true},
+	// Refused: the path's side gives values, which the operator rejects (XPTY0004).
+	{`<out><xsl:value-of select="count(doc/rec/number(@v) intersect $extra)"/></out>`, false},
 	// Refused: a union whose order is not known statically.
 	{`<out><xsl:copy-of select="doc/rec union $extra"/></out>`, false},
 	// apply-templates over windows of a bare path; an insertion or a motionless part refused.

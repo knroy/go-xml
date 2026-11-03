@@ -479,10 +479,12 @@ func foreignSets(e xpath.Expr) (xpath.Expr, []xpath.Expr) {
 	}
 	consumed := func(p xpath.Expr) { extra = append(extra, never(fnCall("count", p))) }
 	split := func(x *xpath.BinaryOp) (p, f xpath.Expr, left bool) {
+		// P must give nodes only: the operator type-checks it too
+		// (XPTY0004 for P/number(), which no rewrite would raise).
 		switch {
-		case foreign(x.Right) && !foreign(x.Left):
+		case foreign(x.Right) && !foreign(x.Left) && nodeValued(x.Left):
 			return x.Left, x.Right, true
-		case foreign(x.Left) && !foreign(x.Right):
+		case foreign(x.Left) && !foreign(x.Right) && nodeValued(x.Right):
 			return x.Right, x.Left, false
 		}
 		return nil, nil, false
