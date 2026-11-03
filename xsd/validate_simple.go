@@ -1032,6 +1032,9 @@ func (v *validator) idOwner(n *xdm.Node) *xdm.Node {
 // recordIDsOwned records bindings for a value already attributed to its owning
 // element, which is what a defaulted attribute supplies directly.
 func (v *validator) recordIDsOwned(owner *xdm.Node, value string, t *SimpleType) {
+	if v.idToken != nil && owner != nil {
+		owner = v.idToken(owner)
+	}
 	switch idKind(t, value) {
 	case "ID":
 		v.recordID(owner, value)

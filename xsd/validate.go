@@ -312,6 +312,11 @@ type validator struct {
 	// has no source text. nil when the run reads the caller's tree.
 	twins map[*xdm.Node]*xdm.Node
 
+	// idToken, set by a run on a stream (streamvalid.go), maps the element
+	// an ID binding is owned by to the one node standing for it: the
+	// stream reuses an element's record once it is dropped.
+	idToken func(*xdm.Node) *xdm.Node
+
 	// typed is set when the run makes a typed copy (ValidateCopy and its
 	// siblings): it writes typing onto the copy it reads as it goes, or,
 	// with layer set, reads the caller's tree and writes typing to layer,
