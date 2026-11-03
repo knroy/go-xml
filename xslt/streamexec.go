@@ -293,6 +293,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		switch local {
 		case "value-of", "copy-of", "sequence", "attribute", "break":
 			return b.selectOp(el, f)
+		case "on-empty", "on-non-empty":
+			return b.selectOp(el, f) // streamonempty.go
 		case "for-each", "iterate":
 			return b.loopOp(el, f)
 		case "copy":
@@ -311,7 +313,7 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		}
 		fallthrough
 	case "element", "attribute", "comment", "processing-instruction", "document",
-		"sequence", "value-of", "variable", "where-populated":
+		"sequence", "value-of", "variable", "where-populated", "on-empty", "on-non-empty":
 		if !b.attrs(el, f) {
 			return false
 		}

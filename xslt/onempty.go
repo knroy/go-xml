@@ -38,6 +38,9 @@ type onEmptyInstr struct {
 }
 
 func (i *onEmptyInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if f := rt.burstsFor(i); f != nil {
+		return f.appendEval(rt, out) // streamonempty.go
+	}
 	return evalConditionalContent(i.sel, i.body, rt, out)
 }
 
@@ -48,6 +51,9 @@ type onNonEmptyInstr struct {
 }
 
 func (i *onNonEmptyInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if f := rt.burstsFor(i); f != nil {
+		return f.appendEval(rt, out) // streamonempty.go
+	}
 	return evalConditionalContent(i.sel, i.body, rt, out)
 }
 
@@ -438,10 +444,14 @@ func (c *compiler) compileOnEmpty(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 			n.Name().Lexical())
 	}
 
+	var instr Instruction = &onNonEmptyInstr{sel: sel, body: body}
 	if n.Name().Local == "on-empty" {
-		return &onEmptyInstr{sel: sel, body: body}, nil
+		instr = &onEmptyInstr{sel: sel, body: body}
 	}
-	return &onNonEmptyInstr{sel: sel, body: body}, nil
+	if sel != nil {
+		c.noteStreamSelect(n, instr, sel, ns) // a consuming select (streamonempty.go)
+	}
+	return instr, nil
 }
 
 // checkOnEmptyPlacement enforces the two positional rules of 8.4.2.
