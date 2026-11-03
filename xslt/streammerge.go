@@ -103,6 +103,11 @@ func mergeKeysOneType(i *mergeInstr) ([]int, bool) {
 		class := ""
 		for _, src := range i.sources {
 			c := mergeKeyClass(src.keyElems[k], src.streamed && src.sourceURIs != nil)
+			if c == "avt" && class == "text" || c == "text" && class == "avt" {
+				// The template must resolve to "text" (runStream checks it),
+				// as the other is written: one type.
+				c, class = "avt", "avt"
+			}
 			if c == "" || class != "" && c != class {
 				return nil, false
 			}
@@ -182,14 +187,24 @@ func nodesOnly(e xpath.Expr) bool {
 // size or has an effect a re-run would repeat. The check is on the source
 // text: a mention is enough.
 func mergeActionOK(action *xdm.Node) bool {
+	return mergeActionWalk(action, map[string]bool{})
+}
+
+// mergeActionWalk is mergeActionOK for el; a named template it calls is
+// walked too, when this module declares it (seen: those walked already).
+// xsl:result-document is no effect a re-run repeats: the re-run takes back
+// the secondary results the failed run made (streamresult.go).
+func mergeActionWalk(el *xdm.Node, seen map[string]bool) bool {
 	ok := true
 	mentions := func(v string) bool {
 		return strings.Contains(v, "last(") || strings.Contains(v, "trace(")
 	}
-	walkElements(action, func(el *xdm.Node) bool {
-		if isXSL(el, "message") || isXSL(el, "result-document") || isXSL(el, "assert") ||
-			isXSL(el, "call-template") || isXSL(el, "evaluate") {
+	walkElements(el, func(el *xdm.Node) bool {
+		if isXSL(el, "message") || isXSL(el, "assert") || isXSL(el, "evaluate") {
 			ok = false
+		}
+		if isXSL(el, "call-template") {
+			ok = mergeCalledOK(el, seen)
 		}
 		for a := range el.Attrs() {
 			if mentions(a.Value()) {
@@ -204,6 +219,30 @@ func mergeActionOK(action *xdm.Node) bool {
 		return ok
 	})
 	return ok
+}
+
+// mergeCalledOK walks the template call names, which must be declared, once,
+// in call's own module (an import or include could override or supply it).
+func mergeCalledOK(call *xdm.Node, seen map[string]bool) bool {
+	name := strings.TrimSpace(call.AttrValue("name"))
+	if seen[name] {
+		return true
+	}
+	seen[name] = true
+	top := call.Root().ChildElements()
+	if len(top) == 0 || strings.Contains(name, ":") {
+		return false
+	}
+	var found []*xdm.Node
+	for _, d := range top[0].ChildElements() {
+		if isXSL(d, "import") || isXSL(d, "include") || isXSL(d, "use-package") {
+			return false
+		}
+		if isXSL(d, "template") && strings.TrimSpace(d.AttrValue("name")) == name {
+			found = append(found, d)
+		}
+	}
+	return len(found) == 1 && mergeActionWalk(found[0], seen)
 }
 
 // mergeInput is one input sequence of a streamed merge: a source's, for one
@@ -235,6 +274,7 @@ func (i *mergeInstr) executeStream(rt *runtime, out *outputBuilder) (bool, error
 		return false, nil
 	}
 	sig, mark := signature(out), rt.localsMark()
+	undoSecondary := rt.secondaryMark() // streamresult.go
 	n0, b0 := xpathleaf.Charged(rt.ctx)
 	var unread []func()
 	err := i.runStream(rt, out, &unread)
@@ -263,6 +303,7 @@ func (i *mergeInstr) executeStream(rt *runtime, out *outputBuilder) (bool, error
 	for _, u := range unread {
 		u()
 	}
+	undoSecondary()
 	terr := i.executeTree(rt, out)
 	if terr == nil && !clean {
 		streamtrace.Guard()

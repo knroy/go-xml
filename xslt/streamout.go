@@ -18,11 +18,16 @@ package xslt
 //     build-tree="no"), nothing is written and End serializes the result as
 //     the tree does;
 //   - under indent="yes" an element's children are indented unless one of
-//     them is text that is not whitespace, which is known only once it
-//     closes: an element at the top is opened only once such a child is in
-//     it (the element is held, written whole, otherwise), and everything
-//     below an opened element is written without indentation, as the tree
-//     writes it;
+//     them is text that is not whitespace (or the element has no element
+//     child), which is known only once it closes, and an element that is
+//     not indented writes everything below it without indentation. So an
+//     element whose indentation is not yet decided is written, with its
+//     content, into a buffer (indentRec), every indent the serializer adds
+//     there recorded: a text child decides it is not indented, and its
+//     indents are taken out; its end decides by the tree's rule. The
+//     outermost one, at the top, writes the buffer out once it is decided.
+//     The result is then held as bytes, not as a tree, and only up to that
+//     decision;
 //   - an html head, whose added meta is indented by its children, is held,
 //     and so is a meta that head replaces.
 //
@@ -39,9 +44,12 @@ package xslt
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"io"
+	"slices"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/htmlser"
 	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
@@ -66,6 +74,42 @@ type streamOut struct {
 	// The last item written at the top of the result, or of the sequence
 	// document being written, was an atomic value.
 	rootAtomic, docAtomic, inDoc bool
+	// rec holds what the frames whose indentation is undecided wrote, from
+	// the outermost of them (frames[recAt]) on; recAt is -1 when none is.
+	rec   indentRec
+	recAt int
+}
+
+// indentRec is the buffer an undecided element is written into, and the
+// indents in it (serializer.indent records them).
+type indentRec struct {
+	buf chunkBuf
+	// spans are the indents written in buf, n of them, each as two uvarints:
+	// its start less the end of the one before (end), and its length. dels
+	// are ranges [from, to) of them in elements decided not to be indented.
+	// (A few bytes an indent: a result can hold one per element.)
+	spans  []byte
+	n, end int
+	dels   [][2]int
+	// owed are the result nodes written into buf, handed back to MaxNodes
+	// only when buf is written out: until then the result holds them, as
+	// it held them as a tree before.
+	owed int64
+}
+
+// span records the indent just written at buf[start:].
+func (r *indentRec) span(start int) {
+	r.spans = binary.AppendUvarint(r.spans, uint64(start-r.end))
+	r.spans = binary.AppendUvarint(r.spans, uint64(r.buf.n-start))
+	r.end = r.buf.n
+	r.n++
+}
+
+// drop takes out the indents from the from'th on.
+func (r *indentRec) drop(from int) {
+	if from < r.n {
+		r.dels = append(r.dels, [2]int{from, r.n})
+	}
 }
 
 // outFrame is an open element, or document node (doc), and what closing it
@@ -76,12 +120,22 @@ type outFrame struct {
 	base   int
 	st     elemState
 	indent bool
+	// und says the element's indentation is not decided yet; spans is
+	// where its content's indents start in rec, and elem that it has an
+	// element child.
+	und   bool
+	spans int
+	elem  bool
+	// inline says the child last written is an inline html element
+	// (htmlser.SkipIndentBefore reads the previous sibling, which the
+	// sink has taken back).
+	inline bool
 }
 
 // newStreamOut returns the writer of a principal result streamed to w under
 // opts and charMap, the stylesheet's own.
 func newStreamOut(rt *runtime, w io.Writer, opts OutputSettings, charMap map[rune]string) *streamOut {
-	o := &streamOut{rt: rt, opts: opts, charMap: charMap}
+	o := &streamOut{rt: rt, opts: opts, charMap: charMap, recAt: -1}
 	switch sw := w.(type) {
 	case *bytes.Buffer:
 		o.w = sw
@@ -175,10 +229,8 @@ func (o *streamOut) Open(n *xdm.Node, depth int, kind xdm.NodeKind, text string)
 			strings.EqualFold(n.Name().Local, "meta")) {
 			return false
 		}
-		if s.opts.Indent && !s.suppressed(n) && !o.unindented(n, kind, text) {
-			return false
-		}
 	}
+	und := !o.text && s.opts.Indent && !s.suppressed(n) && !o.unindented(n, kind, text)
 	if depth == 0 {
 		if o.inDoc {
 			o.docAtomic = false
@@ -186,11 +238,25 @@ func (o *streamOut) Open(n *xdm.Node, depth int, kind xdm.NodeKind, text string)
 			o.rootAtomic = false
 		}
 	}
-	f := outFrame{n: n, base: len(s.ns), indent: s.opts.Indent}
+	f := outFrame{n: n, base: len(s.ns), indent: s.opts.Indent, und: und}
 	if !o.text {
+		p := o.undecided()
+		if p != nil {
+			p.elem = true
+			s.skipIndent = o.skipBefore(p, n)
+			p.inline = s.html && htmlser.Inline(n, s.xhtml, s.html5)
+		}
 		f.st, _ = s.openTag(n, depth, f.base, true)
+		s.skipIndent = false
+		if und && p == nil {
+			o.recAt = len(o.frames)
+			s.rec, s.w = &o.rec, &o.rec.buf
+		}
+		f.spans = o.rec.n
 	}
-	s.opts.Indent = false
+	if !und {
+		s.opts.Indent = false
+	}
 	o.frames = append(o.frames, f)
 	if traceOutOpen != nil {
 		traceOutOpen()
@@ -215,15 +281,98 @@ func (o *streamOut) unindented(n *xdm.Node, kind xdm.NodeKind, text string) bool
 }
 
 func (o *streamOut) Child(c *xdm.Node, depth int) {
+	s := o.s
 	switch {
 	case o.text:
 		o.textNode(c)
 	case depth == 0:
-		o.s.node(c, 0)
+		s.node(c, 0)
+	case o.undecided() != nil:
+		p := o.undecided()
+		k := c.Kind()
+		if k == xdm.KindText && !xdm.IsXMLWhitespace(c.Value()) ||
+			s.html && !s.xhtml && (k == xdm.KindComment || k == xdm.KindPI) {
+			o.flatten()
+			s.nodeNoIndent(c)
+			break
+		}
+		if k == xdm.KindElement {
+			p.elem = true
+		}
+		s.skipIndent = o.skipBefore(p, c)
+		s.node(c, depth)
+		s.skipIndent = false
+		p.inline = s.html && htmlser.Inline(c, s.xhtml, s.html5)
 	default:
-		o.s.nodeNoIndent(c)
+		s.nodeNoIndent(c)
 	}
 	o.refund(c)
+}
+
+// skipBefore is serializer.skipBeforeChild for c (nil: the end tag), a
+// child of f's element, whose previous sibling is gone.
+func (o *streamOut) skipBefore(f *outFrame, c *xdm.Node) bool {
+	s := o.s
+	if !s.html {
+		return false
+	}
+	if c == nil {
+		c = f.n
+	}
+	return f.inline || htmlser.Inline(c, s.xhtml, s.html5)
+}
+
+// undecided returns the innermost frame when its indentation is undecided.
+func (o *streamOut) undecided() *outFrame {
+	if k := len(o.frames) - 1; k >= 0 && o.frames[k].und {
+		return &o.frames[k]
+	}
+	return nil
+}
+
+// flatten decides that the innermost frame, undecided, is not indented:
+// the indents written in its content are taken out, and the rest of it is
+// written without.
+func (o *streamOut) flatten() {
+	k := len(o.frames) - 1
+	f := &o.frames[k]
+	o.rec.drop(f.spans)
+	f.und = false
+	o.s.opts.Indent = false
+	if k == o.recAt {
+		o.emit()
+	}
+}
+
+// emit writes the buffer of the outermost undecided frame, now decided, out
+// without the indents taken out, and ends the recording.
+func (o *streamOut) emit() {
+	s := o.s
+	s.rec, s.w = nil, o.w
+	r := &o.rec
+	slices.SortFunc(r.dels, func(a, b [2]int) int { return a[0] - b[0] })
+	at, pos, end, d, upTo := 0, 0, 0, 0, 0
+	for i := range r.n {
+		gap, k := binary.Uvarint(r.spans[pos:])
+		ln, k2 := binary.Uvarint(r.spans[pos+k:])
+		pos += k + k2
+		start := end + int(gap)
+		end = start + int(ln)
+		for d < len(r.dels) && r.dels[d][0] <= i {
+			upTo = max(upTo, r.dels[d][1])
+			d++
+		}
+		if i < upTo {
+			r.buf.writeRange(s, at, start)
+			at = end
+		}
+	}
+	r.buf.writeRange(s, at, r.buf.n)
+	r.buf.reset()
+	r.spans, r.n, r.end, r.dels = r.spans[:0], 0, 0, r.dels[:0]
+	o.recAt = -1
+	o.handBack(o.rec.owed)
+	o.rec.owed = 0
 }
 
 // textNode writes c under the text method: its text.
@@ -252,12 +401,26 @@ func (o *streamOut) Close(n *xdm.Node, depth int) {
 		return
 	}
 	s := o.s
+	if f.und {
+		// The tree's rule, writeElement's: indented when it has an element
+		// child (no text child came, or it would have been flattened).
+		if f.elem && mayIndentType(n) {
+			if !o.skipBefore(&f, nil) {
+				s.indent(depth)
+			}
+		} else {
+			o.rec.drop(f.spans)
+		}
+	}
 	s.opts.Indent = f.indent
 	if !o.text {
 		s.closeTag(n, f.st)
 		s.ns = s.ns[:f.base]
 	}
-	xpathleaf.Refund(o.rt.ctx, int64(1+n.NumAttrs()), 0)
+	o.handBack(int64(1 + n.NumAttrs()))
+	if k == o.recAt {
+		o.emit()
+	}
 }
 
 func (o *streamOut) Item(it xdm.Item, doc, own bool) {
@@ -330,7 +493,17 @@ func (o *streamOut) End(seq xdm.Sequence) error {
 
 // refund hands back the nodes of n, written, as the builder charged them.
 func (o *streamOut) refund(n *xdm.Node) {
-	if k := countCharged(n); k > 0 {
+	o.handBack(countCharged(n))
+}
+
+// handBack hands k written nodes back to MaxNodes, or, while they are in
+// the undecided buffer, owes them.
+func (o *streamOut) handBack(k int64) {
+	switch {
+	case k <= 0:
+	case o.recAt >= 0:
+		o.rec.owed += k
+	default:
 		xpathleaf.Refund(o.rt.ctx, k, 0)
 	}
 }
@@ -384,4 +557,69 @@ func holdOpen(sub *outputBuilder, noInherit bool, v validationSpec) {
 	if noInherit || !v.isDefault() {
 		xdmsink.Hold(sub)
 	}
+}
+
+// chunkBuf is the undecided buffer: 64 KiB chunks, so that it holds what
+// was written once, never a doubled copy as it grows.
+type chunkBuf struct {
+	chunks [][]byte
+	n      int
+}
+
+const chunkSize = 64 << 10
+
+func (c *chunkBuf) Len() int { return c.n }
+
+func (c *chunkBuf) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		k := c.last()
+		m := min(len(p), chunkSize-len(c.chunks[k]))
+		c.chunks[k] = append(c.chunks[k], p[:m]...)
+		p = p[m:]
+	}
+	c.n += n
+	return n, nil
+}
+
+func (c *chunkBuf) WriteString(str string) (int, error) {
+	n := len(str)
+	for len(str) > 0 {
+		k := c.last()
+		m := min(len(str), chunkSize-len(c.chunks[k]))
+		c.chunks[k] = append(c.chunks[k], str[:m]...)
+		str = str[m:]
+	}
+	c.n += n
+	return n, nil
+}
+
+// last returns the index of a chunk with room in it, the last.
+func (c *chunkBuf) last() int {
+	k := len(c.chunks) - 1
+	if k < 0 || len(c.chunks[k]) == chunkSize {
+		c.chunks = append(c.chunks, make([]byte, 0, chunkSize))
+		k++
+	}
+	return k
+}
+
+// writeRange writes bytes [a, b) to s.
+func (c *chunkBuf) writeRange(s *serializer, a, b int) {
+	off := 0
+	for _, ch := range c.chunks {
+		end := off + len(ch)
+		if lo, hi := max(a, off), min(b, end); lo < hi {
+			s.writeBytes(ch[lo-off : hi-off])
+		}
+		if end >= b {
+			return
+		}
+		off = end
+	}
+}
+
+func (c *chunkBuf) reset() {
+	clear(c.chunks)
+	c.chunks, c.n = c.chunks[:0], 0
 }

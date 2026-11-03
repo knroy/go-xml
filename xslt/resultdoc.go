@@ -113,15 +113,22 @@ func (i *resultDocumentInstr) settings(rt *runtime) (OutputSettings, error) {
 		// element: every serialisation attribute of this instruction is an
 		// attribute value template, and reading the literal text made
 		// doctype-system="{doc/foo}" a doctype of "{doc/foo}".
+		// Each is evaluated once: a streamed run reads a consuming one off
+		// the cursor, which a second evaluation could not (streamresult.go).
+		values := map[string]string{}
 		value := func(name string) string {
+			if v, ok := values[name]; ok {
+				return v
+			}
 			a, ok := i.overrideAVTs[name]
 			if !ok {
 				return ""
 			}
 			v, err := a.eval(rt)
 			if err != nil {
-				return ""
+				v = ""
 			}
+			values[name] = v
 			return v
 		}
 		for _, name := range []string{"method", "json-node-output-method"} {
@@ -198,6 +205,9 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	resolvedHref := i.destination(rt, href)
 	if err := execSequence(i.body, rt.withOutputURI(resolvedHref), sub); err != nil {
 		return err
+	}
+	if err := keptStreamNode(rt, sub.Sequence()); err != nil {
+		return err // streamresult.go
 	}
 
 	// The tree is assessed as a document node before it is recorded, so that

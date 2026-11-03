@@ -307,6 +307,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		return b.mapEntryOp(el, f)
 	case "message":
 		return b.messageOp(el, f, true) // streammessage.go
+	case "result-document":
+		return b.resultDocOp(el, f) // streamresult.go
 	}
 	if el.Attr("", "select") != nil {
 		switch local {
@@ -674,6 +676,9 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "try" {
 			return b.tryMotionless(el, f)
 		}
+		if local == "result-document" {
+			return b.resultDocAttrs(el, f) && b.content(el, f) // streamresult.go
+		}
 		if b.noIdent && (local == "sequence" || local == "variable") {
 			// They could hand the copy on as the node it stands for.
 			return b.refuse("xsl:" + local + " on a copied text, comment or PI node")
@@ -1040,6 +1045,9 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 // it holds one at a time; one that would ground the document element gives
 // up there, which at the document node falls back to the tree.
 func (x *streamExec) readySelect(op *streamOp, minD int) string {
+	if copiedPopulation(op) {
+		return "" // streamgroup.go
+	}
 	s := op.split
 	copies := isXSL(op.el, "copy-of") || isXSL(op.el, "sequence") && inElement(op.el)
 	if c := s.class(); copies && (c == "nodes" || c == "subtree") &&
@@ -1255,6 +1263,9 @@ func (run *streamRun) evalOp(rt *runtime, op *streamOp) (xdm.Sequence, error) {
 	if err == errSplitGiveUp && run.d == 0 && run.i != nil {
 		return run.fallback(rt, op.sel)
 	}
+	if err == nil && copiedPopulation(op) {
+		seq = numberCopies(op, seq) // streamgroup.go
+	}
 	return seq, err
 }
 
@@ -1357,7 +1368,8 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	}
 	i.stream.count()
 	sig, mark := signature(out), rt.localsMark()
-	msgs := rt.messagesMark() // streammessage.go
+	msgs := rt.messagesMark()           // streammessage.go
+	undoSecondary := rt.secondaryMark() // streamresult.go
 	n0, b0 := xpathleaf.Charged(rt.ctx)
 	// At the top of a sequence (the principal result's raw nodes, a
 	// variable's, a function's) the tree keeps the source's own nodes where
@@ -1404,6 +1416,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	}
 	unread()
 	rt.dropMessages(msgs)
+	undoSecondary()
 	terr := i.executeTree(rt, out, href)
 	if terr == nil && !clean {
 		streamtrace.Guard()

@@ -522,10 +522,10 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	// TransformReader unparsed (streamedSource), which streams it when the
 	// stylesheet allows; under GOXSLT_STREAM_OFF=1 it is parsed here and
 	// given to Transform, as every other source is.
-	streamPath, streamOpts := r.streamedSource(set, tc)
+	streamPath, streamContent, streamOpts := r.streamedSource(set, tc)
 	var src *xdm.Node
 	var srcPath string
-	if streamPath == "" {
+	if streamPath == "" && streamContent == "" {
 		if src, srcPath, err = r.principalSource(set, tc); err != nil {
 			return nil, err
 		}
@@ -730,6 +730,11 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	if streamContent != "" {
+		opts.SourceParseOptions = streamOpts
+		opts.Output = r.output
+		return ss.TransformReader(ctx, strings.NewReader(streamContent), opts)
+	}
 	if streamPath != "" {
 		data, err := os.ReadFile(streamPath)
 		if err != nil {
@@ -743,29 +748,34 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	return ss.Transform(ctx, src, opts)
 }
 
-// streamedSource returns the file of the principal input when the catalog
-// declares it streaming="true" and nothing must be done to it between its
-// parse and the transform -- no @select, inline content, XInclude or
-// validation, no initial-mode selection evaluated over it -- with the
-// options principalSource would parse it with; "" otherwise, and always
-// under GOXSLT_STREAM_OFF=1.
-func (r *Runner) streamedSource(set *TestSet, tc *TestCase) (string, xdm.ParseOptions) {
+// streamedSource returns the file of the principal input, or its inline
+// content, when the catalog declares it streaming="true" and nothing must
+// be done to it between its parse and the transform -- no @select,
+// XInclude or validation, no initial-mode selection evaluated over it --
+// with the options principalSource would parse it with; "" otherwise, and
+// always under GOXSLT_STREAM_OFF=1.
+func (r *Runner) streamedSource(set *TestSet, tc *TestCase) (path, content string, _ xdm.ParseOptions) {
 	env := r.environment(set, tc)
 	if env == nil || streamtrace.Off() || tc.Test.InitialMode != nil && tc.Test.InitialMode.Select != "" {
-		return "", xdm.ParseOptions{}
+		return "", "", xdm.ParseOptions{}
 	}
 	for _, s := range env.Sources {
 		if s.Role != "." {
 			continue
 		}
-		if s.Streaming != "true" || s.Select != "" || s.Content != "" || s.File == "" ||
+		if s.Streaming != "true" || s.Select != "" || s.Content == "" && s.File == "" ||
 			s.XInclude == "true" || s.Validation == "strict" || s.Validation == "lax" {
-			return "", xdm.ParseOptions{}
+			return "", "", xdm.ParseOptions{}
+		}
+		if s.Content != "" {
+			// As principalSource parses it: part of the test-set file.
+			return "", s.Content, xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(set.Path),
+				ExternalEntities: r.entityResolver()}
 		}
 		p := filepath.Join(set.Dir, filepath.FromSlash(s.File))
-		return p, r.sourceParseOptions(p)
+		return p, "", r.sourceParseOptions(p)
 	}
-	return "", xdm.ParseOptions{}
+	return "", "", xdm.ParseOptions{}
 }
 
 // sourceParseOptions are the options a principal input read from the file

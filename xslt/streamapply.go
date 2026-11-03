@@ -409,6 +409,9 @@ func patternClasses(p *Pattern) (can [numClasses]bool, why string) {
 	if matchesNoNode(p) { // streampattern_g5.go
 		return can, ""
 	}
+	if dotPattern(p) {
+		return [numClasses]bool{true, true, true, true}, "" // streamgroup.go
+	}
 	if len(p.general) > 0 {
 		return can, "pattern " + p.src + ": an XSLT 3.0 form"
 	}

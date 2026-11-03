@@ -123,6 +123,39 @@ func (b *streamBuilder) groupOp(el *xdm.Node, f vfocus) bool {
 	return true
 }
 
+// dotPattern reports whether p is the pattern ".", which matches every
+// item (§5.5.2) and reads nothing of it: motionless (§19.8.10), decided on
+// any view (patternClasses).
+func dotPattern(p *Pattern) bool {
+	return strings.TrimSpace(p.src) == "." && len(p.alts) == 0 && len(p.general) == 1
+}
+
+// copiedPopulation reports whether op is a grouping whose grounded
+// population is nodes: copies the select makes (copy-of, snapshot), which
+// the tree makes too, so holding them is not the memory rule's concern
+// (the tree holds the document besides).
+func copiedPopulation(op *streamOp) bool {
+	return op.groundPop && op.split != nil && op.split.class() == "nodes"
+}
+
+// numberCopies is what the tree's evaluation of a path select does to
+// the copies a grouping's population is (Order/copy-of()): its result is
+// sorted, which numbers each copy's tree in sequence order (fragments are
+// numbered when first compared, xdm.SortDocumentOrder), and so fixes how
+// the copies order against one another before the body compares them.
+// The split hands the same copies over in the same order, unsorted.
+func numberCopies(op *streamOp, seq xdm.Sequence) xdm.Sequence {
+	if _, ok := op.sel.Expr().(*xpath.PathExpr); !ok {
+		return seq
+	}
+	for _, it := range seq {
+		if _, ok := it.(*xdm.Node); !ok {
+			return seq
+		}
+	}
+	return xdm.SortDocumentOrder(seq)
+}
+
 // groundedSelect reports whether the analysis assessed the select of el, an
 // xsl:for-each-group, as grounded: a population of copies or values
 // (§19.8.4.19's first rule), which the tree's grouping takes whole.
@@ -184,14 +217,15 @@ func (c *compiler) noteStreamGroup(n *xdm.Node, instr *forEachGroupInstr, ns xpa
 		}
 		op.instr, op.sel = instr, instr.sel
 		if op.groundPop {
-			// A select op: the tree groups its value. Of values only: copies
-			// would be grouped as the tree groups its own, but they are in
-			// trees of their own, whose order (current-group()/@a sorts by
-			// it) follows when each tree was first numbered, which differs.
+			// A select op: the tree groups its value, values or copies (a
+			// grounded select). Copies are in trees of their own, which
+			// order (current-group()/@a sorts by it) as they were made:
+			// fn:copy-of numbers each tree as it makes it (noteCopy), in
+			// tree mode as here, so they order alike.
 			if op.split, op.dead = c.splitFor(instr.sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" {
 				continue
 			}
-			if c := op.split.class(); c != "output" && c != "bounded" {
+			if c := op.split.class(); c != "output" && c != "bounded" && c != "nodes" {
 				op.dead = "grouping population of nodes (" + c + ")"
 				continue
 			}
