@@ -405,6 +405,11 @@ func adjacentKeyOf(rt *runtime, it xdm.Item, pos, size int, key *xpath.Compiled,
 	if err != nil {
 		return nil, "", err
 	}
+	return adjacentKeyFrom(rt, vals, coll, composite)
+}
+
+// adjacentKeyFrom is adjacentKeyOf for vals, the key expression's value.
+func adjacentKeyFrom(rt *runtime, vals xdm.Sequence, coll xpath.Collation, composite bool) (xdm.Sequence, string, error) {
 	if composite {
 		atoms := atomizeGroupingKey(vals)
 		k, err := compositeKey(rt, atoms, coll)

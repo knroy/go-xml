@@ -131,6 +131,7 @@ func (c *compiler) noteStreamGroup(n *xdm.Node, instr *forEachGroupInstr, ns xpa
 		if op.dead = groupRefusal(instr); op.dead != "" {
 			continue
 		}
+		op.keyAttr = keyAttribute(instr, ns)
 		if !op.fromGroup {
 			if op.split, op.dead = c.splitFor(instr.sel, ns, op.doc, false, false, op.key); op.dead != "" {
 				continue
@@ -141,6 +142,27 @@ func (c *compiler) noteStreamGroup(n *xdm.Node, instr *forEachGroupInstr, ns xpa
 		}
 		op.x.byInstr[instr] = op
 	}
+}
+
+// keyAttribute is the attribute a group-adjacent key is, when it is one by
+// name (@name, not composite): read off the start tag, without a view or an
+// XPath evaluation, it is what the expression would return.
+func keyAttribute(instr *forEachGroupInstr, ns xpath.NamespaceResolver) *xdm.QName {
+	if instr.groupAdjacent == nil || instr.composite || instr.groupAdjacent.CompatMode() {
+		return nil
+	}
+	e := reparse(instr.groupAdjacent, ns)
+	if pe, ok := e.(*xpath.PathExpr); ok && !pe.Root && len(pe.Steps) == 1 {
+		e = pe.Steps[0]
+	}
+	st, ok := e.(*xpath.Step)
+	if !ok || st.Axis != xpath.AxisAttribute || len(st.Predicates) > 0 {
+		return nil
+	}
+	if nt, ok := st.Test.(*xpath.NameTest); ok && !nt.AnyURI && !nt.AnyLocal {
+		return &nt.Name
+	}
+	return nil
 }
 
 // groupRefusal says why the compiled instr cannot group a streamed
@@ -234,7 +256,7 @@ func (run *streamRun) group(rt *runtime, out *outputBuilder, i *forEachGroupInst
 	if traceGroup != nil {
 		traceGroup()
 	}
-	g := &groupRun{sr: run, rt: rt, i: i}
+	g := &groupRun{sr: run, rt: rt, i: i, keyAttr: op.keyAttr}
 	if op.fromGroup {
 		g.src = run.grp.src
 	} else {
@@ -341,6 +363,31 @@ type groupItem struct {
 	starts, ends bool
 }
 
+// ready makes the view of it, an item opening a group, the cursor still at
+// its start tag; and the key it keeps (current-grouping-key()) its own
+// string, not one into the parse's text, which the key read off the start
+// tag points into.
+func (it *groupItem) ready(c *xdmstream.Cursor) error {
+	if it.view != nil {
+		return nil
+	}
+	v, err := c.View()
+	if err != nil {
+		return err
+	}
+	it.view = v
+	for k, a := range it.key {
+		switch v, _ := a.(*xdm.Atomic); {
+		case v == nil:
+		case v.Type == xdm.TypeUntypedAtomic:
+			it.key[k] = xdm.NewUntypedAtomic(strings.Clone(v.String()))
+		case v.Type == xdm.TypeString:
+			it.key[k] = xdm.NewString(strings.Clone(v.String()))
+		}
+	}
+	return nil
+}
+
 // groupRun is one execution of a streamed grouping: the population (src),
 // and, as a memberSource itself, the members of the group whose body runs.
 type groupRun struct {
@@ -350,7 +397,10 @@ type groupRun struct {
 	src  memberSource
 	walk *popWalk // src, when it is the select's
 	coll xpath.Collation
-	pos  int // the population's items classified
+	// keyAttr is the group-adjacent key's attribute, read off the start tag
+	// (keyAttribute).
+	keyAttr *xdm.QName
+	pos     int // the population's items classified
 	// The current group: its first item, the members handed over, whether
 	// it has ended and how -- at an item of the next group (pend), at the end
 	// of the population (done), or after a member that matches
@@ -366,14 +416,28 @@ type groupRun struct {
 	keyErr error
 }
 
-// classify reads what the grouping needs of the item at ev, its view's.
+// classify reads what the grouping needs of the item at ev, its view's; an
+// item whose key is an attribute gets its view only once it opens a group
+// (view).
 func (g *groupRun) classify(ev xdmstream.Event) (groupItem, error) {
+	g.pos++
+	it := groupItem{ev: ev}
+	if g.keyAttr != nil {
+		var vals xdm.Sequence
+		if a := ev.Node.Attr(g.keyAttr.URI, g.keyAttr.Local); a != nil {
+			vals = xdm.One(a)
+		}
+		var err error
+		if it.key, it.keyStr, err = adjacentKeyFrom(g.rt, vals, g.coll, false); err != nil {
+			g.keyErr = err
+		}
+		return it, err
+	}
 	v, err := g.sr.c.View()
 	if err != nil {
 		return groupItem{}, err
 	}
-	g.pos++
-	it := groupItem{ev: ev, view: v}
+	it.view = v
 	switch i := g.i; {
 	case i.groupAdjacent != nil:
 		it.key, it.keyStr, err = adjacentKeyOf(g.rt, v, g.pos, 0, i.groupAdjacent, g.coll, i.composite)
@@ -449,6 +513,9 @@ func (g *groupRun) run(out *outputBuilder) error {
 	run := g.sr
 	for n := 1; ; n++ {
 		if err := g.rt.ctx.Err(); err != nil {
+			return err
+		}
+		if err := it.ready(run.c); err != nil {
 			return err
 		}
 		g.cur, g.handed, g.closed, g.endAfter, g.pend = it, 0, false, it.ends, nil

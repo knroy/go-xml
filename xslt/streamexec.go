@@ -140,6 +140,7 @@ type streamOp struct {
 	// that it is in the body of one, where current-group() is that group's,
 	// and key that current-grouping-key() is in scope.
 	group, fromGroup, inGroup, key bool
+	keyAttr                        *xdm.QName // a grouping's key attribute (keyAttribute)
 	// avt, for the consuming part of a literal result element's attribute
 	// value template, is that part's expression (avtOp).
 	avt string

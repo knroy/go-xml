@@ -25,6 +25,7 @@ var groupDocs = map[string]string{
 	"parent": `<doc><g><t d="1" v="1" k="a"/><t d="1" v="2" k="a"/></g><g><t d="1" v="-3" k="b"/><t d="2" v="4" k="b"/></g></doc>`,
 	"bad":    `<doc><t d="1" v="1"/><t d="1" v="2"></doc>`,
 	"wide":   "<doc>" + strings.Repeat(`<t d="1" v="1" k="a"><n>s</n></t><t d="1" v="-2" k="b"/><t d="2" v="3" k="b"/>`, 300) + "</doc>",
+	"nsattr": `<doc xmlns:p="urn:p"><t p:z="1" z="9" d="1"/><t p:z="1" z="8" d="1"/><t p:z="2" z="8" d="2"/><t z="8" d="2"/></doc>`,
 	"nested": `<doc><t d="1" v="1" k="a"><t d="1" v="2" k="b"/></t><t d="2" v="-1" k="b"><t d="9" v="1" k="c"/></t></doc>`,
 }
 
@@ -41,6 +42,9 @@ var groupBodies = []struct {
 	{`<out><xsl:for-each-group select="*/t" group-adjacent="@k" collation="http://www.w3.org/2005/xpath-functions/collation/codepoint"><g k="{current-grouping-key()}"/></xsl:for-each-group></out>`, true},
 	{`<out><xsl:for-each-group select="*/t" group-adjacent="@d, @k" composite="yes"><g k="{current-grouping-key()}"/></xsl:for-each-group></out>`, true},
 	{`<out><xsl:for-each-group select="*/t" group-adjacent="position() idiv 2"><g k="{current-grouping-key()}" n="{name()}"/></xsl:for-each-group></out>`, true},
+	// A key read off the start tag (an attribute by name), namespaced or not.
+	{`<out><xsl:for-each-group select="/doc/t" group-adjacent="@p:z"><g k="{current-grouping-key()}" n="{count(current-group())}"/></xsl:for-each-group></out>`, true},
+	{`<out><xsl:for-each-group select="/doc/t" group-adjacent="@z"><g k="{current-grouping-key()}"><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></out>`, true},
 	// The body reads the group: copy-of streamed a member at a time, splits.
 	{`<out><xsl:for-each-group select="/doc/t" group-adjacent="@d"><batch d="{current-grouping-key()}"><xsl:copy-of select="current-group()"/></batch></xsl:for-each-group></out>`, true},
 	{`<out><xsl:for-each-group select="/doc/t" group-adjacent="@d"><b><xsl:value-of select="count(current-group())"/></b></xsl:for-each-group></out>`, true},
