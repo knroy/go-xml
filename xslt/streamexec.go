@@ -809,7 +809,7 @@ func (c *compiler) noteStreamLoop(n *xdm.Node, instr Instruction, sel *xpath.Com
 // reducer or outer, the matches what it returns.
 func (s *streamSplit) bare() bool {
 	return s.cond == nil && !s.ctxItem && s.red == "" && s.tail == nil && s.tailText == "" &&
-		s.steps != nil && isVarRef(s.outer.Expr(), splitItems)
+		s.steps != nil && isVarRef(s.outer.Expr(), splitItems) && s.skip == 0
 }
 
 // streamOps returns the ops of the plans being compiled -- the container's,
@@ -1056,6 +1056,8 @@ func (s *streamSplit) memory(minD int) string {
 		return s.els.memory(minD)
 	}
 	switch c := s.class(); {
+	case c == "nodes" && s.fresh:
+		// The tail's own nodes, not copies of the stream (streamshapes.go).
 	case (c == "nodes" || c == "subtree") && s.group:
 		// A group's members may be all of the document element's children.
 		return "collects grounded copies (" + c + ") of the current group"

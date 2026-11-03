@@ -1,0 +1,229 @@
+package xslt
+
+// Expression shapes of the streamed split beyond its paths (full streaming,
+// gap lane G3): simple maps whose right operand is evaluated per match.
+//
+// "P ! R", P the consuming path, evaluates R once per node of P, in order,
+// with that node as focus, and concatenates the results: which is what the
+// split does with a match's tail. So R becomes the tail (after P's own tail,
+// as "(tail) ! R"), evaluated on the match's view when it reads only the
+// start tag, on a grounded copy of the match otherwise. Unlike a path's last
+// step, R's results are neither sorted nor deduplicated, and may mix nodes
+// and values. M6's mapAsPath already reads an atomic-valued R as the path
+// P/R; this takes the rest: R making nodes.
+//
+// R may not read position() or last() (its focus is the match alone), nor
+// climb out of the match (a copy's ancestors are shallow). It may make new
+// nodes (parse-xml, a stylesheet function given only atomic values): those
+// are what the tree makes too, so collecting them costs what the tree's
+// result costs, not the grounded copies it is made from. A node of the copy
+// itself is kept only where matches cannot nest (their copies would be
+// distinct nodes where the tree's are one).
+
+import (
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+)
+
+// mapPathOf is pathOf for "P ! R": P's parts with R to map over each match.
+func (w *splitter) mapPathOf(x *xpath.SimpleMap) (splitPathParts, bool) {
+	pp, ok := w.pathOf(x.Left)
+	if !ok || pp.ctxItem || pp.group || !mapSafe(x.Right) {
+		return splitPathParts{}, false
+	}
+	if pp.mapR != nil {
+		pp.mapR = &xpath.SimpleMap{Left: pp.mapR, Right: x.Right}
+	} else {
+		pp.mapR = x.Right
+	}
+	return pp, true
+}
+
+// mapTail is the tail a match gives for a path with a map: its own tail,
+// then R over each of its items.
+func mapTail(tail, r xpath.Expr) xpath.Expr {
+	if tail == nil {
+		return r
+	}
+	return &xpath.SimpleMap{Left: tail, Right: r}
+}
+
+// mapPath finishes path for P ! R: tail is what each match gives (R over
+// P's own tail), last P's last axis.
+func (s *streamSplit) mapPath(w *splitter, tail, r xpath.Expr, leaf bool, last xpath.Axis,
+	part func(xpath.Expr) *xpath.Compiled) string {
+	if s.red == "boolean" || s.red == "not" {
+		// R's items may be values: their EBV is not their existence.
+		s.red, w.putRed = "", nil
+	}
+	s.atomize, s.fresh = w.use == useAtomize || splitFolds[s.red], mapFresh(r)
+	switch {
+	case leaf:
+		return "a map over text, comment or PI matches"
+	case (viewCheck{}).safe(tail, vElem, splitCounts[s.red]):
+		s.mode = matchView
+	case !s.nests || s.fresh:
+		s.mode = matchGround
+	default:
+		return "simple map " + r.String() + ": nodes of nested matches"
+	}
+	if last == xpath.AxisDescendantOrSelf && s.mode != matchView {
+		return "the context itself is a result"
+	}
+	if w.kids && s.mode == matchGround {
+		return "has-children(.) on a match that is read whole"
+	}
+	s.tail, s.tailFail = part(tail), !splitCannotFail(tail)
+	s.accepts()
+	s.folds(w, part)
+	return ""
+}
+
+// mapSafe reports whether R, mapped over a grounded copy of a match, reads
+// only what the copy has: burstSafe, without fn:position or a step up; or a
+// call on a stylesheet function given only atomic values, which cannot reach
+// the copy at all.
+func mapSafe(r xpath.Expr) bool {
+	if climbsAny(r) {
+		return false
+	}
+	if f, ok := r.(*xpath.FuncCall); ok && stylesheetFn(f.Name) {
+		for _, a := range f.Args {
+			if !mapAtomic(a) || !burstSafe(a, true) {
+				return false
+			}
+		}
+		return true
+	}
+	return burstSafe(r, true)
+}
+
+// stylesheetFn reports whether a function name is a stylesheet's: in no
+// namespace of built-in functions.
+func stylesheetFn(q xdm.QName) bool {
+	switch q.URI {
+	case "", fnNS, xdm.NSXS, xdm.NSMath, xdm.NSMap, xdm.NSArray:
+		return false
+	}
+	return true
+}
+
+// mapAtomic reports, conservatively, whether e makes only atomic values.
+func mapAtomic(e xpath.Expr) bool {
+	_, ok := e.(*xpath.StringConcat)
+	return ok || atomicValued(e)
+}
+
+// mapFresh reports, conservatively, whether R makes no node of the match's
+// copy: only values, or nodes it makes itself (parse-xml, or a stylesheet
+// function given only atomic values), perhaps navigated within.
+func mapFresh(r xpath.Expr) bool {
+	switch x := r.(type) {
+	case *xpath.FuncCall:
+		if stylesheetFn(x.Name) {
+			return true // mapSafe gave it atomic values only
+		}
+		if x.Name.URI == fnNS && (x.Name.Local == "parse-xml" || x.Name.Local == "parse-xml-fragment") {
+			return true
+		}
+	case *xpath.PathExpr:
+		return !x.Root && len(x.Steps) > 0 && !isStep(x.Steps[0]) && mapFresh(x.Steps[0])
+	case *xpath.SimpleMap:
+		return mapFresh(x.Right)
+	case *xpath.SequenceExpr:
+		for _, it := range x.Items {
+			if !mapFresh(it) {
+				return false
+			}
+		}
+		return true
+	}
+	return mapAtomic(r)
+}
+
+// climbsAny reports whether a step up appears anywhere in e (burstSafe has
+// ruled out the other axes off the match): R's focus is a copy whose
+// ancestors have their names and attributes only.
+func climbsAny(e xpath.Expr) bool {
+	in := func(es ...xpath.Expr) bool {
+		for _, x := range es {
+			if x != nil && climbsAny(x) {
+				return true
+			}
+		}
+		return false
+	}
+	switch x := e.(type) {
+	case *xpath.Step:
+		return climbs(x) || in(x.Predicates...)
+	case *xpath.PathExpr:
+		return x.Root || in(x.Steps...)
+	case *xpath.FilterExpr:
+		return in(x.Base) || in(x.Predicates...)
+	case *xpath.BinaryOp:
+		return in(x.Left, x.Right)
+	case *xpath.StringConcat:
+		return in(x.Left, x.Right)
+	case *xpath.SimpleMap:
+		return in(x.Left, x.Right)
+	case *xpath.UnaryOp:
+		return in(x.Operand)
+	case *xpath.CastExpr:
+		return in(x.Operand)
+	case *xpath.TreatExpr:
+		return in(x.Operand)
+	case *xpath.InstanceOfExpr:
+		return in(x.Operand)
+	case *xpath.FuncCall:
+		return in(x.Args...)
+	case *xpath.IfExpr:
+		return in(x.Cond, x.Then, x.Else)
+	case *xpath.SequenceExpr:
+		return in(x.Items...)
+	case *xpath.LetExpr:
+		return in(bindingExprs(x.Bindings)...) || in(x.Return)
+	case *xpath.ForExpr:
+		return in(bindingExprs(x.Bindings)...) || in(x.Return)
+	case *xpath.QuantifiedExpr:
+		return in(bindingExprs(x.Bindings)...) || in(x.Test)
+	case *xpath.MapConstructor:
+		return in(x.Keys...) || in(x.Values...)
+	case *xpath.ArrayConstructor:
+		return in(x.Members...)
+	case *xpath.LookupExpr:
+		return in(x.Base, x.Expr)
+	}
+	return false
+}
+
+// tailCallOf is pathOf for "tail(Q)", Q a path with no tail of its own: Q's
+// matches but the first (a match of a bare path is one item).
+func (w *splitter) tailCallOf(f *xpath.FuncCall) (splitPathParts, bool) {
+	if f.Name.URI != fnNS || f.Name.Local != "tail" || len(f.Args) != 1 {
+		return splitPathParts{}, false
+	}
+	pp, ok := w.pathOf(f.Args[0])
+	if !ok || pp.ctxItem || pp.group || len(pp.tail) > 0 || pp.mapR != nil {
+		return splitPathParts{}, false
+	}
+	pp.skip++
+	return pp, true
+}
+
+// hoistChoice rewrites F(if (C) then A else B), F a built-in function of one
+// argument and C motionless at the focus, as if (C) then F(A) else F(B): the
+// split then runs the chosen branch's split alone (DESIGN section 1.5's
+// choice groups). Both evaluate C first, then F of the branch's value.
+func hoistChoice(e xpath.Expr, focus vfocus, key bool) xpath.Expr {
+	f, ok := e.(*xpath.FuncCall)
+	if !ok || len(f.Args) != 1 || f.Name.URI != fnNS && f.Name.URI != xdm.NSXS {
+		return e
+	}
+	x, ok := hoistChoice(f.Args[0], focus, key).(*xpath.IfExpr)
+	if !ok || !(viewCheck{kids: true, key: key}).safe(x.Cond, focus, true) {
+		return e
+	}
+	return &xpath.IfExpr{Cond: x.Cond,
+		Then: &xpath.FuncCall{Name: f.Name, Args: []xpath.Expr{x.Then}},
+		Else: &xpath.FuncCall{Name: f.Name, Args: []xpath.Expr{x.Else}}}
+}

@@ -277,7 +277,7 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"copy-of filtered", `<xsl:copy-of select="copy-of(doc/rec)[x = 'r']"/>`, recs, false, false},
 		{"sequence data", `<xsl:sequence select="doc/rec/x/data()"/>`, recs, true, false},
 		{"for", `<xsl:value-of select="for $v in doc/rec/@v/data() return $v * 2"/>`, recs, true, false},
-		{"path from the items", `<xsl:value-of select="tail(doc/rec)/@v"/>`, recs, false, false},
+		{"path from the items", `<xsl:value-of select="tail(doc/rec)/@v"/>`, recs, true, false}, // tail() skips a match (streamshapes.go)
 		{"path from copies", `<xsl:value-of select="count(copy-of(doc/rec)/x)"/>`, recs, false, false},
 		{"unordered", `<xsl:value-of select="sum(unordered(doc/rec/@v))"/>`, recs, false, false},
 		{"malformed tail", `<xsl:value-of select="doc/rec/@v"/>`, tail, true, true},
