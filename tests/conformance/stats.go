@@ -222,12 +222,21 @@ func (r *Results) Suite(id string) Suite {
 
 // Breakdown looks up one named subset, with the same rule.
 func (r *Results) Breakdown(id string) Breakdown {
-	for _, b := range r.Breakdowns {
-		if b.ID == id {
-			return b
-		}
+	if b, ok := r.lookupBreakdown(id); ok {
+		return b
 	}
 	panic(fmt.Sprintf("conformance: no breakdown %q in results.json", id))
+}
+
+// lookupBreakdown is Breakdown for a subset that may be closed: a template
+// that renders an open block, or nothing once it is gone, asks this.
+func (r *Results) lookupBreakdown(id string) (Breakdown, bool) {
+	for _, b := range r.Breakdowns {
+		if b.ID == id {
+			return b, true
+		}
+	}
+	return Breakdown{}, false
 }
 
 // validateExtra checks the fields this file adds. It is called from Validate
@@ -428,8 +437,12 @@ func (r *Results) renderTodoStatus() string {
 	row("XQuery 3.1", r.Suite("xquery-3.1"), fmt.Sprintf(" (%d failing)", r.Suite("xquery-3.1").Disagreements))
 	row("XSLT 2.0", r.Suite("xslt-2.0"), fmt.Sprintf(" (%d failing)", r.Suite("xslt-2.0").Disagreements))
 	x := r.Suite("xslt-3.0")
-	b.WriteString(fmt.Sprintf("| XSLT 3.0 | %s — %s of %s in scope (%d failing); %d of those need more of the §19.8 streamability analysis |\n",
-		pct(x.Passed, x.Total), commas(x.Passed), commas(x.Total), x.Disagreements, r.Breakdown("xtse3430").Of))
+	xtse := ""
+	if bd, ok := r.lookupBreakdown("xtse3430"); ok {
+		xtse = fmt.Sprintf("; %d of those need more of the §19.8 streamability analysis", bd.Of)
+	}
+	b.WriteString(fmt.Sprintf("| XSLT 3.0 | %s — %s of %s in scope (%d failing)%s |\n",
+		pct(x.Passed, x.Total), commas(x.Passed), commas(x.Total), x.Disagreements, xtse))
 	rn := r.Suite("relaxng")
 	b.WriteString(fmt.Sprintf("| RELAX NG | %s — %s of %s |\n", pct(rn.Passed, rn.Total), commas(rn.Passed), commas(rn.Total)))
 	b.WriteString("| Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |\n")
@@ -522,9 +535,14 @@ func (r *Results) renderGapsTests() string {
 	return fmt.Sprintf("The unit-test suite is %s tests.\n", commas(r.TreeCount("unit-tests").Value))
 }
 
+// renderGapsXtse opens the XTSE3430 paragraph while that block is open; with
+// no "xtse3430" breakdown it says that none of the failures wants one.
 func (r *Results) renderGapsXtse() string {
-	b := r.Breakdown("xtse3430")
 	x := r.Suite("xslt-3.0")
+	b, ok := r.lookupBreakdown("xtse3430")
+	if !ok {
+		return fmt.Sprintf("**None of the %d wants an `XTSE3430`.**\n", x.Disagreements)
+	}
 	return fmt.Sprintf("**%d of the %d want an `XTSE3430`** — a refusal of a stylesheet as\n", b.Of, x.Disagreements)
 }
 
