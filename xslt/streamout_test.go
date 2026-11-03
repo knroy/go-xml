@@ -51,6 +51,12 @@ func (e errorString) Error() string { return string(e) }
 // for Transform and TransformReader, and returns how many nodes the streamed
 // runs opened before their end.
 func outCheck(t *testing.T, sheet *Stylesheet, src, where string, opts TransformOptions) int {
+	return outCheckErr(t, sheet, src, where, opts, "")
+}
+
+// outCheckErr is outCheck for a case where Output must fail with code
+// instead (when code is set).
+func outCheckErr(t *testing.T, sheet *Stylesheet, src, where string, opts TransformOptions, code string) int {
 	t.Helper()
 	opened := 0
 	defer func(f func()) { traceOutOpen = f }(traceOutOpen)
@@ -61,6 +67,10 @@ func outCheck(t *testing.T, sheet *Stylesheet, src, where string, opts Transform
 		got, gerr := outRun(sheet, src, main, true, opts)
 		traceOutOpen = nil
 		switch {
+		case code != "":
+			if gerr == nil || !strings.Contains(gerr.Error(), code) {
+				t.Errorf("%s (main %v): error %v, want %s", where, main, gerr, code)
+			}
 		case (werr == nil) != (gerr == nil) || werr != nil && werr.Error() != gerr.Error():
 			t.Errorf("%s (main %v): error %v, want %v", where, main, gerr, werr)
 		case werr == nil && got != want:
@@ -79,28 +89,32 @@ const outDoc = `<?xml version="1.0"?>
   text <b>bold</b> more
 </doc>`
 
-var outSheets = []struct{ name, decls, body string }{
-	{"identity", `<xsl:mode on-no-match="shallow-copy"/>`, ``},
-	{"identity-streamable", `<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`, ``},
-	{"filter", `<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="rec[@k = '2']"/><xsl:template match="v"/>`, ``},
-	{"lre", ``, `<xsl:template match="/"><out a="1"><xsl:for-each select="//rec"><r k="{@k}"><xsl:value-of select="name"/></r></xsl:for-each><end/></out></xsl:template>`},
-	{"lre-ns", `<xsl:mode on-no-match="shallow-copy"/>`, `<xsl:template match="/"><out xmlns="urn:o"><xsl:apply-templates/><x xmlns=""/></out></xsl:template>`},
-	{"text", `<xsl:output method="text"/>`, `<xsl:template match="/"><xsl:for-each select="//rec"><xsl:value-of select="@k"/>:<xsl:value-of select="name"/>;</xsl:for-each></xsl:template>`},
-	{"html", `<xsl:output method="html"/>`, `<xsl:template match="/"><html><head><title>t</title></head><body><xsl:for-each select="//rec"><p><xsl:value-of select="name"/><br/></p></xsl:for-each><script>if (a &lt; b) x();</script></body></html></xsl:template>`},
-	{"html-default", ``, `<xsl:template match="/"><html><body><xsl:copy-of select="//rec"/></body></html></xsl:template>`},
-	{"indent", `<xsl:output indent="yes"/><xsl:mode on-no-match="shallow-copy"/>`, ``},
-	{"indent-text", `<xsl:output indent="yes"/>`, `<xsl:template match="/"><out>x<xsl:copy-of select="//rec"/></out></xsl:template>`},
-	{"charmap", `<xsl:output use-character-maps="m" omit-xml-declaration="yes"/><xsl:character-map name="m"><xsl:output-character character="&amp;" string="AMP"/><xsl:output-character character="o" string="0"/></xsl:character-map><xsl:mode on-no-match="shallow-copy"/>`, ``},
-	{"atomics", ``, `<xsl:template match="/"><xsl:sequence select="1, 2, 'a'"/><e/><xsl:sequence select="3"/><xsl:text/><xsl:sequence select="4"/></xsl:template>`},
-	{"copy-doc", ``, `<xsl:template match="/"><xsl:copy><xsl:sequence select="1, 2"/><xsl:apply-templates/></xsl:copy></xsl:template><xsl:template match="rec"><xsl:copy><xsl:copy-of select="@*"/>[<xsl:value-of select="."/>]</xsl:copy></xsl:template>`},
-	{"cdata", `<xsl:output cdata-section-elements="name"/><xsl:mode on-no-match="shallow-copy"/>`, ``},
-	{"no-inherit", ``, `<xsl:template match="/"><xsl:element name="o" namespace="urn:x" inherit-namespaces="no"><a/><b><c/></b></xsl:element></xsl:template>`},
-	{"comment-error", ``, `<xsl:template match="/"><out><a/><xsl:comment>bad--</xsl:comment><b/></out></xsl:template>`},
-	{"attr-after-child", ``, `<xsl:template match="/"><out><a/><b/><xsl:attribute name="x">1</xsl:attribute></out></xsl:template>`},
-	{"terminate", ``, `<xsl:template match="/"><out><xsl:for-each select="//rec"><r/><xsl:if test="@k = 3"><xsl:message terminate="yes">stop</xsl:message></xsl:if></xsl:for-each></out></xsl:template>`},
-	{"map-top", ``, `<xsl:template match="/"><out/><xsl:sequence select="map{1:2}"/></xsl:template>`},
-	{"nested-transform", ``, `<xsl:template match="/"><out><xsl:sequence select="transform(map{'stylesheet-text': '&lt;xsl:stylesheet version=&quot;3.0&quot; xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot;&gt;&lt;xsl:template match=&quot;/&quot;&gt;&lt;in&gt;&lt;xsl:value-of select=&quot;count(//rec)&quot;/&gt;&lt;/in&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;', 'source-node': .})?output"/></out></xsl:template>`},
-	{"try", `<xsl:mode on-no-match="shallow-copy"/>`, `<xsl:template match="rec[@k = '2']"><xsl:try><bad><xsl:sequence select="error()"/></bad><xsl:catch><caught/></xsl:catch></xsl:try></xsl:template>`},
+var outSheets = []struct{ name, decls, body, outErr string }{
+	{"identity", `<xsl:mode on-no-match="shallow-copy"/>`, ``, ""},
+	{"identity-streamable", `<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`, ``, ""},
+	{"filter", `<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="rec[@k = '2']"/><xsl:template match="v"/>`, ``, ""},
+	{"lre", ``, `<xsl:template match="/"><out a="1"><xsl:for-each select="//rec"><r k="{@k}"><xsl:value-of select="name"/></r></xsl:for-each><end/></out></xsl:template>`, ""},
+	{"lre-ns", `<xsl:mode on-no-match="shallow-copy"/>`, `<xsl:template match="/"><out xmlns="urn:o"><xsl:apply-templates/><x xmlns=""/></out></xsl:template>`, ""},
+	{"text", `<xsl:output method="text"/>`, `<xsl:template match="/"><xsl:for-each select="//rec"><xsl:value-of select="@k"/>:<xsl:value-of select="name"/>;</xsl:for-each></xsl:template>`, ""},
+	{"html", `<xsl:output method="html"/>`, `<xsl:template match="/"><html><head><title>t</title></head><body><xsl:for-each select="//rec"><p><xsl:value-of select="name"/><br/></p></xsl:for-each><script>if (a &lt; b) x();</script></body></html></xsl:template>`, ""},
+	{"html-default", ``, `<xsl:template match="/"><html><body><xsl:copy-of select="//rec"/></body></html></xsl:template>`, ""},
+	{"indent", `<xsl:output indent="yes"/><xsl:mode on-no-match="shallow-copy"/>`, ``, ""},
+	{"indent-text", `<xsl:output indent="yes"/>`, `<xsl:template match="/"><out>x<xsl:copy-of select="//rec"/></out></xsl:template>`, ""},
+	{"charmap", `<xsl:output use-character-maps="m" omit-xml-declaration="yes"/><xsl:character-map name="m"><xsl:output-character character="&amp;" string="AMP"/><xsl:output-character character="o" string="0"/></xsl:character-map><xsl:mode on-no-match="shallow-copy"/>`, ``, ""},
+	{"atomics", ``, `<xsl:template match="/"><xsl:sequence select="1, 2, 'a'"/><e/><xsl:sequence select="3"/><xsl:text/><xsl:sequence select="4"/></xsl:template>`, ""},
+	{"copy-doc", ``, `<xsl:template match="/"><xsl:copy><xsl:sequence select="1, 2"/><xsl:apply-templates/></xsl:copy></xsl:template><xsl:template match="rec"><xsl:copy><xsl:copy-of select="@*"/>[<xsl:value-of select="."/>]</xsl:copy></xsl:template>`, ""},
+	{"cdata", `<xsl:output cdata-section-elements="name"/><xsl:mode on-no-match="shallow-copy"/>`, ``, ""},
+	{"no-inherit", ``, `<xsl:template match="/"><xsl:element name="o" namespace="urn:x" inherit-namespaces="no"><a/><b><c/></b></xsl:element></xsl:template>`, ""},
+	{"comment-error", ``, `<xsl:template match="/"><out><a/><xsl:comment>bad--</xsl:comment><b/></out></xsl:template>`, ""},
+	{"attr-after-child", ``, `<xsl:template match="/"><out><a/><b/><xsl:attribute name="x">1</xsl:attribute></out></xsl:template>`, ""},
+	{"terminate", ``, `<xsl:template match="/"><out><xsl:for-each select="//rec"><r/><xsl:if test="@k = 3"><xsl:message terminate="yes">stop</xsl:message></xsl:if></xsl:for-each></out></xsl:template>`, ""},
+	{"map-top", ``, `<xsl:template match="/"><out/><xsl:sequence select="map{1:2}"/></xsl:template>`, ""},
+	{"nested-transform", ``, `<xsl:template match="/"><out><xsl:sequence select="transform(map{'stylesheet-text': '&lt;xsl:stylesheet version=&quot;3.0&quot; xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot;&gt;&lt;xsl:template match=&quot;/&quot;&gt;&lt;in&gt;&lt;xsl:value-of select=&quot;count(//rec)&quot;/&gt;&lt;/in&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;', 'source-node': .})?output"/></out></xsl:template>`, ""},
+	// The tree admits a namespace node after content, which §5.7.1 makes
+	// XTDE0410; the stream has written the start tag, and raises it.
+	{"ns-after-child", ``, `<xsl:template match="/"><out><a/><b/><xsl:namespace name="q" select="'urn:q'"/><c/></out></xsl:template>`, "XTDE0410"},
+	{"ns-node-after-child", ``, `<xsl:template match="/"><out><a/><b/><xsl:copy-of select="//*:name[1]/namespace::*"/><c/></out></xsl:template>`, "XTDE0410"},
+	{"try", `<xsl:mode on-no-match="shallow-copy"/>`, `<xsl:template match="rec[@k = '2']"><xsl:try><bad><xsl:sequence select="error()"/></bad><xsl:catch><caught/></xsl:catch></xsl:try></xsl:template>`, ""},
 }
 
 func outSheet(t *testing.T, decls, body string) *Stylesheet {
@@ -114,7 +128,7 @@ func outSheet(t *testing.T, decls, body string) *Stylesheet {
 func TestStreamOutMatchesTree(t *testing.T) {
 	opened := 0
 	for _, c := range outSheets {
-		n := outCheck(t, outSheet(t, c.decls, c.body), outDoc, c.name, TransformOptions{})
+		n := outCheckErr(t, outSheet(t, c.decls, c.body), outDoc, c.name, TransformOptions{}, c.outErr)
 		t.Logf("%s: %d opened", c.name, n)
 		opened += n
 	}

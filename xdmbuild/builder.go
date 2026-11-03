@@ -709,6 +709,19 @@ func (b *Builder) AddNamespace(prefix, uri string) error {
 		b.items = append(b.items, b.newItem(xdm.KindNamespace, xdm.QName{Local: prefix}, uri))
 		return nil
 	}
+	// A streamed element whose start tag is written cannot take one more
+	// declaration. XSLT 3.0 §5.7.1 makes a namespace node after content
+	// XTDE0410; this builder admits it otherwise, and the streamed output
+	// cannot, so it is refused here and latched like a budget refusal.
+	if b.sink != nil && b.fr != 0 && b.open.FirstChild() != nil {
+		err := b.policy.Err(FaultAttrAfterChild,
+			fmt.Sprintf("namespace node %q added after the element %s has children, "+
+				"whose start tag the streamed output has written", prefix, b.open.Name().Lexical()))
+		if *b.refused == nil {
+			*b.refused = err
+		}
+		return err
+	}
 	// XTDE0440: "the result sequence contains a namespace node with no name
 	// and the element node being constructed has a null namespace URI (that
 	// is, it is an error to define a default namespace when the element is in
