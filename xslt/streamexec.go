@@ -244,6 +244,9 @@ func (b *streamBuilder) seq(el *xdm.Node, f vfocus) bool {
 			}
 			continue
 		case xdm.KindElement:
+			if fallbackIgnored(ch) { // streamsplit_fns.go
+				continue
+			}
 		default:
 			continue
 		}
@@ -302,6 +305,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		return b.mapOp(el, f)
 	case "map-entry":
 		return b.mapEntryOp(el, f)
+	case "message":
+		return b.messageOp(el, f, true) // streammessage.go
 	}
 	if el.Attr("", "select") != nil {
 		switch local {
@@ -582,6 +587,9 @@ func (b *streamBuilder) members(el *xdm.Node, body []*xdm.Node, f vfocus) bool {
 	consumers := 0
 	defer func(after bool) { b.after = after }(b.after)
 	for _, ch := range body {
+		if fallbackIgnored(ch) { // streamsplit_fns.go
+			continue
+		}
 		r := b.pl.rec(ch)
 		if r == nil || !r.known || r.unverified {
 			return b.refuse("no trusted record for " + elName(ch))
@@ -669,6 +677,9 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if b.noIdent && (local == "sequence" || local == "variable") {
 			// They could hand the copy on as the node it stands for.
 			return b.refuse("xsl:" + local + " on a copied text, comment or PI node")
+		}
+		if local == "message" {
+			return b.messageOp(el, f, false) // streammessage.go
 		}
 		if !streamMotionless[local] || local == "copy" && f == vNone {
 			return b.refuse("motionless xsl:" + local)
@@ -1032,7 +1043,7 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 	s := op.split
 	copies := isXSL(op.el, "copy-of") || isXSL(op.el, "sequence") && inElement(op.el)
 	if c := s.class(); copies && (c == "nodes" || c == "subtree") &&
-		s.cond == nil && s.red == "" && isVarRef(s.outer.Expr(), splitItems) {
+		s.cond == nil && s.red == "" && (isVarRef(s.outer.Expr(), splitItems) || copiedItems(s.outer.Expr())) { // streamsplit_fns.go
 		switch {
 		case s.group && minD+s.minDepth() < 2:
 			// A group of the document element: the fallback a container's
@@ -1070,7 +1081,8 @@ func inElement(el *xdm.Node) bool {
 		switch n.Name().Local {
 		case "element", "copy":
 			return true
-		case "if", "choose", "when", "otherwise", "for-each", "for-each-group", "iterate", "fork":
+		case "if", "choose", "when", "otherwise", "for-each", "for-each-group", "iterate", "fork",
+			"source-document": // g5: its result is written where it is, as an xsl:if's
 		default:
 			return false
 		}
@@ -1345,6 +1357,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	}
 	i.stream.count()
 	sig, mark := signature(out), rt.localsMark()
+	msgs := rt.messagesMark() // streammessage.go
 	n0, b0 := xpathleaf.Charged(rt.ctx)
 	// At the top of a sequence (the principal result's raw nodes, a
 	// variable's, a function's) the tree keeps the source's own nodes where
@@ -1390,6 +1403,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 		return true, fmt.Errorf("streaming: internal error after output was written: %w", err)
 	}
 	unread()
+	rt.dropMessages(msgs)
 	terr := i.executeTree(rt, out, href)
 	if terr == nil && !clean {
 		streamtrace.Guard()

@@ -75,6 +75,9 @@ func rewriteCalls(e xpath.Expr, fns map[funcKey]*streamFunc) xpath.Expr {
 		if body := inlineCall(x, fns); body != nil {
 			return body
 		}
+		if v := traceValue(x); v != nil {
+			return v // streamsplit_fns.go
+		}
 	case *xpath.SimpleMap:
 		x.Left, x.Right = re(x.Left), re(x.Right)
 		if p := mapAsPath(x); p != nil {

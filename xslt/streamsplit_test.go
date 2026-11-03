@@ -471,7 +471,7 @@ var splitRefused = map[string]string{
 	`//rec/(item | @k)`:                                 "",
 	`count(//node()[self::text()][normalize-space(.)])`: "predicate",
 	`head(//text())`:                                    "",
-	`distinct-values(//rec/@k)`:                         "function",
+	`sort(//rec/@k)`:                                    "function",
 	`//item/..`:                                         "climbed",
 	`sum(//rec/@v) div count(*)`:                        "second",
 	`node()`:                                            "",

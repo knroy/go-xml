@@ -1774,10 +1774,14 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	var text string
 	var value xdm.Sequence
+	st := rt.streamTry() // streammessage.go
 	if i.sel != nil {
-		seq, err := i.sel.Eval(rt.ctx)
+		seq, err := rt.evalSelect(i, i.sel)
 		if err != nil {
 			if !i.xslt30 {
+				return err
+			}
+			if err := st.messageFailed(err); err != nil {
 				return err
 			}
 			// 3.0: "if a dynamic error occurs while evaluating the content,
@@ -1800,6 +1804,9 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			if !i.xslt30 {
+				return err
+			}
+			if err := st.messageFailed(err); err != nil {
 				return err
 			}
 			if !i.assert {

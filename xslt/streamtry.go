@@ -237,16 +237,18 @@ func (s *streamSplit) failing() int {
 	}
 	n := 0
 	for _, st := range s.steps {
+		checked := false // "." converted to a number by an earlier predicate
 		for _, p := range st.preds {
-			if p.e != nil && !tryCannotFail(p.e.Expr()) {
+			if p.e != nil && !tryCannotFail(p.e.Expr()) && !(checked && numberCompare(p.e.Expr())) {
 				n++
 			}
+			checked = checked || p.e != nil && numericCheck(p.e.Expr()) // streamtry_fold.go
 		}
 	}
 	if s.tail != nil && !tryCannotFail(s.tail.Expr()) {
 		n++
 	}
-	if splitFolds[s.red] {
+	if splitFolds[s.red] && !s.foldCannotFail() { // streamtry_fold.go
 		n++
 	}
 	if s.outer != nil && besideFails(s.outer, s.outer.Expr(), s.outerVar) {
@@ -278,6 +280,14 @@ func besideFails(base *xpath.Compiled, e xpath.Expr, v xdm.QName) bool {
 		kids = x.Items
 	case *xpath.FilterExpr:
 		kids = append([]xpath.Expr{x.Base}, x.Predicates...)
+	case *xpath.SimpleMap:
+		// The left is evaluated whole, then the right per item (xpath
+		// SimpleMap.Eval): after every error of the path's items, in the
+		// tree as in the stream, which evaluates the outer at the end.
+		if refersTo(base, x.Left, v) {
+			return besideFails(base, x.Left, v)
+		}
+		return !tryCannotFail(e)
 	default:
 		return !tryCannotFail(e)
 	}

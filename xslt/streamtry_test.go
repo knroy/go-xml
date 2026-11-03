@@ -61,7 +61,9 @@ var tryBodies = []struct {
 	// predicate and a fold; a tail and a fold), a loop whose select may
 	// fail, apply-templates, a consuming catch, rollback-output="no".
 	{`<o><xsl:try><xsl:value-of select="sum(doc/rec[xs:integer(@v) gt 0]/@v)"/><xsl:catch>c</xsl:catch></xsl:try></o>`, false},
-	{`<o><xsl:try><xsl:value-of select="avg(doc/rec/(@v * 2))"/><xsl:catch>c</xsl:catch></xsl:try></o>`, false},
+	{`<o><xsl:try><xsl:value-of select="avg(doc/rec/xs:date(@v))"/><xsl:catch>c</xsl:catch></xsl:try></o>`, false},
+	// g5: numeric items, so the fold cannot fail once the tail has not.
+	{`<o><xsl:try><xsl:value-of select="avg(doc/rec/(@v * 2))"/><xsl:catch>c</xsl:catch></xsl:try></o>`, true},
 	{`<o><xsl:try><xsl:for-each select="doc/rec[xs:integer(@v) gt 0]"><r/></xsl:for-each><xsl:catch>c</xsl:catch></xsl:try></o>`, false},
 	{`<o><xsl:try><xsl:apply-templates select="doc/rec"/><xsl:catch>c</xsl:catch></xsl:try></o>`, false},
 	{`<o><xsl:try><xsl:value-of select="sum(doc/rec/@v)"/><xsl:catch><xsl:value-of select="count(doc/rec)"/></xsl:catch></xsl:try></o>`, false},

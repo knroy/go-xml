@@ -406,6 +406,9 @@ func (c *compiler) readyRule(r *rulePlan) {
 // node is matched live, its ancestors open, and so may be named through
 // them as well.
 func patternClasses(p *Pattern) (can [numClasses]bool, why string) {
+	if matchesNoNode(p) { // streampattern_g5.go
+		return can, ""
+	}
 	if len(p.general) > 0 {
 		return can, "pattern " + p.src + ": an XSLT 3.0 form"
 	}

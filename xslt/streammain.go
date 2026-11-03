@@ -103,7 +103,7 @@ func (s *Stylesheet) mainRefusal() string {
 		return "input-type-annotations"
 	}
 	for _, g := range s.globals {
-		if len(g.Body) > 0 || g.Select != nil && !focusFree(g.Select.Expr()) {
+		if len(g.Body) > 0 && !s.literalGlobal(g) || g.Select != nil && !focusFree(g.Select.Expr()) { // streammain_globals.go
 			return "global $" + g.Name.Lexical() + " may read the context item"
 		}
 	}

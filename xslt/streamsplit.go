@@ -614,7 +614,7 @@ func tailKindOK(e xpath.Expr) bool {
 	if f, ok := e.(*xpath.FuncCall); ok && f.Name.URI == fnNS && splitAtomicFns[f.Name.Local] {
 		return true
 	}
-	return atomicValued(e) || tailValue(e) || nodeValued(e)
+	return atomicValued(e) || tailValue(e) || nodeValued(e) || copyTail(e)
 }
 
 // splitAtomicFns return atomic values, beside those atomicValued knows.
@@ -842,7 +842,7 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 	case *xpath.FuncCall:
 		switch x.Name.URI {
 		case fnNS:
-			if !burstConsumers[x.Name.Local] {
+			if !burstConsumers[x.Name.Local] && !splitWholeFns[x.Name.Local] {
 				return w.refuse("function " + x.Name.Local + "()")
 			}
 		case xdm.NSXS, xdm.NSMath:
@@ -858,7 +858,7 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 		}
 		argUse := useKeep
 		switch {
-		case x.Name.URI != fnNS || burstAtomizers[x.Name.Local] && x.Name.Local != "count" &&
+		case x.Name.URI != fnNS || splitWholeAtomizers[x.Name.Local] || burstAtomizers[x.Name.Local] && x.Name.Local != "count" &&
 			x.Name.Local != "exists" && x.Name.Local != "empty":
 			argUse = useAtomize
 		case x.Name.Local == "count" || x.Name.Local == "exists" || x.Name.Local == "empty":
@@ -1174,6 +1174,9 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		}
 		return vc.path(x.Steps, f, nodeOK)
 	case *xpath.FilterExpr:
+		if freeFilter(x) { // streamsplit_fns.go
+			return true
+		}
 		for _, p := range x.Predicates {
 			if !vc.safe(p, vElem, true) || !vc.safe(p, vLeaf, true) {
 				return false
@@ -1262,6 +1265,8 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		return true
 	case *xpath.FuncCall:
 		return vc.call(x, f, nodeOK)
+	case *xpath.NamedFunctionRef, *xpath.InlineFunctionExpr:
+		return vc.funcItemSafe(e) // streamsplit_fns.go
 	}
 	return false
 }
