@@ -597,3 +597,15 @@ func foreign(e xpath.Expr) bool {
 	}
 	return true
 }
+
+// branchKinds is testKinds over the last step of every branch of p: whether
+// a match can be a text, comment or PI node, and an element.
+func branchKinds(p splitPathParts) (leaf, elem bool) {
+	for i, st := range p.steps {
+		if i+1 == len(p.steps) || p.br.bits[i+1] != p.br.bits[i] {
+			l, e := testKinds(st.Test)
+			leaf, elem = leaf || l, elem || e
+		}
+	}
+	return leaf, elem
+}

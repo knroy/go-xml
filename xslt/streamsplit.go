@@ -318,6 +318,9 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 	s.later = (!s.nests || !positional) && !s.group
 	last := p.steps[len(p.steps)-1]
 	leaf, elem := testKinds(last.Test)
+	if p.br != nil {
+		leaf, elem = branchKinds(p) // every branch's last step (streamsplit_union.go)
+	}
 	if last.Axis == xpath.AxisDescendantOrSelf {
 		// The context itself is a result.
 		if len(p.tail) == 0 {

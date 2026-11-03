@@ -47,6 +47,11 @@ var unionBodies = []struct {
 	{`<out><xsl:value-of select="(/doc/rec | //sub)[. = 't3']" separator=","/></out>`, false},
 	// The analysis does not trust (A | B)/C: no plan is built.
 	{`<out><xsl:value-of select="(/doc/rec | /doc/w)/rec/@v" separator=","/></out>`, false},
+	// A branch that can match a text, comment or PI node keeps one: refused
+	// (fuzz seeds 23489, 28756, 32026).
+	{`<out><xsl:copy-of select="//comment() except /doc/rec"/></out>`, false},
+	{`<out><xsl:copy-of select="/doc/rec ! (node() union sub)"/></out>`, false},
+	{`<out><xsl:value-of select="count(//comment() | //sub)"/></out>`, true},
 	// Refused: a predicate that may fail (the operands' errors come in
 	// another order); the context itself as a match not read on its view.
 	{`<out><xsl:value-of select="count(//rec[xs:integer(@v) gt 1] | //sub)"/></out>`, false},
