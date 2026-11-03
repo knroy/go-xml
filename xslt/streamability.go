@@ -299,9 +299,9 @@ func (a *analyzer) exprRule(e xpath.Expr) props {
 		return a.funcCall(x)
 
 	case *xpath.SimpleMap:
-		// §19.8.8.7: the posture and sweep of "a!b" are those of the right
-		// operand, assessed with a context posture and type taken from the
-		// left operand.
+		// §19.8.8.7: the posture of "a!b" is the right operand's, assessed
+		// with a context posture and type taken from the left operand; the
+		// sweep is the wider of the two.
 		return a.simpleMap(x)
 
 	case *xpath.MapConstructor:

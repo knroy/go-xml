@@ -119,6 +119,10 @@ func TestAnalyzeExprFunctionCalls(t *testing.T) {
 		// so the call is striding and consuming -- a modelled answer, and a
 		// narrower one than the general rules would give.
 		{"fn:outermost(descendant::c)", props{postureStriding, sweepConsuming}, true},
+		// §19.8.8.7: the sweep of "!" is the wider of its operands', so a
+		// consuming left side is not dropped by a motionless right one.
+		{"(a ! string(.)) ! number(.)", props{postureGrounded, sweepConsuming}, true},
+		{"@a ! string(.)", props{postureGrounded, sweepMotionless}, true},
 	}
 	for _, c := range cases {
 		got, known := analyze(t, c.expr)

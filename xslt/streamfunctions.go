@@ -776,8 +776,7 @@ func (a *analyzer) varRef(x *xpath.VarRef) props {
 // This was quoted as "the posture AND SWEEP of the expression are the posture
 // and sweep of the right-hand operand", which states the sweep half backwards:
 // the sweep is the wider of the two, so a consuming left operand is not
-// discarded by a motionless right one. The code takes the wider sweep; only
-// the quotation was wrong. The left operand is assessed
+// discarded by a motionless right one. The left operand is assessed
 // first, in the current context; a left operand that is itself not streamable
 // makes the whole expression so.
 //
@@ -818,6 +817,10 @@ func (a *analyzer) simpleMap(x *xpath.SimpleMap) props {
 	p := inner.expr(x.Right)
 	a.known = a.known && inner.known
 	a.unverified = a.unverified || inner.unverified
+	// "The sweep of the expression is the wider of the sweeps of the two
+	// operands": (ITEM ! string(.)) ! number(.) consumes, though its right
+	// operand, in a grounded focus, is motionless.
+	p.sweep = wider(left.sweep, p.sweep)
 	return p
 }
 
