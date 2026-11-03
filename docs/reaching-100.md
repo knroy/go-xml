@@ -1,6 +1,7 @@
 # What reaching 100% would take
 
-Measured at commit `7798acd`, 2026-10-02. The short answer: **100% is not
+Measured at commit `7798acd`, 2026-10-02; the XSLT 3.0 figures re-measured
+on 2026-11-03, after the §19.8 analysis was completed (M8). The short answer: **100% is not
 reachable on any of these suites**, and the great majority of what remains are
 cases where passing would mean shipping something *less* correct. What follows
 separates the work that exists from the work that does not.
@@ -14,19 +15,18 @@ case by case; this file is about what buying them would cost.
 | XPath 3.1 | 0 | 0 | 0 | 0 |
 | XQuery 3.1 | 1 | 0 | 0 | 1 |
 | XSLT 2.0 | 8 | 0 | 0 | 8 |
-| XSLT 3.0 | 23 | 0 | 0 | 23 |
+| XSLT 3.0 | 19 | 0 | 0 | 19 |
 | XSD 1.0 | 30 | 0 | 0 | 30 |
 | XSD 1.1 | 31 | 0 | 0 | 31 |
-| **Total** | **93** | **0** | **0** | **93** |
+| **Total** | **89** | **0** | **0** | **89** |
 
 XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 
-Three of the XSLT 3.0 cases sit in the "cannot fix" column on a weaker claim
-than the rest: they want an `XTSE3430` refusal that the §19.8 streamability
+Three XSLT 3.0 cases used to sit in the "cannot fix" column on a weaker claim
+than the rest: they wanted an `XTSE3430` refusal that the §19.8 streamability
 analysis could emit only through rules measured to cost more cases than they
-gain, and §19.1 says a non-streaming processor "is not required to assess
-whether constructs are guaranteed-streamable". They are not owed, which is not the same as not
-buildable; Part 2 files them under features deliberately not implemented.
+gained. M8 found rules that cost nothing, and all 151 W3C cases that want the
+refusal now get it.
 
 For XSD the fixable/cannot-fix split is not a judgement call: it is the suite's
 own `status` field. A case marked `accepted` is a settled expectation and so is
@@ -53,7 +53,7 @@ cases in Part 2, not a defect. The two the suite itself declared out of scope
 left the denominator, and the harness scoring defects — chiefly the eight XSD
 `indeterminate` expectations per version that were silently scored as "must be
 invalid" — were fixed in the harness. What stands between here and 100% is
-the 93 in Part 2.
+the 89 in Part 2.
 
 The last four to fall are worth recording, because they are the shape of what
 "fixable" meant:
@@ -100,7 +100,7 @@ A ceiling bounds what the suite asks, not what the code does.
 
 ---
 
-## Part 2 — the 93 that are not work
+## Part 2 — the 89 that are not work
 
 Grouped by what would actually have to change.
 
@@ -154,7 +154,7 @@ The policy question for run-time module URIs is answered by not giving the
 function any reach of its own: it reads through the resolver `import module`
 uses, nil by default. See [xquery.md](xquery.md#loading-a-module-at-run-time).
 
-### 3 — the suite contradicts itself
+### 2 — the suite contradicts itself
 
 `strip-space-009` asserts a whitespace-preservation rule §4.4 does not state,
 and its own comment concedes the point.
@@ -165,12 +165,8 @@ containing `<xsd:union memberTypes="xsd:NOTATION"/>` valid, and both are
 `accepted`. Enforcing the rule was measured: 1.1 trades one for the other and
 1.0 loses two outright. Reverted.
 
-`system-property-012` asserts `system-property('xsl:supports-streaming')` is
-`'yes'` from a processor §26.5 requires to answer `'no'`; its twin
-`system-property-013` is the same stylesheet gated on the streaming feature
-being *unsatisfied* and asserts `'no'`. The pair is a dependency-gated fork of
-which exactly one is meant to run, and the suite does not separate the
-streaming dependency from the streaming conformance the property reports on.
+`system-property-012` stood here while `system-property('xsl:supports-streaming')`
+answered `'no'`; it passes since the property reports `'yes'` (2026-11-03).
 
 The three `regex-syntax` ambiguous-dash cases — `-0056`, `-0086`, `-0102` —
 stood here until recently and now **pass**. They were the case where
@@ -296,23 +292,16 @@ part of a resource rather than a different one — and nothing then applied it,
 so the whole document was returned. `xslt/sourcedoc.go` now resolves the
 bare-name fragment against the retrieved document.
 
-### 4 — features deliberately not implemented
+### 1 — a feature deliberately not implemented
 
-Three want an `XTSE3430` refusal that only more of the §19.8 posture-and-sweep
-analysis can emit: `si-fork-902`, `si-fork-952` and `su-absorbing-205`. Each
-fix was measured and costs more than it gains: modelling `||` refuses the two
-`si-fork` cases but loses 18 `sx-union` cases (+2/−18), and the §19.8.4.12
-higher-order reading of `xsl:copy` that `su-absorbing-205` needs loses 61
-`si-copy` cases (+1/−61). Those cases expect stylesheets XSLT 3.0's literal
-rules refuse to be accepted, so closing these three wants the finer rules
-Saxon-EE evidently applies, which the Recommendation does not contain. §19.1
-settles whether the refusal is owed — a processor that does not stream "is not
-required to assess whether constructs are guaranteed-streamable" — so they are
-not defects. Four former members of this list (`su-absorbing-908`,
-`su-ascent-903`, `su-shallow-descent-902`, `sx-square-array-201`) pass since
-2026-10-02.
+Three wanted an `XTSE3430` refusal: `si-fork-902`, `si-fork-952` and
+`su-absorbing-205`. Each known fix cost more than it gained (+2/−18 and
++1/−61); M8 closed all three at no cost, by withholding `||` in a crawling
+focus and applying §19.8.4.12's higher-order note to singularity only. Four
+former members of this list (`su-absorbing-908`, `su-ascent-903`,
+`su-shallow-descent-902`, `sx-square-array-201`) pass since 2026-10-02.
 
-The fourth is `sf-reverse-001`, which wants `reverse(snapshot(/chapter)//section)`
+The one left is `sf-reverse-001`, which wants `reverse(snapshot(/chapter)//section)`
 in reversed order. XPath 3.1 §3.3.1.1 returns a path's nodes in document order
 however the left operand was ordered; the catalog's answer is what a
 *streaming* evaluator produces, since §19.11 says sorting is incompatible with
@@ -398,12 +387,11 @@ lands after all, by a route that had to be walked to be believed. See
 
 ## Part 3 — the honest bottom line
 
-**Reaching 100% is not a goal that survives contact with the suites.** All 93
+**Reaching 100% is not a goal that survives contact with the suites.** All 89
 remaining disagreements would require agreeing with a disputed result,
 contradicting §18.2.2, implementing vendor extensions, freezing a stale Unicode
-table, accepting invalid input, weakening a security default, refining an
-analysis past the rules the Recommendation states, which §19.1 says a
-non-streaming processor need not perform, or reproducing another
+table, accepting invalid input, weakening a security default, returning a
+path out of document order, or reproducing another
 implementation's choice where the spec declines to make one. None is now an
 open question about our own correctness — the last two, `validation-0201` on
 both targets, were settled by fixing the defect behind them, which turned out

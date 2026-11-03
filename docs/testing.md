@@ -564,17 +564,20 @@ suite's consuming expressions, and a fuzzer (`GOXSLT_SPLIT_FUZZ=N`,
    to the tree.
 
 It compares base with branch, and branch with off, using `tests/recdiff`
-and `tests/streamdiff/allow.txt`. That file holds nine case-scoped rules:
+and `tests/streamdiff/allow.txt`. That file holds twelve case-scoped rules:
 generate-id numbering in docbook-002, si-fork-801, document-2011 and
-streamable-007/-022 (a principal input `TransformReader` streamed), and the clock in
-evaluate-052, cvt-042, format-date-037 and error-3160a.
+streamable-007/-022 (a principal input `TransformReader` streamed), the clock in
+evaluate-052, cvt-042, format-date-037 and error-3160a, and three cases whose
+wanted `XTSE3430` M8's analysis now raises where the base wrote output
+(si-fork-902, si-fork-952, su-absorbing-205), to be dropped once the base is
+past M8.
 
 With `GOXSLT_RECORD_DIR` set, tests/xslts writes
 `<dir>/streams/<suite>.tsv`, one line per case that streamed. The runner
 fails when any of these is true:
 - a difference is unexplained;
 - fewer cases streamed than the floor (`-floor`, `GOXSLT_STREAM_FLOOR`,
-  default 922);
+  default 1009);
 - a guard fired;
 - the off leg streamed.
 
@@ -590,16 +593,15 @@ compared byte for byte, error for error, with `Result.Serialize`. A case whose
 third, plain run also differs is counted unstable (the clock, generate-id);
 any other difference fails.
 
-At badba78b, with `-output`, it reads:
-- 922 cases on the streamed path: runs core 878, main 35 (principal inputs
+At fe989cf3 (M8, the §19.8 analysis completed), with `-output`, it reads:
+- 1009 cases on the streamed path: runs core 961, main 39 (principal inputs
   through `TransformReader`), merge 21; 2 with a fallback (si-element-218,
   si-lre-218: an `xsl:sequence` copy that would ground the document element,
-  answered from the tree), 39 re-run on the tree; 0 guard hits;
-- zero unexplained differences;
-- the output leg: all 922 streamed cases byte-identical, 0 error
-  differences, 145 of them writing output before the end; 11,505 of the
-  11,518 cases identical overall, 13 unstable between two tree runs (the
-  clock, generate-id, per-compilation namespace URIs).
+  answered from the tree), 41 re-run on the tree; 0 guard hits;
+- zero unexplained differences (the three M8 rules above each hit once);
+- the output leg: all 1009 streamed cases byte-identical, 0 bytes or errors
+  differ; 11,505 of the 11,518 cases identical overall, 13 unstable between
+  two tree runs (the clock, generate-id, per-compilation namespace URIs).
 
 The TSV line holds the runs per strategy (core: containers; main: principal
 inputs `TransformReader` streamed; merge: streamed merge sources), fallbacks, guard hits, re-runs and
@@ -648,7 +650,7 @@ of them running a streamed grouping; `TestStreamFuzzMain` 100,000 give 0,
 the cursor; `TestStreamFuzzMain` 100,000 give 0, 1,992 streamed with a try
 rule. At badba78b, 100,000 cases each (seed 11) of `TestStreamFuzz`,
 `TestStreamFuzzMain`, `TestStreamFuzzMerge` and `TestStreamOutFuzz` give 0
-differences.
+differences, and at fe989cf3 100,000 each (seed 1) give 0 again.
 
 `TestStreamFuzzMain` applies each case of the modes grammar to its document
 in an initial mode through `TransformReader` and through `xdm.Parse` +
@@ -688,7 +690,7 @@ TestQT3XPath20 15217
 TestQT3XPath30 19362
 TestQT3XPath31 22054
 TestQT3XQuery 30516
-TestXSLT30Suite 11495
+TestXSLT30Suite 11499
 TestXSLTSuite 6193
 VendoredSchemas 185
 XSD10 39358
@@ -777,9 +779,9 @@ reads `tests/ratchet.txt` and examines every documentation line that names a
 suite's **in-scope denominator** -- the one number in a figure that does not
 move between runs (11,518 for XSLT 3.0, 30,346 for XQuery, and so on). The
 passing count, failure count and percentage written beside it must equal the
-ratchet's, in every form the documents use: `11,495 of 11,518`,
-`23 of 11,518`, `11,495 / 11,518 (99.80%)`, `= 99.80%`, `(23 failing)`, and
-the `| 11,518 | 11,495 | 99.80% | **23** |` summary-table row. A line stating
+ratchet's, in every form the documents use: `11,499 of 11,518`,
+`19 of 11,518`, `11,499 / 11,518 (99.84%)`, `= 99.84%`, `(19 failing)`, and
+the `| 11,518 | 11,499 | 99.84% | **19** |` summary-table row. A line stating
 two figures is read as two claims. Failures name the file, line and the value
 wanted.
 
@@ -1394,7 +1396,7 @@ same admission from the other side — it cannot run the case under the conditio
 the case asked for.
 
 Folding those 134 into the denominator as failures is a defensible alternative
-reading, and it gives 11,495 of 11,652, or 98.65%. It is **not** the figure this
+reading, and it gives 11,499 of 11,652, or 98.69%. It is **not** the figure this
 repository publishes, for the same reason the other skips are not: an
 unmodelled dependency is not a measured disagreement with the specification, and
 scoring it as one would put a number on cases that were never run. The published

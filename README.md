@@ -134,7 +134,7 @@ and maintains it as a project of his own.
 | **XPath 3.1** | 100.00% of the W3C QT3 suite (22,054 of 22,054 in scope); maps, arrays, the lookup operator, the JSON family, and `fn:transform`, measured since it became callable from XPath |
 | **XQuery 3.1** | 100.00% of the W3C QT3 suite (30,516 of 30,517 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 318 more passes; the 1 remaining failure, `contextDecl-052`, is a W3C fixture defect catalogued in [conformance-gaps.md](docs/conformance-gaps.md) |
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,193 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.80% of the W3C XSLT suite filtered to 3.0 (11,495 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 3 of the 23 failures want the XTSE3430 that more of the §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XSLT 3.0** | 99.84% of the W3C XSLT suite filtered to 3.0 (11,499 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases; every one of the 151 cases that wants the XTSE3430 refusal gets it — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
@@ -164,11 +164,11 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.80%, and still
+3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.84%, and still
    the one to check against your own stylesheets first. It has no
-   concentration left: 3 of the 23 failures want the `XTSE3430` refusal that
-   more of the §19.8 streamability analysis would emit, and the other 20 are
-   fixture defects, deliberate divergences or implementation-defined, each
+   concentration left: none of the 19 failures wants the `XTSE3430` refusal
+   (the §19.8 analysis raises it for all 151 W3C cases that want it), and the
+   19 are fixture defects, deliberate divergences or implementation-defined, each
    recorded with its verdict. No single feature is systematically weak. The
    corpus differential against Saxon remains stronger evidence for real
    stylesheets than the percentage.
@@ -190,14 +190,13 @@ true here:
    sets, calls on stylesheet functions whose body is one `xsl:sequence`,
    accumulators, `xsl:fork` and `xsl:map`, and `xsl:merge` over streamable
    sources; `TransformOptions.Output` writes the principal result as it is
-   made (922 W3C cases stream; see [known gaps](docs/known-gaps.md)). Otherwise the streaming cases are in
+   made (1009 W3C cases stream; see [known gaps](docs/known-gaps.md)). Otherwise the streaming cases are in
    scope and counted: the stylesheet-level half of streaming, the §19.8
    streamability analysis that refuses a construct with `XTSE3430`, is
    implemented and measured. A construct the streamed core does not take
-   still executes, by building the tree instead. §19.1 allows
-   exactly that — a processor not claiming the streaming option "must still
-   process a stylesheet and deliver the correct results, but is not required to
-   use streaming algorithms". What a streamable stylesheet *computes* is
+   still executes, by building the tree instead: correct results, in memory
+   proportional to the document. `system-property('xsl:supports-streaming')`
+   reports `yes`; `streaming-fallback` is not claimed. What a streamable stylesheet *computes* is
    another question — the spec requires it to be the same as a non-streaming
    evaluation, so the `si-*` sets, which assert results rather than memory
    behaviour, are in scope and nearly all pass. *Where it fails* sets out the
@@ -1836,11 +1835,10 @@ include.
 ## Where this is going
 
 The conformance tail is no longer the interesting work. XPath is at 100% on all
-three versions, XQuery has one fixture case left, and XSLT 31 across both targets —
+three versions, XQuery has one fixture case left, and XSLT 27 across both targets —
 cases where the suite disagrees with the specification, where matching it would
 cost XSD tests, or which want byte-identical reproduction of another
-processor's indentation, plus three `XTSE3430` refusals whose known fixes each
-cost more passing cases than they gain. That leaves **none genuinely open**: the last two were
+processor's indentation. That leaves **none genuinely open**: the last two were
 `validation-0201` on both targets, and the engine defect behind them — a
 union's selected member type dropped on every tree copy, so that
 `xsl:strip-space` silently untyped a validated document — is fixed. The case
