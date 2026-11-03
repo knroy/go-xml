@@ -1,8 +1,10 @@
 package xslt
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -77,4 +79,28 @@ func coreCheckLoose(t *testing.T, sheet, dir, doc string, di, bi int, stream boo
 		t.Errorf("%s decl %d body %d: streamed", doc, di, bi)
 	}
 	return int(st.Runs[0])
+}
+
+// TestStreamFallbackAndIterateDefaults: an xsl:fallback in a streamed body
+// (never instantiated) and an xsl:iterate parameter defaulting to a map or
+// array constructor no longer send the container to the tree.
+func TestStreamFallbackAndIterateDefaults(t *testing.T) {
+	bodies := []string{
+		`<n><xsl:value-of select="count(doc/rec)"/></n><xsl:fallback><f/></xsl:fallback>`,
+		`<xsl:iterate select="doc/rec"><xsl:param name="m" as="map(*)" select="map{}"/>` +
+			`<xsl:on-completion><n><xsl:value-of select="map:size($m)"/></n></xsl:on-completion>` +
+			`<xsl:next-iteration><xsl:with-param name="m" select="map:put($m, string(@k), 1)"/></xsl:next-iteration></xsl:iterate>`,
+		`<xsl:iterate select="doc/rec"><xsl:param name="a" as="array(*)" select="[]"/>` +
+			`<xsl:on-completion><n><xsl:value-of select="array:size($a)"/></n></xsl:on-completion>` +
+			`<xsl:next-iteration><xsl:with-param name="a" select="array:append($a, string(@v))"/></xsl:next-iteration></xsl:iterate>`,
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["flat"]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for i, b := range bodies {
+		sheet := strings.Replace(coreSheet(b), `xmlns:p="urn:p"`,
+			`xmlns:p="urn:p" xmlns:map="http://www.w3.org/2005/xpath-functions/map" xmlns:array="http://www.w3.org/2005/xpath-functions/array"`, 1)
+		coreCheck(t, sheet, dir, fmt.Sprint("body ", i), true, TransformOptions{})
+	}
 }

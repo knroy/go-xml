@@ -230,6 +230,9 @@ func (b *streamBuilder) seq(el *xdm.Node, f vfocus) bool {
 			}
 			continue
 		case xdm.KindElement:
+			if fallbackIgnored(ch) { // streamsplit_fns.go
+				continue
+			}
 		default:
 			continue
 		}
@@ -560,6 +563,9 @@ func (b *streamBuilder) members(el *xdm.Node, body []*xdm.Node, f vfocus) bool {
 	consumers := 0
 	defer func(after bool) { b.after = after }(b.after)
 	for _, ch := range body {
+		if fallbackIgnored(ch) { // streamsplit_fns.go
+			continue
+		}
 		r := b.pl.rec(ch)
 		if r == nil || !r.known || r.unverified {
 			return b.refuse("no trusted record for " + elName(ch))

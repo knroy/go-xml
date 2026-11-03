@@ -368,7 +368,7 @@ func iterateParamOK(p *xdm.Node) bool {
 	}
 	if s := p.AttrValue("select"); s != "" {
 		e := parseAt(p, s)
-		return e != nil && focusFree(e)
+		return e != nil && constructorFocusFree(e) // streamsplit_fns.go
 	}
 	return true
 }

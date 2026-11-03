@@ -71,3 +71,35 @@ func traceValue(x *xpath.FuncCall) xpath.Expr {
 	}
 	return x.Args[0]
 }
+
+// constructorFocusFree is focusFree that also reads map and array
+// constructors (map{}, [1, 2]), which focusFree, the analysis's, leaves out:
+// for an xsl:iterate parameter's default (iterateParamOK).
+func constructorFocusFree(e xpath.Expr) bool {
+	switch x := e.(type) {
+	case *xpath.MapConstructor:
+		for i := range x.Keys {
+			if !constructorFocusFree(x.Keys[i]) || !constructorFocusFree(x.Values[i]) {
+				return false
+			}
+		}
+		return true
+	case *xpath.ArrayConstructor:
+		for _, m := range x.Members {
+			if !constructorFocusFree(m) {
+				return false
+			}
+		}
+		return true
+	}
+	return focusFree(e)
+}
+
+// fallbackIgnored reports whether el is an xsl:fallback in an XSLT
+// instruction: one this processor recognises, so the fallback is never
+// instantiated and compiles to nothing (compile_instr.go). Under an
+// extension instruction it is what runs.
+func fallbackIgnored(el *xdm.Node) bool {
+	p := el.Parent()
+	return isXSL(el, "fallback") && p != nil && p.Kind() == xdm.KindElement && p.Name().URI == xdm.NSXSL
+}
