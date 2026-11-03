@@ -805,6 +805,7 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 	if e == nil {
 		return nil, "select does not parse again"
 	}
+	e = c.inlineCalls(e)
 	if _, ctx := e.(*xpath.ContextItem); simple && (ctx || noTextNodes(e)) {
 		// Simple content (§5.7.2) drops zero-length text nodes, merges
 		// adjacent ones, then atomizes: with no text node in the value the
