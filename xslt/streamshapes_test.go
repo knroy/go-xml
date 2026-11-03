@@ -29,17 +29,27 @@ var shapeBodies = []struct {
 	{`<o><xsl:value-of select="count(/doc/rec ! sub)"/></o>`, true},
 	{`<o><xsl:value-of select="string-join(/doc/rec ! (sub, 'x') ! string(), ',')"/></o>`, true},
 	{`<o><xsl:value-of select="string-join(/doc/rec/@k ! parse-xml('&lt;q>' || . || '&lt;/q>')/q, ',')"/></o>`, true},
-	{`<o><xsl:value-of select="count(//rec ! sub)"/></o>`, false},                             // XTSE3430 (crawling, then consuming)
-	{`<o><xsl:value-of select="string-join(/doc/rec ! (position(), sub), ',')"/></o>`, false}, // position() in R
-	{`<o><xsl:value-of select="count(/doc/rec/sub ! (.., .))"/></o>`, false},                  // R climbs
+	{`<o><xsl:value-of select="count(//rec ! sub)"/></o>`, false}, // XTSE3430 (crawling, then consuming)
+	// position() in R keeps it from mapPathOf; since the merge the split's
+	// walk takes it, the matches' copies collected and the outer
+	// ($items ! (position(), sub)) evaluated once (G1's hold at the document
+	// node); output equal to the tree's.
+	{`<o><xsl:value-of select="string-join(/doc/rec ! (position(), sub), ',')"/></o>`, true},
+	{`<o><xsl:value-of select="count(/doc/rec/sub ! (.., .))"/></o>`, false}, // R climbs
 	// tail(P): P's matches but the first.
 	{`<o><xsl:value-of select="sum(tail(/doc/rec)/@v)"/></o>`, true},
 	{`<o><xsl:value-of select="count(tail(//rec))"/></o>`, true},
 	{`<o><xsl:value-of select="string-join(tail(tail(/doc/rec))/@k, ',')"/></o>`, true},
 	{`<o><xsl:value-of select="sum((tail(/doc/rec/sub)/number(@x), 31))"/></o>`, true},
-	{`<o><xsl:value-of select="count(tail(/doc/rec/@k))"/></o>`, false},       // P has a tail of its own
-	{`<o><xsl:apply-templates select="tail(/doc/rec)" mode="m"/></o>`, false}, // a loop: no skip
-	{`<o><xsl:for-each select="tail(//rec)"><xsl:value-of select="@k"/></xsl:for-each></o>`, false},
+	// P has a tail of its own, so not tailCallOf's; the walk collects the
+	// attributes and evaluates count(tail($items)) once (G1's hold at the
+	// document node); output equal to the tree's.
+	{`<o><xsl:value-of select="count(tail(/doc/rec/@k))"/></o>`, true},
+	// A loop over tail(): G2's apply-templates windows (streampop.go) gate
+	// the first match out; output equal to the tree's.
+	{`<o><xsl:apply-templates select="tail(/doc/rec)" mode="m"/></o>`, true},
+	// G2's loop population (streampop.go): tail() a window over the matches.
+	{`<o><xsl:for-each select="tail(//rec)"><xsl:value-of select="@k"/></xsl:for-each></o>`, true},
 	// F(if (C) then A else B), C motionless: the choice hoisted.
 	{`<o><xsl:value-of select="count(if ($c) then () else //rec)"/></o>`, true},
 	{`<o><xsl:value-of select="sum(if (not($c)) then //rec/@v else //sub/@x)"/></o>`, true},
