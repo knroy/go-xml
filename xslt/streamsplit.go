@@ -88,6 +88,9 @@ type splitPred struct {
 	at   int64
 	e    *xpath.Compiled
 	kids bool // e reads $splitKids
+	// pe, with e nil, is a positional test other than a literal, of the
+	// position counted as for at (positionPred, streamsplit_union.go).
+	pe *xpath.Compiled
 }
 
 // streamSplit is an expression split for the cursor.
@@ -271,6 +274,11 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		for _, pr := range st.Predicates {
 			if n, ok := positionAt(pr); ok {
 				ss.preds = append(ss.preds, splitPred{at: n})
+				ss.pos, positional = true, true
+				continue
+			}
+			if positionPred(pr) {
+				ss.preds = append(ss.preds, splitPred{pe: part(pr)})
 				ss.pos, positional = true, true
 				continue
 			}
@@ -535,7 +543,7 @@ func isStep(e xpath.Expr) bool {
 func stepPredsOK(st *xpath.Step) bool {
 	leaf, elem := testKinds(st.Test)
 	for _, pr := range st.Predicates {
-		if _, ok := positionAt(pr); ok {
+		if _, ok := positionAt(pr); ok || positionPred(pr) {
 			continue
 		}
 		if elem && !(viewCheck{}).safe(pr, vElem, true) || leaf && !(viewCheck{}).safe(pr, vLeaf, true) || !booleanShaped(pr) {
@@ -1454,6 +1462,16 @@ func (a *splitAt) preds(st *splitStep, in *splitInst) (bool, error) {
 		p := &st.preds[i]
 		if p.e == nil {
 			in.n[i]++
+			if p.pe != nil {
+				seq, err := p.pe.Eval(a.r.ctx.WithFocus(xdm.NewInteger(in.n[i]), int(in.n[i]), 0))
+				if err != nil {
+					return false, err
+				}
+				if ok, err := xpath.EffectiveBooleanValue(seq); err != nil || !ok {
+					return false, err
+				}
+				continue
+			}
 			if in.n[i] != p.at {
 				return false, nil
 			}

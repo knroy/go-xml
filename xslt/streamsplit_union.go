@@ -24,6 +24,7 @@ package xslt
 // meets them in document order); a branch ending in descendant-or-self.
 
 import (
+	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
@@ -416,6 +417,32 @@ func positionOnly(e xpath.Expr) bool {
 		return positionOnly(x.Left) && positionOnly(x.Right)
 	case *xpath.UnaryOp:
 		return positionOnly(x.Operand)
+	case *xpath.FuncCall:
+		return x.Name.URI == fnNS && x.Name.Local == "position" && len(x.Args) == 0
+	}
+	return false
+}
+
+// positionPred reports whether a step's predicate is a test of the
+// candidate's position that cannot fail: position() compared with, or
+// combined by + - * with, integer literals, divided only by a nonzero one
+// (ITEM[position() lt 4], *[position() mod 2 = 1]). P counts it as it counts
+// a literal [n], per context (splitPred.pe).
+func positionPred(e xpath.Expr) bool {
+	switch x := e.(type) {
+	case *xpath.Literal:
+		return x.Val != nil && x.Val.Type == xdm.TypeInteger
+	case *xpath.BinaryOp:
+		switch x.Op {
+		case "=", "!=", "<", "<=", ">", ">=", "eq", "ne", "lt", "le", "gt", "ge", "+", "-", "*", "to", "and", "or":
+		case "mod", "idiv", "div":
+			if l, ok := x.Right.(*xpath.Literal); !ok || l.Val == nil || l.Val.Type != xdm.TypeInteger || l.Val.String() == "0" {
+				return false
+			}
+		default:
+			return false
+		}
+		return positionPred(x.Left) && positionPred(x.Right)
 	case *xpath.FuncCall:
 		return x.Name.URI == fnNS && x.Name.Local == "position" && len(x.Args) == 0
 	}

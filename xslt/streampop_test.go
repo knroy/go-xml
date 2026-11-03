@@ -2,6 +2,8 @@ package xslt
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,3 +75,41 @@ func TestStreamIdentity(t *testing.T) {
 		t.Errorf("@*|node(): %s, want XTSE3430", out)
 	}
 }
+
+// popBodies are container bodies whose loop, grouping or select population
+// is more than a bare path of the stream (streampop.go); stream says the
+// core must take them.
+var popBodies = []struct {
+	body   string
+	stream bool
+}{
+	// Positional step predicates, counted per context (positionPred).
+	{`<out><xsl:for-each select="doc/rec[position() lt 3]"><e><xsl:value-of select="@k"/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:value-of select="count(//sub[position() mod 2 = 1])"/></out>`, true},
+	{`<out><xsl:copy-of select="doc/rec[@k = 'a'][position() = 2]"/></out>`, true},
+	{`<out><xsl:copy-of select="doc/rec[position() = 2][@k = 'a']"/></out>`, true},
+	{`<out><xsl:for-each-group select="doc/rec[position() &lt; 3]" group-adjacent="@k"><g k="{current-grouping-key()}" n="{count(current-group())}"/></xsl:for-each-group></out>`, true},
+}
+
+func TestStreamPopMatchesTree(t *testing.T) {
+	dir := t.TempDir()
+	streamed := 0
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range popBodies {
+			for _, d := range coreDecls {
+				where := fmt.Sprintf("doc %s, decls %q, body %s", name, d, c.body)
+				streamed += coreCheck(t, coreSheetWith(d+popDecls, c.body), dir, where, c.stream, TransformOptions{})
+			}
+		}
+	}
+	if streamed == 0 {
+		t.Error("nothing streamed without a re-run")
+	}
+}
+
+// popDecls are the variables the population bodies read.
+const popDecls = `<xsl:variable name="extra" as="element()*"><x v="10">X</x><y v="20">Y</y></xsl:variable>` +
+	`<xsl:variable name="three" select="3"/><xsl:variable name="cond" select="false()"/>`
