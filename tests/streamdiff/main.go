@@ -296,12 +296,12 @@ func outputSummary(file, branch string) bool {
 		return false
 	}
 	defer f.Close()
-	type tally struct{ cases, same, diff, errdiff, unstable, opened int }
+	type tally struct{ cases, same, diff, errdiff, unstable, opened, secCases, sec int }
 	var all, str tally
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		fs := strings.Split(sc.Text(), "\t")
-		if len(fs) != 3 {
+		if len(fs) != 3 && len(fs) != 4 {
 			die(fmt.Errorf("%s: bad line %q", file, sc.Text()))
 		}
 		for _, t := range []*tally{&all, &str} {
@@ -322,6 +322,11 @@ func outputSummary(file, branch string) bool {
 			if fs[2] != "0" {
 				t.opened++
 			}
+			if len(fs) == 4 && fs[3] != "0" {
+				n, _ := strconv.Atoi(fs[3])
+				t.secCases++
+				t.sec += n
+			}
 		}
 	}
 	fmt.Printf("== output (TransformOptions.Output against Result.Serialize)\n")
@@ -329,8 +334,8 @@ func outputSummary(file, branch string) bool {
 		name string
 		t    tally
 	}{{"all cases", all}, {"streamed cases", str}} {
-		fmt.Printf("  %-14s %5d: same %d, bytes differ %d, error differs %d, unstable %d; written before the end %d\n",
-			t.name, t.t.cases, t.t.same, t.t.diff, t.t.errdiff, t.t.unstable, t.t.opened)
+		fmt.Printf("  %-14s %5d: same %d, bytes differ %d, error differs %d, unstable %d; written before the end %d; secondary results %d in %d cases\n",
+			t.name, t.t.cases, t.t.same, t.t.diff, t.t.errdiff, t.t.unstable, t.t.opened, t.t.sec, t.t.secCases)
 	}
 	if all.diff+all.errdiff > 0 {
 		fmt.Printf("FAIL output: %d cases differ (%s.diff)\n", all.diff+all.errdiff, file)

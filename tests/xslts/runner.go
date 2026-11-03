@@ -47,6 +47,9 @@ type Runner struct {
 	// output, while checkOutput runs a case again, is where the principal
 	// result is streamed (TransformOptions.Output).
 	output io.Writer
+	// secondary, then, is where its secondary results are written
+	// (TransformOptions.SecondaryOutput).
+	secondary func(href string) (io.WriteCloser, error)
 	// Root is the suite checkout.
 	Root string
 	// Target is the version measured. The zero value is XSLT 2.0, so an
@@ -733,6 +736,7 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	if streamContent != "" {
 		opts.SourceParseOptions = streamOpts
 		opts.Output = r.output
+		opts.SecondaryOutput = r.secondary
 		return ss.TransformReader(ctx, strings.NewReader(streamContent), opts)
 	}
 	if streamPath != "" {
@@ -742,9 +746,11 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		}
 		opts.SourceParseOptions = streamOpts
 		opts.Output = r.output
+		opts.SecondaryOutput = r.secondary
 		return ss.TransformReader(ctx, strings.NewReader(string(stripBOM(data))), opts)
 	}
 	opts.Output = r.output
+	opts.SecondaryOutput = r.secondary
 	return ss.Transform(ctx, src, opts)
 }
 
