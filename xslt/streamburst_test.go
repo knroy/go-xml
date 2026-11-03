@@ -47,7 +47,7 @@ func TestBurstsMatchTree(t *testing.T) {
 		{"ancestor content", `<xsl:for-each select="account/transaction"><xsl:value-of select="string-length(string(..))"/></xsl:for-each>`, false, ""},
 		{"identity", `<xsl:for-each select="account/transaction"><xsl:value-of select=". is ."/></xsl:for-each>`, true, ""},
 		{"sort", `<xsl:for-each select="account/transaction"><xsl:sort select="@value"/><xsl:copy-of select="."/></xsl:for-each>`, false, ""},
-		{"node carried", `<xsl:iterate select="account/transaction"><xsl:param name="prev" select="()"/><xsl:on-completion><xsl:copy-of select="$prev"/></xsl:on-completion><xsl:next-iteration><xsl:with-param name="prev" select="copy-of(.)"/></xsl:next-iteration></xsl:iterate>`, false, ""},
+		{"node carried", `<xsl:iterate select="account/transaction"><xsl:param name="prev" select="()"/><xsl:on-completion><xsl:copy-of select="$prev"/></xsl:on-completion><xsl:next-iteration><xsl:with-param name="prev" select="copy-of(.)"/></xsl:next-iteration></xsl:iterate>`, true, ""}, // a copy, carried (M3)
 		{"single instruction", `<xsl:value-of select="count(account/transaction)"/>`, true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
