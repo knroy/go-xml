@@ -91,7 +91,7 @@ var groupBodies = []struct {
 	{`<out><xsl:iterate select="/*/t"><xsl:param name="n" select="1" as="xs:integer"/><xsl:param name="prev" select="()"/><x n="{$n}" v="{$prev/@v}"/>` +
 		`<xsl:next-iteration><xsl:with-param name="n" select="$n + 1"/><xsl:with-param name="prev" select="copy-of(.)[$n gt 2]"/></xsl:next-iteration></xsl:iterate></out>`, true},
 	{`<out><xsl:iterate select="/*/t"><xsl:param name="s" select="''"/><xsl:on-completion><s v="{$s}"/></xsl:on-completion>` +
-		`<xsl:next-iteration><xsl:with-param name="s" select="concat($s, string(.))"/></xsl:next-iteration></xsl:iterate></out>`, false},
+		`<xsl:next-iteration><xsl:with-param name="s" select="concat($s, string(.))"/></xsl:next-iteration></xsl:iterate></out>`, true},
 	{`<out><xsl:iterate select="/*/t"><xsl:if test="@v &lt; 0"><xsl:break select="copy-of(.)"/></xsl:if><i k="{@k}"/></xsl:iterate></out>`, false},
 	{`<out><xsl:iterate select="/*/t"><xsl:param name="all" select="()"/><xsl:on-completion><xsl:copy-of select="$all"/></xsl:on-completion>` +
 		`<xsl:next-iteration><xsl:with-param name="all" select="($all, copy-of(.))"/></xsl:next-iteration></xsl:iterate></out>`, true},

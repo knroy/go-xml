@@ -248,6 +248,9 @@ func (a *analyzer) exprRule(e xpath.Expr) props {
 	case *xpath.BinaryOp:
 		return a.binary(x)
 
+	case *xpath.StringConcat:
+		return a.stringConcat(x)
+
 	case *xpath.LookupExpr:
 		// §19.8.8.18: E?K -- E inspection, a parenthesised K absorption;
 		// unary ?K is .?K.
@@ -296,9 +299,9 @@ func (a *analyzer) exprRule(e xpath.Expr) props {
 		return a.funcCall(x)
 
 	case *xpath.SimpleMap:
-		// §19.8.8.7: the posture and sweep of "a!b" are those of the right
-		// operand, assessed with a context posture and type taken from the
-		// left operand.
+		// §19.8.8.7: the posture of "a!b" is the right operand's, assessed
+		// with a context posture and type taken from the left operand; the
+		// sweep is the wider of the two.
 		return a.simpleMap(x)
 
 	case *xpath.MapConstructor:
@@ -467,6 +470,37 @@ func (a *analyzer) binary(x *xpath.BinaryOp) props {
 		// "!" has its own rule in §19.8.8.7.
 		return a.unknown()
 	}
+}
+
+// stringConcat applies §19.8.8's operand-usage table to "A || B"
+// (StringConcatExpr: "A || A"): the general rules, both operands absorbed.
+// si-fork-902's TITLE||PRICE and si-fork-952's current-group()/(AUTHOR||TITLE)
+// are two consuming operands, so roaming and free-ranging.
+//
+// One verdict is withheld: a consuming, not free-ranging, "||" in a crawling
+// focus or over a crawling operand. Its only refusal would come from an
+// enclosing rule meeting that crawling focus,
+// and in the corpus that focus comes from §19.8.8.4 widening two striding
+// operands to crawling, which sx-union-C contradicts in 18 cases asserting
+// output (".+1 || ' '" in a for-each over PRICE union QUANTITY). Withholding
+// is the old answer for every "||"; see docs/conformance-gaps.md, "The ||
+// operator".
+func (a *analyzer) stringConcat(x *xpath.StringConcat) props {
+	ops := []operand{
+		a.operandOf(x.Left, usageAbsorption),
+		a.operandOf(x.Right, usageAbsorption),
+	}
+	p := a.combine(ops, false)
+	if p.streamable() && p.sweep != sweepMotionless {
+		crawls := a.ctxPosture == postureCrawling
+		for _, o := range ops {
+			crawls = crawls || o.props.posture == postureCrawling
+		}
+		if crawls {
+			return a.unknown()
+		}
+	}
+	return p
 }
 
 // filter applies §19.8.8.10 to a filter expression.
@@ -897,6 +931,15 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		// is callable.
 		return a.combine([]operand{a.operandOf(x.Args[0], usageAbsorption)}, false)
 	}
+	if us, ok := nsBuiltinOperandUsages(x.Name.URI, x.Name.Local, len(x.Args)); ok {
+		// The map:, array: and math: rows of §19.8.9's table, under the
+		// general rules.
+		ops := make([]operand, len(x.Args))
+		for i, arg := range x.Args {
+			ops[i] = a.operandOf(arg, us[i])
+		}
+		return a.combine(ops, false)
+	}
 	if x.Name.URI != fnNS {
 		// A stylesheet function is assessed under §19.8.5 (streamfunctions.go).
 		// An extension function, or a stylesheet function this analysis did
@@ -1054,6 +1097,11 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 	if x.Name.Local == "key" && len(x.Args) == 2 {
 		return a.funcCall(&xpath.FuncCall{Name: x.Name, Args: []xpath.Expr{x.Args[0], x.Args[1], &xpath.PathExpr{Root: true}}})
 	}
+	// "fn:unparsed-entity-uri(x) -- Equivalent to
+	// fn:unparsed-entity-uri(x, /)", and the same for -public-id.
+	if (x.Name.Local == "unparsed-entity-uri" || x.Name.Local == "unparsed-entity-public-id") && len(x.Args) == 1 {
+		return a.funcCall(&xpath.FuncCall{Name: x.Name, Args: []xpath.Expr{x.Args[0], &xpath.PathExpr{Root: true}}})
+	}
 
 	usages, ok := builtinOperandUsages(x.Name.Local, len(x.Args))
 	if !ok && contextDefaultingBuiltin[x.Name.Local] {
@@ -1170,19 +1218,24 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 		"string": {1}, "data": {1}, "number": {1},
 		"string-length": {1}, "normalize-space": {1},
 		"string-join": {1, 2}, "string-to-codepoints": {1},
-		"codepoints-to-string": {1}, "concat": {3},
-		"upper-case": {1}, "lower-case": {1},
+		"codepoints-to-string": {1},
+		"upper-case":           {1}, "lower-case": {1},
 		"substring": {2, 3}, "substring-before": {2, 3},
 		"substring-after": {2, 3}, "contains": {2, 3},
 		"starts-with": {2, 3}, "ends-with": {2, 3},
 		"compare": {2, 3}, "codepoint-equal": {2},
-		"translate": {3}, "tokenize": {2}, "matches": {2, 3},
+		"translate": {3}, "tokenize": {1, 2, 3}, "matches": {2, 3},
+		"contains-token": {2, 3}, "parse-ietf-date": {1}, "parse-json": {1},
+		"json-doc": {1}, "xml-to-json": {1}, "load-xquery-module": {1},
+		"random-number-generator": {1}, "type-available": {1}, "trace": {1},
+		"unparsed-text": {1, 2}, "unparsed-text-available": {1, 2},
+		"unparsed-text-lines": {1, 2}, "uri-collection": {1},
 		"replace": {3, 4}, "normalize-unicode": {1, 2},
 		"distinct-values": {1, 2}, "index-of": {2, 3},
 		"deep-equal": {2, 3}, "copy-of": {1}, "snapshot": {1},
 		"doc": {1}, "doc-available": {1}, "document": {1},
 		"parse-xml": {1}, "parse-xml-fragment": {1},
-		"serialize": {1, 2}, "json-to-xml": {1, 2},
+		"serialize": {1, 2}, "json-to-xml": {1},
 		"escape-html-uri": {1}, "encode-for-uri": {1},
 		"iri-to-uri": {1}, "resolve-uri": {1, 2},
 		"format-number": {2, 3}, "format-integer": {2, 3},
@@ -1237,22 +1290,33 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 		// known to be in the result until its descendants have been read.
 		// fn:outermost stays absent: §19.8.9.15 gives it a genuine exception
 		// to the general rules, turning a crawling argument striding.
-		"reverse":                  {1: {N}},
-		"innermost":                {1: {N}},
-		"filter":                   {2: {N, I}},
-		"for-each":                 {2: {N, I}},
-		"for-each-pair":            {3: {N, N, I}},
-		"fold-left":                {3: {N, A, I}},
-		"lang":                     {2: {A, I}},
-		"id":                       {2: {A, N}},
-		"idref":                    {2: {A, N}},
-		"element-with-id":          {2: {A, N}},
-		"key":                      {3: {A, A, N}},
-		"path":                     {1: {N}},
-		"namespace-uri-for-prefix": {2: {A, I}},
-		"resolve-QName":            {2: {A, I}},
-		"document":                 {2: {A, I}},
-		"error":                    {3: {A, A, N}},
+		"reverse":                   {1: {N}},
+		"innermost":                 {1: {N}},
+		"filter":                    {2: {N, I}},
+		"for-each":                  {2: {N, I}},
+		"for-each-pair":             {3: {N, N, I}},
+		"fold-left":                 {3: {N, A, I}},
+		"lang":                      {2: {A, I}},
+		"id":                        {2: {A, N}},
+		"idref":                     {2: {A, N}},
+		"element-with-id":           {2: {A, N}},
+		"key":                       {3: {A, A, N}},
+		"path":                      {1: {N}},
+		"namespace-uri-for-prefix":  {2: {A, I}},
+		"resolve-QName":             {2: {A, I}},
+		"document":                  {2: {A, I}},
+		"error":                     {3: {A, A, N}},
+		"trace":                     {2: {T, A}},
+		"apply":                     {2: {A, I}},
+		"transform":                 {1: {I}},
+		"json-to-xml":               {2: {A, I}},
+		"parse-json":                {2: {A, I}},
+		"json-doc":                  {2: {A, I}},
+		"xml-to-json":               {2: {A, I}},
+		"load-xquery-module":        {2: {A, I}},
+		"unparsed-entity-uri":       {2: {A, I}},
+		"unparsed-entity-public-id": {2: {A, I}},
+		"sort":                      {1: {N}, 2: {N, A}, 3: {N, A, I}},
 	}
 	// Functions that take no arguments at all are grounded and motionless
 	// by §19.8.1, having no operands.
@@ -1262,6 +1326,8 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 		"implicit-timezone": true, "default-collation": true,
 		"static-base-uri": true, "current-output-uri": true,
 		"available-environment-variables": true, "collection": true,
+		"random-number-generator": true, "uri-collection": true,
+		"available-system-properties": true, "default-language": true,
 	}
 	if arity == 0 {
 		if noArgs[name] {
@@ -1281,7 +1347,9 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 		}
 		return nil, false
 	}
-	if as, ok := allAbsorption[name]; ok && contains(as, arity) {
+	// "fn:concat(A, A, A)": the proforma's three arguments stand for any
+	// number from two, every one absorbed.
+	if as, ok := allAbsorption[name]; ok && contains(as, arity) || name == "concat" && arity >= 2 {
 		us := make([]usage, arity)
 		for i := range us {
 			us[i] = A
@@ -1301,6 +1369,51 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 		}
 	}
 	return nil, false
+}
+
+// nsBuiltinOperandUsages is §19.8.9's proforma for the functions in the
+// map, array and math namespaces, by name and arity.
+func nsBuiltinOperandUsages(uri, name string, arity int) ([]usage, bool) {
+	const (
+		A = usageAbsorption
+		I = usageInspection
+		N = usageNavigation
+	)
+	var table map[string]map[int][]usage
+	switch uri {
+	case xdm.NSMap:
+		table = map[string]map[int][]usage{
+			"contains": {2: {I, A}}, "entry": {2: {A, N}}, "find": {2: {I, A}},
+			"for-each": {2: {I, I}}, "get": {2: {I, A}}, "keys": {1: {I}},
+			"merge": {1: {I}, 2: {I, I}}, "put": {3: {I, A, N}},
+			"remove": {2: {I, A}}, "size": {1: {I}},
+		}
+	case xdm.NSArray:
+		table = map[string]map[int][]usage{
+			"append": {2: {I, N}}, "filter": {2: {I, I}}, "flatten": {1: {A}},
+			"fold-left": {3: {I, N, I}}, "fold-right": {3: {I, N, I}},
+			"for-each": {2: {I, I}}, "for-each-pair": {3: {I, I, I}},
+			"get": {2: {I, A}}, "head": {1: {I}}, "insert-before": {3: {I, A, N}},
+			"join": {1: {I}}, "put": {3: {I, I, N}}, "remove": {2: {I, A}},
+			"reverse": {1: {I}}, "size": {1: {I}},
+			"sort":     {1: {I}, 2: {I, A}, 3: {I, A, I}},
+			"subarray": {2: {I, A}, 3: {I, A, A}}, "tail": {1: {I}},
+		}
+	case xdm.NSMath:
+		if name == "pi" {
+			return nil, arity == 0
+		}
+		table = map[string]map[int][]usage{
+			"atan2": {2: {A, A}}, "pow": {2: {A, A}},
+		}
+		for _, f := range []string{"acos", "asin", "atan", "cos", "exp", "exp10", "log", "log10", "sin", "sqrt", "tan"} {
+			table[f] = map[int][]usage{1: {A}}
+		}
+	default:
+		return nil, false
+	}
+	us, ok := table[name][arity]
+	return us, ok
 }
 
 func contains(xs []int, x int) bool {
@@ -1435,6 +1548,13 @@ func (a *analyzer) allowsChildren(e xpath.Expr) bool {
 			return a.allowsChildren(x.Left) || a.allowsChildren(x.Right)
 		}
 		return true
+	case *xpath.SimpleMap:
+		// What "a ! b" returns is what b returns, with a's items as its
+		// context item (§19.8.8.7): "$input ! @name" delivers attributes
+		// (su-absorbing-204's AVT).
+		in := *a
+		in.ctxAllowsChildren = a.allowsChildren(x.Left)
+		return in.allowsChildren(x.Right)
 	default:
 		return true
 	}

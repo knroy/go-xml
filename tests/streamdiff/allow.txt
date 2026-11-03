@@ -34,3 +34,14 @@ xslt30 expand-text/cvt-042 \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z
 # day ("01" must be separated from what follows in "2026-11-01Z/").
 xslt30 format-date/format-date-037 \d{4}-\d\d-\d\d
 xslt30 error/error-3160a \d{4}-\d\d-\d\d|"\d\d"
+
+# M8 (the §19.8 analysis completed, against base badba78b): cases whose
+# expected XTSE3430 the analysis now raises, so the base's output becomes the
+# refusal. Each names the rule; drop a line when the base is moved past it.
+# §19.8.8's table, StringConcatExpr "A || A": two consuming operands (§19.8.1).
+xslt30 si-fork/si-fork-902 (?s).+
+xslt30 si-fork/si-fork-952 (?s).+
+# §19.8.5's body rule over a sequence constructor: the streaming parameter
+# read in an xsl:copy's select and again in its content, a higher-order
+# operand (§19.8.4.12's note), is not singular (§19.8.5.2).
+xslt30 su-absorbing/su-absorbing-205 (?s).+

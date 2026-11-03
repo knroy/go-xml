@@ -383,12 +383,12 @@ func TestStreamPlanRules(t *testing.T) {
 		}
 	})
 	t.Run("unknown is recorded where it arises", func(t *testing.T) {
-		pl, sd := planOfSheet(t, sheet("", `<out><xsl:value-of select="@k"/><xsl:where-populated><w/></xsl:where-populated></out>`))
+		pl, sd := planOfSheet(t, sheet("", `<out><xsl:value-of select="@k"/><xsl:copy-of select="fold-right((), 'd', concat#2)"/></out>`))
 		if r := site(t, pl, firstXSL(sd, "value-of"), "select"); !r.known {
 			t.Errorf("value-of before the gap: %+v", r)
 		}
-		if r := pl.rec(firstXSL(sd, "where-populated")); r == nil || r.known {
-			t.Errorf("where-populated: %+v", r)
+		if r := pl.rec(firstXSL(sd, "copy-of")); r == nil || r.known {
+			t.Errorf("copy-of: %+v", r)
 		}
 		if pl.verdict.known || pl.trusted() {
 			t.Errorf("verdict %+v", pl.verdict)

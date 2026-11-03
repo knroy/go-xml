@@ -119,6 +119,20 @@ func TestAnalyzeExprFunctionCalls(t *testing.T) {
 		// so the call is striding and consuming -- a modelled answer, and a
 		// narrower one than the general rules would give.
 		{"fn:outermost(descendant::c)", props{postureStriding, sweepConsuming}, true},
+		// §19.8.8.7: the sweep of "!" is the wider of its operands', so a
+		// consuming left side is not dropped by a motionless right one.
+		{"(a ! string(.)) ! number(.)", props{postureGrounded, sweepConsuming}, true},
+		{"@a ! string(.)", props{postureGrounded, sweepMotionless}, true},
+		// "a ! b" has b's type, so ". ! @name" holds no children and
+		// absorbing it is inspection (§19.8.1).
+		{"string(. ! @name)", props{postureGrounded, sweepMotionless}, true},
+		// §19.8.9's proforma rows: fn:concat(A, A, A) at any arity from
+		// two, fn:trace(T, A), fn:tokenize(A), fn:contains-token(A, A).
+		{"concat(a, 'x')", props{postureGrounded, sweepConsuming}, true},
+		{"concat(@a, @b, @c, 'x')", props{postureGrounded, sweepMotionless}, true},
+		{"trace(a, 'x')", props{postureStriding, sweepConsuming}, true},
+		{"tokenize(a)", props{postureGrounded, sweepConsuming}, true},
+		{"contains-token(@a, 'x')", props{postureGrounded, sweepMotionless}, true},
 	}
 	for _, c := range cases {
 		got, known := analyze(t, c.expr)
@@ -253,10 +267,15 @@ func TestStreamabilityRaisesOnReorderingAxis(t *testing.T) {
 }
 
 func TestStreamabilityRaisesOnTwoConsumingOperands(t *testing.T) {
-	err := compileSrc(t, stylesheetWith(
-		`<xsl:value-of select="price - discount"/>`))
-	if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
-		t.Fatalf("two consuming operands should be XTSE3430, got: %v", err)
+	for _, b := range []string{
+		`<xsl:value-of select="price - discount"/>`,
+		// §19.8.8's table gives "||" two absorbed operands: si-fork-902.
+		`<xsl:for-each select="ITEM"><xsl:sequence select="TITLE || PRICE"/></xsl:for-each>`,
+	} {
+		err := compileSrc(t, stylesheetWith(b))
+		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
+			t.Errorf("%s: two consuming operands should be XTSE3430, got: %v", b, err)
+		}
 	}
 }
 
@@ -289,6 +308,10 @@ func TestStreamabilityAcceptsStreamableConstructs(t *testing.T) {
 		// is grounded". The streamed-operand half is asserted in
 		// TestNavigationFromStreamedArgumentIsNotStreamable.
 		`<xsl:sequence select="reverse((1, 2, 3))"/>`,
+		// "||" with one consuming operand, and sx-union-315's shape, which
+		// stringConcat withholds (a crawling focus from a union).
+		`<xsl:value-of select="@a || TITLE"/>`,
+		`<xsl:for-each select="(ITEM/PRICE union ITEM/QUANTITY)"><xsl:value-of select=".+1 || ' '"/></xsl:for-each>`,
 	}
 	for _, b := range bodies {
 		if err := compileSrc(t, stylesheetWith(b)); err != nil &&

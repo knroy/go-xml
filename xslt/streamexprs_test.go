@@ -3,6 +3,7 @@ package xslt
 import (
 	"testing"
 
+	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
@@ -139,6 +140,13 @@ func TestAnalyzeMapConstructor(t *testing.T) {
 		// then roaming and free-ranging."
 		{"map{'a': 'v', 'b': //B}", roamingFreeRanging,
 			"one roaming entry makes the whole map roaming"},
+
+		// §19.8.9's map:, array: and math: rows, under the general rules.
+		{"Q{" + xdm.NSMap + "}put(map{}, @k, 1)", groundedMotionless, "map:put(I, A, N)"},
+		{"Q{" + xdm.NSMap + "}entry(a, 1)", props{postureGrounded, sweepConsuming}, "map:entry(A, N)"},
+		{"Q{" + xdm.NSMap + "}entry('k', a)", roamingFreeRanging, "map:entry's value navigates"},
+		{"Q{" + xdm.NSMath + "}sqrt(a)", props{postureGrounded, sweepConsuming}, "math:sqrt(A)"},
+		{"Q{" + xdm.NSArray + "}size([1])", groundedMotionless, "array:size(I)"},
 	}
 	for _, c := range cases {
 		got, known := analyze31(t, c.expr)

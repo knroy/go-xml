@@ -52,9 +52,11 @@ import (
 // 606 with streamable modes (M2), 629 with streamed principal input through
 // TransformReader (M2b), 707 with streamed grouping and full xsl:iterate
 // (M3), 877 with streamed xsl:try, function calls and attribute sets (M6),
-// 922 with accumulators, fork, map, merge and streamed output (M4, M5, M7).
+// 922 with accumulators, fork, map, merge and streamed output (M4, M5, M7),
+// 1009 with the §19.8 analysis completed (M8): containers it used to leave
+// unknown or unverified.
 // A stage may only raise it.
-const defaultFloor = 922
+const defaultFloor = 1009
 
 func main() {
 	floor := defaultFloor
