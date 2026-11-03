@@ -178,6 +178,10 @@ func (op *streamOp) exactInTry() string {
 		return "xsl:apply-templates in its body"
 	case op.group:
 		return "xsl:for-each-group in its body"
+	case op.fork:
+		return elName(op.el) + " with several consuming prongs in its body"
+	case op.split == nil:
+		return "a consumer with no split in its body"
 	case op.loop:
 		if op.split.failing() > 0 {
 			return "a loop whose select may fail in its body"

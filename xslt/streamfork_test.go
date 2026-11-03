@@ -25,6 +25,11 @@ var forkBodies = []struct {
 		`<xsl:sequence select="max(//rec/@v)"/><xsl:sequence select="exists(//other)"/></xsl:fork></out>`, true},
 	{`<out><xsl:fork><xsl:sequence><xsl:for-each select="/doc/rec"><r k="{@k}"/></xsl:for-each></xsl:sequence>` +
 		`<xsl:sequence><xsl:for-each select="/doc/rec/sub"><s x="{@x}"><xsl:value-of select="."/></s></xsl:for-each></xsl:sequence></xsl:fork></out>`, true},
+	// A tee in a streamed xsl:try's body: the try cannot order its prongs'
+	// errors, so the container runs on the tree (it panicked at the planner
+	// once fork and try met).
+	{`<out><xsl:try><xsl:fork><xsl:sequence select="count(//rec)"/><xsl:sequence select="sum(/doc/rec/@v)"/></xsl:fork>` +
+		`<xsl:catch><caught/></xsl:catch></xsl:try></out>`, false},
 	// A prong's error, the first in prong order is the fork's: xs:integer
 	// of v="x" fails in prong 2, the sum over k fails (FORG0001) in prong 1.
 	{`<out><xsl:fork><xsl:sequence select="sum(/doc/rec/@k)"/><xsl:sequence select="sum(/doc/rec/xs:integer(@v))"/></xsl:fork></out>`, true},
