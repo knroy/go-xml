@@ -310,7 +310,7 @@ func burstElement(el, target *xdm.Node) bool {
 		}
 		return true
 	}
-	if el != target && !burstInstructions[el.Name().Local] {
+	if el != target && !burstInstructions[el.Name().Local] && !burstMessage(el) {
 		return false
 	}
 	for a := range el.Attrs() {

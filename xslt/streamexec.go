@@ -288,6 +288,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		return b.mapOp(el, f)
 	case "map-entry":
 		return b.mapEntryOp(el, f)
+	case "message":
+		return b.messageOp(el, f, true) // streammessage.go
 	}
 	if el.Attr("", "select") != nil {
 		switch local {
@@ -645,6 +647,9 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if b.noIdent && (local == "sequence" || local == "variable") {
 			// They could hand the copy on as the node it stands for.
 			return b.refuse("xsl:" + local + " on a copied text, comment or PI node")
+		}
+		if local == "message" {
+			return b.messageOp(el, f, false) // streammessage.go
 		}
 		if !streamMotionless[local] || local == "copy" && f == vNone {
 			return b.refuse("motionless xsl:" + local)
@@ -1286,6 +1291,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	}
 	i.stream.count()
 	sig, mark := signature(out), rt.localsMark()
+	msgs := rt.messagesMark() // streammessage.go
 	n0, b0 := xpathleaf.Charged(rt.ctx)
 	// At the top of a sequence (the principal result's raw nodes, a
 	// variable's, a function's) the tree keeps the source's own nodes where
@@ -1331,6 +1337,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 		return true, fmt.Errorf("streaming: internal error after output was written: %w", err)
 	}
 	unread()
+	rt.dropMessages(msgs)
 	terr := i.executeTree(rt, out, href)
 	if terr == nil && !clean {
 		streamtrace.Guard()

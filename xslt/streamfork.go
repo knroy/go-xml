@@ -208,13 +208,20 @@ func (run *streamRun) fork(rt *runtime, op *streamOp, body []Instruction, out *o
 	run.used = true
 	outs := make([]*outputBuilder, len(body))
 	errs := make([]error, len(body))
+	// Each prong's messages are set aside as it tells them and appended in
+	// prong order, as the tree, which runs the prongs one after another,
+	// tells them (streammessage.go).
+	pm := rt.prongMessages(len(body), errs)
+	defer pm.done()
 	var cons []int
 	for k := range body {
 		outs[k] = newOutputBuilder(rt)
 		if len(op.prongs[k]) > 0 {
 			cons = append(cons, k)
 		} else {
+			pm.turn(k, true)
 			errs[k] = body[k].Execute(rt, outs[k])
+			pm.turn(k, false)
 		}
 	}
 	// What a prong binds is set aside between its turns, above mark, and
@@ -249,6 +256,7 @@ func (run *streamRun) fork(rt *runtime, op *streamOp, body []Instruction, out *o
 		}
 		return err
 	}, func(j int, in bool) {
+		pm.turn(cons[j], in)
 		if st == nil {
 			return
 		}

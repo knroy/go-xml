@@ -1172,6 +1172,7 @@ func (c *compiler) compileMessage(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 			return nil, err
 		}
 		instr.sel = comp
+		c.noteStreamSelect(n, instr, comp, ns)
 	}
 	body, err := c.compileSequence(n, n)
 	if err != nil {
