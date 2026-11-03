@@ -211,7 +211,26 @@ error. Calls on stylesheet functions split as their bodies when the call is
 its body exactly (one `xsl:sequence`, focus free, the arguments `.`, a path or
 literals of the parameter types, a result type the body certainly has);
 recursive bodies stay on the tree. `P ! R` of atomic values is the path
-`P/R`. Streamable attribute sets run on the view. A path
+`P/R`. Streamable attribute sets run on the view. Accumulators applicable
+to a streamed document are computed as it is read: each rule fires as the
+cursor passes its node's start or end (text, comment and processing-instruction
+nodes too, inside skipped and copied elements); `accumulator-before` reads the
+value of an element whose start tag the plan is at, or of the document node,
+and `accumulator-after` reads it once the element has been read, or reads the
+element to its end when nothing else does. `use-accumulators` on
+`xsl:source-document` and on the initial mode is honoured, XTDE3362 as the
+tree raises it, and an accumulator's error is the tree's: that of the
+earliest-read accumulator whose rules fail anywhere in the document.
+`xsl:fork` and `xsl:map` stream: with at most one prong (entry) reading the
+stream, as the sequence constructor they are; with several, at the document
+node of a container, each reading prong parses the document itself over one
+read of its bytes (`xdmstream.Cursor.Tee`), the prongs taking turns, outputs
+in prong order and the first failing prong's error the result, as the
+tree's; a fork or map per record runs on a grounded copy of the record. Every
+goroutine a stream evaluates on hands xpath's `EvalLock` back at each switch,
+so a host function item cannot hang it. `xsl:merge` streams the documents of
+a `for-each-source` merge source each on a cursor, merged by key as the tree
+merges; any error re-runs the merge on the tree. A path
 is child or descendant steps by name, wildcard or kind (`doc/rec`, `//rec`,
 `/*/*/rec`, `*:rec`, `p:*`, names resolved through `xpath-default-namespace`),
 optionally under `outermost()`/`innermost()`, with motionless or positional
@@ -225,7 +244,8 @@ when the transform starts by applying templates to it in a streamable mode
 the rules run as above. It takes the tree path, `xdm.Parse` then `Transform`
 exactly, for an initial template, function or match selection; a mode that
 is not streamable, not verified, or reaches a rule or built-in the core does
-not run; an `xsl:global-context-item`, an accumulator,
+not run; an `xsl:global-context-item`, an applicable accumulator that is not
+streamable or that the observer cannot compute,
 `input-type-annotations="strip"`, or a global variable or parameter whose
 value may read the context item (§5.3.3: the global context item is
 grounded); a built-in rule that would copy a node of the document to the top
@@ -233,6 +253,14 @@ of the principal result (`Result.Nodes` would hold a copy where the tree
 holds the source's node); a deep-copy mode; a select at the document node
 that may give up (`min`/`max` over mixed types); a stylesheet of more than
 one module.
+
+`TransformOptions.Output` serializes the principal result to a writer as it
+is built, for `Transform` and `TransformReader`: the builder writes each
+element's finished children and takes them back, so memory holds the open
+path and what is not yet written, and `MaxNodes` counts only that (a live
+count; without `Output` it stays cumulative). `Result.Nodes` and
+`Result.Tree()` are nil, and on an error the writer may hold part of the
+result. A nested `fn:transform` does not inherit it.
 
 Figures for the core, on this machine:
 - a 1 GB file totalled by `xsl:iterate`: 26 MB RSS against the tree's
@@ -243,7 +271,7 @@ Figures for the core, on this machine:
   tree's 1.7 s; `count(outermost(//rec))` there: 1.5 s against 10.6 s;
 - the identity transform (`shallow-copy`): 100 MB in 4.0 s and 588 MB heap
   against the tree's 2.6 s and 1,011 MB; 1 GB in 46 s and 5.4 GB against 33 s
-  and 9.0 GB (the heap is the output, which is still built in memory);
+  and 9.0 GB (the heap is the output, built in memory without `Output`);
 - a filter keeping 1 record in 10: 100 MB in 2.3 s and 60 MB against 1.7 s
   and 739 MB; 1 GB in 23.6 s and 624 MB against 23.4 s and 7.4 GB;
 - through `TransformReader`: the identity over 100 MB in 4.1 s and 573 MB
@@ -261,7 +289,24 @@ Figures for the core, on this machine:
 - `xsl:try` around a for-each writing an element per record: 100 MB in 5.5 s
   and 361 MB against 3.6 s and 1,226 MB (the loop alone is 1.8×; the try adds
   about 11%); 1 GB in 61 s and 3.4 GB against 57 s and 11.6 GB (the heap is
-  the output, held twice at the end as the tree's try holds it).
+  the output, held twice at the end as the tree's try holds it);
+- a running total (two accumulators) over a 100 MB log through
+  `TransformReader`: 3.6 s CPU and 2.9 MB heap against Parse + Transform's
+  2.5–2.9 s and 1.5 GB; 1 GB in 28 s and 3 MB against 42 s and 15 GB; the
+  positions of the ERROR entries (`accumulator-before` in a loop): 1 GB in
+  29 s and 276 MB (its output) against 58 s and 17 GB;
+- four aggregates over 100 MB in one `xsl:fork`: 7.0 s CPU and 3 MB heap
+  against the tree's 2.4 s and 865 MB (a parse per reading prong: 1 prong
+  1.2×, 2 prongs 1.9×, 4 prongs 3× the tree's CPU); 1 GB in 70 s and 3.7 MB
+  against 44 s and 7.8 GB (91 s wall, the tree compressing);
+- a merge of two 50 MB logs: 12.9 s and 3.7 MB against 8.9 s and 4.2 GB; two
+  512 MB logs in 115 s and 3.9 MB (the tree, about 42 GB by the 100 MB
+  figure, not run on this 18 GiB machine);
+- `TransformReader` with `Output`: the identity over 100 MB in 6.6 s and
+  4.0 MB heap against the tree's 2.8 s and 1,002 MB, 1 GB in 64 s and 4.5 MB
+  against 41 s and 9.4 GB; the filter over 1 GB in 36.6 s and 9.4 MB against
+  31.0 s and 7.4 GB (CPU measured under load; `Output` adds about 8% to a
+  held `TransformReader` run).
 
 On flat documents the core costs 1.2–1.8× the tree's CPU (each match is a
 coroutine round trip on the cursor); on deep ones 0.14–1.5×.
@@ -271,7 +316,7 @@ the document node (it would hold more than the tree); `xsl:apply-templates`
 over a select that is not a bare path, or in a sequence-typed variable; a
 pattern a view cannot decide (positional, reading content, `id()`/`key()`,
 `text()` below a step); paths whose tail climbs; kept text, comment or processing-instruction nodes;
-union/intersect/except; `xsl:fork`,
+union/intersect/except;
 `xsl:result-document`; `last()`, `reverse`, `sort`, user functions;
 `group-by` or `xsl:sort` over a streamed population (§19.8.4.19 makes them
 free-ranging); a grouping population that is not child steps (`//`,
@@ -283,17 +328,47 @@ a loop whose select may fail, `xsl:apply-templates` or grouping in its body),
 a consuming catch (no W3C case has one), `rollback-output="no"`; a call on a
 stylesheet function that is not its body exactly (a conversion that may fail,
 a recursive body, a global variable, a cache), or in an instruction the core
-checks on the view.
+checks on the view; an applicable streamable accumulator whose rules read
+more of a node than its start tag has, whose values may hold a node of the
+document, that reads another accumulator, or whose rule body is not one
+`xsl:sequence`; `accumulator-before` in a grouping's body or on a node copied
+out of the stream; an `xsl:fork` or `xsl:map` with several reading prongs at
+an element (a loop body, a rule body under `TransformReader`: no tee there),
+and `group-by` in a fork; an `xsl:try` whose body holds a fork or map with
+several reading prongs, or whose body or catch reads an accumulator (the tree raises an accumulator's error at
+its first read inside the try, the stream may raise it later); a dynamic call
+`$v(...)` unless `$v` is provably a map or an array; an `xsl:merge` source
+with `use-accumulators`, validation or `sort-before-merge`, a select that is
+not child steps, keys of different types at one position across sources, a
+collected source after a streamed one, or an action that mentions `last()`
+or `trace()` or holds `xsl:message`, `xsl:result-document`, `xsl:assert`,
+`xsl:call-template` or `xsl:evaluate`.
 
-In the W3C XSLT 3.0 run 877 cases stream (9 before the second burst shape,
+In the W3C XSLT 3.0 run 922 cases stream (9 before the second burst shape,
 364 before `//` record paths, 450 before the core, 576 before streamable
-modes, 606 before `TransformReader`, 629 before grouping, 707 before `xsl:try` and functions). 27 of the 225
-cases with a streamed principal input stream; the rest need accumulators,
-`xsl:fork`, constructs still refused above, or their mode is not verified.
+modes, 606 before `TransformReader`, 629 before grouping, 707 before `xsl:try` and functions,
+877 before accumulators, fork, merge and streamed output). 35 of the 225
+cases with a streamed principal input stream; the rest need accumulators that
+read accumulators, a fork at an element, constructs still refused above, or
+their mode is not verified.
 Also:
 
-- **The result is still built in memory**, so a large filtered copy grows with
-  its output and stops at the result-node cap. Temporary work per record is not
+- **Without `TransformOptions.Output` the result is built in memory**, so a
+  large filtered copy grows with its output and stops at the result-node cap.
+  With it, `MaxNodes` counts only what is held, but some results are held
+  to the end and then written exactly as `Result.Serialize` writes them: the
+  json and adaptive methods, `build-tree="no"`, `item-separator`,
+  `normalization-form`, `standalone`, `doctype-system`/`-public`,
+  `parameter-document`, HTML5 under html or xhtml. Partly held: under
+  `indent="yes"` (the html and xhtml default) an element at the top whose
+  content is indented, so an indented document with no text in its document
+  element is held whole; html `head` and `meta`; elements with
+  `inherit-namespaces="no"` or validation; anything under `xsl:try` (both
+  `rollback-output` values buffer); a variable's or function's content.
+  `xsl:result-document` is not streamed. A namespace node added to an element
+  after its content raises XTDE0410 (§5.7.1) under `Output`, where the tree
+  builder admits it and `Result.Serialize` succeeds: the start tag is already
+  written. Temporary work per record is not
   charged cumulatively since v2.3.0: a loop item that writes nothing to the
   output hands back up to 4,096 nodes and 64 KiB it dropped
   (`TransformOptions.MaxNodesBuilt`/`MaxBytesBuilt` lift that cap). An item that
@@ -311,7 +386,8 @@ Also:
   error into `XTDE3530` where the tree fails before writing; no case shows it.
   A container whose result is a sequence that would hold a node of the stream
   at its top runs on the tree, as the tree keeps the source's own nodes there.
-  A differential fuzzer (250k generated cases) compares streamed and tree runs
+  A differential fuzzer (250k generated cases, accumulator, fork, merge and
+  `Output` cases among them) compares streamed and tree runs
   exactly and finds no difference.
 - **`TransformReader` reads its document once**, so it cannot re-run on the
   tree as a container does. Everything that would need the tree is refused

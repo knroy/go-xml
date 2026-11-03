@@ -139,7 +139,7 @@ and maintains it as a project of his own.
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 3,049 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 3,067 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -187,8 +187,10 @@ true here:
    elements, `xsl:element`, `xsl:copy`, `xsl:choose`, loops, split selects,
    `xsl:apply-templates` into streamable modes, `xsl:for-each-group`
    (adjacent, starting-with, ending-with), `xsl:try`, streamable attribute
-   sets, and calls on stylesheet functions whose body is one `xsl:sequence`
-   (877 W3C cases stream; see [known gaps](docs/known-gaps.md)). Otherwise the streaming cases are in
+   sets, calls on stylesheet functions whose body is one `xsl:sequence`,
+   accumulators, `xsl:fork` and `xsl:map`, and `xsl:merge` over streamable
+   sources; `TransformOptions.Output` writes the principal result as it is
+   made (922 W3C cases stream; see [known gaps](docs/known-gaps.md)). Otherwise the streaming cases are in
    scope and counted: the stylesheet-level half of streaming, the §19.8
    streamability analysis that refuses a construct with `XTSE3430`, is
    implemented and measured. What is absent is streamed *execution*, not the
@@ -384,8 +386,21 @@ result, err := sheet.TransformReader(ctx, f, xslt.TransformOptions{
 })
 ```
 
+With `Output` set, the principal result is serialized there as it is built,
+so memory holds only what is not yet written:
+
+```go
+result, err := sheet.TransformReader(ctx, f, xslt.TransformOptions{
+    Output: os.Stdout,
+})
+```
+
+`Result.Tree()` and `Result.Nodes` are then nil, and on an error the writer
+may already hold part of the result.
+
 Nothing outside the rules may read the document for it to stream: no global
-variable reading `.`, no `xsl:global-context-item`, no accumulator. See
+variable reading `.`, no `xsl:global-context-item`, no applicable accumulator
+that is not streamable or that the stream cannot compute. See
 [known gaps](docs/known-gaps.md) for the full conditions.
 
 `Compile` is the expensive step and `Transform` does not mutate the compiled
@@ -1421,7 +1436,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (3,049 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (3,067 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,517 XQuery cases | XSLT (it is an XPath suite) |

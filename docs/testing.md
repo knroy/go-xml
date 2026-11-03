@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,049 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,067 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -574,7 +574,7 @@ With `GOXSLT_RECORD_DIR` set, tests/xslts writes
 fails when any of these is true:
 - a difference is unexplained;
 - fewer cases streamed than the floor (`-floor`, `GOXSLT_STREAM_FLOOR`,
-  default 877);
+  default 922);
 - a guard fired;
 - the off leg streamed.
 
@@ -583,18 +583,26 @@ content, XInclude or validation, no initial-mode selection) is handed to
 `TransformReader` unparsed; under `GOXSLT_STREAM_OFF=1` it is parsed and given
 to `Transform`, so the off leg compares Parse + Transform.
 
-At 40ab5b4b it reads:
-- 877 cases on the streamed path: 862 container runs and 27 principal inputs,
-  2 with a fallback (si-element-218, si-lre-218: an `xsl:sequence` copy that
-  would ground the document element, answered from the tree), 34 re-run on
-  the tree (all expected-error cases);
-- sNodes: tree 126, ground 9, seq 1780, element 807, choose 36, for-each 78,
-  where-pop 0, source-doc 2, select 762, apply 96, group 9 (the TSV has 11
-  kinds);
-- zero unexplained differences; the 148 XTSE3430 results unchanged.
+`-output` runs a fourth leg with `GOXSLT_OUTPUT_CHECK`
+([`tests/xslts/outputcheck.go`](../tests/xslts/outputcheck.go)): every case
+again with its principal result streamed to `TransformOptions.Output`,
+compared byte for byte, error for error, with `Result.Serialize`. A case whose
+third, plain run also differs is counted unstable (the clock, generate-id);
+any other difference fails.
+
+At badba78b, with `-output`, it reads:
+- 922 cases on the streamed path: runs core 878, main 35 (principal inputs
+  through `TransformReader`), merge 21; 2 with a fallback (si-element-218,
+  si-lre-218: an `xsl:sequence` copy that would ground the document element,
+  answered from the tree), 39 re-run on the tree; 0 guard hits;
+- zero unexplained differences;
+- the output leg: all 922 streamed cases byte-identical, 0 error
+  differences, 145 of them writing output before the end; 11,505 of the
+  11,518 cases identical overall, 13 unstable between two tree runs (the
+  clock, generate-id, per-compilation namespace URIs).
 
 The TSV line holds the runs per strategy (core: containers; main: principal
-inputs `TransformReader` streamed), fallbacks, guard hits, re-runs and
+inputs `TransformReader` streamed; merge: streamed merge sources), fallbacks, guard hits, re-runs and
 sNodes per kind. The core has its own differential, `go test ./xslt -run
 TestStreamCore -v`: hand-written bodies × documents × whitespace
 declarations, the document-element fallback, the result budgets pinned to
@@ -610,7 +618,22 @@ cases come from a fourth stream (key-run documents, every grouping form, the
 body reading the group or refused; the modes grammar's rules group too, for
 `TestStreamFuzzMain`); `GOXSLT_STREAM_FUZZ_GROUPS=0` reproduces the M2 cases. Try and function-call
 cases come from a fifth stream, and the modes grammar's rules get tries and
-calls too; `GOXSLT_STREAM_FUZZ_TRY=0` leaves them out. A
+calls too; `GOXSLT_STREAM_FUZZ_TRY=0` leaves them out. Accumulator cases
+come from a stream of their own (random declarations read in every way a run
+answers, `use-accumulators` lists, failing rules), and a fifth of the modes
+grammar's stylesheets get accumulators, so `TestStreamFuzzMain` has them;
+`GOXSLT_STREAM_FUZZ_ACCUMS=0` leaves them out. Fork and map cases (1–4
+prongs or entries, duplicate keys, a fork per record, under `xsl:try`, with
+limits) come from another, and the modes grammar's rule bodies get forks
+and maps too; `GOXSLT_STREAM_FUZZ_FORKS=0` leaves them out.
+`TestStreamFuzzMerge` generates 1–3 logs (sorted, ties, out of order,
+non-numeric keys, malformed) and 1–3 merge sources over them, with collected
+sources, descending order, seven actions and node limits. `TestStreamOutFuzz`
+gives each case of the core and modes grammars random serialization
+parameters (method, indent, character maps, cdata-section-elements, now and
+then one that holds the result to the end) and a random shape around its
+output (an element, an html page, a try), and requires the bytes `Output`
+receives and the error to be `Result.Serialize`'s. A
 failing case prints its seed and the command that replays it.
 
 At 7344aa13, 100,000 cases (seed 1) give 0 differences, 36,142 of them
@@ -623,7 +646,9 @@ of them running a streamed grouping; `TestStreamFuzzMain` 100,000 give 0,
 `GOXSLT_STREAM_FUZZ_GROUPS=0` give the base's cases and 0 differences. At
 40ab5b4b, 100,000 cases give 0 differences, 637 of them catching an error on
 the cursor; `TestStreamFuzzMain` 100,000 give 0, 1,992 streamed with a try
-rule.
+rule. At badba78b, 100,000 cases each (seed 11) of `TestStreamFuzz`,
+`TestStreamFuzzMain`, `TestStreamFuzzMerge` and `TestStreamOutFuzz` give 0
+differences.
 
 `TestStreamFuzzMain` applies each case of the modes grammar to its document
 in an initial mode through `TransformReader` and through `xdm.Parse` +
@@ -638,7 +663,17 @@ tree's order through `TransformReader`, and, without `-short`, peak heap.
 `go test ./xslt -run 'TestStreamTry|TestStreamCall|TestStreamAttributeSets' -v`
 compares tries (errors at record k, the tree's error code and description, a
 parse error after a caught one, `TransformReader`), calls and attribute sets
-with the tree.
+with the tree. `go test ./xslt -run TestStreamAccum -v` compares accumulators
+with the tree in containers and through `TransformReader`, errors in the
+tree's order, the item limit, and, without `-short`, peak heap;
+`go test ./internal/xdmstream -run 'TestObserverSeesEverything|TestTee'`
+checks the cursor's observer against a tree walk and the tee against one
+cursor. `go test ./xslt -run 'TestStreamFork|TestStreamMerge|TestStreamDynamicCall' -v`
+compares forks, maps and merges with the tree, the tee's error order, host
+function items reaching a stream (a hang fails), dynamic calls, and, without
+`-short`, a merge's peak heap. `go test ./xslt -run TestStreamOut -v`
+compares `Output` with `Result.Serialize` over shapes, `MaxNodes` under
+`Output`, and, without `-short`, peak heap.
 
 
 ## The ratchet

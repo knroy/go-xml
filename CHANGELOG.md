@@ -11,13 +11,17 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | What it does | Commit |
 |---|---|---|
 | Streamed record paths with `//`, wildcards and `outermost()` | `//rec`, `doc//rec`, `/*/*/rec`, `*:rec`, `p:*` stream; nested matches ride inside their outermost record. Small records share one tree: 900-deep `count(//rec)` 2.0 s CPU. | [`df9677e`][df9677e], [`fd31bb3`][fd31bb3], [`382983c`][382983c], [`22af5f4`][22af5f4] |
-| Streamed core for `xsl:source-document` | One streamed path for every trusted container: wrappers, choose, loops, split selects; any error re-runs on the tree, so errors are the tree's. W3C streamed cases 450 → 877. | [`ff0c463`][ff0c463], [`44db07f`][44db07f], [`096a587`][096a587], [`d1a98a8`][d1a98a8] |
+| Streamed core for `xsl:source-document` | One streamed path for every trusted container: wrappers, choose, loops, split selects; any error re-runs on the tree, so errors are the tree's. W3C streamed cases 450 → 922. | [`ff0c463`][ff0c463], [`44db07f`][44db07f], [`096a587`][096a587], [`d1a98a8`][d1a98a8] |
 | `Stylesheet.TransformReader`, `TransformOptions.SourceParseOptions` | Applies a stylesheet to a reader, streaming it when the initial mode is streamable and verified (a 1 GB filter in 620 MB heap, not 7.3 GB); otherwise exactly Parse + Transform. | [`bdf45d8`][bdf45d8] |
 | Streamed `xsl:apply-templates` | Template rules, built-in rules, `next-match`, `apply-imports` and tunnels run on the cursor in a streamable container: a 1 GB filter in 624 MB, not 7.4 GB. | [`c8c0a01`][c8c0a01] |
 | Streamed `xsl:for-each-group` | group-adjacent, -starting-with and -ending-with over a child path stream in a streamable container or rule, each group as it closes, `current-group()` read once off the cursor: a 1 GB log grouped in 158 MB heap, not 6.0 GB. | [`fe1eb18`][fe1eb18] |
 | Streamed `xsl:try` | A try in a streamable container or rule streams its body; a caught error skips the rest of the context on the cursor and the catch runs on the start tag's view. The catch sees the tree's first error. | [`2447ca0`][2447ca0] |
 | Stylesheet functions in streamed selects | A call whose body is its value exactly (one `xsl:sequence`, no failing conversion) is split as its body; `path ! f(.)` of atomic values reads as `path/f(.)`: an absorbing function over 1 GB of records in 3 MB heap, not 11 GB. | [`6abbb27`][6abbb27] |
 | Streamable attribute sets | `xsl:use-attribute-sets` on streamed literal result elements, `xsl:element` and `xsl:copy`. | [`26caed6`][26caed6] |
+| Streamed accumulators | `xsl:accumulator` values are computed as a streamed document is read, in a streamable `xsl:source-document` and through `TransformReader`: a running total over 1 GB in 3 MB heap, not 15 GB. | [`42902f3`][42902f3] |
+| Streamed `xsl:fork` and `xsl:map` | Several prongs or entries reading one streamed document each run on a parse of their own over one read of its bytes, in turn; outputs in prong order, the first error the tree's. | [`2a1d6ad`][2a1d6ad] |
+| Streamed `xsl:merge` | Each `for-each-source` document of a streamable merge source is read on its own cursor and merged by key as the tree merges: two 512 MB logs in 3.9 MB of heap. | [`2089255`][2089255] |
+| `TransformOptions.Output` | Serializes the principal result to a writer as it is built: a 1 GB identity in 4.5 MB heap, not 9.4 GB. Written nodes no longer count toward `MaxNodes`; buffered results keep the cumulative count. | [`34e6b36`][34e6b36] |
 | `TransformOptions` `MaxNodes`, `MaxBytes`, `MaxNodesBuilt`, `MaxBytesBuilt` | Held and total-work bounds for result and temporary trees and strings. Zero keeps the defaults; negative removes the bound. | [`294b965`][294b965] |
 
 ### Changed
@@ -30,6 +34,10 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A streamed `xsl:iterate` that carried a copy of its item, or read it in `xsl:next-iteration`, ran on the tree | The parameter is read off the cursor at the item; copies are carried on. | [`009d510`][009d510] |
 | A grouping over grounded values (`group-by`, `xsl:sort`) in a streamed container ran it on the tree | Its select is read off the cursor; the tree's grouping runs over the values. | [`09174d4`][09174d4] |
 | A streamed `treat as` over a path atomized the path's nodes first, raising XPDY0050 and re-running on the tree | The operand of `treat as` is kept as it is. | [`ba6c23f`][ba6c23f] |
+| `accumulator-before`/`-after` on a node copied out of a stream walked the copy's tree | It answers from the stream's observer, or the container falls back to the tree; values are never computed over a copy. | [`42902f3`][42902f3] |
+| A fork or map in a loop over records sent its container to the tree | The loop runs its body on a grounded copy of each record; `$m('k')` and `?k` on a variable proven a map or array are motionless. | [`2a1d6ad`][2a1d6ad] |
+| A host function item reaching streamed evaluation could hang the transform | Every goroutine streaming evaluates on (prongs, parses, merge inputs) hands xpath's EvalLock back at each switch. | [`83e45c5`][83e45c5] |
+| A namespace node added after an element's content, under `Output` | Raises XTDE0410 (§5.7.1) where the tree builder admits it: the streamed start tag is already written. | [`44d2374`][44d2374] |
 | Streamed loops were refused after ~1M records of flat state | The node and byte budgets counted every temporary ever built. A loop item that writes no output now hands back what it dropped. | [`294b965`][294b965] |
 | `fn:copy-of` and `fn:snapshot` copies were not charged to the result-node budget | Unlike `xsl:copy-of`. They are charged before the copy, so a transform making over 2M such copies is now refused. | [`294b965`][294b965] |
 
@@ -1929,6 +1937,12 @@ here so every entry in this file sits under a release.
 [fe1eb18]: https://github.com/knroy/go-xml/commit/fe1eb18
 [009d510]: https://github.com/knroy/go-xml/commit/009d510
 [09174d4]: https://github.com/knroy/go-xml/commit/09174d4
+[42902f3]: https://github.com/knroy/go-xml/commit/42902f3
+[2a1d6ad]: https://github.com/knroy/go-xml/commit/2a1d6ad
+[2089255]: https://github.com/knroy/go-xml/commit/2089255
+[34e6b36]: https://github.com/knroy/go-xml/commit/34e6b36
+[83e45c5]: https://github.com/knroy/go-xml/commit/83e45c5
+[44d2374]: https://github.com/knroy/go-xml/commit/44d2374
 [2447ca0]: https://github.com/knroy/go-xml/commit/2447ca0
 [6abbb27]: https://github.com/knroy/go-xml/commit/6abbb27
 [26caed6]: https://github.com/knroy/go-xml/commit/26caed6
