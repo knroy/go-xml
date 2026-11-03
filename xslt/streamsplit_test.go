@@ -428,7 +428,7 @@ var splitExprs = []string{
 	`//rec ! string(@k)`, `for $r in //rec return string($r/@v)`, `some $r in //rec satisfies $r/@k = 'a'`,
 	`every $r in //item satisfies $r/@v`, `data(//item/@v)`, `//text()/string()`, `//comment()/string()`,
 	`//rec/@v/string()`, `//*/node-name()`, `tokenize(string(//rec[1]), ' ')`,
-	`//rec[2]`, `//a/b`, `//p:r/@v`, `//rec/item[1]/@v`, `rec`, `*`, `.//*`, `.`,
+	`//rec[2]`, `//rec[position() = 2]`, `//rec[position() lt 3]/item`, `//a/b`, `//p:r/@v`, `//rec/item[1]/@v`, `rec`, `*`, `.//*`, `.`,
 	`(//rec/@v)[. > 2]`, `//rec[@v][@k]/item[@v = 1]`,
 	// the context itself, the outer on the context's view, choice
 	`string(.)`, `data(.)`, `string-length()`, `normalize-space()`, `number()`,
@@ -444,7 +444,6 @@ var splitExprs = []string{
 // splitRefused are expressions the split must refuse, and why.
 var splitRefused = map[string]string{
 	`//rec[last()]`:                                     "predicate",
-	`//rec[position() = 2]`:                             "predicate",
 	`//rec[item]`:                                       "predicate",
 	`//rec[@v][count(item) > 1]`:                        "predicate",
 	`count(//rec[@v castable as xs:double])`:            "predicate",

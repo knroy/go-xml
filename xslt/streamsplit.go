@@ -75,10 +75,11 @@ const (
 
 // splitStep is one downward step of P.
 type splitStep struct {
-	axis  xpath.Axis // child, descendant, or descendant-or-self::node()
-	test  xpath.NodeTest
-	preds []splitPred
-	pos   bool // a predicate is positional
+	axis   xpath.Axis // child, descendant, or descendant-or-self::node()
+	test   xpath.NodeTest
+	preds  []splitPred
+	pos    bool  // a predicate is positional
+	branch uint8 // the operand of a set operator it is a step of (streamsplit_union.go)
 }
 
 // splitPred is a predicate of a step: positional (e nil, at the position),
@@ -87,6 +88,9 @@ type splitPred struct {
 	at   int64
 	e    *xpath.Compiled
 	kids bool // e reads $splitKids
+	// pe, with e nil, is a positional test other than a literal, of the
+	// position counted as for at (positionPred, streamsplit_union.go).
+	pe *xpath.Compiled
 }
 
 // streamSplit is an expression split for the cursor.
@@ -142,6 +146,13 @@ type streamSplit struct {
 	// hold caps what the split collects at what the tree holds (streamhold.go);
 	// counted hands the outer stand-ins for counted matches (streamfold.go).
 	hold, counted bool
+	// self and set, for P with branches (streamsplit_union.go): the
+	// branches the context itself ends, and how the ended ones make a match.
+	self uint64
+	set  *splitSet
+	// checks are evaluated before the walk: the type checks of a set
+	// operator's foreign operand (foreignSets, streamsplit_union.go).
+	checks []*xpath.Compiled
 }
 
 // splitStream splits e, an expression whose context item is the document
@@ -221,6 +232,11 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		return ""
 	}
 	s.outermost, s.innermost = p.oi == "outermost", p.oi == "innermost"
+	if p.br != nil {
+		if why := s.branched(p); why != "" {
+			return why
+		}
+	}
 	if s.group = p.group; s.group && p.oi != "" {
 		return p.oi + "() of the current group"
 	}
@@ -230,6 +246,9 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 	// match's content (burstPattern's cut). The dos step of a // goes with it.
 	cut := len(p.steps)
 	for i, st := range p.steps {
+		if p.br != nil {
+			break // branched checked them all
+		}
 		if !stepPredsOK(st) {
 			cut = i
 			break
@@ -251,6 +270,9 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 	positional := false
 	for _, st := range p.steps {
 		ss := splitStep{axis: st.Axis, test: st.Test}
+		if p.br != nil {
+			ss.branch = p.br.bits[len(s.steps)]
+		}
 		if st.Axis != xpath.AxisChild {
 			s.nests = true
 		}
@@ -258,6 +280,11 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		for _, pr := range st.Predicates {
 			if n, ok := positionAt(pr); ok {
 				ss.preds = append(ss.preds, splitPred{at: n})
+				ss.pos, positional = true, true
+				continue
+			}
+			if positionPred(pr) {
+				ss.preds = append(ss.preds, splitPred{pe: part(pr)})
 				ss.pos, positional = true, true
 				continue
 			}
@@ -294,6 +321,9 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 	s.later = (!s.nests || !positional) && !s.group
 	last := p.steps[len(p.steps)-1]
 	leaf, elem := testKinds(last.Test)
+	if p.br != nil {
+		leaf, elem = branchKinds(p) // every branch's last step (streamsplit_union.go)
+	}
 	if last.Axis == xpath.AxisDescendantOrSelf {
 		// The context itself is a result.
 		if len(p.tail) == 0 {
@@ -379,6 +409,11 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		// A leaf match is taken at once: so must the elements be, to keep
 		// document order.
 		s.later = false
+	}
+	if p.br != nil {
+		if why := s.branchChecks(); why != "" {
+			return why
+		}
 	}
 	s.accepts()
 	s.folds(w, part)
@@ -517,7 +552,7 @@ func isStep(e xpath.Expr) bool {
 func stepPredsOK(st *xpath.Step) bool {
 	leaf, elem := testKinds(st.Test)
 	for _, pr := range st.Predicates {
-		if _, ok := positionAt(pr); ok {
+		if _, ok := positionAt(pr); ok || positionPred(pr) {
 			continue
 		}
 		if elem && !(viewCheck{}).safe(pr, vElem, true) || leaf && !(viewCheck{}).safe(pr, vLeaf, true) || !booleanShaped(pr) {
@@ -662,11 +697,12 @@ const (
 
 // splitPathParts is a consuming path taken apart.
 type splitPathParts struct {
-	steps   []*xpath.Step // P
-	tail    []xpath.Expr  // what follows P, per match
-	oi      string        // "outermost" or "innermost" around P
-	ctxItem bool          // the path is "." itself
-	group   bool          // its first step is current-group()'s members
+	steps   []*xpath.Step  // P
+	tail    []xpath.Expr   // what follows P, per match
+	oi      string         // "outermost" or "innermost" around P
+	ctxItem bool           // the path is "." itself
+	group   bool           // its first step is current-group()'s members
+	br      *splitBranches // the operands of a set operator (streamsplit_union.go)
 }
 
 // splitter finds the one consuming path of an expression and checks that
@@ -810,6 +846,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 			w.slot(x.Right, func(y xpath.Expr) { x.Right = y }, useAtomize)
 	case *xpath.UnaryOp:
 		return w.slot(x.Operand, func(y xpath.Expr) { x.Operand = y }, useAtomize)
+	case *xpath.StringConcat: // A || A: both absorbed (G2)
+		return w.slot(x.Left, func(y xpath.Expr) { x.Left = y }, useAtomize) &&
+			w.slot(x.Right, func(y xpath.Expr) { x.Right = y }, useAtomize)
 	case *xpath.CastExpr:
 		return w.slot(x.Operand, func(y xpath.Expr) { x.Operand = y }, useAtomize)
 	case *xpath.InstanceOfExpr:
@@ -914,6 +953,10 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 		// position in the group -- the members' step, so filtered.
 		list = []xpath.Expr{w.newGroupStep(x.Predicates)}
 		pp.group = true
+	case *xpath.BinaryOp:
+		return w.setOf(x)
+	case *xpath.SimpleMap:
+		return w.mapOf(x)
 	case *xpath.FuncCall:
 		if w.group && isCurrentGroup(x) {
 			list = []xpath.Expr{w.newGroupStep(nil)}
@@ -941,6 +984,8 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 			switch f := list[0].(type) {
 			case *xpath.ContextItem:
 				list = list[1:]
+			case *xpath.BinaryOp:
+				return w.unionSteps(f, list[1:])
 			case *xpath.FilterExpr:
 				if w.group && isCurrentGroup(f.Base) {
 					list = append([]xpath.Expr{w.newGroupStep(f.Predicates)}, list[1:]...)
@@ -1293,7 +1338,8 @@ type splitInst struct {
 type splitFrame struct {
 	own  []*splitInst
 	desc []*splitInst
-	base int // desc[:base] are the parent's
+	base int    // desc[:base] are the parent's
+	hit  uint64 // the branches its node ends (streamsplit_union.go)
 }
 
 func (f *splitFrame) live() bool { return len(f.own) > 0 || len(f.desc) > 0 }
@@ -1313,7 +1359,10 @@ func (s *streamSplit) inst(j int) *splitInst {
 // reach makes the node of f a context for step j, and reports whether that
 // makes it a match (j is past the last step).
 func (s *streamSplit) reach(f *splitFrame, j int) bool {
-	if j == len(s.steps) {
+	if s.isEnd(j) {
+		if j > 0 {
+			f.hit |= 1 << s.steps[j-1].branch
+		}
 		return true
 	}
 	st := &s.steps[j]
@@ -1362,13 +1411,16 @@ func (s *streamSplit) enter(pf *splitFrame, at *splitAt) (f splitFrame, match bo
 			if err != nil {
 				return f, false, err
 			}
-			if !ok || at.leaf && in.step+1 < len(s.steps) {
+			if !ok || at.leaf && !s.isEnd(in.step+1) {
 				continue // a leaf is the context of nothing
 			}
 			if s.reach(&f, in.step+1) {
 				match = true
 			}
 		}
+	}
+	if s.set != nil {
+		match = s.set.holds(f.hit)
 	}
 	return f, match, nil
 }
@@ -1422,6 +1474,16 @@ func (a *splitAt) preds(st *splitStep, in *splitInst) (bool, error) {
 		p := &st.preds[i]
 		if p.e == nil {
 			in.n[i]++
+			if p.pe != nil {
+				seq, err := p.pe.Eval(a.r.ctx.WithFocus(xdm.NewInteger(in.n[i]), int(in.n[i]), 0))
+				if err != nil {
+					return false, err
+				}
+				if ok, err := xpath.EffectiveBooleanValue(seq); err != nil || !ok {
+					return false, err
+				}
+				continue
+			}
 			if in.n[i] != p.at {
 				return false, nil
 			}
@@ -1540,6 +1602,9 @@ func (r *splitRun) at(g *groupAt, d int) int {
 // evalAt is eval, in the body of a streamed xsl:for-each-group when g is
 // set (d is then g.d, the first member's).
 func (s *streamSplit) evalAt(ctx *xpath.Context, c *xdmstream.Cursor, d int, g *groupAt) (xdm.Sequence, error) {
+	if err := s.runChecks(ctx); err != nil {
+		return nil, err
+	}
 	ctx = ctx.HoldItemBudget().HoldByteBudget()
 	octx := ctx
 	var view *xdm.Node
@@ -1601,6 +1666,9 @@ func (s *streamSplit) loop(ctx *xpath.Context, c *xdmstream.Cursor, d int,
 func (s *streamSplit) loopAt(ctx *xpath.Context, c *xdmstream.Cursor, d int, g *groupAt,
 	each func(xdm.Item) error, body func(*xdm.Node, int) (bool, error)) error {
 
+	if err := s.runChecks(ctx); err != nil {
+		return err
+	}
 	var v *xdm.Node
 	if d > 0 {
 		var err error
@@ -1630,7 +1698,7 @@ func (r *splitRun) run(v *xdm.Node, d int) error {
 		return r.take(xdm.One(g))
 	}
 	var root splitFrame
-	if s.steps != nil && s.reach(&root, 0) && !s.doc {
+	if s.steps != nil && s.rootFrame(&root) && !s.doc {
 		// .//@a: the context is a match (path admits only a view tail).
 		items, err := s.tail.Eval(r.ctx.WithFocus(v, 1, 1))
 		if err != nil {
@@ -1898,7 +1966,7 @@ func (s *streamSplit) accepts() {
 		}
 		leaf, _ := testKinds(st.test)
 		s.leaves = s.leaves || leaf
-		if st.axis == xpath.AxisDescendantOrSelf && i+1 < len(s.steps) {
+		if st.axis == xpath.AxisDescendantOrSelf && !s.isEnd(i+1) {
 			continue
 		}
 		if _, ok := st.test.(*xpath.NameTest); !ok {

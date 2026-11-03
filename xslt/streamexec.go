@@ -157,6 +157,9 @@ type streamOp struct {
 	// accAfter says it is an instruction that consumes its context only by
 	// reading accumulator-after of it, which runs as it is (streamaccum.go).
 	accAfter bool
+	// pop, for a loop whose select is not a bare path, is its population
+	// (streampop.go); split is then its stream part's.
+	pop *streamPop
 }
 
 // streamBuilder builds a plan from the source of a container.
@@ -802,8 +805,9 @@ func (c *compiler) noteStreamLoop(n *xdm.Node, instr Instruction, sel *xpath.Com
 			continue
 		}
 		if !op.split.bare() {
-			op.dead = "loop select is not a bare path"
-			continue
+			if op.pop, op.split, op.dead = c.popFor(op, ns); op.dead != "" {
+				continue
+			}
 		}
 		op.x.byInstr[instr] = op
 	}
@@ -845,7 +849,7 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 	if e == nil {
 		return nil, "select does not parse again"
 	}
-	e = c.inlineCalls(e)
+	e, checks := foreignSets(c.inlineCalls(e)) // streamsplit_union.go
 	if _, ctx := e.(*xpath.ContextItem); simple && (ctx || noTextNodes(e)) {
 		// Simple content (§5.7.2) drops zero-length text nodes, merges
 		// adjacent ones, then atomizes: with no text node in the value the
@@ -858,12 +862,15 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 		if x, ok := e.(*xpath.IfExpr); ok {
 			e = &xpath.IfExpr{Cond: x.Cond, Then: data(x.Then), Else: data(x.Else)}
 		} else {
-			e = data(e)
+			e = liftData(data(e))
 		}
 	}
 	s, why := splitStreamIn(e, sel, doc, group, key)
 	if s == nil {
 		return nil, "split: " + why
+	}
+	for _, x := range checks {
+		s.checks = append(s.checks, xpathleaf.WithExpr(sel, x).(*xpath.Compiled))
 	}
 	return s, ""
 }
@@ -897,6 +904,15 @@ func noTextNodes(e xpath.Expr) bool {
 		return true
 	case *xpath.IfExpr:
 		return noTextNodes(x.Then) && noTextNodes(x.Else)
+	case *xpath.BinaryOp:
+		switch x.Op { // streamsplit_union.go
+		case "union":
+			return noTextNodes(x.Left) && noTextNodes(x.Right)
+		case "intersect":
+			return noTextNodes(x.Left) || noTextNodes(x.Right)
+		case "except":
+			return noTextNodes(x.Left)
+		}
 	}
 	return atomicValued(e)
 }
@@ -954,6 +970,12 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 		}
 		s := op.split
 		k := op.ctxDepth(minD) + s.minDepth()
+		if why, ok := x.readyPop(op, op.ctxDepth(minD), k, kinds); ok {
+			if why != "" {
+				return why
+			}
+			continue
+		}
 		switch {
 		case op.planned && len(op.inner) == 0:
 			// A motionless body reads its match's view only: matches below
@@ -1039,6 +1061,9 @@ func inElement(el *xdm.Node) bool {
 
 // minDepth is the least depth below the context a match of P can be at.
 func (s *streamSplit) minDepth() int {
+	if s.hasBranches() {
+		return s.branchMinDepth()
+	}
 	n := 0
 	for _, st := range s.steps {
 		if st.axis != xpath.AxisDescendantOrSelf {
@@ -1152,6 +1177,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 	}
 	if !op.loop {
 		return &burstFeed{instr: instr, eval: func(rt *runtime) (xdm.Sequence, error) { return run.evalOp(rt, op) }}
+	}
+	if op.pop != nil {
+		return run.popFeed(instr, rt, op, g)
 	}
 	return &burstFeed{instr: instr, read: func(each func(xdm.Item) error) error {
 		if run.used {

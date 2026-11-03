@@ -259,7 +259,7 @@ func groupRefusal(instr *forEachGroupInstr) string {
 // population popWalk reads: a path of child steps to elements, predicates
 // decided on the candidate's view.
 func populationRefusal(s *streamSplit) string {
-	if !s.bare() || s.group || s.outermost || s.innermost {
+	if !s.bare() || s.group || s.outermost || s.innermost || s.hasBranches() {
 		return "grouping population is not a path of child steps"
 	}
 	for _, st := range s.steps {
