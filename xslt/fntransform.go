@@ -3,6 +3,7 @@ package xslt
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -929,6 +930,17 @@ func compileNested(
 	if err != nil {
 		if xdm.ErrorCode(err) != "" {
 			return nil, fmt.Errorf("fn:transform: compiling the stylesheet: %w", err)
+		}
+		// Many static errors (the §19.8 XTSE3430 family among them) carry
+		// their code only as a trailing "(XTSE3430)", which xdm.ErrorCode
+		// does not read. It is still the XSLT code, so it is retained; its
+		// shape is checked by handing ErrorCode the prefix form.
+		msg := err.Error()
+		if n := len(msg); n >= 10 && msg[n-10] == '(' && msg[n-1] == ')' {
+			if code := xdm.ErrorCode(errors.New(msg[n-9:n-1] + ":")); code != "" {
+				return nil, &xdm.Error{Code: code, Err: err,
+					Message: "fn:transform: compiling the stylesheet: " + msg}
+			}
 		}
 		return nil, xdm.Errorf("FOXT0002",
 			"fn:transform: compiling the stylesheet: %v", err)

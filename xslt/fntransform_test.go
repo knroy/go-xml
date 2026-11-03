@@ -820,6 +820,29 @@ func TestFnTransformRequestedProperties(t *testing.T) {
 	}
 }
 
+// F&O 3.1 §16.3.2: a static error from the nested compilation fails
+// fn:transform "retaining the XSLT error code". The §19.8 XTSE3430 carries its
+// code only as a trailing "(XTSE3430)", which was relabelled FOXT0002 once
+// supports-streaming became "yes" (qt3 fn-transform-77: x/y + x/z in a
+// streamable rule, run by initial-template).
+func TestFnTransformRetainsTrailingStaticCode(t *testing.T) {
+	src := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+	  <xsl:variable name="inner"><![CDATA[
+	    <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+	      <xsl:mode streamable="yes"/>
+	      <xsl:template match="/"><out><xsl:value-of select="x/y + x/z"/></out></xsl:template>
+	      <xsl:template name="main"><ok/></xsl:template>
+	    </xsl:stylesheet>]]></xsl:variable>
+	  <xsl:template match="/">
+	    <xsl:sequence select="transform(map{'stylesheet-text': string($inner),
+	        'initial-template': QName('', 'main')})?output"/>
+	  </xsl:template>
+	</xsl:stylesheet>`
+	if _, err := runPP(t, src, `<r/>`); xdm.ErrorCode(err) != "XTSE3430" {
+		t.Fatalf("got %v, want XTSE3430", err)
+	}
+}
+
 // F&O 3.1: with no initial-function, initial-template, source-node or
 // initial-match-selection, the invocation is call-template on
 // xsl:initial-template, so a stylesheet without one is XTDE0040
