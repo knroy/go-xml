@@ -97,7 +97,7 @@ var (
 	// writes or is appended to; 0 for any other builder.
 	Stamp func(out any) int64
 	// Items returns how many items out's sequence has had, those written
-	// included.
+	// (or, for a Try buffer, handed on) included.
 	Items func(out any) int
 	// Try returns the builder an xsl:try writes its body into when out
 	// streams, or nil: a sequence builder (policy p) that hands each item

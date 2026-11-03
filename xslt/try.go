@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -260,9 +261,9 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if !ok {
 		return err
 	}
-	// A buffer that hands items on keeps the newest (streamtry_out.go), so
-	// it is empty exactly when the body produced nothing, as in tree mode.
-	if i.noRollback && len(sub.Sequence()) > 0 {
+	// The items the body produced, those a buffer handed on included
+	// (streamtry_out.go): tree mode's len(sub.Sequence()).
+	if i.noRollback && xdmsink.Items(sub) > 0 {
 		// rollback-output="no" waives the guarantee that the failed body's
 		// output is discarded. This engine could discard it anyway, but the
 		// stylesheet has declared it does not need to be able to, and 8.3.1

@@ -68,6 +68,9 @@ var tryOutSheets = []struct {
 	{"no-empty-text", ``, `<xsl:template match="/"><out><a/><xsl:try rollback-output="no"><xsl:text/><xsl:value-of select="xs:integer('x')"/><xsl:catch><caught/></xsl:catch></xsl:try></out></xsl:template>`, false, "XTDE3530"},
 	{"no-ok", ``, `<xsl:template match="/"><out><xsl:try rollback-output="no"><xsl:for-each select="//rec"><r/></xsl:for-each><xsl:catch/></xsl:try></out></xsl:template>`, true, ""},
 	{"no-narrow", ``, `<xsl:template match="/"><out><xsl:try><xsl:try rollback-output="no"><a/><b/><xsl:sequence select="error()"/><xsl:catch errors="err:XPTY0004"/></xsl:try><xsl:catch><outer/></xsl:catch></xsl:try></out></xsl:template>`, false, ""},
+	// An inner try's checkpoint hands the outer buffer's items on: after the
+	// inner one rolls back, the outer one has produced items all the same.
+	{"no-inner-rollback", ``, `<xsl:template match="/"><out><xsl:try rollback-output="no"><a/><b/><xsl:try><c/><d/><xsl:sequence select="error()"/><xsl:catch errors="err:XPTY0004"/></xsl:try><xsl:catch>caught</xsl:catch></xsl:try></out></xsl:template>`, true, "XTDE3530"},
 	{"no-in-yes", ``, `<xsl:template match="/"><out><xsl:try><a/><xsl:try rollback-output="no"><b/><c/><xsl:catch/></xsl:try><xsl:sequence select="error()"/><xsl:catch><outer/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
 }
 

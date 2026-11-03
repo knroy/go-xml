@@ -104,6 +104,9 @@ func init() {
 		if s := b.sink; s != nil && b == s.root {
 			return s.items
 		}
+		if f := b.fwd; f != nil {
+			return f.produced
+		}
 		return len(b.items)
 	}
 }
