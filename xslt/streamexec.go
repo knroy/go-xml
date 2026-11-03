@@ -105,6 +105,8 @@ type streamExec struct {
 	// rule says it is a template rule's body (streamapply.go), whose
 	// context element may be, but need not be, the document element.
 	rule bool
+	// tries are the consumers of each streamed xsl:try's body (streamtry.go).
+	tries [][]*streamOp
 }
 
 func newStreamExec() *streamExec {
@@ -259,6 +261,9 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		return true
 	}
 	local := el.Name().Local
+	if local == "try" {
+		return b.tryOp(el, f)
+	}
 	if el.Attr("", "select") != nil {
 		switch local {
 		case "value-of", "copy-of", "sequence", "attribute", "break":
@@ -328,7 +333,7 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 func (b *streamBuilder) avtOps(el *xdm.Node, f vfocus) bool {
 	var op *streamOp
 	for a := range el.Attrs() {
-		if !lreAttrOK(a) {
+		if !lreAttrOK(a) && !b.useSets(el, a, f) {
 			return b.refuse("attribute xsl:" + a.Name().Local)
 		}
 		if a.Name().URI == xdm.NSXSL || !strings.ContainsAny(a.Value(), "{}") {
@@ -602,6 +607,9 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "apply-templates" {
 			return b.attrApply(el, f)
 		}
+		if local == "try" {
+			return b.tryMotionless(el, f)
+		}
 		if b.noIdent && (local == "sequence" || local == "variable") {
 			// They could hand the copy on as the node it stands for.
 			return b.refuse("xsl:" + local + " on a copied text, comment or PI node")
@@ -656,7 +664,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 	for a := range el.Attrs() {
 		name := a.Name()
 		if !xslEl {
-			if !lreAttrOK(a) {
+			if !lreAttrOK(a) && !b.useSets(el, a, f) {
 				return b.refuse("attribute xsl:" + name.Local)
 			}
 			if !b.avt(el, a.Value(), f) {
@@ -667,7 +675,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 		if name.URI != "" {
 			continue
 		}
-		if !streamAttrsOK[name.Local] {
+		if !streamAttrsOK[name.Local] && !b.useSets(el, a, f) {
 			return b.refuse("attribute " + name.Local + " of " + elName(el))
 		}
 		switch name.Local {
@@ -797,6 +805,7 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 	if e == nil {
 		return nil, "select does not parse again"
 	}
+	e = c.inlineCalls(e)
 	if _, ctx := e.(*xpath.ContextItem); simple && (ctx || noTextNodes(e)) {
 		// Simple content (§5.7.2) drops zero-length text nodes, merges
 		// adjacent ones, then atomizes: with no text node in the value the
@@ -865,7 +874,10 @@ func (x *streamExec) ready() string {
 	if x.class == classElem {
 		minD = 1 // a rule's context element: the document element, or below
 	}
-	return x.readyOps(x.top, minD, &x.kinds)
+	if why := x.readyOps(x.top, minD, &x.kinds); why != "" {
+		return why
+	}
+	return x.readyTries()
 }
 
 // readyOps readies ops, whose context element is at depth minD or deeper

@@ -439,6 +439,8 @@ func fuzzMakeModes(seed int64) fuzzCase {
 		s.WriteString("/>\n")
 	}
 	gr := rand.New(rand.NewSource(seed*39916801 + 13)) // the grouping rule bodies' draws
+	tr := rand.New(rand.NewSource(seed*1000003 + 19))  // the try rule bodies' draws
+	calls := false
 	for i, n := 0, g.n(6); i < n; i++ {
 		s.WriteString(`<xsl:template match="` + strings.ReplaceAll(sub(g.pick(fuzzPatterns...)), "<", "&lt;") + `"`)
 		if g.p(40) || len(modes) > 1 && g.p(50) {
@@ -455,6 +457,9 @@ func fuzzMakeModes(seed int64) fuzzCase {
 		body = strings.ReplaceAll(body, "MODE", g.pick(modes[len(modes)-1], "#default", "#current"))
 		if gb := fuzzGroupRule(gr, g.rec, modes[len(modes)-1]); gb != "" {
 			body = gb
+		}
+		if tb := fuzzTryRule(tr, g.rec); tb != "" {
+			body, calls = tb, true
 		}
 		s.WriteString(">" + body + "</xsl:template>\n")
 	}
@@ -479,7 +484,11 @@ func fuzzMakeModes(seed int64) fuzzCase {
 	if try {
 		s.WriteString(`<xsl:catch><caught code="{local-name-from-QName($err:code)}"/></xsl:catch></xsl:try>`)
 	}
-	s.WriteString("\n</xsl:template>\n</xsl:stylesheet>\n")
+	s.WriteString("\n</xsl:template>\n")
+	if calls {
+		s.WriteString(fuzzCallDecls)
+	}
+	s.WriteString("</xsl:stylesheet>\n")
 	c := fuzzCase{seed: seed, sheet: s.String(), doc: doc, malform: g.malform, kind: "modes"}
 	if g.p(3) {
 		c.maxNodes = 5 + g.n(60)
@@ -573,6 +582,9 @@ func (g *fuzzGen) coreContent(esc func(string) string) (string, bool) {
 func fuzzMake(seed int64) fuzzCase {
 	if fuzzIsGroups(seed) {
 		return fuzzMakeGroups(seed)
+	}
+	if fuzzIsTry(seed) {
+		return fuzzMakeTry(seed)
 	}
 	if fuzzIsModes(seed) {
 		return fuzzMakeModes(seed)
@@ -803,10 +815,11 @@ func TestStreamFuzz(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(c.doc), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		groups := 0
+		groups, tries := 0, 0
 		traceGroup = func() { groups++ }
+		traceTry = func() { tries++ }
 		co := fuzzRun(c, dir, true)
-		traceGroup = nil
+		traceGroup, traceTry = nil, nil
 		tr := fuzzRun(c, dir, false)
 		tally["cases"]++
 		if co.trace.Streamed() > 0 {
@@ -832,6 +845,15 @@ func TestStreamFuzz(t *testing.T) {
 		}
 		if groups > 0 {
 			tally["streamed: a grouping ran"]++
+		}
+		if c.kind == "try" {
+			tally["try shapes"]++
+			if co.trace.Streamed() > 0 {
+				tally["streamed: try shapes"]++
+			}
+		}
+		if tries > 0 {
+			tally["streamed: a try caught on the cursor"]++
 		}
 		if c.kind == "modes" {
 			tally["mode shapes"]++
@@ -917,13 +939,20 @@ func TestStreamFuzzMain(t *testing.T) {
 		if r.Intn(30) == 0 {
 			opts.MaxNodes = 5 + r.Intn(60)
 		}
-		groups := 0
+		groups, tries := 0, 0
 		traceGroup = func() { groups++ }
+		traceTry = func() { tries++ }
 		co, ct := mainRun(c.sheet, c.doc, true, opts)
-		traceGroup = nil
+		traceGroup, traceTry = nil, nil
 		tr, tt := mainRun(c.sheet, c.doc, false, opts)
 		if groups > 0 {
 			tally["streamed: a grouping ran"]++
+		}
+		if tries > 0 {
+			tally["streamed: a try caught on the cursor"]++
+		}
+		if ct.Runs[streamtrace.Main] > 0 && strings.Contains(c.sheet, `<xsl:try rollback-output`) {
+			tally["streamed: with a try rule"]++
 		}
 		tally["cases"]++
 		if ct.Runs[streamtrace.Main] > 0 && strings.Contains(c.sheet, "for-each-group") {

@@ -162,6 +162,10 @@ func (c *Cursor) StripWhitespace(strip func(el *xdm.Node) bool) { c.strip = stri
 // Close stops the parse. The cursor is spent.
 func (c *Cursor) Close() { c.stop() }
 
+// At is the current event: the last one Next, NextTag, SkipTag, Skip,
+// Ground, GroundLater or Text returned (a Peek does not move it).
+func (c *Cursor) At() Event { return c.ev }
+
 // Observe adds o to the cursor's observers, from the next element on.
 func (c *Cursor) Observe(o Observer) { c.obs = append(c.obs, o) }
 
