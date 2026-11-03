@@ -1,12 +1,16 @@
 package xslt
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/internal/xsdstream"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // The input side of validation on the stream (streamvalidin.go): an
@@ -189,6 +193,83 @@ func TestStreamMergeValidation(t *testing.T) {
 		}
 		if st.Reruns > 0 && te == "" {
 			t.Errorf("%s: re-run where the tree succeeds", where)
+		}
+	}
+}
+
+// TestStreamMainValidation: a principal input TransformReader validates (the
+// harness's annotate: the document node the root) streams, and gives what
+// Parse, xsd ValidateCopy and Transform give: ignorable whitespace dropped,
+// xsl:strip-space made after the validation (sparing simple content), typed
+// values, defaults. An invalid document is an error on both paths.
+func TestStreamMainValidation(t *testing.T) {
+	st, err := xdm.ParseString(inSchema, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := xsd.Load(st.Root, "s.xsd", xsd.Options{Version: xsd.Version11})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := xsdstream.WithSource(context.Background(), schema)
+	sheet := func(decl, rules string) string {
+		return `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+ xmlns:xs="http://www.w3.org/2001/XMLSchema" exclude-result-prefixes="xs">` + decl + `
+<xsl:mode streamable="yes" on-no-match="shallow-copy"/>` + rules + `</xsl:stylesheet>`
+	}
+	run := func(src, doc string, streamed bool) (string, streamtrace.Counts) {
+		before := streamtrace.Snapshot()
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: "file:///s/s.xsl"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Compile(tree.Root, CompileOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var res *Result
+		if streamed {
+			res, err = s.TransformReader(ctx, readOnly{strings.NewReader(doc)}, TransformOptions{})
+		} else {
+			var in *xdm.Tree
+			if in, err = xdm.Parse(strings.NewReader(doc), xdm.ParseOptions{}); err == nil {
+				var typed *xdm.Node
+				if typed, err = schema.ValidateCopy(in.Root, xsd.ValidateOptions{}); err == nil {
+					res, err = s.Transform(context.Background(), typed, TransformOptions{})
+				}
+			}
+		}
+		if err != nil {
+			return "error", streamtrace.Snapshot().Sub(before)
+		}
+		return res.String(), streamtrace.Snapshot().Sub(before)
+	}
+	spaced := "<list>\n <item n=\"1\">\n  <price> 4.50 </price>\n  <note> </note>\n </item>\n" +
+		" <item n=\"2\"><price>0.1</price><dims> 1 2 </dims><note>\n</note></item>\n</list>"
+	rules := []string{
+		``,
+		`<xsl:template match="price"><p v="{data(.) * 2}"/></xsl:template>`,
+		`<xsl:template match="price"><p s="[{.}]"/></xsl:template>`,
+		`<xsl:template match="item"><i r="{data(@rate)}" c="{count(node())}"/></xsl:template>`,
+		`<xsl:template match="note"><n c="{count(node())}" nil="{nilled(.)}"/></xsl:template>`,
+		`<xsl:template match="/"><o><xsl:value-of select="sum(list/item/price)"/></o></xsl:template>`,
+	}
+	for _, decl := range []string{"", `<xsl:strip-space elements="*"/>`, `<xsl:strip-space elements="note price"/>`} {
+		for _, r := range rules {
+			for name, doc := range map[string]string{"spaced": spaced, "ok": inDocs["ok"], "bad": inDocs["bad-order"]} {
+				where := name + " " + decl + " " + r
+				want, _ := run(sheet(decl, r), doc, false)
+				got, tr := run(sheet(decl, r), doc, true)
+				if got != want {
+					t.Errorf("%s:\nstreamed %q\ntree     %q", where, got, want)
+				}
+				if (want == "error") != (name == "bad") {
+					t.Errorf("%s: tree gives %q", where, want)
+				}
+				if tr.Runs[streamtrace.Main] == 0 {
+					t.Errorf("%s: not streamed", where)
+				}
+			}
 		}
 	}
 }
