@@ -55,6 +55,10 @@ var accumBodies = []struct {
 	{`<xsl:value-of select="serialize(accumulator-after('v'), map{'method':'adaptive'})"/>`, true},
 	{`<xsl:apply-templates select="*" mode="a"/>`, true},
 	{`<xsl:apply-templates mode="a"/><xsl:value-of select="accumulator-after('n')"/>`, true},
+	// A group's body has read past its first member, its focus.
+	{`<xsl:for-each-group select="*/rec" group-adjacent="@k"><g n="{count(current-group())}" b="{accumulator-before('n')}"/></xsl:for-each-group>`, false},
+	{`<xsl:for-each-group select="*/rec" group-adjacent="@k"><g b="{accumulator-before('n')}"><xsl:copy-of select="current-group()"/></g></xsl:for-each-group>`, false},
+	{`<xsl:for-each-group select="*/rec" group-adjacent="@k"><g><xsl:value-of select="count(current-group())"/><xsl:value-of select="accumulator-before('n')"/></g></xsl:for-each-group>`, false},
 	// Below an element's start: the after-value needs it read first.
 	{`<xsl:for-each select="*/rec"><xsl:value-of select="accumulator-after('n')"/><xsl:value-of select="count(sub)"/></xsl:for-each>`, false},
 }
@@ -239,5 +243,49 @@ func TestStreamAccumErrors(t *testing.T) {
 				t.Errorf("doc %d, rules %d: container streamed runs %d, guard hits %d", di, ri, ct.Runs[streamtrace.Core], ct.Guards)
 			}
 		}
+	}
+}
+
+// TestStreamAccumItemLimit: the items an accumulator's values hold are
+// counted as the tree's walk counts them, so a value growing and shrinking
+// over a document is refused at the same limit (MaxItems) in both modes.
+func TestStreamAccumItemLimit(t *testing.T) {
+	const decls = `<xsl:accumulator name="s" as="xs:string*" initial-value="()" streamable="yes">
+	  <xsl:accumulator-rule match="rec" select="($value, string(@k))"/>
+	  <xsl:accumulator-rule match="sub" phase="end" select="tail($value)"/></xsl:accumulator>
+	<xsl:mode streamable="yes" use-accumulators="#all"/>
+	<xsl:template match="rec"><r n="{count(accumulator-before('s'))}"/></xsl:template>`
+	var b strings.Builder
+	b.WriteString("<doc>")
+	for i := range 40 {
+		fmt.Fprintf(&b, `<rec k="k%d"><sub/></rec><rec k="j%d"/>`, i, i)
+	}
+	b.WriteString("</doc>")
+	doc := b.String()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refused, passed := 0, 0
+	for _, lim := range []int{20, 45, 60, 80, 100, 400, 2000} {
+		opts := TransformOptions{MaxItems: lim}
+		so, _ := mainRun(mainSheet(decls), doc, true, opts)
+		to, _ := mainRun(mainSheet(decls), doc, false, opts)
+		if so != to {
+			t.Errorf("MaxItems %d, TransformReader:\nstreamed %.300s\ntree     %.300s", lim, so, to)
+		}
+		co, ce, _ := coreRun(coreSheetWith(decls, `<xsl:apply-templates/>`), dir, true, opts)
+		cto, cte, _ := coreRun(coreSheetWith(decls, `<xsl:apply-templates/>`), dir, false, opts)
+		if co != cto || ce != cte {
+			t.Errorf("MaxItems %d, container:\nstreamed %.300s %s\ntree     %.300s %s", lim, co, ce, cto, cte)
+		}
+		if strings.HasPrefix(to, "error: ") {
+			refused++
+		} else {
+			passed++
+		}
+	}
+	if refused == 0 || passed == 0 {
+		t.Errorf("the limits should refuse some runs and pass others: %d refused, %d passed", refused, passed)
 	}
 }
