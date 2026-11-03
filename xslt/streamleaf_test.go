@@ -68,6 +68,12 @@ var climbBodies = []struct {
 	stream bool
 }{
 	{`<out><xsl:copy-of select="head(//sub/ancestor::*) ! name()"/></out>`, true},
+	// A map over a climbing path (G2 triage): the path's ancestors are
+	// shared by several matches and deduplicated; their string values are
+	// not in a view.
+	{`<out><xsl:value-of select="//sub/ancestor::* ! string()" separator="|"/></out>`, false},
+	{`<out><xsl:value-of select="(//sub/ancestor::*)[. = 'x'] ! name()" separator="|"/></out>`, false},
+	{`<out><xsl:value-of select="//sub/ancestor::* ! name()" separator="|"/></out>`, true}, // names: in the view
 	{`<out><xsl:copy-of select="(//sub/ancestor::*, 'x') ! name()"/></out>`, true},
 	{`<out><xsl:copy-of select="head(//sub/./ancestor-or-self::*) ! name()"/></out>`, true},
 	{`<out><xsl:copy-of select="subsequence(//rec/ancestor-or-self::*, 2) ! name()"/></out>`, true},

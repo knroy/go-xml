@@ -287,38 +287,26 @@ func (s *streamSplit) branchMinDepth() int {
 	return least
 }
 
-// mapOf takes P ! E apart as a consuming path, when it is one of two forms
-// (pathOf's case for a simple map; anything else is walk's):
-//
-//   - E is a downward path Q, or a set operator over such paths, and P is
-//     child steps: P's matches are disjoint subtrees in document order, so
-//     the nodes E gives for them are those of P/Q, in that order, once each
-//     (for intersect and except too: a node below one match is below no
-//     other). Q's branches each get P's steps before their own.
-//   - E gives only atomic values and reads no position(): P ! E is then
-//     P's matches in document order, each giving E -- E is the tail, as in
-//     P/E (where atomic values are neither sorted nor de-duplicated). P may
-//     have a tail of steps (P/@a ! E is P/@a/E); not one ending in values.
+// mapOf takes P ! Q apart as a consuming path where Q is a downward path,
+// or a set operator over such paths, and P is child steps (pathOf's case for
+// a simple map, after mapPathOf, streamshapes.go, has declined it): P's
+// matches are disjoint subtrees in document order, so the nodes Q gives for
+// them are those of P/Q, in that order, once each (for intersect and except
+// too: a node below one match is below no other). Q's branches each get P's
+// steps before their own. Any other map is mapPathOf's or the walk's: read
+// as a path, P ! E would deduplicate and sort what the map keeps per match
+// (//rec ! ancestor-or-self::*/data(@k) gives a shared ancestor's key once
+// per match).
 func (w *splitter) mapOf(x *xpath.SimpleMap) (splitPathParts, bool) {
 	l, ok := w.pathOf(x.Left)
-	if !ok || l.oi != "" || l.group || l.ctxItem {
+	if !ok || l.oi != "" || l.group || l.ctxItem || len(l.tail) > 0 || l.br != nil || !childSteps(l.steps) {
 		return l, false
 	}
-	if len(l.tail) == 0 && l.br == nil && childSteps(l.steps) {
-		if q, ok := w.relPath(x.Right); ok {
-			return prefixed(l.steps, q), true
-		}
-		if w.why != "" {
-			return l, false
-		}
-	}
-	if !valueTail(x.Right) || readsPosition(x.Right) ||
-		len(l.tail) > 0 && !isStep(l.tail[len(l.tail)-1]) {
-		// After a tail giving values, E would be a path step over them.
+	q, ok := w.relPath(x.Right)
+	if !ok {
 		return l, false
 	}
-	l.tail = append(l.tail[:len(l.tail):len(l.tail)], x.Right)
-	return l, true
+	return prefixed(l.steps, q), true
 }
 
 // relPath is e as a consuming path relative to the context: no root step,

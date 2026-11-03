@@ -579,6 +579,11 @@ func (run *streamRun) popFeed(instr Instruction, rt *runtime, op *streamOp, g *g
 					if ok, err := gate(); err != nil || !ok {
 						return false, err
 					}
+					if v.Kind() != xdm.KindElement {
+						// A kept leaf's copy, complete: off the cursor, as
+						// the bare loop hands it (streamleaf.go, G4).
+						return true, run.offEach(each, v)
+					}
 					run.d, run.used = md, false
 					err := each(v)
 					read := run.used

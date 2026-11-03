@@ -132,7 +132,8 @@ var coreBodies = []struct {
 	{`<e><xsl:attribute name="a" select="//sub/@x"/></e>`, true},
 	{`<e><xsl:attribute name="a" select="//rec" separator="-"/></e>`, true},
 	{`<out><xsl:value-of select="//rec/text()"/></out>`, true}, // kept leaves (G4)
-	{`<out><xsl:value-of select="//rec/node()"/></out>`, false},
+	// Text, comment and PI matches are kept since G4 (streamleaf.go).
+	{`<out><xsl:value-of select="//rec/node()"/></out>`, true},
 	// The burst plans' shapes the core took at M1.6: values made from each
 	// grounded match (sf-deep-equal, si-lre-C), a choice under simple
 	// content (sx-ifExpr), a simple map the analysis calls motionless
