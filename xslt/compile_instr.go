@@ -1146,6 +1146,7 @@ func (c *compiler) compileCopy(n *xdm.Node, ns xpath.NamespaceResolver) (Instruc
 			return nil, fmt.Errorf("in xsl:copy/@select: %w", err)
 		}
 		instr.sel = sel
+		c.noteStreamLoop(n, instr, sel, ns) // a consuming select (streamcopy.go)
 	}
 	return instr, nil
 }

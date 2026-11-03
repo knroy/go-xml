@@ -899,6 +899,9 @@ type copyInstr struct {
 }
 
 func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if f := rt.burstsFor(i); f != nil && i.sel != nil {
+		return i.executeFed(rt, out, f) // streamcopy.go
+	}
 	item := rt.ctx.Item
 	if i.sel != nil {
 		seq, err := i.sel.Eval(rt.ctx)

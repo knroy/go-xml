@@ -295,6 +295,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 			return b.selectOp(el, f)
 		case "for-each", "iterate":
 			return b.loopOp(el, f)
+		case "copy":
+			return b.copySelectOp(el, f) // streamcopy.go
 		case "apply-templates":
 			return b.applyOp(el, f)
 		case "for-each-group":
