@@ -107,6 +107,9 @@ func (b *streamBuilder) applyOp(el *xdm.Node, f vfocus) bool {
 // that selects attributes of the context, which its view has. It runs off
 // the cursor.
 func (b *streamBuilder) attrApply(el *xdm.Node, f vfocus) bool {
+	if f == vLeaf && leafEmptySelect(el) {
+		return b.applyAttrs(el, f) && b.withParams(el, f) // runs on the copy, over nothing
+	}
 	src := el.AttrValue("select")
 	e := parseAt(el, src)
 	if f != vElem || e == nil || !endsInAttribute(e) || !(viewCheck{noIdent: b.noIdent}).safe(e, f, true) {
@@ -194,6 +197,7 @@ func (b *streamBuilder) copyDoc(el *xdm.Node) bool {
 
 // childNodes reports whether e is node() or child::node(): the children.
 func childNodes(e xpath.Expr) bool {
+	e = oneStep(e)
 	st, ok := e.(*xpath.Step)
 	if !ok || st.Axis != xpath.AxisChild || len(st.Predicates) > 0 {
 		return false
