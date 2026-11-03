@@ -189,7 +189,21 @@ takes literal result elements, `xsl:element`, `xsl:copy`, `xsl:attribute`,
 streamable modes: rules chosen as the tree chooses them (priorities,
 precedence, patterns decided on the start tag), every `on-no-match` built-in,
 tunnel and ordinary parameters, `#current` and mode switches, to any depth on
-one cursor. A path
+one cursor. `xsl:for-each-group` with `group-adjacent`,
+`group-starting-with` or `group-ending-with` over a path of child steps
+(or the current group of an enclosing grouping) streams: each item's key
+or pattern is decided on its start tag, each group's body runs at its
+first item, and `current-group()` is read once, in order, off the cursor
+by `xsl:copy-of`, `xsl:value-of`, `xsl:sequence` in an element, a
+reducer (`count(current-group())`, `sum(current-group()/@v)`), an
+`xsl:for-each`, `xsl:iterate` or `xsl:apply-templates` over it, or a nested
+grouping. Its errors come in the tree's order (predicates, then keys, then
+bodies), `TransformReader` included. A grouping over a grounded population
+of values (`group-by`, `xsl:sort`) reads its select off the cursor and
+groups as the tree does. `xsl:iterate` carries copies of its items
+(`xsl:next-iteration` with `copy-of(.)`). A consuming attribute value
+template on a literal result element (`<g n="{count(current-group())}"/>`)
+streams. A path
 is child or descendant steps by name, wildcard or kind (`doc/rec`, `//rec`,
 `/*/*/rec`, `*:rec`, `p:*`, names resolved through `xpath-default-namespace`),
 optionally under `outermost()`/`innermost()`, with motionless or positional
@@ -227,7 +241,12 @@ Figures for the core, on this machine:
 - through `TransformReader`: the identity over 100 MB in 4.1 s and 573 MB
   against Parse + Transform's 2.5 s and 1,034 MB, 1 GB in 42 s and 5.2 GB
   against 36 s and 9.1 GB; the filter over 1 GB in 23.3 s and 620 MB against
-  22.2 s and 7.3 GB.
+  22.2 s and 7.3 GB;
+- group-adjacent over a 100 MB log of sessions: 1.24 s CPU and 17 MB heap
+  against the tree's 1.04 s and 590 MB; 1 GB in 12.0 s and 158 MB against
+  13.6 s and 6.0 GB. group-starting-with copying the ERROR entries of each
+  run: 100 MB in 2.1 s and 82 MB against 1.4 s and 622 MB; 1 GB in 20.2 s and
+  890 MB against 19.7 s and 6.2 GB (the heap is the output).
 
 On flat documents the core costs 1.2–1.8× the tree's CPU (each match is a
 coroutine round trip on the cursor); on deep ones 0.14–1.5×.
@@ -237,14 +256,19 @@ the document node (it would hold more than the tree); `xsl:apply-templates`
 over a select that is not a bare path, or in a sequence-typed variable; a
 pattern a view cannot decide (positional, reading content, `id()`/`key()`,
 `text()` below a step); paths whose tail climbs; kept text, comment or processing-instruction nodes;
-union/intersect/except; `xsl:try`, `xsl:for-each-group`, `xsl:fork`,
-`xsl:result-document`; `last()`, `reverse`, `sort`, user functions.
+union/intersect/except; `xsl:try`, `xsl:fork`,
+`xsl:result-document`; `last()`, `reverse`, `sort`, user functions;
+`group-by` or `xsl:sort` over a streamed population (§19.8.4.19 makes them
+free-ranging); a grouping population that is not child steps (`//`,
+`outermost()`, attributes, text); a grouping over a grounded population of
+copies (`t/copy-of()`: their order across their own trees is not the tree's);
+a key or pattern a view cannot decide.
 
-In the W3C XSLT 3.0 run 629 cases stream (9 before the second burst shape,
+In the W3C XSLT 3.0 run 707 cases stream (9 before the second burst shape,
 364 before `//` record paths, 450 before the core, 576 before streamable
-modes, 606 before `TransformReader`). 23 of the 225 cases with a streamed
-principal input stream; the rest need grouping, accumulators, `xsl:fork`,
-`xsl:try` or streamable functions, or their mode is not verified.
+modes, 606 before `TransformReader`, 629 before grouping). 27 of the 225
+cases with a streamed principal input stream; the rest need accumulators,
+`xsl:fork`, `xsl:try` or streamable functions, or their mode is not verified.
 Also:
 
 - **The result is still built in memory**, so a large filtered copy grows with
