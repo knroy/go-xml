@@ -439,6 +439,7 @@ func fuzzMakeModes(seed int64) fuzzCase {
 		s.WriteString("/>\n")
 	}
 	gr := rand.New(rand.NewSource(seed*39916801 + 13)) // the grouping rule bodies' draws
+	fr := rand.New(rand.NewSource(seed*524287 + 19))   // the fork rule bodies' (streamforkfuzz_test.go)
 	for i, n := 0, g.n(6); i < n; i++ {
 		s.WriteString(`<xsl:template match="` + strings.ReplaceAll(sub(g.pick(fuzzPatterns...)), "<", "&lt;") + `"`)
 		if g.p(40) || len(modes) > 1 && g.p(50) {
@@ -455,6 +456,9 @@ func fuzzMakeModes(seed int64) fuzzCase {
 		body = strings.ReplaceAll(body, "MODE", g.pick(modes[len(modes)-1], "#default", "#current"))
 		if gb := fuzzGroupRule(gr, g.rec, modes[len(modes)-1]); gb != "" {
 			body = gb
+		}
+		if fb := fuzzForkRule(fr, g.rec); fb != "" {
+			body = fb
 		}
 		s.WriteString(">" + body + "</xsl:template>\n")
 	}
@@ -571,6 +575,9 @@ func (g *fuzzGen) coreContent(esc func(string) string) (string, bool) {
 }
 
 func fuzzMake(seed int64) fuzzCase {
+	if fuzzIsForks(seed) {
+		return fuzzMakeForks(seed) // streamforkfuzz_test.go
+	}
 	if fuzzIsGroups(seed) {
 		return fuzzMakeGroups(seed)
 	}
@@ -832,6 +839,15 @@ func TestStreamFuzz(t *testing.T) {
 		}
 		if groups > 0 {
 			tally["streamed: a grouping ran"]++
+		}
+		if c.kind == "forks" {
+			tally["fork shapes"]++
+			if co.trace.Streamed() > 0 {
+				tally["streamed: fork shapes"]++
+			}
+			if co.trace.Kinds[streamtrace.KindFork] > 0 {
+				tally["streamed: a tee"]++
+			}
 		}
 		if c.kind == "modes" {
 			tally["mode shapes"]++
