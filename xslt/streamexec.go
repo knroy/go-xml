@@ -854,7 +854,7 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 		if x, ok := e.(*xpath.IfExpr); ok {
 			e = &xpath.IfExpr{Cond: x.Cond, Then: data(x.Then), Else: data(x.Else)}
 		} else {
-			e = data(e)
+			e = liftData(data(e))
 		}
 	}
 	s, why := splitStreamIn(e, sel, doc, group, key)
@@ -893,6 +893,15 @@ func noTextNodes(e xpath.Expr) bool {
 		return true
 	case *xpath.IfExpr:
 		return noTextNodes(x.Then) && noTextNodes(x.Else)
+	case *xpath.BinaryOp:
+		switch x.Op { // streamsplit_union.go
+		case "union":
+			return noTextNodes(x.Left) && noTextNodes(x.Right)
+		case "intersect":
+			return noTextNodes(x.Left) || noTextNodes(x.Right)
+		case "except":
+			return noTextNodes(x.Left)
+		}
 	}
 	return atomicValued(e)
 }

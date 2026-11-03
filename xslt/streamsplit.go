@@ -935,6 +935,8 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 		pp.group = true
 	case *xpath.BinaryOp:
 		return w.setOf(x)
+	case *xpath.SimpleMap:
+		return w.mapOf(x)
 	case *xpath.FuncCall:
 		if w.group && isCurrentGroup(x) {
 			list = []xpath.Expr{w.newGroupStep(nil)}

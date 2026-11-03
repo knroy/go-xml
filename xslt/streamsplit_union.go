@@ -267,3 +267,141 @@ func (s *streamSplit) branchMinDepth() int {
 	}
 	return least
 }
+
+// mapOf takes P ! E apart as a consuming path, when it is one of two forms
+// (pathOf's case for a simple map; anything else is walk's):
+//
+//   - E is a downward path Q, or a set operator over such paths, and P is
+//     child steps: P's matches are disjoint subtrees in document order, so
+//     the nodes E gives for them are those of P/Q, in that order, once each
+//     (for intersect and except too: a node below one match is below no
+//     other). Q's branches each get P's steps before their own.
+//   - E gives only atomic values and reads no position(): P ! E is then
+//     P's matches in document order, each giving E -- E is the tail, as in
+//     P/E (where atomic values are neither sorted nor de-duplicated). P may
+//     have a tail of steps (P/@a ! E is P/@a/E); not one ending in values.
+func (w *splitter) mapOf(x *xpath.SimpleMap) (splitPathParts, bool) {
+	l, ok := w.pathOf(x.Left)
+	if !ok || l.oi != "" || l.group || l.ctxItem {
+		return l, false
+	}
+	if len(l.tail) == 0 && l.br == nil && childSteps(l.steps) {
+		if q, ok := w.relPath(x.Right); ok {
+			return prefixed(l.steps, q), true
+		}
+		if w.why != "" {
+			return l, false
+		}
+	}
+	if !valueTail(x.Right) || readsPosition(x.Right) ||
+		len(l.tail) > 0 && !isStep(l.tail[len(l.tail)-1]) {
+		// After a tail giving values, E would be a path step over them.
+		return l, false
+	}
+	l.tail = append(l.tail[:len(l.tail):len(l.tail)], x.Right)
+	return l, true
+}
+
+// relPath is e as a consuming path relative to the context: no root step,
+// no tail, not under outermost() or innermost().
+func (w *splitter) relPath(e xpath.Expr) (splitPathParts, bool) {
+	if pe, ok := e.(*xpath.PathExpr); ok && pe.Root {
+		return splitPathParts{}, false
+	}
+	q, ok := w.pathOf(e)
+	if !ok || q.oi != "" || q.group || len(q.tail) > 0 {
+		return q, false
+	}
+	return q, true
+}
+
+// prefixed is q with steps before each of its branches' own.
+func prefixed(steps []*xpath.Step, q splitPathParts) splitPathParts {
+	b := branchesOf(q)
+	out := splitPathParts{}
+	nb := &splitBranches{n: b.n, set: b.set}
+	for k := uint(0); k < b.n; k++ {
+		if b.self&(1<<k) == 0 && !slicesHasBranch(b.bits, k) {
+			continue
+		}
+		out.steps = append(out.steps, steps...)
+		for range steps {
+			nb.bits = append(nb.bits, uint8(k))
+		}
+		for i, st := range q.steps {
+			if uint(b.bits[i]) == k {
+				out.steps = append(out.steps, st)
+				nb.bits = append(nb.bits, uint8(k))
+			}
+		}
+	}
+	if q.br == nil && !q.ctxItem {
+		out.br = nil // one branch: a plain path
+		return out
+	}
+	out.br = nb
+	return out
+}
+
+func slicesHasBranch(bits []uint8, k uint) bool {
+	for _, b := range bits {
+		if uint(b) == k {
+			return true
+		}
+	}
+	return false
+}
+
+// childSteps reports whether every step is a child step: matches that
+// cannot nest.
+func childSteps(steps []*xpath.Step) bool {
+	for _, st := range steps {
+		if st.Axis != xpath.AxisChild {
+			return false
+		}
+	}
+	return len(steps) > 0
+}
+
+// liftData rewrites data(X[p]) as data(X)[p] where X gives only elements or
+// attributes of the stream (noTextNodes) and p reads nothing but position():
+// a streamed document is never validated, so each such node atomizes to one
+// untyped value, and the n-th value is the n-th node's. The values are then
+// read off the cursor instead of the nodes being collected
+// (value-of select="(A | B)[position() mod 2 = 0]").
+func liftData(e xpath.Expr) xpath.Expr {
+	d, ok := e.(*xpath.FuncCall)
+	if !ok || d.Name.URI != fnNS || d.Name.Local != "data" || len(d.Args) != 1 {
+		return e
+	}
+	f, ok := d.Args[0].(*xpath.FilterExpr)
+	if !ok || !noTextNodes(f.Base) || atomicValued(f.Base) {
+		return e
+	}
+	for _, p := range f.Predicates {
+		if !positionOnly(p) {
+			return e
+		}
+	}
+	return &xpath.FilterExpr{Base: &xpath.FuncCall{Name: d.Name, Args: []xpath.Expr{f.Base}}, Predicates: f.Predicates}
+}
+
+// positionOnly reports whether a predicate reads of its focus only its
+// position: arithmetic and comparisons of position(), literals, variables.
+func positionOnly(e xpath.Expr) bool {
+	switch x := e.(type) {
+	case *xpath.Literal, *xpath.VarRef:
+		return true
+	case *xpath.BinaryOp:
+		switch x.Op {
+		case "is", "<<", ">>", "union", "intersect", "except":
+			return false
+		}
+		return positionOnly(x.Left) && positionOnly(x.Right)
+	case *xpath.UnaryOp:
+		return positionOnly(x.Operand)
+	case *xpath.FuncCall:
+		return x.Name.URI == fnNS && x.Name.Local == "position" && len(x.Args) == 0
+	}
+	return false
+}

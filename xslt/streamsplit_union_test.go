@@ -28,6 +28,19 @@ var unionBodies = []struct {
 	{`<out><xsl:copy-of select="/doc/rec except /doc/rec[@k = 'b']"/></out>`, true},
 	{`<out><xsl:value-of select="(//rec | //sub)/@k" separator=","/></out>`, true},
 	{`<out><xsl:for-each select="/doc/rec | /doc/other"><e n="{name()}"/></xsl:for-each></out>`, true},
+	// Simple maps (mapOf) and a filter by position under data() (liftData).
+	{`<out><xsl:value-of select="(//rec | //sub) ! name()" separator=","/></out>`, true},
+	{`<out><xsl:value-of select="//rec ! string(@k)" separator=","/></out>`, true},
+	{`<out><xsl:value-of select="/doc/rec/@k ! string(.) ! upper-case(.)" separator=","/></out>`, true},
+	{`<out><xsl:copy-of select="/doc/rec ! (sub | other)"/></out>`, true},
+	{`<out><xsl:copy-of select="/doc/rec ! (sub except sub[@x = '2'])"/></out>`, true},
+	{`<out><xsl:copy-of select="/doc/rec ! sub"/></out>`, true},
+	{`<out><xsl:value-of select="(/doc/rec | //sub)[position() mod 2 = 0]" separator=","/></out>`, true},
+	{`<out><xsl:for-each select="/doc/rec"><xsl:value-of select="(. | sub) ! local-name()"/></xsl:for-each></out>`, true},
+	// Refused: operands with a tail of their own; a map reading position().
+	{`<out><xsl:value-of select="(/doc/rec/@k | //sub/@x)[position() lt 3]" separator=","/></out>`, false},
+	{`<out><xsl:value-of select="(//rec | //sub) ! position()" separator=","/></out>`, false},
+	{`<out><xsl:value-of select="(/doc/rec | //sub)[. = 't3']" separator=","/></out>`, false},
 	// The analysis does not trust (A | B)/C: no plan is built.
 	{`<out><xsl:value-of select="(/doc/rec | /doc/w)/rec/@v" separator=","/></out>`, false},
 	// Refused: a predicate that may fail (the operands' errors come in
