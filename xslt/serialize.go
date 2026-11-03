@@ -102,6 +102,12 @@ type stringWriter interface {
 }
 
 func serializeTo(w stringWriter, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
+	return newSerializer(w, opts, charMap).run(seq)
+}
+
+// newSerializer returns a serializer writing to w, with the sets its
+// parameters name made.
+func newSerializer(w stringWriter, opts OutputSettings, charMap map[rune]string) *serializer {
 	s := &serializer{w: w, opts: opts, charMap: charMap}
 	s.normalize = normalizerFor(opts.NormalizationForm)
 	if len(opts.SuppressIndentation) > 0 {
@@ -132,6 +138,13 @@ func serializeTo(w stringWriter, seq xdm.Sequence, opts OutputSettings, charMap 
 			s.cdataElems[xdm.QName{URI: q.URI, Local: q.Local}] = true
 		}
 	}
+	return s
+}
+
+// run serializes seq.
+func (s *serializer) run(seq xdm.Sequence) error {
+	opts := s.opts
+	charMap := s.charMap
 
 	// The method defaults to one chosen from the result itself: a document
 	// whose first element is <html> is meant to be read as HTML, and writing
@@ -292,53 +305,73 @@ func serializeTo(w stringWriter, seq xdm.Sequence, opts OutputSettings, charMap 
 		// Text output emits string values only; markup is discarded, which is
 		// the point of the method.
 		for _, it := range seq {
-			switch v := it.(type) {
-			case *xdm.Node:
-				// XSLT Serialization 3.0 section 10: the text output method
-				// writes the string value of every text node in the result,
-				// and nothing else. Comments and processing instructions are
-				// not text nodes and contribute nothing — the same rule that
-				// keeps them out of an ancestor's string value. Reaching them
-				// through StringValue here would have written a comment's text
-				// and a PI's data as if they were character content, which is
-				// exactly the markup the method exists to suppress.
-				if v.Kind() == xdm.KindComment || v.Kind() == xdm.KindPI {
-					continue
-				}
-				// Sequence normalisation runs before any method does, so a
-				// parentless attribute or namespace node is an error here
-				// too: there is no document it could belong to, and the text
-				// method having nothing to write for it is not the same as
-				// there being nothing wrong. Serialization-text-1 through -4
-				// send one straight to the serialiser and ask for SENR0001.
-				if v.Kind() == xdm.KindAttribute || v.Kind() == xdm.KindNamespace {
-					if s.err == nil {
-						s.err = fmt.Errorf("SENR0001: an attribute or " +
-							"namespace node cannot be serialised on its own")
-					}
-					return s.err
-				}
-				// Without normalisation the string value is written one
-				// text descendant at a time rather than concatenated first,
-				// which held a copy of the whole output. Normalisation keeps
-				// the concatenation: a combining mark at the start of one
-				// text node composes with the character ending the last.
-				if s.normalize == nil && (v.Kind() == xdm.KindDocument || v.Kind() == xdm.KindElement) {
-					for d := range v.Descendants() {
-						if d.Kind() == xdm.KindText {
-							s.writeString(s.mapChars(d.Value()))
-						}
-					}
-					continue
-				}
-				s.writeString(s.normalized(s.mapChars(v.StringValue())))
-			case *xdm.Atomic:
-				s.writeString(s.normalized(s.mapChars(v.String())))
+			if s.textItem(it) {
+				return s.err
 			}
 		}
 		return s.err
 	}
 
+	seq = s.beginMarkup(seq)
+	for _, it := range seq {
+		s.topItem(it)
+	}
+	return s.err
+}
+
+// textItem writes it, an item at the top of the result, under the text
+// method, and reports whether serialization stops there.
+func (s *serializer) textItem(it xdm.Item) bool {
+	switch v := it.(type) {
+	case *xdm.Node:
+		// XSLT Serialization 3.0 section 10: the text output method
+		// writes the string value of every text node in the result,
+		// and nothing else. Comments and processing instructions are
+		// not text nodes and contribute nothing — the same rule that
+		// keeps them out of an ancestor's string value. Reaching them
+		// through StringValue here would have written a comment's text
+		// and a PI's data as if they were character content, which is
+		// exactly the markup the method exists to suppress.
+		if v.Kind() == xdm.KindComment || v.Kind() == xdm.KindPI {
+			return false
+		}
+		// Sequence normalisation runs before any method does, so a
+		// parentless attribute or namespace node is an error here
+		// too: there is no document it could belong to, and the text
+		// method having nothing to write for it is not the same as
+		// there being nothing wrong. Serialization-text-1 through -4
+		// send one straight to the serialiser and ask for SENR0001.
+		if v.Kind() == xdm.KindAttribute || v.Kind() == xdm.KindNamespace {
+			if s.err == nil {
+				s.err = fmt.Errorf("SENR0001: an attribute or " +
+					"namespace node cannot be serialised on its own")
+			}
+			return true
+		}
+		// Without normalisation the string value is written one
+		// text descendant at a time rather than concatenated first,
+		// which held a copy of the whole output. Normalisation keeps
+		// the concatenation: a combining mark at the start of one
+		// text node composes with the character ending the last.
+		if s.normalize == nil && (v.Kind() == xdm.KindDocument || v.Kind() == xdm.KindElement) {
+			for d := range v.Descendants() {
+				if d.Kind() == xdm.KindText {
+					s.writeString(s.mapChars(d.Value()))
+				}
+			}
+			return false
+		}
+		s.writeString(s.normalized(s.mapChars(v.StringValue())))
+	case *xdm.Atomic:
+		s.writeString(s.normalized(s.mapChars(v.String())))
+	}
+	return false
+}
+
+// beginMarkup sets the xml, xhtml and html methods up and writes what comes
+// before the first item, returning seq as those methods write it.
+func (s *serializer) beginMarkup(seq xdm.Sequence) xdm.Sequence {
+	opts := s.opts
 	html := strings.EqualFold(opts.Method, "html")
 	// XHTML serialises as XML — declaration, self-closing empty elements,
 	// well-formed markup — while sharing the HTML method's content-type meta
@@ -432,18 +465,21 @@ func serializeTo(w stringWriter, seq xdm.Sequence, opts OutputSettings, charMap 
 	// newline that indent mode puts before every element: the XML declaration
 	// already ended with one, and two would leave a blank line.
 	s.atTop = true
-	for _, it := range seq {
-		switch v := it.(type) {
-		case *xdm.Node:
-			if v.Kind() == xdm.KindElement && v.Parent() != nil {
-				s.seeded = v
-			}
-			s.node(v, 0)
-		case *xdm.Atomic:
-			s.escapeText(v.String())
+	return seq
+}
+
+// topItem writes it, an item at the top of the result, under the xml, xhtml
+// or html method.
+func (s *serializer) topItem(it xdm.Item) {
+	switch v := it.(type) {
+	case *xdm.Node:
+		if v.Kind() == xdm.KindElement && v.Parent() != nil {
+			s.seeded = v
 		}
+		s.node(v, 0)
+	case *xdm.Atomic:
+		s.escapeText(v.String())
 	}
-	return s.err
 }
 
 type serializer struct {
@@ -830,6 +866,80 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 
 // writeElement writes element n; s.ns[:base] is in scope from its ancestors.
 func (s *serializer) writeElement(n *xdm.Node, depth, base int) {
+	st, ok := s.openTag(n, depth, base, false)
+	if !ok {
+		return
+	}
+	// Indentation is suppressed for mixed content: adding whitespace around
+	// text would change the element's string value, which for a validator's
+	// output is a correctness issue rather than a cosmetic one.
+	//
+	// It is suppressed for the same reason, said explicitly rather than
+	// inferred, when the element is named by suppress-indentation or carries
+	// xml:space="preserve". Both are a statement that this element's content
+	// is significant to the character: Serialization 3.1 §5 gives the
+	// serialiser licence to add whitespace "only where the effect is not
+	// significant", and these two are how a caller says where that is. An
+	// <li> full of <p> elements has no text child at all, so the mixed-content
+	// rule alone would have re-indented it and the suppress-indentation
+	// parameter would have meant nothing.
+	//
+	// Suppression covers the whole subtree, not this element alone: the
+	// point is that the content comes out as it went in, and re-indenting a
+	// grandchild disturbs it exactly as much as re-indenting a child.
+	//
+	// Beyond those, Serialization 3.1 §5.1.4 grants the licence to indent
+	// only in the immediate content of an untyped (or xs:anyType) element
+	// that has element children, or of an element whose content model is
+	// element-only; mayIndentContent says which.
+	indentChildren := s.opts.Indent && !hasTextChild(n) && !s.suppressed(n) &&
+		mayIndentContent(n)
+	// The html method adds no whitespace before or after a comment or a
+	// processing instruction, which is what Serialization-html-48 is titled.
+	// The reason is that neither is markup an HTML parser skips over on its
+	// way to the content: the characters around them are part of the
+	// element's text, so a newline the serialiser inserts there is a newline
+	// the document did not have. html-48 catches the case where the element
+	// also holds text, which hasTextChild already suppresses; -58 and -59
+	// hold nothing but the instruction -- "<p><?pi data></p>" -- and need the
+	// rule stated for its own sake.
+	if indentChildren && s.html && !s.xhtml && hasCommentOrPIChild(n) {
+		indentChildren = false
+	}
+	// Serialization 3.1 §7.4.3 (html) and §6.1.4 (xhtml): whitespace "MUST
+	// NOT be added or removed adjacent to an inline element"; see
+	// htmlser.SkipIndentBefore for where that leaves room for an indent.
+	for c := range n.Children() {
+		if !indentChildren {
+			s.nodeNoIndent(c)
+			continue
+		}
+		s.skipIndent = s.skipBeforeChild(n, c)
+		s.node(c, depth+1)
+		s.skipIndent = false
+	}
+	if (indentChildren && !s.skipBeforeChild(n, nil)) ||
+		(st.emptyHead && s.opts.Indent) {
+		s.indent(depth)
+	}
+	s.closeTag(n, st)
+}
+
+// elemState is what openTag changed for an element's content, which closeTag
+// restores.
+type elemState struct {
+	head                       *xdm.Node
+	cdata, rawElem, raw, rawLT bool
+	emptyHead                  bool
+	rawName                    string
+}
+
+// openTag writes element n's start tag and what the method puts at the start
+// of its content; s.ns[:base] is in scope from its ancestors. It reports false
+// when that was the whole of n: an empty element, or a meta the html method
+// replaces. nonEmpty says n is to have content whatever it holds now.
+func (s *serializer) openTag(n *xdm.Node, depth, base int, nonEmpty bool) (elemState, bool) {
+	var st elemState
 	if s.pendingDoctype {
 		s.pendingDoctype = false
 		s.writeDoctypeFor(n)
@@ -840,7 +950,7 @@ func (s *serializer) writeElement(n *xdm.Node, depth, base int) {
 	// declaration. Both spellings are dropped, the HTML5 "charset" form and
 	// the HTTP-header form, but only as children of that head (§7.4.13).
 	if s.html && htmlser.ReplacedMeta(s.head, n) {
-		return
+		return st, false
 	}
 	s.indent(depth)
 
@@ -912,12 +1022,14 @@ func (s *serializer) writeElement(n *xdm.Node, depth, base int) {
 	// not. Serialization-xhtml-36 writes <html><head/></html> with no
 	// namespace and asks to see the content-type meta, which the
 	// no-children branch would have written away as "<head></head>".
-	emptyHead := n.FirstChild() == nil && s.html &&
+	empty := n.FirstChild() == nil && !nonEmpty
+	emptyHead := empty && s.html &&
 		strings.EqualFold(n.Name().Local, "head") &&
 		(!s.xhtml || n.Name().URI == nsXHTML || n.Name().URI == "") &&
 		(s.opts.IncludeContentType == nil || *s.opts.IncludeContentType)
 
-	if n.FirstChild() == nil && !emptyHead {
+	st.emptyHead = emptyHead
+	if empty && !emptyHead {
 		// htmlNativeElement rather than s.html: an element in a namespace of
 		// its own is an XML island, and Serialization 3.1 §9 has the html
 		// method write foreign content with XML syntax. The self-closing
@@ -939,11 +1051,11 @@ func (s *serializer) writeElement(n *xdm.Node, depth, base int) {
 					s.writeElementName(n)
 					s.writeString(">")
 				}
-				return
+				return st, false
 			}
 			// An island is XML, and XML self-closes an empty element.
 			s.writeString("/>")
-			return
+			return st, false
 		}
 		if s.xhtml {
 			// XHTML has to satisfy both parsers at once. An HTML parser
@@ -971,12 +1083,12 @@ func (s *serializer) writeElement(n *xdm.Node, depth, base int) {
 				s.writeElementName(n)
 				s.writeString(">")
 			}
-			return
+			return st, false
 		}
 		// XML self-closes an empty element, which is the shortest spelling
 		// and the one every parser reads identically.
 		s.writeString("/>")
-		return
+		return st, false
 	}
 
 	s.writeString(">")
@@ -984,10 +1096,7 @@ func (s *serializer) writeElement(n *xdm.Node, depth, base int) {
 	// restored after its end tag. Not by defer, for the reason element gives.
 	// The raw-text state is restored only by the element that set it: the
 	// text inside sets rawTextLT for whatever follows, across element ends.
-	savedHead, savedCData := s.head, s.inCData
-	rawElem := false
-	var savedRaw, savedRawLT bool
-	var savedRawName string
+	st.head, st.cdata = s.head, s.inCData
 
 	// The HTML method adds the content-type meta so the encoding survives
 	// being served without a charset header.
@@ -996,7 +1105,7 @@ func (s *serializer) writeElement(n *xdm.Node, depth, base int) {
 	// suite's expected output escapes "<" and "&" inside a script there, and
 	// a document that did not would not parse as XML at all.
 	if s.html && !s.xhtml && isRawTextElement(n.Name().Local) {
-		rawElem, savedRaw, savedRawName, savedRawLT = true, s.rawText, s.rawTextName, s.rawTextLT
+		st.rawElem, st.raw, st.rawName, st.rawLT = true, s.rawText, s.rawTextName, s.rawTextLT
 		s.rawText, s.rawTextName, s.rawTextLT = true, n.Name().Local, false
 	}
 	// The head this belongs in is an HTML one. Under the html method every
@@ -1073,65 +1182,17 @@ func (s *serializer) writeElement(n *xdm.Node, depth, base int) {
 		// normally unless that element is named too.
 		s.inCData = false
 	}
+	return st, true
+}
 
-	// Indentation is suppressed for mixed content: adding whitespace around
-	// text would change the element's string value, which for a validator's
-	// output is a correctness issue rather than a cosmetic one.
-	//
-	// It is suppressed for the same reason, said explicitly rather than
-	// inferred, when the element is named by suppress-indentation or carries
-	// xml:space="preserve". Both are a statement that this element's content
-	// is significant to the character: Serialization 3.1 §5 gives the
-	// serialiser licence to add whitespace "only where the effect is not
-	// significant", and these two are how a caller says where that is. An
-	// <li> full of <p> elements has no text child at all, so the mixed-content
-	// rule alone would have re-indented it and the suppress-indentation
-	// parameter would have meant nothing.
-	//
-	// Suppression covers the whole subtree, not this element alone: the
-	// point is that the content comes out as it went in, and re-indenting a
-	// grandchild disturbs it exactly as much as re-indenting a child.
-	//
-	// Beyond those, Serialization 3.1 §5.1.4 grants the licence to indent
-	// only in the immediate content of an untyped (or xs:anyType) element
-	// that has element children, or of an element whose content model is
-	// element-only; mayIndentContent says which.
-	indentChildren := s.opts.Indent && !hasTextChild(n) && !s.suppressed(n) &&
-		mayIndentContent(n)
-	// The html method adds no whitespace before or after a comment or a
-	// processing instruction, which is what Serialization-html-48 is titled.
-	// The reason is that neither is markup an HTML parser skips over on its
-	// way to the content: the characters around them are part of the
-	// element's text, so a newline the serialiser inserts there is a newline
-	// the document did not have. html-48 catches the case where the element
-	// also holds text, which hasTextChild already suppresses; -58 and -59
-	// hold nothing but the instruction -- "<p><?pi data></p>" -- and need the
-	// rule stated for its own sake.
-	if indentChildren && s.html && !s.xhtml && hasCommentOrPIChild(n) {
-		indentChildren = false
-	}
-	// Serialization 3.1 §7.4.3 (html) and §6.1.4 (xhtml): whitespace "MUST
-	// NOT be added or removed adjacent to an inline element"; see
-	// htmlser.SkipIndentBefore for where that leaves room for an indent.
-	for c := range n.Children() {
-		if !indentChildren {
-			s.nodeNoIndent(c)
-			continue
-		}
-		s.skipIndent = s.skipBeforeChild(n, c)
-		s.node(c, depth+1)
-		s.skipIndent = false
-	}
-	if (indentChildren && !s.skipBeforeChild(n, nil)) ||
-		(emptyHead && s.opts.Indent) {
-		s.indent(depth)
-	}
+// closeTag writes element n's end tag and restores what openTag changed.
+func (s *serializer) closeTag(n *xdm.Node, st elemState) {
 	s.writeString("</")
 	s.writeElementName(n)
 	s.writeString(">")
-	s.head, s.inCData = savedHead, savedCData
-	if rawElem {
-		s.rawText, s.rawTextName, s.rawTextLT = savedRaw, savedRawName, savedRawLT
+	s.head, s.inCData = st.head, st.cdata
+	if st.rawElem {
+		s.rawText, s.rawTextName, s.rawTextLT = st.raw, st.rawName, st.rawLT
 	}
 }
 
@@ -2443,6 +2504,13 @@ func isRawTextElement(local string) bool {
 // xhtml would add a content-type meta and percent-escape its URIs, changing
 // output the stylesheet's author had already settled.
 func defaultMethod(seq xdm.Sequence, v10Implicit bool) string {
+	m, _ := methodOf(seq, v10Implicit)
+	return m
+}
+
+// methodOf is defaultMethod, and whether seq decides it: whether anything
+// appended to seq could still change the answer.
+func methodOf(seq xdm.Sequence, v10Implicit bool) (string, bool) {
 	var first *xdm.Node
 	var scan func(xdm.Sequence) bool
 	scan = func(items xdm.Sequence) bool {
@@ -2479,20 +2547,20 @@ func defaultMethod(seq xdm.Sequence, v10Implicit bool) string {
 		}
 		return true
 	}
-	scan(seq)
+	decided := !scan(seq)
 	if first == nil {
-		return "xml"
+		return "xml", decided
 	}
 	switch {
 	case first.Name().URI == nsXHTML && first.Name().Local == "html":
 		if v10Implicit {
-			return "xml"
+			return "xml", true
 		}
-		return "xhtml"
+		return "xhtml", true
 	case first.Name().URI == "" && strings.EqualFold(first.Name().Local, "html"):
-		return "html"
+		return "html", true
 	}
-	return "xml"
+	return "xml", true
 }
 
 // checkOutputSettings reports the serialization errors that a set of output

@@ -492,6 +492,8 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 	}
 
 	topts := rt.opts
+	// Its result is the call's value, not this transform's output.
+	topts.Output = nil
 	// The nested runtime picks up where this one left off instead of
 	// restarting at zero. See TransformOptions.nestedDepth.
 	topts.nestedDepth = depth

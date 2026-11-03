@@ -4,7 +4,7 @@
 // recordings with tests/recdiff, and summarises which cases ran on the
 // streamed path.
 //
-//	go run ./tests/streamdiff [-floor n] [-allow file] <base-rev> <outdir>
+//	go run ./tests/streamdiff [-floor n] [-allow file] [-output] <base-rev> <outdir>
 //
 // Run it from the checkout under test. The base tree is extracted with
 // "git archive <base-rev> | tar -x" into <outdir>/base-src, with a testdata
@@ -23,6 +23,13 @@
 // leg streamed anything. The summary comes from <outdir>/branch/streams/
 // xslt30.tsv, which tests/xslts writes (key, runs per strategy, fallbacks,
 // guard hits, re-runs, the core's sNodes per kind).
+//
+// With -output it also runs a fourth leg, "output", on this checkout with
+// GOXSLT_OUTPUT_CHECK (tests/xslts/outputcheck.go): every case is run again
+// with its principal result streamed to TransformOptions.Output, and the
+// bytes and error compared with Result.Serialize's. It then fails when any
+// case differs, and reports the counts over all cases and over those the
+// branch leg streamed.
 package main
 
 import (
@@ -58,9 +65,10 @@ func main() {
 	}
 	flag.IntVar(&floor, "floor", floor, "fewest cases that must run on the streamed path")
 	allow := flag.String("allow", "", "recdiff allow-rule file (default tests/streamdiff/allow.txt)")
+	outLeg := flag.Bool("output", false, "also compare TransformOptions.Output's bytes with Result.Serialize's")
 	flag.Parse()
 	if flag.NArg() != 2 {
-		fmt.Fprintln(os.Stderr, "usage: go run ./tests/streamdiff [-floor n] [-allow file] <base-rev> <outdir>")
+		fmt.Fprintln(os.Stderr, "usage: go run ./tests/streamdiff [-floor n] [-allow file] [-output] <base-rev> <outdir>")
 		os.Exit(2)
 	}
 	rev := flag.Arg(0)
@@ -96,6 +104,9 @@ func main() {
 	}, baseSrc, td)
 	leg(out, "branch", rev, nil, nil, root, td)
 	leg(out, "off", rev, []string{"GOXSLT_STREAM_OFF=1"}, nil, root, td)
+	if *outLeg {
+		leg(out, "output", rev, []string{"GOXSLT_OUTPUT_CHECK=" + filepath.Join(out, "output.tsv")}, nil, root, td)
+	}
 
 	rd := filepath.Join(out, "recdiff")
 	run(root, "go", "build", "-o", rd, "./tests/recdiff")
@@ -138,6 +149,9 @@ func main() {
 	}
 	if off.total.Streamed() > 0 {
 		fmt.Println("FAIL GOXSLT_STREAM_OFF=1 still streamed")
+		bad = true
+	}
+	if *outLeg && !outputSummary(filepath.Join(out, "output.tsv"), filepath.Join(out, "branch")) {
 		bad = true
 	}
 	if bad {
@@ -257,6 +271,67 @@ func summary(dir string) (s streams) {
 		die(err)
 	}
 	return s
+}
+
+// outputSummary prints the output leg's counts, over every case and over
+// those the branch leg streamed, and reports whether none differed.
+func outputSummary(file, branch string) bool {
+	streamed := map[string]bool{}
+	if f, err := os.Open(filepath.Join(branch, "streams", "xslt30.tsv")); err == nil {
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			k, _, _ := strings.Cut(sc.Text(), "\t")
+			streamed[k] = true
+		}
+		f.Close()
+	}
+	f, err := os.Open(file)
+	if err != nil {
+		fmt.Printf("FAIL output leg: %v\n", err)
+		return false
+	}
+	defer f.Close()
+	type tally struct{ cases, same, diff, errdiff, unstable, opened int }
+	var all, str tally
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		fs := strings.Split(sc.Text(), "\t")
+		if len(fs) != 3 {
+			die(fmt.Errorf("%s: bad line %q", file, sc.Text()))
+		}
+		for _, t := range []*tally{&all, &str} {
+			if t == &str && !streamed[fs[0]] {
+				continue
+			}
+			t.cases++
+			switch fs[1] {
+			case "same":
+				t.same++
+			case "diff":
+				t.diff++
+			case "unstable":
+				t.unstable++
+			default:
+				t.errdiff++
+			}
+			if fs[2] != "0" {
+				t.opened++
+			}
+		}
+	}
+	fmt.Printf("== output (TransformOptions.Output against Result.Serialize)\n")
+	for _, t := range []struct {
+		name string
+		t    tally
+	}{{"all cases", all}, {"streamed cases", str}} {
+		fmt.Printf("  %-14s %5d: same %d, bytes differ %d, error differs %d, unstable %d; written before the end %d\n",
+			t.name, t.t.cases, t.t.same, t.t.diff, t.t.errdiff, t.t.unstable, t.t.opened)
+	}
+	if all.diff+all.errdiff > 0 {
+		fmt.Printf("FAIL output: %d cases differ (%s.diff)\n", all.diff+all.errdiff, file)
+		return false
+	}
+	return true
 }
 
 func run(dir, name string, args ...string) {

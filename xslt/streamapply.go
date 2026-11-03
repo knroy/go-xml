@@ -47,7 +47,6 @@ import (
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/xdm"
-	"github.com/knroy/go-xml/v2/xdmbuild"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
@@ -1095,7 +1094,7 @@ func (b builtInRun) shallowCopyDoc(out *outputBuilder) error {
 	run, rt, node, mode, descend := b.run, b.rt, b.node, b.mode, b.descend
 	var doc *xdm.Node
 	if mr := rt.sheet.rules[mode]; mr != nil && mr.empty {
-		sub, root := xdmbuild.InPlaceDocument(xsltPolicy{nodes: rt.nodeBudget()})
+		sub, root := inPlaceDocument(rt, out)
 		if err := descend(sub); err != nil {
 			return err
 		}
@@ -1105,7 +1104,7 @@ func (b builtInRun) shallowCopyDoc(out *outputBuilder) error {
 		root.Tree().Finalize()
 		doc = root
 	} else {
-		sub := newOutputBuilder(rt)
+		sub := documentBuilder(rt, out)
 		if err := descend(sub); err != nil {
 			return err
 		}

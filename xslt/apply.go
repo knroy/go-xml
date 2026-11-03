@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
-	"github.com/knroy/go-xml/v2/xdmbuild"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
@@ -1254,7 +1253,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 			// building them and copying them into a document afterwards,
 			// which held the result twice. Should one ever arrive, the
 			// builder raises XTDE0420 as ToDocument does.
-			sub, root := xdmbuild.InPlaceDocument(xsltPolicy{nodes: rt.nodeBudget()})
+			sub, root := inPlaceDocument(rt, out)
 			if err := builtInDescend(rt, node, mode, params, tunnels, sub, false); err != nil {
 				return err
 			}
@@ -1264,7 +1263,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 			root.Tree().Finalize()
 			doc = root
 		} else {
-			sub := newOutputBuilder(rt)
+			sub := documentBuilder(rt, out)
 			if err := builtInDescend(rt, node, mode, params, tunnels, sub, false); err != nil {
 				return err
 			}

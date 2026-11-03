@@ -981,6 +981,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := applyAttributeSets(rt, i.attrSets, sub); err != nil {
 			return err
 		}
+		holdOpen(sub, i.noInherit, i.validation)
 		if err := execBlocking(rt, i.noInherit, i.body, sub); err != nil {
 			return err
 		}
@@ -1012,6 +1013,9 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// the parent either way — but it is exactly what a variable declared
 		// as="document-node()*" is asking about.
 		sub := newOutputBuilder(rt)
+		if i.validation.isDefault() {
+			sub = documentBuilder(rt, out)
+		}
 		if err := execSequence(i.body, rt, sub); err != nil {
 			return err
 		}
@@ -1270,6 +1274,7 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 			return err
 		}
 	}
+	holdOpen(sub, i.noInherit, i.validation)
 	if err := execBlocking(rt, i.noInherit, i.body, sub); err != nil {
 		return err
 	}
@@ -1337,6 +1342,7 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err := applyAttributeSets(rt, i.attrSets, sub); err != nil {
 		return err
 	}
+	holdOpen(sub, i.noInherit, i.validation)
 	if err := execBlocking(rt, i.noInherit, i.body, sub); err != nil {
 		return err
 	}

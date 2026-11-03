@@ -47,6 +47,7 @@ package xslt
 // at quadratic work could take hours.
 
 import (
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -76,10 +77,15 @@ type liveLoop struct {
 // the open element's subtree end, which moves with every child or
 // descendant appended to it: O(1), where counting its children made a loop
 // writing under one element quadratic.
-type outSig struct{ items, end, attrs, ns, text int }
+type outSig struct {
+	items, end, attrs, ns, text int
+	// stamp moves whenever a streamed result (streamout.go) is appended
+	// to, which takes written nodes back and so can bring end back too.
+	stamp int64
+}
 
 func signature(out *outputBuilder) outSig {
-	s := outSig{items: len(out.Items())}
+	s := outSig{items: len(out.Items()), stamp: xdmsink.Stamp(out)}
 	var last *xdm.Node
 	if e := out.Open(); e != nil {
 		s.end, s.attrs, s.ns = e.SubtreeEnd(), e.NumAttrs(), e.NumNamespaceDecls()
