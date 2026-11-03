@@ -30,6 +30,8 @@ type splitHold struct {
 	ord   uint64
 	last  *xdm.Node // the item element with the greatest ordinal
 	tree  int64     // records a tree-mode parse holds by last's end
+	// copies counts the grounded copies, each charged half a record more.
+	copies int64
 }
 
 // holdSlack is how far held may pass tree: each batch tree copies its
@@ -64,20 +66,22 @@ func (r *splitRun) holdOn(items xdm.Sequence) error {
 			}
 		}
 		if r.s.mode == matchGround && n.Kind() == xdm.KindElement {
-			// Each copy carries its origin in the batch (a segment), about
-			// a record's worth: measured 26 B a copy above the tree's.
-			h.held++
+			// Each copy carries its origin in the batch (a segment):
+			// measured 26 B a copy above the tree's records, charged as
+			// half a record (40 B) here and the other half below.
+			h.copies++
 		}
 		h.reach(r, n)
 	}
-	if h.held <= h.tree+holdSlack(h.tree) {
+	held := h.held + (h.copies+1)/2
+	if held <= h.tree+holdSlack(h.tree) {
 		return nil
 	}
 	if h.last != nil && r.s.mode == matchGround {
 		// A copy holds the original's subtree, which the tree holds too.
 		h.tree = int64(h.ord) + records(h.last, true)
 	}
-	if h.held <= h.tree+holdSlack(h.tree) {
+	if held <= h.tree+holdSlack(h.tree) {
 		return nil
 	}
 	return errSplitGiveUp
@@ -115,5 +119,8 @@ func records(n *xdm.Node, deep bool) int64 {
 // under the cap: a match that may be the document element gives up at once
 // (that copy is the tree).
 func (s *streamSplit) holdAt() {
+	if s.countAt() {
+		return // counted, not held (streamfold.go)
+	}
 	s.noRoot, s.hold = s.minDepth() < 2, true
 }

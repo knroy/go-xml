@@ -26,8 +26,16 @@ func TestStreamHold(t *testing.T) {
 		{recs, `deep-equal(/doc/rec/p, ())`, false},
 		{recs, `exactly-one(/doc/rec/p)`, false}, // FORG0005, the tree's
 		{recs, `count((doc/rec/@k, 1))`, false},
-		{bare, `count(remove(/doc/t, 3))`, true}, // a copy costs more than <t/>
-		{bare, `count(remove(/*, 1))`, true},     // the document element
+		{bare, `string-join(remove(/doc/t, 3) ! name())`, true}, // a copy costs more than <t/>
+		{bare, `remove(/*, 1) ! name()`, true},                  // the document element
+		// Counted, not held (streamfold.go): no copy, so no give-up.
+		{bare, `count(remove(/doc/t, 3))`, false},
+		{bare, `count(remove(/*, 1))`, false},
+		{bare, `boolean((/doc/t, 1))`, false},
+		{bare, `boolean((1, /doc/t))`, false}, // FORG0006, the tree's
+		{bare, `exists(subsequence(insert-before(1, 1, tail(/doc/t)), 2, 5))`, false},
+		{bare, `count(exactly-one(/doc/t))`, false}, // FORG0005 with the tree's count
+		{recs, `empty(unordered(/doc/rec/p))`, false},
 	} {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(c.doc), 0o600); err != nil {

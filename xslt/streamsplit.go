@@ -139,8 +139,9 @@ type streamSplit struct {
 	// noRoot gives up (errSplitGiveUp) at a match that would ground the
 	// document element: that copy is the tree (C5's streamed copy-of).
 	noRoot bool
-	// hold caps what the split collects at what the tree holds (streamhold.go).
-	hold bool
+	// hold caps what the split collects at what the tree holds (streamhold.go);
+	// counted hands the outer stand-ins for counted matches (streamfold.go).
+	hold, counted bool
 }
 
 // splitStream splits e, an expression whose context item is the document
@@ -2094,6 +2095,9 @@ func (r *splitRun) take(items xdm.Sequence) error {
 	case "":
 		if s.atomize {
 			items = xdm.Atomize(items)
+		}
+		if s.counted {
+			items = standIns(len(items))
 		}
 		if s.hold {
 			if err := r.holdOn(items); err != nil {
