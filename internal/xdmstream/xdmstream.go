@@ -99,6 +99,11 @@ type Cursor struct {
 	closed      int
 	// resumes counts the switches to the parse, for the tests.
 	resumes int
+	// src and opts are what Open was given, for Tee; teed says Tee has
+	// taken src over.
+	src  io.Reader
+	opts xdm.ParseOptions
+	teed bool
 }
 
 // A Filter says which events NextTag and SkipTag report. What they pass
@@ -140,7 +145,7 @@ var errNotAtStart = errors.New("xdmstream: not at a start tag")
 // Open returns a cursor over r, parsed with opts. Nothing is read until the
 // first call. Close releases it.
 func Open(r io.Reader, opts xdm.ParseOptions) *Cursor {
-	c := &Cursor{}
+	c := &Cursor{src: r, opts: opts}
 	c.next, c.stop = iter.Pull(func(yield func(Event) bool) {
 		err := xdmburst.Drive(r, opts, &client{c, yield})
 		switch {
@@ -358,6 +363,9 @@ func (c *Cursor) decide(act xdmburst.Action) (Event, error) {
 // resume runs the parse to its next event, act deciding the start tag it
 // stopped at, if any.
 func (c *Cursor) resume(act xdmburst.Action) (Event, error) {
+	if c.teed {
+		return Event{}, errTeed
+	}
 	c.act = act
 	c.resumes++
 	ev, ok := c.next()
