@@ -41,18 +41,18 @@ and `tests/docfigures.sh` cross-checks the same numbers against
 | QT3 — XPath 3.1 | XPath 3.1 | 22,054 | 22,054 | 100.00% | **0** |  | 2026-10-01 | `tests/check.sh (TestQT3, lane xpath-3.1)` |
 | QT3 — XQuery 3.1 | XQuery 3.1 | 30,517 | 30,516 | 100.00% | **1** |  | 2026-10-01 | `tests/check.sh (TestQT3XQuery)` |
 | W3C XSLT 2.0 | XSLT 2.0 (Second Edition) | 6,201 | 6,193 | 99.87% | **8** | 8,332 / 68 | 2026-09-11 | `tests/check.sh (TestXSLTSuite)` |
-| W3C XSLT 3.0 | XSLT 3.0 | 11,518 | 11,498 | 99.83% | **20** | 2,949 / 134 | 2026-11-03 | `tests/check.sh (TestXSLT30Suite)` |
+| W3C XSLT 3.0 | XSLT 3.0 | 11,518 | 11,499 | 99.84% | **19** | 2,949 / 134 | 2026-11-03 | `tests/check.sh (TestXSLT30Suite)` |
 | W3C xsdtests 1.0 | XML Schema 1.0 (Second Edition) | 39,388 | 39,358 | 99.92% | **30** |  | 2026-09-11 | `tests/check.sh (XSD10)` |
 | W3C xsdtests 1.1 | XML Schema 1.1 | 41,598 | 41,567 | 99.93% | **31** |  | 2026-09-11 | `tests/check.sh (XSD11)` |
 | Clark spectest | RELAX NG 1.0 | 965 | 965 | 100.00% | **0** |  | 2026-09-11 | `tests/check.sh (RelaxNGSpectest)` |
-| **Total** | | | | | **90** | | | |
+| **Total** | | | | | **89** | | | |
 
 The skipped column is the XSLT lanes' exclusions split by class: cases the
 suite says a conforming processor may leave out, and cases excluded because a
 feature is not implemented or a dependency is not modelled. Neither is in the
 denominator; docs/testing.md explains the line between them.
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 20 + 30 + 31 + 0 = 90.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 19 + 30 + 31 + 0 = 89.
 
 ## Real-world corpora
 

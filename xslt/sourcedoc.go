@@ -18,9 +18,9 @@ import (
 // processor to evaluate the body in a streamed manner, which is a statement
 // about memory rather than about the answer — a stylesheet that is
 // guaranteed-streamable produces the same result either way, and one that is
-// not is explicitly left to the processor. This engine does not stream, so it
-// reads the document and evaluates the body, which is what a conforming
-// non-streaming processor does with streamable="yes".
+// not is explicitly left to the processor. A body the streamed core does not
+// take (streamexec.go) reads the document and evaluates the body here, which
+// is what a conforming non-streaming processor does with streamable="yes".
 //
 // use-accumulators, by contrast, is enforced. It is not a statement about
 // memory: 18.2.2 makes it the set of accumulators *applicable* to the document

@@ -116,8 +116,8 @@
       "component": "xslt",
       "suite": "W3C XSLT 3.0",
       "edition": "XSLT 3.0",
-      "passed": 11498,
-      "disagreements": 20,
+      "passed": 11499,
+      "disagreements": 19,
       "total": 11518,
       "run_date": "2026-11-03",
       "command": "tests/check.sh (TestXSLT30Suite)",
@@ -210,11 +210,6 @@
           "note": "§4.4 grants no ancestor-assertion exemption; the case exists to exercise Saxon paths."
         },
         {
-          "id": "system-property-012",
-          "verdict": "deliberate-divergence",
-          "note": "§26.5 requires a non-streaming processor to answer \"no\"; answering \"yes\" would lie to stylesheets that branch on it to pick a fallback."
-        },
-        {
           "id": "validation-0006",
           "verdict": "fixture",
           "note": "XTTE1555 is scoped to a document node; a parentless attribute is not one."
@@ -225,7 +220,7 @@
           "note": "Read in §2 and in Corrections."
         }
       ],
-      "unenumerated_note": "All 20 are enumerated. The XTSE3430 block is closed: si-fork-902 and si-fork-952 (|| modelled per §19.8.8, withheld in a crawling focus for sx-union-C) and su-absorbing-205 (§19.8.5's body rule) now get the refusal, so every W3C case wanting XTSE3430 gets it. su-ascent-903, the former overlap, passes since the ascent call rule was applied by intent (§19.8.5.7's last clause is otherwise unreachable). merge-097sf is not a disagreement: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
+      "unenumerated_note": "All 19 are enumerated. The XTSE3430 block is closed: si-fork-902 and si-fork-952 (|| modelled per §19.8.8, withheld in a crawling focus for sx-union-C) and su-absorbing-205 (§19.8.5's body rule) now get the refusal, so every W3C case wanting XTSE3430 gets it. su-ascent-903, the former overlap, passes since the ascent call rule was applied by intent (§19.8.5.7's last clause is otherwise unreachable). merge-097sf is not a disagreement: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
     },
     {
       "id": "xsd-1.0",

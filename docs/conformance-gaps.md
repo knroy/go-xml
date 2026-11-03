@@ -35,15 +35,15 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xpath** | QT3 — XPath 3.1 | 22,054 | 22,054 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,517 | 30,516 | 100.00% | **1** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,498 | 99.83% | **20** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,499 | 99.84% | **19** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,598 | 41,567 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
 | **xslt** | DocBook xslTNG *(real-world)* | 578 | 578 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **90** |
+| | **Total** | | | | **89** |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 20 + 30 + 31 + 0 = 90. Measured 2026-09-11, 2026-09-29, 2026-10-01, 2026-11-03.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 19 + 30 + 31 + 0 = 89. Measured 2026-09-11, 2026-09-29, 2026-10-01, 2026-11-03.
 <!-- END GENERATED CONFORMANCE SUMMARY -->
 
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
@@ -268,7 +268,7 @@ it, and only to a module declaring 2.0 or lower. XRechnung's
 <!-- BEGIN GENERATED XTSE3430 BLOCK -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-**None of the 20 wants an `XTSE3430`.**
+**None of the 19 wants an `XTSE3430`.**
 <!-- END GENERATED XTSE3430 BLOCK -->
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine

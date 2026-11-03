@@ -92,10 +92,12 @@ var systemProperties = map[string]string{
 	// feature: a 2.0 stylesheet asking for one gets an honest answer rather
 	// than the empty string that means "no such property".
 	"supports-namespace-axis": "yes",
-	// Streaming is not implemented, and is not a small omission to work
-	// around: it wants a pull parser and a streamability static analysis.
-	// Saying no here is what lets a stylesheet take its fallback path.
-	"supports-streaming": "no",
+	// Streaming is implemented: the §19.8 analysis refuses a construct that
+	// is not guaranteed-streamable with XTSE3430, and streamable
+	// xsl:source-document, xsl:merge sources and modes applied to a
+	// TransformReader input run on a cursor. streaming-fallback is not
+	// claimed.
+	"supports-streaming": "yes",
 	// xsl:evaluate, which this processor implements. §18.2 ties the answer to
 	// element-available('xsl:evaluate'): the feature is "statically disabled"
 	// only if BOTH report the absence, and that one already reported true.

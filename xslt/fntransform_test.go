@@ -786,18 +786,21 @@ func fnTransformWith(t *testing.T, extra string) (string, error) {
 }
 
 // requested-properties is matched against what fn:system-property reports;
-// F&O 3.1 leaves an unmet request implementation-defined and this processor
-// refuses it with FOXT0001. true() and false() stand for yes and no, and
-// xsl:version is ignored.
+// F&O 3.1 §16.3.2 leaves an unmet request implementation-defined and this
+// processor refuses it with FOXT0001. true() and false() stand for yes and
+// no, and a boolean property set to false() is "an explicit request for a
+// processor in which the value of the property is false": supports-streaming
+// is "yes", so 'yes' is met and false() is not. xsl:version is ignored.
 func TestFnTransformRequestedProperties(t *testing.T) {
 	const xsl = `'http://www.w3.org/1999/XSL/Transform'`
 	for _, tc := range []struct{ name, req, code string }{
-		{"met boolean", `QName(` + xsl + `, 'supports-streaming'): false()`, ""},
+		{"met boolean", `QName(` + xsl + `, 'supports-streaming'): true()`, ""},
 		{"met string", `QName(` + xsl + `, 'xpath-version'): '3.1'`, ""},
 		{"version ignored", `QName(` + xsl + `, 'version'): '9.9'`, ""},
 		{"product", `QName(` + xsl + `, 'product-name'): 'Xalan'`, "FOXT0001"},
 		{"unmet boolean", `QName(` + xsl + `, 'supports-namespace-axis'): false()`, "FOXT0001"},
-		{"streaming", `QName(` + xsl + `, 'supports-streaming'): 'yes'`, "FOXT0001"},
+		{"streaming", `QName(` + xsl + `, 'supports-streaming'): 'yes'`, ""},
+		{"no streaming", `QName(` + xsl + `, 'supports-streaming'): false()`, "FOXT0001"},
 		{"schema-aware", `QName(` + xsl + `, 'is-schema-aware'): false()`, "FOXT0001"},
 		{"other namespace", `QName('urn:x', 'p'): 'v'`, "FOXT0001"},
 		{"string key", `'product-name': 'go-xml'`, "XPTY0004"},
