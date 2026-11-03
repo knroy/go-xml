@@ -91,7 +91,14 @@ func TestStreamTrustReproducers(t *testing.T) {
 			hdr + mode + `<xsl:template match="rec[fold-right((), ` + sib + `, concat#2) = '3']" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
 		{"M5 rule body unknown", "unverified", nil,
 			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="fold-right((), string(` + sib + `), concat#2)"/></v></xsl:template>` + apply + end, ""},
-		// M8: "." is a motionless pattern (§19.8.10).
+		// M8: a rule pattern may read a streamable accumulator
+		// (§19.8.9.2), and "." is a motionless pattern (§19.8.10).
+		{"M8 rule pattern reads a verified accumulator", "verified", nil,
+			hdr + `<xsl:accumulator name="a" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>` + mode +
+				`<xsl:template match="rec[accumulator-before('a') = 2]" mode="s"><hit k="{@k}"/></xsl:template>` + sdAcc(`<xsl:apply-templates select="doc/rec" mode="s"/>`) + end, ""},
+		{"M8 rule pattern reads an unverified accumulator", "unverified", nil,
+			hdr + `<xsl:accumulator name="a" initial-value="''" streamable="yes"><xsl:accumulator-rule match="rec" select="fold-right((), string(` + sib + `), concat#2)"/></xsl:accumulator>` + mode +
+				`<xsl:template match="rec[accumulator-before('a') = '2']" mode="s"><hit k="{@k}"/></xsl:template>` + sdAcc(`<xsl:apply-templates select="doc/rec" mode="s"/>`) + end, ""},
 		{"M8 rule pattern . (verified; the planner does not take it)", "verified", nil,
 			hdr + mode + `<xsl:template match="." mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
 		{"M5 control: grounded rule", "verified", nil,

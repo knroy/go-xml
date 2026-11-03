@@ -27,6 +27,7 @@ package xslt
 // point simply sets the bit, which nobody reads there, and costs nothing.
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -247,6 +248,33 @@ func patternVerified(src string, at *xdm.Node) bool {
 	return known && !free
 }
 
+// accumBeforeCall is a call on fn:accumulator-before with a literal name.
+var accumBeforeCall = regexp.MustCompile(`accumulator-before\(\s*(?:'([^']*)'|"([^"]*)")\s*\)`)
+
+// rulePatternVerified is patternVerified for a template rule's pattern, which
+// may also call fn:accumulator-before: §19.8.9.2 makes the call grounded and
+// motionless when the accumulator is streamable, so the pattern is verified
+// when every accumulator it names is (stream-201's
+// part[not(map:contains(accumulator-before('selected-part-ids'), @id))]).
+//
+// ponytail: the calls are found textually; a call the regexp does not
+// recognise (a computed name, accumulator-after) leaves the pattern
+// unverified, as before.
+func (t *declTrust) rulePatternVerified(src string, at *xdm.Node) bool {
+	calls := accumBeforeCall.FindAllStringSubmatch(src, -1)
+	if len(calls) == 0 || len(calls) != strings.Count(src, "accumulator-") {
+		return patternVerified(src, at)
+	}
+	for _, c := range calls {
+		lit := &xpath.Literal{Val: xdm.NewString(c[1] + c[2])}
+		if !t.accumulatorVerified(at, lit) {
+			return false
+		}
+	}
+	free, known := patternIsFreeRanging(src, at)
+	return known && !free
+}
+
 // modeKey keys a mode in declTrust.state.
 type modeKey struct{ clark string }
 
@@ -274,7 +302,7 @@ func (t *declTrust) modeVerified(root *xdm.Node, clark string) bool {
 }
 
 func (t *declTrust) ruleOK(rule *xdm.Node) bool {
-	if !patternVerified(rule.AttrValue("match"), rule) {
+	if !t.rulePatternVerified(rule.AttrValue("match"), rule) {
 		return false
 	}
 	for _, c := range rule.ChildElements() {
