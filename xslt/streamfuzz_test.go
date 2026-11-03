@@ -480,7 +480,7 @@ func fuzzMakeModes(seed int64) fuzzCase {
 		s.WriteString(`<xsl:catch><caught code="{local-name-from-QName($err:code)}"/></xsl:catch></xsl:try>`)
 	}
 	s.WriteString("\n</xsl:template>\n</xsl:stylesheet>\n")
-	c := fuzzCase{seed: seed, sheet: s.String(), doc: doc, malform: g.malform, kind: "modes"}
+	c := fuzzCase{seed: seed, sheet: fuzzAccumize(seed, s.String(), g.rec), doc: doc, malform: g.malform, kind: "modes"}
 	if g.p(3) {
 		c.maxNodes = 5 + g.n(60)
 	}
@@ -573,6 +573,9 @@ func (g *fuzzGen) coreContent(esc func(string) string) (string, bool) {
 func fuzzMake(seed int64) fuzzCase {
 	if fuzzIsGroups(seed) {
 		return fuzzMakeGroups(seed)
+	}
+	if fuzzIsAccums(seed) {
+		return fuzzMakeAccums(seed)
 	}
 	if fuzzIsModes(seed) {
 		return fuzzMakeModes(seed)
@@ -833,6 +836,12 @@ func TestStreamFuzz(t *testing.T) {
 		if groups > 0 {
 			tally["streamed: a grouping ran"]++
 		}
+		if strings.Contains(c.sheet, "<xsl:accumulator ") {
+			tally["accumulator shapes"]++
+			if co.trace.Streamed() > 0 {
+				tally["streamed: accumulator shapes"]++
+			}
+		}
 		if c.kind == "modes" {
 			tally["mode shapes"]++
 			if co.trace.Streamed() > 0 {
@@ -926,6 +935,9 @@ func TestStreamFuzzMain(t *testing.T) {
 			tally["streamed: a grouping ran"]++
 		}
 		tally["cases"]++
+		if ct.Runs[streamtrace.Main] > 0 && strings.Contains(c.sheet, "<xsl:accumulator ") {
+			tally["streamed: with accumulators"]++
+		}
 		if ct.Runs[streamtrace.Main] > 0 && strings.Contains(c.sheet, "for-each-group") {
 			tally["streamed: with a grouping rule"]++
 		}
