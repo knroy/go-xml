@@ -59,6 +59,10 @@ var accumBodies = []struct {
 	{`<xsl:for-each-group select="*/rec" group-adjacent="@k"><g n="{count(current-group())}" b="{accumulator-before('n')}"/></xsl:for-each-group>`, false},
 	{`<xsl:for-each-group select="*/rec" group-adjacent="@k"><g b="{accumulator-before('n')}"><xsl:copy-of select="current-group()"/></g></xsl:for-each-group>`, false},
 	{`<xsl:for-each-group select="*/rec" group-adjacent="@k"><g><xsl:value-of select="count(current-group())"/><xsl:value-of select="accumulator-before('n')"/></g></xsl:for-each-group>`, false},
+	// In an xsl:try: the tree raises an accumulator's error at its first
+	// read, inside the try; the stream may raise it after the try ends.
+	{`<xsl:try><xsl:for-each select="*/rec"><r n="{accumulator-before('n')}"/></xsl:for-each><xsl:catch><c/></xsl:catch></xsl:try>`, false},
+	{`<xsl:try><xsl:value-of select="count(//rec)"/><xsl:catch><c n="{accumulator-before('n')}"/></xsl:catch></xsl:try>`, false},
 	// Below an element's start: the after-value needs it read first.
 	{`<xsl:for-each select="*/rec"><xsl:value-of select="accumulator-after('n')"/><xsl:value-of select="count(sub)"/></xsl:for-each>`, false},
 }
