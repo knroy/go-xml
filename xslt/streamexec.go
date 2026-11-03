@@ -1035,6 +1035,9 @@ func inElement(el *xdm.Node) bool {
 
 // minDepth is the least depth below the context a match of P can be at.
 func (s *streamSplit) minDepth() int {
+	if s.hasBranches() {
+		return s.branchMinDepth()
+	}
 	n := 0
 	for _, st := range s.steps {
 		if st.axis != xpath.AxisDescendantOrSelf {
