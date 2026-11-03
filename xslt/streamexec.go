@@ -845,7 +845,7 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 	if e == nil {
 		return nil, "select does not parse again"
 	}
-	e = c.inlineCalls(e)
+	e, checks := foreignSets(c.inlineCalls(e)) // streamsplit_union.go
 	if _, ctx := e.(*xpath.ContextItem); simple && (ctx || noTextNodes(e)) {
 		// Simple content (§5.7.2) drops zero-length text nodes, merges
 		// adjacent ones, then atomizes: with no text node in the value the
@@ -864,6 +864,9 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 	s, why := splitStreamIn(e, sel, doc, group, key)
 	if s == nil {
 		return nil, "split: " + why
+	}
+	for _, x := range checks {
+		s.checks = append(s.checks, xpathleaf.WithExpr(sel, x).(*xpath.Compiled))
 	}
 	return s, ""
 }

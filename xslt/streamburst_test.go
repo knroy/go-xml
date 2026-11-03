@@ -296,7 +296,7 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"distinct-values", `<xsl:value-of select="count(distinct-values(doc/rec/@k))"/>`, recs, false, false},
 		{"reverse", `<xsl:value-of select="reverse(doc/rec/@k/string())"/>`, recs, false, false},
 		{"last()", `<xsl:value-of select="(doc/rec/@k)[last()]"/>`, recs, false, false},
-		{"union", `<xsl:value-of select="count(doc/rec union ())"/>`, recs, false, false},
+		{"union", `<xsl:value-of select="count(doc/rec union ())"/>`, recs, true, false}, // foreignSets: count(P) + count(())
 		{"two paths", `<xsl:value-of select="sum(doc/rec/@v) div count(doc/rec)"/>`, recs, false, false},
 		{"path from copies the path made", `<xsl:value-of select="(doc/rec/copy-of())/x"/>`, recs, false, false},
 		{"let", `<xsl:value-of select="let $r := doc/rec return count($r)"/>`, recs, false, false},

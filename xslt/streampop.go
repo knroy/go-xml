@@ -110,7 +110,7 @@ func (c *compiler) popFor(op *streamOp, ns xpath.NamespaceResolver) (*streamPop,
 	if op.doc {
 		pb.focus = vNone
 	}
-	if p := pb.pop(c.inlineCalls(e)); p != nil && pb.split != nil {
+	if p := pb.pop(withChecks(foreignSets(c.inlineCalls(e)))); p != nil && pb.split != nil {
 		return p, pb.split, ""
 	}
 	if pb.why == "" {

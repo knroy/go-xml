@@ -117,6 +117,22 @@ var popBodies = []struct {
 	{`<out><xsl:iterate select="tail(doc/rec)"><xsl:param name="n" select="0"/><xsl:on-completion><n><xsl:value-of select="$n"/></n></xsl:on-completion><xsl:next-iteration><xsl:with-param name="n" select="$n + 1"/></xsl:next-iteration></xsl:iterate></out>`, true},
 	{`<out><xsl:for-each select="doc/rec"><xsl:value-of select="@v + 1 || ' '"/></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="doc/rec"><xsl:value-of select="string(.) || '|'"/></xsl:for-each></out>`, true},
+	// Set operators with a variable's nodes (foreignSets).
+	{`<out><xsl:value-of select="count(//rec except $extra)"/></out>`, true},
+	{`<out><xsl:value-of select="count($extra except //rec)"/></out>`, true},
+	{`<out><xsl:value-of select="count(//rec intersect $extra)"/></out>`, true},
+	{`<out><xsl:value-of select="count($extra intersect doc/rec)"/></out>`, true},
+	{`<out><xsl:value-of select="count(//rec union $extra)"/></out>`, true},
+	{`<out><xsl:value-of select="exists($extra union //sub)"/></out>`, true},
+	{`<out><xsl:value-of select="empty(//sub union $extra)"/></out>`, true},
+	{`<out><xsl:copy-of select="doc/rec except $extra"/></out>`, true},
+	{`<out><xsl:copy-of select="$extra except doc/rec"/></out>`, true},
+	{`<out><xsl:value-of select="sum(doc/rec/@v except $extra/@v)"/></out>`, true},
+	{`<out><xsl:for-each select="doc/rec except $extra"><e><xsl:value-of select="@k"/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="doc/rec"><xsl:copy-of select="sub except $extra"/></xsl:for-each></out>`, true},
+	{`<out><xsl:value-of select="count(//rec except $three)"/></out>`, true},
+	// Refused: a union whose order is not known statically.
+	{`<out><xsl:copy-of select="doc/rec union $extra"/></out>`, false},
 	// apply-templates over windows of a bare path; an insertion or a motionless part refused.
 	{`<out><xsl:apply-templates select="head(doc/rec)" mode="m"/></out>`, true},
 	{`<out><xsl:apply-templates select="tail(doc/rec)" mode="m"/></out>`, true},

@@ -147,6 +147,9 @@ type streamSplit struct {
 	// branches the context itself ends, and how the ended ones make a match.
 	self uint64
 	set  *splitSet
+	// checks are evaluated before the walk: the type checks of a set
+	// operator's foreign operand (foreignSets, streamsplit_union.go).
+	checks []*xpath.Compiled
 }
 
 // splitStream splits e, an expression whose context item is the document
@@ -1591,6 +1594,9 @@ func (r *splitRun) at(g *groupAt, d int) int {
 // evalAt is eval, in the body of a streamed xsl:for-each-group when g is
 // set (d is then g.d, the first member's).
 func (s *streamSplit) evalAt(ctx *xpath.Context, c *xdmstream.Cursor, d int, g *groupAt) (xdm.Sequence, error) {
+	if err := s.runChecks(ctx); err != nil {
+		return nil, err
+	}
 	ctx = ctx.HoldItemBudget().HoldByteBudget()
 	octx := ctx
 	var view *xdm.Node
@@ -1652,6 +1658,9 @@ func (s *streamSplit) loop(ctx *xpath.Context, c *xdmstream.Cursor, d int,
 func (s *streamSplit) loopAt(ctx *xpath.Context, c *xdmstream.Cursor, d int, g *groupAt,
 	each func(xdm.Item) error, body func(*xdm.Node, int) (bool, error)) error {
 
+	if err := s.runChecks(ctx); err != nil {
+		return err
+	}
 	var v *xdm.Node
 	if d > 0 {
 		var err error

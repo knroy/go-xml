@@ -24,6 +24,8 @@ package xslt
 // meets them in document order); a branch ending in descendant-or-self.
 
 import (
+	"strings"
+
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -447,4 +449,149 @@ func positionPred(e xpath.Expr) bool {
 		return x.Name.URI == fnNS && x.Name.Local == "position" && len(x.Args) == 0
 	}
 	return false
+}
+
+// foreignSets rewrites the set operators in e that join a path of the
+// stream P with a foreign operand F -- one that reads no focus and no
+// document (focusFree, no doc() family): a variable's nodes, which are never
+// nodes of the stream (§19.8.4.41: no variable holds a streamed node). Their
+// nodes are disjoint from P's, so:
+//
+//	P except F -> P                 F except P -> F | ()
+//	P intersect F, F intersect P -> ()
+//	count(P union F) -> count(P) + count(F | ())   (exists, empty, boolean, not by it)
+//
+// P is still read, for its errors: count(P)[false()] is appended to e as an
+// empty item. F is checked as the operator checks it (F | (), XPTY0004 for a
+// value): the checks are returned, for the split to evaluate before its walk
+// (streamSplit.checks). A union under any other holder is left: its order
+// depends on where F's trees fall among the stream's, drawn at run time.
+func foreignSets(e xpath.Expr) (xpath.Expr, []xpath.Expr) {
+	var extra, checks []xpath.Expr
+	var re func(x xpath.Expr) xpath.Expr
+	never := func(x xpath.Expr) xpath.Expr {
+		return &xpath.FilterExpr{Base: x, Predicates: []xpath.Expr{fnCall("false")}}
+	}
+	checked := func(f xpath.Expr) xpath.Expr {
+		u := &xpath.BinaryOp{Op: "union", Left: f, Right: &xpath.SequenceExpr{}}
+		checks = append(checks, u)
+		return u
+	}
+	consumed := func(p xpath.Expr) { extra = append(extra, never(fnCall("count", p))) }
+	split := func(x *xpath.BinaryOp) (p, f xpath.Expr, left bool) {
+		switch {
+		case foreign(x.Right) && !foreign(x.Left):
+			return x.Left, x.Right, true
+		case foreign(x.Left) && !foreign(x.Right):
+			return x.Right, x.Left, false
+		}
+		return nil, nil, false
+	}
+	re = func(x xpath.Expr) xpath.Expr {
+		switch v := x.(type) {
+		case *xpath.FuncCall:
+			if v.Name.URI == fnNS && len(v.Args) == 1 {
+				if b, ok := v.Args[0].(*xpath.BinaryOp); ok && b.Op == "union" {
+					if p, f, _ := split(b); p != nil {
+						n := &xpath.BinaryOp{Op: "+", Left: fnCall("count", re(p)),
+							Right: fnCall("count", &xpath.BinaryOp{Op: "union", Left: f, Right: &xpath.SequenceExpr{}})}
+						zero := &xpath.Literal{Val: xdm.NewInteger(0)}
+						switch v.Name.Local {
+						case "count":
+							return n
+						case "exists", "boolean":
+							return &xpath.BinaryOp{Op: "gt", Left: n, Right: zero}
+						case "empty", "not":
+							return &xpath.BinaryOp{Op: "eq", Left: n, Right: zero}
+						}
+					}
+				}
+			}
+			for i := range v.Args {
+				v.Args[i] = re(v.Args[i])
+			}
+		case *xpath.BinaryOp:
+			if v.Op == "intersect" || v.Op == "except" {
+				if p, f, left := split(v); p != nil {
+					p = re(p)
+					switch {
+					case v.Op == "except" && left:
+						checked(f)
+						return p
+					case v.Op == "except":
+						consumed(p)
+						return checked(f)
+					}
+					consumed(p)
+					checked(f)
+					return &xpath.SequenceExpr{}
+				}
+			}
+			v.Left, v.Right = re(v.Left), re(v.Right)
+		case *xpath.FilterExpr:
+			v.Base = re(v.Base)
+		case *xpath.SimpleMap:
+			v.Left = re(v.Left)
+		case *xpath.SequenceExpr:
+			for i := range v.Items {
+				v.Items[i] = re(v.Items[i])
+			}
+		case *xpath.PathExpr:
+			if len(v.Steps) > 0 && !isStep(v.Steps[0]) {
+				v.Steps[0] = re(v.Steps[0])
+			}
+		case *xpath.UnaryOp:
+			v.Operand = re(v.Operand)
+		case *xpath.CastExpr:
+			v.Operand = re(v.Operand)
+		}
+		return x
+	}
+	e = re(e)
+	if len(extra) > 0 {
+		e = &xpath.SequenceExpr{Items: append([]xpath.Expr{e}, extra...)}
+	}
+	return e, checks
+}
+
+// withChecks is e with the checks foreignSets returned as empty items after
+// it, for a population (streampop.go), whose motionless parts come first.
+func withChecks(e xpath.Expr, checks []xpath.Expr) xpath.Expr {
+	if len(checks) == 0 {
+		return e
+	}
+	items := []xpath.Expr{e}
+	for _, c := range checks {
+		items = append(items, &xpath.FilterExpr{Base: c, Predicates: []xpath.Expr{fnCall("false")}})
+	}
+	return &xpath.SequenceExpr{Items: items}
+}
+
+// runChecks evaluates the checks of s, before its walk.
+func (s *streamSplit) runChecks(ctx *xpath.Context) error {
+	for _, c := range s.checks {
+		if _, err := c.Eval(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fnCall(name string, args ...xpath.Expr) *xpath.FuncCall {
+	return &xpath.FuncCall{Name: xdm.QName{URI: fnNS, Local: name}, Args: args}
+}
+
+// foreign reports whether e reads neither the focus nor a document: its
+// nodes, if any, are not the stream's.
+func foreign(e xpath.Expr) bool {
+	if !focusFree(e) {
+		return false
+	}
+	s := e.String()
+	for _, f := range []string{"doc(", "document(", "collection(", "uri-collection(", "unparsed-text", "json-doc(", "parse-xml"} {
+		if strings.Contains(s, f) {
+			return false
+		}
+	}
+	return true
 }
