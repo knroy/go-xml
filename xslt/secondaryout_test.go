@@ -266,9 +266,30 @@ func TestSecondaryOutputHeldUntilDone(t *testing.T) {
 }
 
 // TestSecondaryOutputErrors: the function's error and Close's are the
-// transform's; a nested fn:transform does not write through it.
+// transform's; a nested fn:transform does not write through it; written
+// nodes are handed back to MaxNodes, as under Output, and held ones are not.
 func TestSecondaryOutputErrors(t *testing.T) {
 	dir := t.TempDir()
+	for _, c := range []struct {
+		body string
+		held bool
+	}{
+		{`<xsl:template match="/"><xsl:for-each select="1 to 1000"><xsl:result-document href="c{.}.xml"><r><a/><b/></r></xsl:result-document></xsl:for-each></xsl:template>`, false},
+		{`<xsl:template match="/"><xsl:for-each select="1 to 1000"><xsl:result-document href="c{.}.xml" item-separator=" "><r><a/><b/></r></xsl:result-document></xsl:for-each></xsl:template>`, true},
+	} {
+		capped := secSheet(t, dir, ``, c.body)
+		doc, _ := xdm.ParseString(`<d/>`, xdm.ParseOptions{})
+		for _, sec := range []bool{false, true} {
+			opts := TransformOptions{MaxNodes: 2000}
+			if sec {
+				opts.SecondaryOutput = (&secWriters{}).open
+			}
+			_, err := capped.Transform(context.Background(), doc.Root, opts)
+			if refused := err != nil && strings.Contains(err.Error(), "XPDY0130"); refused != (!sec || c.held) {
+				t.Errorf("MaxNodes 2000, SecondaryOutput %v, held %v: %v", sec, c.held, err)
+			}
+		}
+	}
 	sheet := secSheet(t, dir, ``, `<xsl:template match="/"><xsl:result-document href="ok.xml"><a/></xsl:result-document><xsl:result-document href="bad.xml"><b/></xsl:result-document></xsl:template>`)
 	w := &secWriters{fail: "bad.xml"}
 	_, err := secRun(t, sheet, secDoc, false, w, dir)
