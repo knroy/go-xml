@@ -221,8 +221,13 @@ func (c *compiler) noteStreamApply(n *xdm.Node, instr Instruction, sel *xpath.Co
 				continue
 			}
 			if !op.split.bare() {
-				op.dead = "apply-templates select is not a bare path"
-				continue
+				// A window over a bare path (streampop.go): head(), subsequence() ...
+				pop, s, _ := c.popFor(op, ns)
+				if pop == nil || !pop.windowsOnly() {
+					op.dead = "apply-templates select is not a bare path"
+					continue
+				}
+				op.pop, op.split = pop, s
 			}
 		}
 		op.x.byInstr[instr] = op
@@ -666,6 +671,14 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 
 // executeStream runs i, an apply op of the plan running, on the cursor.
 func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run *streamRun, op *streamOp) error {
+	gate, done := func() (bool, error) { return true, nil }, func() error { return nil }
+	if op.pop != nil {
+		// The windows' arguments are the select's: before the parameters.
+		var err error
+		if gate, done, err = op.pop.gates(rt.ctx); err != nil {
+			return err
+		}
+	}
 	var attrs xdm.Sequence
 	if op.apply == applyAttrs {
 		// Attributes of the view, which has them all: evaluated as the tree
@@ -727,13 +740,19 @@ func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run
 	}
 	run.used = true
 	pos := 0
-	return op.split.loopAt(rt.ctx, run.c, run.d, run.groupAt(op), nil, func(v *xdm.Node, md int) (bool, error) {
+	if err := op.split.loopAt(rt.ctx, run.c, run.d, run.groupAt(op), nil, func(v *xdm.Node, md int) (bool, error) {
 		if err := rt.ctx.Err(); err != nil {
+			return false, err
+		}
+		if ok, err := gate(); err != nil || !ok {
 			return false, err
 		}
 		pos++
 		return run.element(focus.at(v, pos), v, md, mode, params, tunnels, out)
-	})
+	}); err != nil {
+		return err
+	}
+	return done()
 }
 
 // context is the node the context of the instruction running is: the view

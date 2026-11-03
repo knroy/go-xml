@@ -563,3 +563,47 @@ func (run *streamRun) popFeed(instr Instruction, rt *runtime, op *streamOp, g *g
 		})
 	}}
 }
+
+// windowsOnly reports whether p is its stream part's matches through
+// windows and nothing else: what an xsl:apply-templates may select
+// (streamapply.go dispatches only matches of the stream).
+func (p *streamPop) windowsOnly() bool {
+	if p.cond != nil || p.values || p.off || p.fn != nil || p.at != 0 || len(p.parts) != 1 {
+		return false
+	}
+	for _, w := range p.wins {
+		if w.kind == "ins" || w.kind == "check" {
+			return false // an insertion hands items that are not matches
+		}
+	}
+	return true
+}
+
+// gates readies p's windows (their argument errors first) and returns the
+// gate each match passes, and the check to run once the matches are read.
+func (p *streamPop) gates(ctx *xpath.Context) (gate func() (bool, error), done func() error, err error) {
+	wins := make([]popRun, len(p.wins))
+	for i := range p.wins {
+		if err := wins[i].ready(&p.wins[i], ctx); err != nil {
+			return nil, nil, err
+		}
+	}
+	handed := false
+	gate = func() (bool, error) {
+		for j := range wins {
+			if ok, err := wins[j].pass(nil); err != nil || !ok {
+				return false, err
+			}
+		}
+		handed = true
+		return true, nil
+	}
+	done = func() error {
+		if !handed && p.oneOrMore != nil {
+			_, err := p.oneOrMore.Eval(ctx)
+			return err
+		}
+		return nil
+	}
+	return gate, done, nil
+}

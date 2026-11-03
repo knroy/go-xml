@@ -117,6 +117,16 @@ var popBodies = []struct {
 	{`<out><xsl:iterate select="tail(doc/rec)"><xsl:param name="n" select="0"/><xsl:on-completion><n><xsl:value-of select="$n"/></n></xsl:on-completion><xsl:next-iteration><xsl:with-param name="n" select="$n + 1"/></xsl:next-iteration></xsl:iterate></out>`, true},
 	{`<out><xsl:for-each select="doc/rec"><xsl:value-of select="@v + 1 || ' '"/></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="doc/rec"><xsl:value-of select="string(.) || '|'"/></xsl:for-each></out>`, true},
+	// apply-templates over windows of a bare path; an insertion or a motionless part refused.
+	{`<out><xsl:apply-templates select="head(doc/rec)" mode="m"/></out>`, true},
+	{`<out><xsl:apply-templates select="tail(doc/rec)" mode="m"/></out>`, true},
+	{`<out><xsl:apply-templates select="subsequence(doc/rec, 2, 1)" mode="m"/></out>`, true},
+	{`<out><xsl:apply-templates select="remove(doc/rec, 1)" mode="m"/></out>`, true},
+	{`<out><xsl:apply-templates select="unordered(doc/rec)" mode="m"/></out>`, true},
+	{`<out><xsl:apply-templates select="one-or-more(doc/rec)" mode="m"/></out>`, true},
+	{`<out><xsl:apply-templates select="subsequence(doc/rec, $three - 2)" mode="m"/></out>`, true},
+	{`<out><xsl:apply-templates select="insert-before(doc/rec, 2, $extra)" mode="m"/></out>`, false},
+	{`<out><xsl:apply-templates select="($extra, doc/rec)" mode="m"/></out>`, false},
 	// Refused: a window argument that reads the stream.
 	{`<out><xsl:for-each select="subsequence(doc/rec, count(doc/rec))"><e/></xsl:for-each></out>`, false},
 }
@@ -142,4 +152,5 @@ func TestStreamPopMatchesTree(t *testing.T) {
 
 // popDecls are the variables the population bodies read.
 const popDecls = `<xsl:variable name="extra" as="element()*"><x v="10">X</x><y v="20">Y</y></xsl:variable>` +
-	`<xsl:variable name="three" select="3"/><xsl:variable name="cond" select="false()"/>`
+	`<xsl:variable name="three" select="3"/><xsl:variable name="cond" select="false()"/>` +
+	`<xsl:mode name="m" streamable="yes"/><xsl:template match="rec" mode="m"><r p="{position()}"><xsl:value-of select="@k"/></r></xsl:template>`
