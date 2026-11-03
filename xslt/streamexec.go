@@ -329,12 +329,18 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		b.kinds[k]++
 		return b.seq(el, f)
 	case "if":
+		if done, ok := b.consumingIf(el, f); done { // streamshapes.go
+			return ok
+		}
 		if !b.attrs(el, f) {
 			return false
 		}
 		b.kinds[streamtrace.KindChoose]++
 		return b.seq(el, f)
 	case "choose":
+		if done, ok := b.consumingChoose(el, f); done { // streamshapes.go
+			return ok
+		}
 		b.kinds[streamtrace.KindChoose]++
 		for ch := range el.Children() {
 			switch {

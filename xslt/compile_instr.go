@@ -987,6 +987,7 @@ func (c *compiler) compileIf(n *xdm.Node, ns xpath.NamespaceResolver) (Instructi
 	if err != nil {
 		return nil, err
 	}
+	c.noteStreamTest(n, test, ns)
 	body, err := c.compileSequence(n, n)
 	if err != nil {
 		return nil, err
@@ -1003,6 +1004,7 @@ func (c *compiler) compileChoose(n *xdm.Node, ns xpath.NamespaceResolver) (Instr
 			if err != nil {
 				return nil, err
 			}
+			c.noteStreamTest(ch, test, newNSResolver(ch, ""))
 			body, err := c.compileSequence(ch, ch)
 			if err != nil {
 				return nil, err

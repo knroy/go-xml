@@ -44,6 +44,18 @@ var shapeBodies = []struct {
 	{`<o><xsl:value-of select="count(if ($c) then () else //rec)"/></o>`, true},
 	{`<o><xsl:value-of select="sum(if (not($c)) then //rec/@v else //sub/@x)"/></o>`, true},
 	{`<o><xsl:value-of select="string(count(if ($c) then //rec else /doc/rec/sub))"/></o>`, true},
+	// xsl:if / xsl:when whose test reads the context; the bodies motionless.
+	{`<o><xsl:if test="doc/rec"><y n="{1}"/></xsl:if></o>`, true},
+	{`<o><xsl:if test="rec">no</xsl:if></o>`, true},
+	{`<o><xsl:if test="doc/rec"><y/></xsl:if><xsl:if test="rec">no</xsl:if></o>`, false}, // two consumers
+	{`<o><xsl:if test="//sub[@x = '3']">yes</xsl:if></o>`, true},
+	{`<xsl:for-each select="/doc/rec"><xsl:if test="sub"><r k="{@k}"/></xsl:if></xsl:for-each>`, true},
+	{`<xsl:choose><xsl:when test="$c">a</xsl:when><xsl:when test="count(//rec) gt 1"><many/></xsl:when><xsl:otherwise><few/></xsl:otherwise></xsl:choose>`, true},
+	{`<o><xsl:if test="data(//rec/@v)">x</xsl:if></o>`, true}, // EBV of several values: FORG0006
+	{`<o><xsl:if test="not(//rec[@k = 'zz'])"><xsl:value-of select="name()"/></xsl:if></o>`, true},
+	{`<o><xsl:if test="doc/rec"><xsl:value-of select="count(//sub)"/></xsl:if></o>`, false},
+	{`<xsl:choose><xsl:when test="//rec">a</xsl:when><xsl:when test="//sub">b</xsl:when></xsl:choose>`, false},
+	{`<xsl:choose><xsl:when test="//rec">a</xsl:when><xsl:otherwise><xsl:value-of select="count(//sub)"/></xsl:otherwise></xsl:choose>`, false},
 	// Text value templates: motionless parts, or one consuming part.
 	{`<o xsl:expand-text="yes">{count(//rec)}</o>`, true},
 	{`<o xsl:expand-text="yes">n={count(//rec)} k={1 + 1}, {name()}</o>`, true},

@@ -21,6 +21,8 @@ package xslt
 // distinct nodes where the tree's are one).
 
 import (
+	"strings"
+
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -264,4 +266,121 @@ func (b *streamBuilder) addTextOp(op *streamOp) {
 	*b.ops = append(*b.ops, op)
 	b.x.exprOps = append(b.x.exprOps, op)
 	b.kinds[streamtrace.KindSelect]++
+}
+
+// consumingIf plans an xsl:if whose test reads its context (§19.8.4.21:
+// the test is the operand, the body then motionless, as a choice group's
+// condition): the test is an expression op, split as boolean(test) as the
+// instruction compiles (noteStreamTest), the body checked as motionless.
+// done is false when the test is motionless: the usual plan applies.
+func (b *streamBuilder) consumingIf(el *xdm.Node, f vfocus) (done, ok bool) {
+	op := b.testOp(el, f)
+	if op == nil {
+		return false, false
+	}
+	if !b.content(el, f) {
+		return true, false
+	}
+	b.kinds[streamtrace.KindChoose]++
+	b.addTextOp(op)
+	return true, true
+}
+
+// consumingChoose is consumingIf for an xsl:choose: one xsl:when's test
+// reads the context; every other test and every branch is motionless.
+func (b *streamBuilder) consumingChoose(el *xdm.Node, f vfocus) (done, ok bool) {
+	var op *streamOp
+	for _, ch := range el.ChildElements() {
+		if isXSL(ch, "when") {
+			if t := b.testOp(ch, f); t != nil {
+				if op != nil {
+					return true, b.refuse("two consuming tests in xsl:choose")
+				}
+				op = t
+			}
+		}
+	}
+	if op == nil {
+		return false, false
+	}
+	for ch := range el.Children() {
+		switch {
+		case ch.Kind() == xdm.KindText && strings.TrimSpace(ch.Value()) == "",
+			ch.Kind() == xdm.KindComment, ch.Kind() == xdm.KindPI:
+		case ch.Kind() == xdm.KindElement && (isXSL(ch, "when") || isXSL(ch, "otherwise")):
+			if ch != op.el && !b.attrs(ch, f) || !b.content(ch, f) {
+				return true, false
+			}
+		default:
+			return true, b.refuse("xsl:choose content")
+		}
+	}
+	b.kinds[streamtrace.KindChoose]++
+	b.addTextOp(op)
+	return true, true
+}
+
+// testOp is the op of el's test when the view cannot answer it, its other
+// attributes being ones nothing reads; nil otherwise.
+func (b *streamBuilder) testOp(el *xdm.Node, f vfocus) *streamOp {
+	src := el.AttrValue("test")
+	if e := parseAt(el, src); e == nil || (viewCheck{pos: true, noIdent: b.noIdent, key: b.key, acc: !b.noIdent && !b.grp, after: b.after}).safe(e, f, true) {
+		return nil
+	}
+	for a := range el.Attrs() {
+		if n := a.Name(); n.URI == "" && n.Local != "test" && (!streamAttrsOK[n.Local] || n.Local == "select") {
+			return nil
+		}
+	}
+	return &streamOp{x: b.x, el: el, doc: f == vNone, inGroup: b.grp, key: b.key, avt: src}
+}
+
+// noteStreamTest splits test, the test of n, an xsl:if or xsl:when whose
+// test an op of the plans being compiled consumes, as boolean(test): its
+// effective boolean value, which folds a path to whether it has a match.
+func (c *compiler) noteStreamTest(n *xdm.Node, test *xpath.Compiled, ns xpath.NamespaceResolver) {
+	if c.stream == nil && len(c.ruleExecs) == 0 {
+		return
+	}
+	for _, x := range append([]*streamExec{c.stream}, c.ruleExecs...) {
+		if x == nil {
+			continue
+		}
+		for _, op := range x.exprOps {
+			if op.el != n || op.instr != nil || op.avt != n.AttrValue("test") {
+				continue
+			}
+			op.instr, op.sel = exprInstr{}, test
+			e := reparse(test, ns)
+			switch {
+			case test.CompatMode():
+				op.dead = "XPath 1.0 compatibility mode"
+			case e == nil:
+				op.dead = "test does not parse again"
+			default:
+				e = &xpath.FuncCall{Name: xdm.QName{URI: fnNS, Local: "boolean"}, Args: []xpath.Expr{c.inlineCalls(e)}}
+				var why string
+				if op.split, why = splitStreamIn(e, test, op.doc, op.inGroup, op.key); op.split == nil {
+					op.dead = "split: " + why
+				} else {
+					x.byExpr[test] = op
+				}
+			}
+		}
+	}
+}
+
+// evalStreamBool is the effective boolean value of test, an xsl:if's or
+// xsl:when's, read from the stream when it is an op of the plan running.
+func (rt *runtime) evalStreamBool(test *xpath.Compiled) (bool, error) {
+	if f := rt.bursts; f != nil && f.run != nil && !f.run.off {
+		if op := f.run.x.byExpr[test]; op != nil {
+			seq, err := f.run.evalOp(rt, op)
+			if err != nil {
+				return false, err
+			}
+			return xpath.EffectiveBooleanValue(seq)
+		}
+	}
+	return test.EvalBool(rt.ctx)
 }
