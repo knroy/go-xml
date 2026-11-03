@@ -9,7 +9,8 @@ import (
 // xsl:map whose entries each read it: full streaming C10). Each consumer gets
 // a cursor of its own over the bytes c would have parsed, which are read
 // from c's reader once, a block at a time, as the consumers ask for them.
-// Every cursor parses those bytes with c's options and whitespace stripping,
+// Every cursor parses those bytes with c's options, whitespace stripping and
+// Handoff,
 // so each sees exactly the events, nodes, identities, errors and limits c
 // would have: the consumers need nothing a single cursor does not give them.
 // The cost is a parse per consumer; the memory, one block of bytes beside
@@ -19,9 +20,10 @@ import (
 // block: run(k, its cursor) runs until its parse wants bytes that have not
 // been read, then the next consumer goes on. swap is called as consumer k
 // stops (in false) and goes on (in true), so that state the consumers share
-// can be set aside between turns. A consumer runs on a goroutine of its own,
-// but never at the same time as another or as the caller: each turn starts
-// and ends with a channel exchange.
+// can be set aside between turns (state a goroutine holds, such as a lock,
+// is c's Handoff's: a turn ends at a switch to a parse). A consumer runs on
+// a goroutine of its own, but never at the same time as another or as the
+// caller: each turn starts and ends with a channel exchange.
 //
 // Tee returns each consumer's error. Once consumer k has failed, those after
 // it are not needed (an error is reported in consumer order): their cursors
@@ -113,7 +115,7 @@ type teeBlock struct {
 func (t *tee) start(k int, c *Cursor, run func(int, *Cursor) error, errs []error) {
 	r := &teeReader{t: t, k: k}
 	sub := Open(r, c.opts)
-	sub.strip = c.strip
+	sub.strip, sub.handoff = c.strip, c.handoff
 	go func() {
 		defer func() {
 			if p := recover(); p != nil {

@@ -108,9 +108,11 @@ var (
 	Refund    func(ctx any, nodes, bytes int64)
 )
 
-// LockShared reports whether l, an *xpath.EvalLock, is shared: from then on
-// it is held by the goroutine evaluating, which evaluation on another
-// goroutine would wait for (xslt's streamed xsl:fork, which runs its prongs
-// on goroutines of their own, one at a time). Package xpath sets it in its
-// init.
-var LockShared func(l any) bool
+// LockYield lets go of l, an *xpath.EvalLock, when it is shared and the
+// calling goroutine holds it, and returns what takes it back; otherwise it
+// does nothing. Once a host call has shared the lock, the goroutine
+// evaluating holds it: one of several goroutines that take turns evaluating
+// with one runtime (xslt's streamed xsl:fork and xsl:merge), suspended
+// holding it, would leave the next waiting forever. So each lets go at the
+// end of its turn. Package xpath sets it in its init.
+var LockYield func(l any) func()

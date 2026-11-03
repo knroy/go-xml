@@ -36,7 +36,8 @@ package xslt
 // focus; and an action whose effects a re-run would repeat (xsl:message,
 // xsl:result-document, xsl:assert, fn:trace). At run time: a document the
 // transformation has read already, a resolver that cannot stream, and the
-// conditions forkSafe states (the items are read by coroutines).
+// and the items are read by coroutines, which hand xpath's EvalLock back and
+// forth with the merge as a fork's prongs do (streamfork.go).
 
 import (
 	"errors"
@@ -209,10 +210,9 @@ func mergeActionOK(action *xdm.Node) bool {
 // anchor.
 type mergeInput struct {
 	src, anchor int
-	// next gives the next item of a streamed input (stop ends it); entries
-	// are a collected input's, with their keys.
+	// next gives the next item of a streamed input; entries are a collected
+	// input's, with their keys.
 	next    func() (xdm.Item, bool)
-	stop    func()
 	err     error
 	entries []mergeEntry
 	pos     int
@@ -231,7 +231,7 @@ var errMergeStop = errors.New("streaming: merge input stopped")
 
 // executeStream runs i on cursors, and reports whether it did.
 func (i *mergeInstr) executeStream(rt *runtime, out *outputBuilder) (bool, error) {
-	if noBursts || streamtrace.Off() || !forkSafe(rt) {
+	if noBursts || streamtrace.Off() {
 		return false, nil
 	}
 	sig, mark := signature(out), rt.localsMark()
@@ -355,10 +355,18 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 			if d.strip != nil {
 				c.StripWhitespace(d.strip)
 			}
+			c.Handoff(func() func() { return xpathleaf.LockYield(rt.evalLock) })
 			in := d.in
-			in.next, in.stop = iter.Pull(func(yield func(xdm.Item) bool) {
+			// The coroutine and the merge take turns evaluating: each lets
+			// the EvalLock go as its turn ends (see LockYield).
+			lock := func() func() { return xpathleaf.LockYield(rt.evalLock) }
+			next, stop := iter.Pull(func(yield func(xdm.Item) bool) {
+				defer lock()
 				err := d.split.loopAt(d.ctx, c, 0, nil, func(it xdm.Item) error {
-					if !yield(it) {
+					back := lock()
+					ok := yield(it)
+					back()
+					if !ok {
 						return errMergeStop
 					}
 					return nil
@@ -367,7 +375,16 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 					in.err = err
 				}
 			})
-			defer in.stop()
+			in.next = func() (xdm.Item, bool) {
+				back := lock()
+				defer back()
+				return next()
+			}
+			defer func() {
+				back := lock()
+				stop()
+				back()
+			}()
 			return open(j + 1)
 		})
 	}

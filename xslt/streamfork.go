@@ -36,11 +36,14 @@ package xslt
 // Two things they share are made safe for that: the local variables stack,
 // whose bindings each prong makes are set aside at the end of its turn and
 // put back at the start of the next (swap); and xpath's EvalLock, which a
-// goroutine holds once a host call has shared it -- another prong would
-// then wait for it forever. So the tee runs only when nothing of the host
-// can be called: the lock not shared, no function item in the transform's
-// parameters, and no collection resolver but this module's (forkSafe).
-// Otherwise the container runs on the tree (errStreamPlan).
+// goroutine holds once a host call has shared it (a function item the host
+// made, reaching a prong by any route: parameters, static ones, globals,
+// maps, partial applications, collections), so that the next prong, or the
+// transform after the fork, would wait for it forever. So every goroutine
+// lets it go when its turn may end -- the transform's before the tee, each
+// prong's, and each parse's, at every switch (the cursor's Handoff, which
+// the tee's cursors inherit), each prong's when it is done -- and takes it
+// back when its turn goes on (xpathleaf.LockYield).
 
 import (
 	"strings"
@@ -197,7 +200,7 @@ func (rt *runtime) forkOf(instr Instruction) *streamOp {
 // they wrote to out in prong order. The error is the first prong's, in
 // prong order, that failed.
 func (run *streamRun) fork(rt *runtime, op *streamOp, body []Instruction, out *outputBuilder) error {
-	if run.used || run.d != 0 || !forkSafe(rt) {
+	if run.used || run.d != 0 {
 		return errStreamPlan
 	}
 	run.used = true
@@ -227,7 +230,9 @@ func (run *streamRun) fork(rt *runtime, op *streamOp, body []Instruction, out *o
 	}
 	saved := make([]held, len(cons))
 	kept := false
+	back := xpathleaf.LockYield(rt.evalLock)
 	cerrs := run.c.Tee(len(cons), func(j int, c *xdmstream.Cursor) error {
+		defer xpathleaf.LockYield(rt.evalLock) // done: let go, for good
 		k := cons[j]
 		pr := &streamRun{x: run.x, c: c, root: run.root, top: run.top, i: run.i, href: run.href,
 			unread: run.unread}
@@ -255,6 +260,7 @@ func (run *streamRun) fork(rt *runtime, op *streamOp, body []Instruction, out *o
 		}
 		saved[j] = held{st.Detach(mark), st.SetBase(base)}
 	})
+	back()
 	run.kept = run.kept || kept
 	for j, k := range cons {
 		errs[k] = cerrs[j]
@@ -273,54 +279,4 @@ func (run *streamRun) fork(rt *runtime, op *streamOp, body []Instruction, out *o
 		}
 	}
 	return nil
-}
-
-// forkSafe reports whether the prongs may run on goroutines of their own:
-// nothing they evaluate can call host code, which would share xpath's
-// EvalLock and leave it held by a prong's goroutine (see the file comment).
-// Host code is reached through a resolver not of this module (documents
-// are, for a container to stream: executeStream) or a function item the
-// host made, which only parameters and collections can bring in.
-func forkSafe(rt *runtime) bool {
-	if rt.evalLock != nil && xpathleaf.LockShared(rt.evalLock) {
-		return false
-	}
-	o := rt.opts
-	if o == nil {
-		return true
-	}
-	if o.Collections != nil {
-		if _, ok := o.Collections.(xpathleaf.NativeResolver); !ok {
-			return false
-		}
-	}
-	for _, v := range o.Params {
-		if !plainValues(v) {
-			return false
-		}
-	}
-	for _, v := range o.InitialTemplateParams {
-		if !plainValues(v) {
-			return false
-		}
-	}
-	for _, v := range o.InitialFunctionParams {
-		if !plainValues(v) {
-			return false
-		}
-	}
-	return plainValues(o.InitialMatchSelection)
-}
-
-// plainValues reports whether seq holds nodes and atomic values only: no
-// function item, nor a map or array that could hold one.
-func plainValues(seq xdm.Sequence) bool {
-	for _, it := range seq {
-		switch it.(type) {
-		case *xdm.Node, *xdm.Atomic:
-		default:
-			return false
-		}
-	}
-	return true
 }

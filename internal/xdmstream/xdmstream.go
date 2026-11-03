@@ -104,6 +104,8 @@ type Cursor struct {
 	src  io.Reader
 	opts xdm.ParseOptions
 	teed bool
+	// handoff is Handoff's.
+	handoff func() func()
 }
 
 // A Filter says which events NextTag and SkipTag report. What they pass
@@ -150,6 +152,9 @@ func Open(r io.Reader, opts xdm.ParseOptions) *Cursor {
 		err := xdmburst.Drive(r, opts, &client{c, yield})
 		switch {
 		case err == nil:
+			if c.handoff != nil {
+				c.handoff()
+			}
 			yield(Event{Kind: EndDocument, Closed: c.closed})
 		case err != errStop:
 			c.err = err
@@ -157,6 +162,16 @@ func Open(r io.Reader, opts xdm.ParseOptions) *Cursor {
 	})
 	return c
 }
+
+// Handoff has f called at each switch between the reader and the parse,
+// which run on goroutines of their own and take turns: by the reader before
+// it switches to the parse (what f returns is called when the parse is
+// back), and by the parse before it hands an event over (what f returns is
+// dropped). A filter's Accept runs on the parse's side, the reader's code
+// on the other, so state either took that a goroutine holds (xpath's
+// EvalLock, once a host call has shared it) can be let go before the other
+// needs it. A Tee's cursors have c's. It must be set before the first call.
+func (c *Cursor) Handoff(f func() func()) { c.handoff = f }
 
 // StripWhitespace has the parse drop whitespace-only text directly inside
 // each element el for which strip reports true, as xsl:strip-space does: el
@@ -368,6 +383,10 @@ func (c *Cursor) resume(act xdmburst.Action) (Event, error) {
 	}
 	c.act = act
 	c.resumes++
+	if c.handoff != nil {
+		back := c.handoff()
+		defer back()
+	}
 	ev, ok := c.next()
 	if !ok {
 		if c.err != nil {
@@ -387,6 +406,9 @@ type client struct {
 
 // send hands ev to the consumer, with what was closed unseen before it.
 func (k *client) send(ev Event) bool {
+	if k.c.handoff != nil {
+		k.c.handoff()
+	}
 	ev.Closed, k.c.closed = k.c.closed, 0
 	return k.yield(ev)
 }
