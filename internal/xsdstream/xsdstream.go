@@ -10,11 +10,7 @@
 // meets a failure records it and goes on, and Err reports it.
 package xsdstream
 
-import (
-	"context"
-
-	"github.com/knroy/go-xml/v2/xdm"
-)
+import "github.com/knroy/go-xml/v2/xdm"
 
 // Root says what the validation root is assessed against.
 type Root uint8
@@ -68,25 +64,6 @@ var Open func(schema any, m Mode) Validator
 // exactly as the tree is, or "" when it can. It is a property of the schema's
 // components, so a caller may remember it per schema.
 var Refusal func(schema any) string
-
-type sourceKey struct{}
-
-// WithSource returns ctx carrying schema (an *xsd.Schema): a principal input
-// read with xslt's TransformReader is validated against it, strictly, with the
-// document node as the validation root. It is how the conformance harness asks
-// for what it does for a tree (parse, xsd ValidateCopy, Transform), and is not
-// API: there is none for validating a principal input.
-func WithSource(ctx context.Context, schema any) context.Context {
-	return context.WithValue(ctx, sourceKey{}, schema)
-}
-
-// Source returns the schema WithSource put in ctx, or nil.
-func Source(ctx context.Context) any {
-	if ctx == nil {
-		return nil
-	}
-	return ctx.Value(sourceKey{})
-}
 
 // MarkSource tells resolver (an *xslt.FileResolver) that the document at
 // uri, which it holds as a tree, is one the conformance harness validated

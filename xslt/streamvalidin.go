@@ -25,7 +25,7 @@ package xslt
 
 import (
 	"bufio"
-	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -90,6 +90,9 @@ type streamValidation struct {
 	// strips is input-type-annotations="strip" on an xsl:source-document's
 	// document (stripInputAnnotations), applied once it is validated.
 	strips bool
+	// main is the principal input's validation (pre the stylesheet's
+	// schema): its mode, and its error (sourceError).
+	main SourceValidation
 }
 
 // streamedValidation says how spec's validation of the document at href is
@@ -157,7 +160,7 @@ func (spec validationSpec) streamedValidation(rt *runtime, br burstResolver, hre
 func (sv *streamValidation) attach(c *xdmstream.Cursor, strip func(*xdm.Node) bool) func() error {
 	var vs []xsdstream.Validator
 	if sv.pre != nil {
-		vs = append(vs, xsdstream.Open(sv.pre, xsdstream.Mode{Root: xsdstream.Strict, Doc: true}))
+		vs = append(vs, xsdstream.Open(sv.pre, rootMode(sv.main)))
 	}
 	if sv.schema != nil {
 		vs = append(vs, xsdstream.Open(sv.schema, sv.mode))
@@ -182,6 +185,9 @@ func (sv *streamValidation) attach(c *xdmstream.Cursor, strip func(*xdm.Node) bo
 	return func() error {
 		for _, v := range vs {
 			if err := v.Err(); err != nil {
+				if sv.main != 0 {
+					return sourceError(sv.main, err)
+				}
 				return fmt.Errorf("XTTE1510: the streamed document is not valid: %w", err)
 			}
 		}
@@ -415,43 +421,124 @@ func groundAtomized(c *xdmstream.Cursor) (xdm.Sequence, error) {
 	return xdm.AtomizeChecked(xdm.One(g))
 }
 
-// A principal input read with TransformReader under a context carrying a
-// schema (xsdstream.WithSource) is validated against it, the document node
-// the root, as the conformance harness validates the tree it hands Transform:
-// on the stream when it streams, with the stylesheet's xsl:strip-space made
-// after the validation (validatedStripper's first); else on the tree.
+// The principal input with TransformOptions.SourceValidation: validated
+// against the stylesheet's schema, the document node the root, as an xsd
+// typed copy of the document is made, before xsl:strip-space (which then
+// spares simple content: validatedStripper's first). TransformReader
+// validates on the stream when it streams and the schema allows; Transform,
+// and TransformReader otherwise, makes the typed copy. An invalid document
+// is the same error both ways: the failures the event validator meets,
+// which on the tree path it is made to meet by reading the document again
+// (sourceInvalid), positions left out (a stream's parse and a tree's differ
+// in them).
 
-// mainValidationStreams reports whether the validation ctx asks for, if any,
-// can be made on the stream.
-func mainValidationStreams(ctx context.Context) bool {
-	sch := xsdstream.Source(ctx)
-	return sch == nil || xsdstream.Refusal(sch) == ""
-}
-
-// validatedMain is the principal input root as the validation ctx asks for
-// leaves it: xsd's typed copy of the document. An invalid document is an
-// error.
-func validatedMain(ctx context.Context, root *xdm.Node) (*xdm.Node, error) {
-	sch, _ := xsdstream.Source(ctx).(*xsd.Schema)
-	if sch == nil {
-		return root, nil
+// sourceValidationStreams reports whether the validation mode asks for can
+// be made on the stream.
+func (s *Stylesheet) sourceValidationStreams(mode SourceValidation) bool {
+	switch {
+	case mode == 0:
+		return true
+	case s.schema == nil:
+		return mode == SourceLax // lax without a schema assesses nothing
 	}
-	return sch.ValidateCopy(root, xsd.ValidateOptions{})
+	return xsdstream.Refusal(s.schema) == ""
 }
 
-// validateMain attaches the validation ctx asks for to c, the principal
+// rootMode is the event validator's mode for mode.
+func rootMode(mode SourceValidation) xsdstream.Mode {
+	if mode == SourceLax {
+		return xsdstream.Mode{Root: xsdstream.Lax, Doc: true}
+	}
+	return xsdstream.Mode{Root: xsdstream.Strict, Doc: true}
+}
+
+// validateMain attaches the validation mode asks for to c, the principal
 // input's cursor, and returns what reports its outcome once c has been read
 // to its end.
-func (s *Stylesheet) validateMain(ctx context.Context, c *xdmstream.Cursor) func() error {
-	sch := xsdstream.Source(ctx)
-	if sch == nil {
+func (s *Stylesheet) validateMain(mode SourceValidation, c *xdmstream.Cursor) func() error {
+	if mode == 0 || s.schema == nil {
 		return func() error { return nil }
 	}
 	var strip func(*xdm.Node) bool
 	if len(s.strip) > 0 {
 		strip = s.whitespaceStripper(0)
 	}
-	return (&streamValidation{pre: sch}).attach(c, strip)
+	return (&streamValidation{pre: s.schema, main: mode}).attach(c, strip)
+}
+
+// validatedSource is source as the validation mode asks for leaves it: the
+// typed copy of the document.
+func (s *Stylesheet) validatedSource(source *xdm.Node, mode SourceValidation) (*xdm.Node, error) {
+	if source == nil || source.Kind() != xdm.KindDocument {
+		return nil, fmt.Errorf("SourceValidation: the source must be a document node")
+	}
+	if s.schema == nil {
+		if mode == SourceLax {
+			return source, nil
+		}
+		return nil, fmt.Errorf("XTSE1660: validation requires a schema; none was imported")
+	}
+	if els := source.ChildElements(); mode == SourceLax && (len(els) == 0 || !s.schema.CanAssessStrictly(els[0])) {
+		return source, nil
+	}
+	typed, err := s.schema.ValidateCopy(source, xsd.ValidateOptions{})
+	if err != nil {
+		return nil, s.sourceInvalid(source, mode, err)
+	}
+	return typed, nil
+}
+
+// sourceInvalid is the error of source, which the typed copy found invalid
+// with err: the failures the event validator meets reading it, as a stream
+// of it would have met them.
+func (s *Stylesheet) sourceInvalid(source *xdm.Node, mode SourceValidation, err error) error {
+	var b strings.Builder
+	if Serialize(&b, xdm.One(source), OutputSettings{Method: "xml"}, nil) == nil {
+		c := xdmstream.Open(strings.NewReader(b.String()), xdm.ParseOptions{MaxBytes: -1, MaxNodes: -1})
+		defer c.Close()
+		v := xsdstream.Open(s.schema, rootMode(mode))
+		c.Observe(func(n *xdm.Node, d int, end bool, _ uint64) { v.Observe(n, d, end) })
+		c.StripWhitespace(v.Drops)
+		if drainTo(c) == nil && v.Err() != nil {
+			err = v.Err()
+		}
+	}
+	return sourceError(mode, err)
+}
+
+// sourceError is the principal input's validation error: its code, and the
+// failures without their positions.
+func sourceError(mode SourceValidation, err error) error {
+	code := "XTTE1510"
+	if mode == SourceLax {
+		code = "XTTE1515"
+	}
+	var errs *xsd.ValidationErrors
+	if errors.As(err, &errs) {
+		c := &xsd.ValidationErrors{}
+		for _, e := range errs.Errors {
+			x := *e
+			x.Line, x.Column = 0, 0
+			c.Errors = append(c.Errors, &x)
+		}
+		err = c
+	}
+	return fmt.Errorf("%s: the principal input is not valid: %w", code, err)
+}
+
+// drainTo reads c to its end.
+func drainTo(c *xdmstream.Cursor) error {
+	for {
+		ev, err := c.Next()
+		switch {
+		case err == io.EOF:
+			return nil
+		case err != nil:
+			return err
+		case ev.Kind == xdmstream.EndDocument:
+			return nil
+		}
+	}
 }
 
 // stream reads d on a cursor fn reads: as the tree's validated copy of it

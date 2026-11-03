@@ -211,7 +211,7 @@ func (s *Stylesheet) transformStream(ctx context.Context, r io.Reader, opts Tran
 	if len(s.strip) > 0 {
 		main.c.StripWhitespace(s.whitespaceStripper(0))
 	}
-	valid := s.validateMain(ctx, main.c) // streamvalidin.go
+	valid := s.validateMain(opts.SourceValidation, main.c) // streamvalidin.go
 	res, err := s.transform(ctx, nil, opts, main)
 	if err == nil {
 		if err := valid(); err != nil {

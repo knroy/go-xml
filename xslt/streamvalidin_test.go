@@ -2,13 +2,13 @@ package xslt
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
-	"github.com/knroy/go-xml/v2/internal/xsdstream"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xsd"
 )
@@ -197,27 +197,28 @@ func TestStreamMergeValidation(t *testing.T) {
 	}
 }
 
-// TestStreamMainValidation: a principal input TransformReader validates (the
-// harness's annotate: the document node the root) streams, and gives what
-// Parse, xsd ValidateCopy and Transform give: ignorable whitespace dropped,
-// xsl:strip-space made after the validation (sparing simple content), typed
-// values, defaults. An invalid document is an error on both paths.
+// TestStreamMainValidation: TransformOptions.SourceValidation. TransformReader
+// streams the validated principal input and gives what Transform gives with
+// the field over the parsed document -- outputs and errors alike -- and, for
+// a valid document, what Parse, xsd ValidateCopy and Transform give: ignorable
+// whitespace dropped, xsl:strip-space after the validation (sparing simple
+// content), typed values, defaults. A schema the stream cannot validate (keys)
+// takes the tree path; strict with no schema is XTSE1660.
 func TestStreamMainValidation(t *testing.T) {
-	st, err := xdm.ParseString(inSchema, xdm.ParseOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	schema, err := xsd.Load(st.Root, "s.xsd", xsd.Options{Version: xsd.Version11})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := xsdstream.WithSource(context.Background(), schema)
-	sheet := func(decl, rules string) string {
+	keyed := strings.Replace(inSchema, `<xs:element name="list" type="listT"/>`,
+		`<xs:element name="list" type="listT"><xs:unique name="U"><xs:selector xpath="item"/><xs:field xpath="@id"/></xs:unique></xs:element>`, 1)
+	sheet := func(schema, decl, rules string) string {
+		imp := ""
+		if schema != "" {
+			imp = `<xsl:import-schema>` + schema + `</xsl:import-schema>`
+		}
 		return `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
- xmlns:xs="http://www.w3.org/2001/XMLSchema" exclude-result-prefixes="xs">` + decl + `
+ xmlns:xs="http://www.w3.org/2001/XMLSchema" exclude-result-prefixes="xs">` + imp + decl + `
 <xsl:mode streamable="yes" on-no-match="shallow-copy"/>` + rules + `</xsl:stylesheet>`
 	}
-	run := func(src, doc string, streamed bool) (string, streamtrace.Counts) {
+	// how: "reader" TransformReader, "field" Parse + Transform with the
+	// field, "manual" Parse + xsd ValidateCopy + Transform.
+	run := func(src, doc, how string, v SourceValidation) (string, streamtrace.Counts) {
 		before := streamtrace.Snapshot()
 		tree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: "file:///s/s.xsl"})
 		if err != nil {
@@ -227,20 +228,26 @@ func TestStreamMainValidation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		opts := TransformOptions{SourceValidation: v}
 		var res *Result
-		if streamed {
-			res, err = s.TransformReader(ctx, readOnly{strings.NewReader(doc)}, TransformOptions{})
-		} else {
+		switch how {
+		case "reader":
+			res, err = s.TransformReader(context.Background(), readOnly{strings.NewReader(doc)}, opts)
+		default:
 			var in *xdm.Tree
 			if in, err = xdm.Parse(strings.NewReader(doc), xdm.ParseOptions{}); err == nil {
-				var typed *xdm.Node
-				if typed, err = schema.ValidateCopy(in.Root, xsd.ValidateOptions{}); err == nil {
-					res, err = s.Transform(context.Background(), typed, TransformOptions{})
+				root := in.Root
+				if how == "manual" {
+					opts.SourceValidation = 0
+					root, err = s.Schema().ValidateCopy(in.Root, xsd.ValidateOptions{})
+				}
+				if err == nil {
+					res, err = s.Transform(context.Background(), root, opts)
 				}
 			}
 		}
 		if err != nil {
-			return "error", streamtrace.Snapshot().Sub(before)
+			return "error: " + err.Error(), streamtrace.Snapshot().Sub(before)
 		}
 		return res.String(), streamtrace.Snapshot().Sub(before)
 	}
@@ -254,22 +261,62 @@ func TestStreamMainValidation(t *testing.T) {
 		`<xsl:template match="note"><n c="{count(node())}" nil="{nilled(.)}"/></xsl:template>`,
 		`<xsl:template match="/"><o><xsl:value-of select="sum(list/item/price)"/></o></xsl:template>`,
 	}
-	for _, decl := range []string{"", `<xsl:strip-space elements="*"/>`, `<xsl:strip-space elements="note price"/>`} {
-		for _, r := range rules {
-			for name, doc := range map[string]string{"spaced": spaced, "ok": inDocs["ok"], "bad": inDocs["bad-order"]} {
-				where := name + " " + decl + " " + r
-				want, _ := run(sheet(decl, r), doc, false)
-				got, tr := run(sheet(decl, r), doc, true)
-				if got != want {
-					t.Errorf("%s:\nstreamed %q\ntree     %q", where, got, want)
-				}
-				if (want == "error") != (name == "bad") {
-					t.Errorf("%s: tree gives %q", where, want)
-				}
-				if tr.Runs[streamtrace.Main] == 0 {
-					t.Errorf("%s: not streamed", where)
+	docs := map[string]string{"spaced": spaced, "ok": inDocs["ok"], "bad": inDocs["bad-order"],
+		"bad-ref": inDocs["bad-ref"], "bad-assert": inDocs["bad-assert"], "undeclared": `<other><x>1</x></other>`,
+		// Two failures, the tree meeting the text before the child's: the
+		// error is the stream's either way (sourceInvalid).
+		"bad-two": `<list><item n="1"><price>x</price></item>junk</list>`}
+	for _, v := range []SourceValidation{SourceStrict, SourceLax} {
+		for _, decl := range []string{"", `<xsl:strip-space elements="*"/>`, `<xsl:strip-space elements="note price"/>`} {
+			for _, r := range rules {
+				for name, doc := range docs {
+					where := fmt.Sprintf("%v %s %s %s", v, name, decl, r)
+					src := sheet(inSchema, decl, r)
+					got, tr := run(src, doc, "reader", v)
+					want, _ := run(src, doc, "field", v)
+					if got != want {
+						t.Errorf("%s:\nreader %q\nfield  %q", where, got, want)
+					}
+					invalid := strings.HasPrefix(name, "bad") || name == "undeclared" && v == SourceStrict
+					if strings.HasPrefix(want, "error") != invalid {
+						t.Errorf("%s: %q", where, want)
+					}
+					if !invalid {
+						if man, _ := run(src, doc, "manual", v); man != want && name != "undeclared" {
+							t.Errorf("%s:\nfield  %q\nmanual %q", where, want, man)
+						}
+					}
+					if tr.Runs[streamtrace.Main] == 0 {
+						t.Errorf("%s: not streamed", where)
+					}
 				}
 			}
+		}
+	}
+	// The codes: strict XTTE1510, lax XTTE1515; no schema; a schema the
+	// stream refuses.
+	for _, r := range []struct {
+		schema, doc string
+		v           SourceValidation
+		code        string
+		stream      bool
+	}{
+		{inSchema, inDocs["bad-ref"], SourceStrict, "XTTE1510", true},
+		{inSchema, inDocs["bad-ref"], SourceLax, "XTTE1515", true},
+		{"", inDocs["ok"], SourceStrict, "XTSE1660", false},
+		{"", inDocs["ok"], SourceLax, "", true},
+		{keyed, inDocs["ok"], SourceStrict, "", false},
+		{keyed, strings.Replace(inDocs["ok"], `<item ref="a"`, `<item id="b" ref="a"`, 1), SourceStrict, "", false},
+		{keyed, strings.Replace(inDocs["ok"], `<item n="3">`, `<item n="3" id="z">`, -1), SourceStrict, "XTTE1510", false},
+	} {
+		src := sheet(r.schema, "", rules[1])
+		got, tr := run(src, r.doc, "reader", r.v)
+		want, _ := run(src, r.doc, "field", r.v)
+		if got != want || !strings.Contains(got, r.code) || (r.code == "") != !strings.HasPrefix(got, "error") {
+			t.Errorf("%v %q: reader %q, field %q, want %s", r.v, r.code, got, want, r.code)
+		}
+		if streamed := tr.Runs[streamtrace.Main] > 0; streamed != r.stream {
+			t.Errorf("%v %q: streamed %v, want %v", r.v, r.code, streamed, r.stream)
 		}
 	}
 }

@@ -514,11 +514,12 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	// streamable-021 has the import commented out -- so without this the
 	// components were loaded and discarded and every one reported XTSE1660,
 	// validation requires a schema and none was imported.
+	envOnly := false // the stylesheet's schema is the environment's, and only it
 	if es := envSchema(set, r.environment(set, tc)); es != nil {
 		if sch := ss.Schema(); sch != nil {
 			mergeInto(sch, es)
 		} else {
-			ss.SetSchemaIfAbsent(es)
+			envOnly = ss.SetSchemaIfAbsent(es)
 		}
 	}
 
@@ -527,6 +528,13 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	// stylesheet allows; under GOXSLT_STREAM_OFF=1 it is parsed here and
 	// given to Transform, as every other source is.
 	streamPath, streamContent, streamOpts := r.streamedSource(set, tc)
+	// A validated principal input streams with TransformOptions.SourceValidation,
+	// which validates against the stylesheet's schema: the one annotate uses
+	// only when the stylesheet imports none (streamvalidate.go).
+	validation := r.principalValidation(set, tc)
+	if validation != 0 && (!envOnly || streamPath == "") {
+		streamPath, streamContent, validation = "", "", 0
+	}
 	var src *xdm.Node
 	var srcPath string
 	if streamPath == "" && streamContent == "" {
@@ -748,9 +756,7 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		opts.SourceParseOptions = streamOpts
 		opts.Output = r.output
 		opts.SecondaryOutput = r.secondary
-		if sch := r.principalValidated(set, tc); sch != nil {
-			ctx = xsdstream.WithSource(ctx, sch) // the annotate the tree has, on the stream
-		}
+		opts.SourceValidation = validation // the annotate the tree has, on the stream
 		return ss.TransformReader(ctx, strings.NewReader(string(stripBOM(data))), opts)
 	}
 	opts.Output = r.output

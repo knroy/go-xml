@@ -250,6 +250,30 @@ type TransformOptions struct {
 	// Transform ignores them: its source is already a tree.
 	SourceParseOptions xdm.ParseOptions
 
+	// SourceValidation validates the principal input against the schema the
+	// stylesheet imports (xsl:import-schema) before the transform reads it,
+	// with the document node as the validation root, as an xsd typed copy of
+	// a document is made: the nodes carry their type annotations and typed
+	// values, attributes the schema supplies by default are added, and
+	// whitespace-only text in element-only content is dropped. The
+	// stylesheet's xsl:strip-space applies after the validation.
+	//
+	// SourceStrict requires the document element to have a global
+	// declaration or an xsi:type; SourceLax assesses it only when it has one,
+	// and otherwise leaves the document untyped. An invalid document is an
+	// error coded XTTE1510 (XTTE1515 for lax), the same error whether the
+	// document was streamed or a tree. The zero value validates nothing.
+	//
+	// Transform validates its source, which must then be a document node,
+	// by making a typed copy of it: the caller's tree is not changed.
+	// TransformReader validates the document as it streams it when the
+	// stylesheet streams the principal input and the schema allows it (not
+	// with identity constraints, element default or fixed values, open
+	// content, or a default for an attribute in a namespace); otherwise it
+	// parses the document and validates as Transform does. A strict
+	// validation with no imported schema is the error XTSE1660.
+	SourceValidation SourceValidation
+
 	// Output, when set, receives the principal result serialized with the
 	// stylesheet's xsl:output, as Result.Serialize would write it, byte for
 	// byte; the Result's Nodes are then nil and its Tree is nil. The result
@@ -383,8 +407,26 @@ type Result struct {
 // The Stylesheet is not mutated, so one compiled stylesheet may be used from
 // many goroutines concurrently.
 func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts TransformOptions) (*Result, error) {
+	if opts.SourceValidation != 0 {
+		var err error
+		if source, err = s.validatedSource(source, opts.SourceValidation); err != nil { // streamvalidin.go
+			return nil, err
+		}
+	}
 	return s.transform(ctx, source, opts, nil)
 }
+
+// SourceValidation is how TransformOptions.SourceValidation validates the
+// principal input: xsl:source-document's validation="strict" and "lax",
+// applied to the document a transform starts from.
+type SourceValidation uint8
+
+const (
+	// SourceStrict validates the principal input strictly.
+	SourceStrict SourceValidation = iota + 1
+	// SourceLax validates the principal input laxly.
+	SourceLax
+)
 
 // TransformReader applies the stylesheet to the XML document r reads, which
 // it parses with opts.SourceParseOptions. Its result, its errors and the
@@ -437,16 +479,12 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 // for xdm.Parse; set them for fn:base-uri, fn:document-uri and relative
 // fn:doc references from the document to answer.
 func (s *Stylesheet) TransformReader(ctx context.Context, r io.Reader, opts TransformOptions) (*Result, error) {
-	if !s.streamsMain(opts) || !mainValidationStreams(ctx) {
+	if !s.streamsMain(opts) || !s.sourceValidationStreams(opts.SourceValidation) { // streamvalidin.go
 		tree, err := xdm.Parse(r, opts.SourceParseOptions)
 		if err != nil {
 			return nil, err
 		}
-		root, err := validatedMain(ctx, tree.Root) // streamvalidin.go
-		if err != nil {
-			return nil, err
-		}
-		return s.Transform(ctx, root, opts)
+		return s.Transform(ctx, tree.Root, opts)
 	}
 	return s.transformStream(ctx, r, opts)
 }
