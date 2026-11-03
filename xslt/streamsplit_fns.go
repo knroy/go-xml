@@ -55,3 +55,19 @@ func copyTail(e xpath.Expr) bool {
 	return len(f.Args) == 0 || len(f.Args) == 1 && isContextItem(f.Args[0])
 }
 
+// traceValue is the value of fn:trace(v) or fn:trace(v, 'label'), v: the
+// function returns its argument and prints nothing (xpath/fn_node.go), and a
+// string literal label passes its one check. Read as v, a trace around a
+// loop's select or a reducer's argument splits as that select or argument.
+func traceValue(x *xpath.FuncCall) xpath.Expr {
+	if x.Name.URI != fnNS || x.Name.Local != "trace" || len(x.Args) == 0 || len(x.Args) > 2 {
+		return nil
+	}
+	if len(x.Args) == 2 {
+		l, ok := x.Args[1].(*xpath.Literal)
+		if !ok || l.Val == nil || l.Val.Type != xdm.TypeString {
+			return nil
+		}
+	}
+	return x.Args[0]
+}

@@ -31,6 +31,9 @@ func TestStreamWholeFnsMatchTree(t *testing.T) {
 		{`<v><xsl:value-of select="for-each(doc/rec/@k/data(), name#0)"/></v>`, false},
 		// A cast that fails at some record: the tree's error.
 		{`<v><xsl:value-of select="fold-left(doc/rec/@v/xs:integer(.), 0, p:add#2)"/></v>`, true},
+		// fn:trace(v, 'label') is v: a loop over it, a reducer of it.
+		{`<xsl:for-each select="trace(doc/rec, 'r')"><r k="{@k}"/></xsl:for-each>`, true},
+		{`<v><xsl:value-of select="count(trace(//rec, 'c'))"/></v>`, true},
 	}
 	n := 0
 	for name, doc := range coreDocs {
