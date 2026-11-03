@@ -1005,7 +1005,13 @@ func (a *instrAnalyzer) instructionRule(el *xdm.Node) props {
 		// from any other call on them; both are unmodelled, so a body
 		// mentioning either stays unknown rather than being passed as
 		// streamable.
-		if bodyCallsAny(el, "current-group", "current-merge-group") {
+		// A group whose select is grounded is exempt, as subFocus exempts it:
+		// it is materialised, and the nested container reads nothing of this
+		// stream through it. si-group-051 (Saxon 9.8 passes it, the catalog
+		// expects its output) reads current-group() of a group over
+		// Order/copy-of() inside a nested xsl:source-document.
+		if bodyCallsAny(el, "current-merge-group") ||
+			bodyCallsAny(el, "current-group") && !(a.groupInScope && a.currentGroup.posture == postureGrounded) {
 			return a.unknown()
 		}
 		// Otherwise "the posture is grounded and the sweep is the sweep of
