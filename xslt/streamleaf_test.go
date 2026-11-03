@@ -23,6 +23,10 @@ var leafBodies = []string{
 	`<out><xsl:copy-of select="/doc/rec/node()"/></out>`,
 	`<out><xsl:attribute name="a" select="1, head(//text())"/></out>`,
 	`<out d="{deep-equal(//sub/text(), ())}"/>`,
+	`<out><xsl:copy-of select="outermost(//sub/text()) ! string-length()"/></out>`,
+	`<out><xsl:value-of select="//rec/text()/(. || '!')" separator="|"/></out>`,
+	`<out n="{sum(//sub/text()/string-length())}"/>`,
+	`<out><xsl:value-of select="(//text()/tokenize(., ' '))[2]"/></out>`,
 }
 
 // leafRuleDecls and leafRuleBody match text nodes through their parents in

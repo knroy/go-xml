@@ -357,7 +357,11 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		s.mode = matchGround
 		s.keepLeaves, s.leafOnly = leaf, leaf && !elem
 	case leaf:
-		return "a tail after text, comment or PI matches"
+		// Only leaves match: the tail runs on each one's copy, whole.
+		if elem || !(viewCheck{}).safe(tail, vLeaf, splitCounts[s.red]) {
+			return "a tail after text, comment or PI matches"
+		}
+		s.mode, s.keepLeaves, s.leafOnly = matchView, true, true
 	case !tailKindOK(tail):
 		return "tail " + tail.String() + ": may give both nodes and values (XPTY0018)"
 	case w.mapped:
@@ -1998,11 +2002,11 @@ func (s *streamSplit) textAtomic(t string) *xdm.Atomic {
 func (r *splitRun) leaf(n *xdm.Node, d int) error {
 	s := r.s
 	switch {
-	case s.mode == matchCount || s.red == "nth" && !s.atomize && s.tailText == "" && r.idx+1 < s.nth:
+	case s.mode == matchCount || s.red == "nth" && !s.atomize && s.tailText == "" && s.tail == nil && r.idx+1 < s.nth:
 		return r.take(xdm.Sequence{nil})
 	case s.tailText == "string":
 		return r.take(xdm.One(xdm.NewString(n.StringValue())))
-	case s.keepLeaves && !s.atomize && s.tailText == "":
+	case s.keepLeaves && (s.tail != nil || !s.atomize && s.tailText == ""):
 		if d > 0 {
 			c, err := r.c.Leaf()
 			if err != nil {
@@ -2013,6 +2017,13 @@ func (r *splitRun) leaf(n *xdm.Node, d int) error {
 		if r.body != nil {
 			_, err := r.body(n, d)
 			return err
+		}
+		if s.tail != nil {
+			items, err := s.tail.Eval(r.ctx.WithFocus(n, 1, 1))
+			if err != nil {
+				return err
+			}
+			return r.take(items)
 		}
 		return r.take(xdm.One(n))
 	}
