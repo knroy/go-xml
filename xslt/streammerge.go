@@ -275,6 +275,7 @@ func (i *mergeInstr) executeStream(rt *runtime, out *outputBuilder) (bool, error
 	}
 	sig, mark := signature(out), rt.localsMark()
 	undoEffects := rt.effectsMark() // streammessage.go: secondary results and messages
+	defer rt.holdSecondary()()      // secondaryout.go
 	n0, b0 := xpathleaf.Charged(rt.ctx)
 	var unread []func()
 	err := i.runStream(rt, out, &unread)

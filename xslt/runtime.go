@@ -54,6 +54,10 @@ type runtime struct {
 	// calls, however deeply.
 	temporary bool
 
+	// inTry marks the body of an xsl:try, under SecondaryOutput, whose
+	// result-documents are written when they complete (secondaryout.go).
+	inTry bool
+
 	// tunnel holds tunnel parameters, which pass through templates that do
 	// not declare them.
 	tunnel map[string]xdm.Sequence
@@ -262,6 +266,10 @@ type transformState struct {
 	// a plain slice would leave a result-document written inside a template
 	// appending to a copy that the caller never sees.
 	secondary *[]SecondaryResult
+
+	// secondaryOut is TransformOptions.SecondaryOutput's state, nil when it
+	// is not set (secondaryout.go).
+	secondaryOut *secondaryOutput
 
 	// resultHrefs is the set of @href values, as written, that
 	// xsl:result-document has produced, so that XTDE1490 is a lookup rather

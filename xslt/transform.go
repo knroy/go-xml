@@ -272,6 +272,28 @@ type TransformOptions struct {
 	// returned. Output is not closed.
 	Output io.Writer
 
+	// SecondaryOutput, when set, is called once for each xsl:result-document
+	// with the absolute URI of its result (its href resolved against the base
+	// output URI, or the href itself when there is no base URI to resolve
+	// it), and the result is serialized to the writer it returns, with the
+	// result-document's own output settings, byte for byte as
+	// SecondaryResult.Serialize would write it; the writer is closed at the
+	// result's end. Such results are not added to Result.Secondary. The result
+	// is written as it is produced, as Output writes the principal result,
+	// except where a written byte could not be taken back: a result-document
+	// inside an xsl:try body is written when it completes, and one inside a
+	// streamed xsl:source-document or xsl:merge when that ends (a failure
+	// re-runs it on the tree). Results whose output settings need the whole
+	// result (those Output lists, validation) are written when they complete.
+	//
+	// An error the function returns, a serialization error, and an error
+	// from Close are the transform's error. Errors are otherwise those of
+	// the transform without SecondaryOutput (XTDE1490, XTDE1500, ...), and a
+	// writer may have received part of a result when an error is returned;
+	// every writer returned is closed. A nested fn:transform does not
+	// inherit it.
+	SecondaryOutput func(href string) (io.WriteCloser, error)
+
 	// nestedDepth seeds the runtime's recursion depth, so that a transform
 	// started by fn:transform continues its caller's count instead of
 	// starting a fresh one. It is unexported because it is not a caller's
@@ -623,6 +645,9 @@ func (s *Stylesheet) transform(ctx context.Context, source *xdm.Node, opts Trans
 	}
 	rt.readDocs = &readDocs
 	rt.writtenDocs = &writtenDocs
+	if opts.SecondaryOutput != nil {
+		rt.secondaryOut = &secondaryOutput{open: opts.SecondaryOutput, opened: map[string]bool{}}
+	}
 	// Bind the runtime so key(), current() and xsl:function can reach it.
 	rt.ctx = bindRuntime(rt.ctx, rt)
 
@@ -846,6 +871,11 @@ func (s *Stylesheet) transform(ctx context.Context, source *xdm.Node, opts Trans
 	nodes := out.Sequence()
 	if haveRaw {
 		nodes = rawResult
+	}
+	if rt.secondaryOut != nil {
+		if err := rt.secondaryOut.flush(rt); err != nil {
+			return nil, err
+		}
 	}
 	if so != nil {
 		// The settings the parameter document gave the result, which a

@@ -1375,6 +1375,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	i.stream.count()
 	sig, mark := signature(out), rt.localsMark()
 	undoEffects := rt.effectsMark() // streammessage.go: secondary results and messages
+	defer rt.holdSecondary()()      // secondaryout.go
 	n0, b0 := xpathleaf.Charged(rt.ctx)
 	// At the top of a sequence (the principal result's raw nodes, a
 	// variable's, a function's) the tree keeps the source's own nodes where

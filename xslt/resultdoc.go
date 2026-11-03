@@ -203,6 +203,11 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// The destination is resolved before the body runs, because the body is
 	// what fn:current-output-uri answers inside.
 	resolvedHref := i.destination(rt, href)
+	if rt.secondaryOut != nil {
+		if done, err := i.stream(rt, href, resolvedHref, sepSettings); done {
+			return err // secondaryout.go
+		}
+	}
 	if err := execSequence(i.body, rt.withOutputURI(resolvedHref), sub); err != nil {
 		return err
 	}
@@ -245,41 +250,8 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		*rt.baseURIUsed = true
 	}
 
-	// A resource this transformation has already read may not be written to:
-	// the document the stylesheet holds would stop matching what is on disk.
-	// See readdocs.go.
-	if err := checkReadThenWrite(rt, resolvedHref); err != nil {
+	if err := checkResultURI(rt, href, resolvedHref); err != nil {
 		return err
-	}
-
-	// Two result documents sharing an href would mean one silently
-	// overwriting the other, so the collision is reported instead.
-	//
-	// The comparison is on the ABSOLUTE URI, not on the href as written.
-	// §24.2: "[ERR XTDE1490] It is a dynamic error for a transformation to
-	// generate two or more final result trees with the same URI." The URI of
-	// a secondary result is the href resolved against the base output URI
-	// (§24.1: "The effective value of the attribute must be a URI Reference,
-	// which may be absolute or relative. If it is relative, then it is
-	// resolved against the base output URI"), so href="out.xml" and
-	// href="./out.xml" name one and the same tree. Comparing the raw strings
-	// let that pair through and wrote one document over the other in silence.
-	// checkReadThenWrite above already keys off the resolved form for the
-	// neighbouring XTDE1500; this is the same URI identity.
-	//
-	// The raw href is still compared as well, for the case where no base
-	// output URI is known: resolution then yields "" for every document, and
-	// the resolved form would neither catch a real collision nor be safe to
-	// treat as one.
-	//
-	// Both identities are looked up in a set: the raw href in resultHrefs and
-	// the resolved URI in writtenDocs, which records every resolved URI a
-	// result document has written.
-	if (*rt.resultHrefs)[href] ||
-		(resolvedHref != "" && (*rt.writtenDocs)[resolvedHref]) {
-		return fmt.Errorf(
-			"XTDE1490: xsl:result-document: href %q was already produced by an earlier "+
-				"result document", href)
 	}
 
 	settings := sepSettings
@@ -342,11 +314,61 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// the read-then-write half was detected; see checkWrittenThenRead.
 	// Keyed on the resolved form for the same reason checkReadThenWrite is:
 	// the spec's test is on the absolute URI.
+	recordResultURI(rt, href, resolvedHref)
+	if rt.secondaryOut != nil {
+		return rt.secondaryOut.flush(rt) // secondaryout.go
+	}
+	return nil
+}
+
+// checkResultURI raises XTDE1500 and XTDE1490 for a result document about to
+// be recorded at href, resolved.
+func checkResultURI(rt *runtime, href, resolvedHref string) error {
+	// A resource this transformation has already read may not be written to:
+	// the document the stylesheet holds would stop matching what is on disk.
+	// See readdocs.go.
+	if err := checkReadThenWrite(rt, resolvedHref); err != nil {
+		return err
+	}
+
+	// Two result documents sharing an href would mean one silently
+	// overwriting the other, so the collision is reported instead.
+	//
+	// The comparison is on the ABSOLUTE URI, not on the href as written.
+	// §24.2: "[ERR XTDE1490] It is a dynamic error for a transformation to
+	// generate two or more final result trees with the same URI." The URI of
+	// a secondary result is the href resolved against the base output URI
+	// (§24.1: "The effective value of the attribute must be a URI Reference,
+	// which may be absolute or relative. If it is relative, then it is
+	// resolved against the base output URI"), so href="out.xml" and
+	// href="./out.xml" name one and the same tree. Comparing the raw strings
+	// let that pair through and wrote one document over the other in silence.
+	// checkReadThenWrite above already keys off the resolved form for the
+	// neighbouring XTDE1500; this is the same URI identity.
+	//
+	// The raw href is still compared as well, for the case where no base
+	// output URI is known: resolution then yields "" for every document, and
+	// the resolved form would neither catch a real collision nor be safe to
+	// treat as one.
+	//
+	// Both identities are looked up in a set: the raw href in resultHrefs and
+	// the resolved URI in writtenDocs, which records every resolved URI a
+	// result document has written.
+	if (*rt.resultHrefs)[href] ||
+		(resolvedHref != "" && (*rt.writtenDocs)[resolvedHref]) {
+		return fmt.Errorf(
+			"XTDE1490: xsl:result-document: href %q was already produced by an earlier "+
+				"result document", href)
+	}
+	return nil
+}
+
+// recordResultURI records href and resolvedHref as produced.
+func recordResultURI(rt *runtime, href, resolvedHref string) {
 	(*rt.resultHrefs)[href] = true
 	if resolvedHref != "" {
 		(*rt.writtenDocs)[resolvedHref] = true
 	}
-	return nil
 }
 
 // Serialize writes the secondary document using its own output settings.

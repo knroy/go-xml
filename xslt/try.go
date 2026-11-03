@@ -221,7 +221,7 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// began.
 	sub := tryBuffer(rt)
 	st := rt.streamTry()
-	err := i.run(rt, sub)
+	err := i.run(rt.inTryBody(), sub) // secondaryout.go
 	if err == nil {
 		return appendSequence(sub.Sequence(), out)
 	}
