@@ -519,6 +519,10 @@ type serializer struct {
 	// skipIndent drops the indent before the node being written: it sits
 	// next to an inline HTML element (see skipBeforeChild).
 	skipIndent bool
+	// rec, when set, is where a streamed result whose indentation is not
+	// yet decided is written (streamout.go): w is its buffer, and each
+	// indent is recorded so that it can be taken out again.
+	rec *indentRec
 	// rawText marks that serialisation is inside an HTML element whose
 	// content is CDATA rather than parsed character data. rawTextName is
 	// which one, so that the error naming it can say so.
@@ -1365,9 +1369,16 @@ func (s *serializer) indent(depth int) {
 		s.skipIndent = false
 		return
 	}
+	start := 0
+	if s.rec != nil {
+		start = s.rec.buf.n
+	}
 	s.writeString("\n")
 	for range depth {
 		s.writeString("  ")
+	}
+	if s.rec != nil {
+		s.rec.span(start)
 	}
 }
 
@@ -1556,9 +1567,12 @@ func mayIndentContent(n *xdm.Node) bool {
 			break
 		}
 	}
-	if !hasElem {
-		return false
-	}
+	return hasElem && mayIndentType(n)
+}
+
+// mayIndentType is mayIndentContent's rule for n's annotation, n having
+// element children.
+func mayIndentType(n *xdm.Node) bool {
 	switch n.TypeAnnotation() {
 	case "", "untyped":
 		return true
