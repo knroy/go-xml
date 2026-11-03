@@ -41,9 +41,11 @@ var unionBodies = []struct {
 	{`<out><xsl:copy-of select="/doc/rec ! sub"/></out>`, true},
 	{`<out><xsl:value-of select="(/doc/rec | //sub)[position() mod 2 = 0]" separator=","/></out>`, true},
 	{`<out><xsl:for-each select="/doc/rec"><xsl:value-of select="(. | sub) ! local-name()"/></xsl:for-each></out>`, true},
-	// Refused: operands with a tail of their own; a map reading position().
+	// Refused: operands with a tail of their own.
 	{`<out><xsl:value-of select="(/doc/rec/@k | //sub/@x)[position() lt 3]" separator=","/></out>`, false},
-	{`<out><xsl:value-of select="(//rec | //sub) ! position()" separator=","/></out>`, false},
+	// A map reading position() is refused by the split, but held at the
+	// document node (streamhold.go) it streams.
+	{`<out><xsl:value-of select="(//rec | //sub) ! position()" separator=","/></out>`, true},
 	{`<out><xsl:value-of select="(/doc/rec | //sub)[. = 't3']" separator=","/></out>`, false},
 	// The analysis does not trust (A | B)/C: no plan is built.
 	{`<out><xsl:value-of select="(/doc/rec | /doc/w)/rec/@v" separator=","/></out>`, false},
