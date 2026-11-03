@@ -288,6 +288,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		return b.mapOp(el, f)
 	case "map-entry":
 		return b.mapEntryOp(el, f)
+	case "result-document":
+		return b.resultDocOp(el, f) // streamresult.go
 	}
 	if el.Attr("", "select") != nil {
 		switch local {
@@ -641,6 +643,9 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		}
 		if local == "try" {
 			return b.tryMotionless(el, f)
+		}
+		if local == "result-document" {
+			return b.resultDocAttrs(el, f) && b.content(el, f) // streamresult.go
 		}
 		if b.noIdent && (local == "sequence" || local == "variable") {
 			// They could hand the copy on as the node it stands for.
@@ -1286,6 +1291,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	}
 	i.stream.count()
 	sig, mark := signature(out), rt.localsMark()
+	undoSecondary := rt.secondaryMark() // streamresult.go
 	n0, b0 := xpathleaf.Charged(rt.ctx)
 	// At the top of a sequence (the principal result's raw nodes, a
 	// variable's, a function's) the tree keeps the source's own nodes where
@@ -1331,6 +1337,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 		return true, fmt.Errorf("streaming: internal error after output was written: %w", err)
 	}
 	unread()
+	undoSecondary()
 	terr := i.executeTree(rt, out, href)
 	if terr == nil && !clean {
 		streamtrace.Guard()

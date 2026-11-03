@@ -1277,6 +1277,7 @@ func (c *compiler) compileResultDocument(n *xdm.Node, ns xpath.NamespaceResolver
 			return nil, fmt.Errorf("in xsl:result-document/@format: %w", err)
 		}
 		instr.format = a
+		c.noteStreamAVT(n, a, ns) // streamresult.go
 	}
 	// Serialisation attributes written on the instruction itself override
 	// whatever the selected definition supplies, so they are kept separately
@@ -1302,6 +1303,7 @@ func (c *compiler) compileResultDocument(n *xdm.Node, ns xpath.NamespaceResolver
 			return nil, fmt.Errorf("in xsl:result-document/@%s: %w", a.Name().Local, err)
 		}
 		instr.overrideAVTs[a.Name().Local] = t
+		c.noteStreamAVT(n, t, ns) // streamresult.go
 	}
 	// §19.2.2: a result document is a document node, and validation on it is
 	// document-node validation — the sole element child is assessed, and the
@@ -1318,6 +1320,7 @@ func (c *compiler) compileResultDocument(n *xdm.Node, ns xpath.NamespaceResolver
 			return nil, fmt.Errorf("in xsl:result-document/@href: %w", err)
 		}
 		instr.href = a
+		c.noteStreamAVT(n, a, ns) // streamresult.go
 	}
 
 	body, err := c.compileSequence(n, n)
