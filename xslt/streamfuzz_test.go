@@ -592,6 +592,9 @@ func (g *fuzzGen) coreContent(esc func(string) string) (string, bool) {
 }
 
 func fuzzMake(seed int64) fuzzCase {
+	if fuzzIsValid(seed) {
+		return fuzzMakeValid(seed) // streamvalidfuzz_test.go
+	}
 	if fuzzIsHold(seed) {
 		return fuzzMakeHold(seed) // streamholdfuzz_test.go
 	}
@@ -879,6 +882,15 @@ func TestStreamFuzz(t *testing.T) {
 		}
 		if groups > 0 {
 			tally["streamed: a grouping ran"]++
+		}
+		if c.kind == "valid" {
+			tally["validated shapes"]++ // streamvalidfuzz_test.go
+			if co.trace.Streamed() > 0 {
+				tally["streamed: validated shapes"]++
+			}
+			if co.err != "" && co.trace.Reruns > 0 {
+				tally["validated shapes: invalid, the tree's error"]++
+			}
 		}
 		if c.kind == "hold" {
 			tally["hold shapes"]++ // streamholdfuzz_test.go
