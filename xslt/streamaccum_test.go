@@ -289,3 +289,51 @@ func TestStreamAccumItemLimit(t *testing.T) {
 		t.Errorf("the limits should refuse some runs and pass others: %d refused, %d passed", refused, passed)
 	}
 }
+
+// TestStreamAccumMemory: a running total and the positions of some records,
+// over 150,000 records, take a small part of the tree's peak heap, as a
+// container and through TransformReader: the observer holds a value per
+// open element, not one per node.
+func TestStreamAccumMemory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("memory test")
+	}
+	var b strings.Builder
+	b.WriteString("<doc>")
+	for i := range 150000 {
+		fmt.Fprintf(&b, `<t v="%d"><n>%d</n><n x="1">x</n></t>`, i%100, i%10)
+	}
+	b.WriteString("</doc>")
+	doc := b.String()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const decls = `<xsl:accumulator name="n" as="xs:integer" initial-value="0" streamable="yes">
+	  <xsl:accumulator-rule match="t" select="$value + 1"/></xsl:accumulator>
+	<xsl:accumulator name="s" as="xs:integer" initial-value="0" streamable="yes">
+	  <xsl:accumulator-rule match="t" select="$value + xs:integer(@v)"/></xsl:accumulator>
+	<xsl:mode streamable="yes" use-accumulators="#all"/>`
+	for _, body := range []string{
+		`<xsl:for-each select="doc/t"/><out n="{accumulator-after('n')}" s="{accumulator-after('s')}"/>`,
+		`<out><xsl:for-each select="doc/t[@v = '0']"><p n="{accumulator-before('n')}" s="{accumulator-before('s')}"/></xsl:for-each></out>`,
+	} {
+		var st streamtrace.Counts
+		sheet := coreSheetWith(decls, body)
+		core := splitPeak(func() { _, _, st = coreRun(sheet, dir, true, TransformOptions{}) })
+		tree := splitPeak(func() { coreRun(sheet, dir, false, TransformOptions{}) })
+		msheet := mainSheet(decls + `<xsl:template match="/">` + body + `</xsl:template>`)
+		var mt streamtrace.Counts
+		main := splitPeak(func() { _, mt = mainRun(msheet, doc, true, TransformOptions{}) })
+		mtree := splitPeak(func() { mainRun(msheet, doc, false, TransformOptions{}) })
+		t.Logf("%s: core %.1f MB, tree %.1f MB; TransformReader %.1f MB, Parse + Transform %.1f MB", body,
+			float64(core)/1e6, float64(tree)/1e6, float64(main)/1e6, float64(mtree)/1e6)
+		if st.Runs[streamtrace.Core] != 1 || st.Reruns != 0 || mt.Runs[streamtrace.Main] != 1 {
+			t.Errorf("%s: trace %+v, main %+v", body, st, mt)
+		}
+		if !raceEnabled && (float64(core) > 0.1*float64(tree) || float64(main) > 0.1*float64(mtree)) {
+			t.Errorf("%s: peak live heap core %.1f MB (tree %.1f), TransformReader %.1f MB (tree %.1f): bound 10%%",
+				body, float64(core)/1e6, float64(tree)/1e6, float64(main)/1e6, float64(mtree)/1e6)
+		}
+	}
+}
