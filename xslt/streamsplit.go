@@ -1782,6 +1782,13 @@ func (s *streamSplit) loopAt(ctx *xpath.Context, c *xdmstream.Cursor, d int, g *
 func (r *splitRun) run(v *xdm.Node, d int) error {
 	s, c := r.s, r.c
 	if s.ctxItem {
+		if s.atomize && v != nil && typedValue(s, v) { // streamvalidin.go
+			items, err := groundAtomized(c)
+			if err != nil {
+				return err
+			}
+			return r.take(items)
+		}
 		if s.atomize {
 			t, err := c.Text()
 			if err != nil {
@@ -1964,6 +1971,17 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					return err
 				}
 			case matchText:
+				if typedValue(s, ev.Node) { // streamvalidin.go
+					items, err := groundAtomized(c)
+					if err != nil {
+						return err
+					}
+					decided = true
+					if err := r.take(items); err != nil {
+						return err
+					}
+					break
+				}
 				t, err := c.Text()
 				if err != nil {
 					return err

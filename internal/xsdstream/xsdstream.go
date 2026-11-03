@@ -87,3 +87,10 @@ func Source(ctx context.Context) any {
 	}
 	return ctx.Value(sourceKey{})
 }
+
+// MarkSource tells resolver (an *xslt.FileResolver) that the document at
+// uri, which it holds as a tree, is one the conformance harness validated
+// against schema (an *xsd.Schema) with the document node as the root, and
+// that a validating xsl:source-document may read it on a stream all the same,
+// validating it so first. Package xslt sets it; it is not API.
+var MarkSource func(resolver any, uri string, schema any)

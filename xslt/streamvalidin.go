@@ -1,0 +1,371 @@
+package xslt
+
+// Validating a streamed document as the cursor reads it (lane H1): what
+// assessSource does to the tree of an xsl:source-document or a merge
+// source, and what the conformance harness does to a principal input it
+// gives as validated.
+//
+// The validator (xsd, through internal/xsdstream) is the cursor's first
+// observer: it types the parse's records as it meets them, so every view,
+// grounded copy and leaf copy of them carries the typing the tree's typed
+// copy has, and it adds the attributes the schema supplies by default to
+// the start tags. A document is known to be valid only at its end; until
+// then the run goes on, and a failure is the run's error: the container
+// re-runs on the tree (executeStream, the merge's re-run), which raises the
+// tree's error with its code, its message and in its order -- including
+// when the body failed first, since the tree validates before it runs the
+// body. So the stream must be exact on a valid document and exact about
+// whether a document is valid; the error text is the tree's.
+//
+// What the tree's copy is besides typed is the stream's too: no document
+// URI (streamDocAs), no DTD (a document whose prolog may hold a DOCTYPE is
+// left to the tree, decided before anything runs: ENTITY validation reads
+// the DTD the copy does not have), and ignorable whitespace kept for an
+// element-rooted validation and dropped for a document-rooted one.
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"github.com/knroy/go-xml/v2/internal/xdmstream"
+	"github.com/knroy/go-xml/v2/internal/xsdstream"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xsd"
+)
+
+// A document the harness gives as validated, and preloads as a typed tree,
+// may be read again on a stream by a validating xsl:source-document: the
+// harness marks it (xsdstream.MarkSource), and the stream repeats its
+// validation first.
+func init() {
+	xsdstream.MarkSource = func(resolver any, uri string, schema any) {
+		r, ok := resolver.(*FileResolver)
+		if !ok || schema == nil {
+			return
+		}
+		path, err := r.resolvePath(uri, "")
+		if err != nil {
+			return
+		}
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.preValid == nil {
+			r.preValid = map[string]any{}
+		}
+		r.preValid[path] = schema
+	}
+}
+
+// preValidation is the schema the harness marked the document at uri with,
+// or nil.
+func (r *FileResolver) preValidation(uri, base string) any {
+	path, err := r.resolvePath(uri, base)
+	if err != nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.preValid[path]
+}
+
+// streamValidation is how a document is validated on the stream.
+type streamValidation struct {
+	// schema and mode are the validation, when there is an assessment;
+	// pre is a validation that comes first, the document node the root:
+	// the harness's (preloadSources, annotate), with its own schema.
+	schema, pre any
+	mode        xsdstream.Mode
+	// docIDs is the ID/IDREF check XSLT applies over the typed document
+	// (checkDocumentIDs): validation strict and lax.
+	docIDs bool
+	// marked says the resolver holds the tree the harness validated, which
+	// the stream reads again (wantsBursts would decline it).
+	marked bool
+}
+
+// streamedValidation says how spec's validation of the document at href is
+// made on the stream: nil for none (validation="strip", the default); ok
+// false when it cannot be, and the tree does it.
+func (spec validationSpec) streamedValidation(rt *runtime, br burstResolver, href, base string) (sv *streamValidation, ok bool) {
+	if spec.isDefault() {
+		return nil, true
+	}
+	fr, isFile := br.(*FileResolver)
+	if !isFile || rt.sheet.stripTypeAnnotations || fr.prologMayHaveDTD(href, base) {
+		return nil, false
+	}
+	sv = &streamValidation{pre: fr.preValidation(href, base)}
+	sv.marked = sv.pre != nil
+	schema := any(nil)
+	if rt.sheet.schema != nil {
+		schema = rt.sheet.schema
+	}
+	switch {
+	case spec.typeName != nil:
+		if schema == nil {
+			if spec.typeName.URI != xdm.NSXS {
+				return nil, false // XTSE1660, from the tree
+			}
+			schema = xsd.NewSchema()
+		}
+		if spec.typeName.URI == xdm.NSXS {
+			switch spec.typeName.Local {
+			case "untyped", "anyType":
+				schema = nil // assess strips: untyped
+			case "untypedAtomic":
+				return nil, false
+			}
+		}
+		sv.mode = xsdstream.Mode{Root: xsdstream.Type, Type: *spec.typeName}
+	case spec.mode == validatePreserve:
+		schema = nil // the copy, as read
+	case spec.mode == validateLax:
+		sv.mode, sv.docIDs = xsdstream.Mode{Root: xsdstream.Lax}, true
+	case spec.mode == validateStrict:
+		if schema == nil {
+			return nil, false // XTSE1660, from the tree
+		}
+		sv.mode, sv.docIDs = xsdstream.Mode{Root: xsdstream.Strict}, true
+	}
+	if schema == nil {
+		sv.docIDs = false
+	} else if xsdstream.Refusal(schema) != "" {
+		return nil, false
+	}
+	if sv.pre != nil && xsdstream.Refusal(sv.pre) != "" {
+		return nil, false
+	}
+	sv.schema = schema
+	return sv, true
+}
+
+// attach makes sv the cursor's first observer, strip (xsl:strip-space) or
+// nil the whitespace it strips, and returns what reports the outcome once
+// the cursor has read the document to its end.
+func (sv *streamValidation) attach(c *xdmstream.Cursor, strip func(*xdm.Node) bool) func() error {
+	var vs []xsdstream.Validator
+	if sv.pre != nil {
+		vs = append(vs, xsdstream.Open(sv.pre, xsdstream.Mode{Root: xsdstream.Strict, Doc: true}))
+	}
+	if sv.schema != nil {
+		vs = append(vs, xsdstream.Open(sv.schema, sv.mode))
+	}
+	var ids *docIDs
+	if sv.docIDs {
+		ids = &docIDs{owners: map[string]uint64{}}
+	}
+	c.Observe(func(n *xdm.Node, d int, end bool, ord uint64) {
+		for _, v := range vs {
+			v.Observe(n, d, end)
+		}
+		if ids != nil {
+			ids.observe(n, d, end, ord)
+		}
+	})
+	c.StripWhitespace(validatedStripper(vs, strip, sv.pre != nil))
+	return func() error {
+		for _, v := range vs {
+			if err := v.Err(); err != nil {
+				return fmt.Errorf("XTTE1510: the streamed document is not valid: %w", err)
+			}
+		}
+		if ids != nil {
+			return ids.err
+		}
+		return nil
+	}
+}
+
+// validatedStripper is the cursor's whitespace stripping under validation:
+// ignorable whitespace a document-rooted validation drops, then strip's.
+// With first (a validation made before the stylesheet strips, as the harness
+// makes it), strip spares an element annotated with a simple type
+// (stripCopyNode's exemption) and tells the validation what it stripped.
+func validatedStripper(vs []xsdstream.Validator, strip func(*xdm.Node) bool, first bool) func(*xdm.Node) bool {
+	return func(el *xdm.Node) bool {
+		for _, v := range vs {
+			if v.Drops(el) {
+				return true
+			}
+		}
+		if strip == nil || !strip(el) {
+			return false
+		}
+		if first {
+			if xdm.HasSimpleTypeAnnotation(el.TypeAnnotation()) {
+				return false
+			}
+			vs[0].Stripped(el)
+		}
+		return true
+	}
+}
+
+// docIDs is checkDocumentIDs over the stream: the annotations are those
+// the validator has written by the time it is told of a node.
+type docIDs struct {
+	owners map[string]uint64 // ID value -> its element's ordinal
+	refs   []string
+	dupe   string
+	// text collects the string value of each open element annotated as an
+	// ID or a reference (they have simple content), per depth.
+	text []*strings.Builder
+	err  error
+}
+
+func (x *docIDs) observe(n *xdm.Node, d int, end bool, ord uint64) {
+	if x.err != nil {
+		return
+	}
+	switch {
+	case n == nil:
+		if x.dupe != "" {
+			x.err = fmt.Errorf("XTTE1555: ID value %q is defined more than once in the document", x.dupe)
+			return
+		}
+		for _, r := range x.refs {
+			if _, ok := x.owners[r]; !ok {
+				x.err = fmt.Errorf("XTTE1555: IDREF %q does not match any ID in the document", r)
+				return
+			}
+		}
+	case n.Kind() == xdm.KindElement && !end:
+		for a := range n.Attrs() {
+			x.note(ord, a.TypeAnnotation(), a.Value())
+		}
+		for len(x.text) <= d {
+			x.text = append(x.text, nil)
+		}
+		x.text[d] = nil
+		switch n.TypeAnnotation() {
+		case "ID", "IDREF", "IDREFS":
+			x.text[d] = &strings.Builder{}
+		}
+	case n.Kind() == xdm.KindElement:
+		if d < len(x.text) && x.text[d] != nil {
+			x.note(ord, n.TypeAnnotation(), x.text[d].String())
+			x.text[d] = nil
+		}
+	case n.Kind() == xdm.KindText && d-1 < len(x.text) && x.text[d-1] != nil:
+		x.text[d-1].WriteString(n.Value())
+	}
+}
+
+// note is checkDocumentIDs's noteID and noteRefs for a node of the element
+// whose ordinal is owner.
+func (x *docIDs) note(owner uint64, ann, value string) {
+	switch ann {
+	case "ID":
+		if prev, seen := x.owners[value]; !seen {
+			x.owners[value] = owner
+		} else if prev != owner && x.dupe == "" {
+			x.dupe = value
+		}
+	case "IDREF":
+		x.refs = append(x.refs, value)
+	case "IDREFS":
+		x.refs = append(x.refs, strings.Fields(value)...)
+	}
+}
+
+// prologMayHaveDTD reports whether the document at href may have a
+// DOCTYPE: one before its first element, or a prolog this cannot read
+// (a UTF-16 one, or one past what it looks at).
+func (r *FileResolver) prologMayHaveDTD(href, base string) bool {
+	path, err := r.resolvePath(href, base)
+	if err != nil {
+		return false // the stream reports it as the tree would
+	}
+	may := true
+	_ = r.openConfined(path, func(f *os.File) error {
+		may = prologDTD(bufio.NewReaderSize(io.LimitReader(f, 1<<16), 1<<12))
+		return nil
+	})
+	return may
+}
+
+// prologDTD reads a prolog up to its first element: false only when it
+// meets that element with no DOCTYPE before it.
+func prologDTD(r *bufio.Reader) bool {
+	b, _ := r.Peek(2)
+	if len(b) == 2 && (b[0] == 0xFE && b[1] == 0xFF || b[0] == 0xFF && b[1] == 0xFE) {
+		return true
+	}
+	if b, _ := r.Peek(3); string(b) == "\xEF\xBB\xBF" {
+		r.Discard(3)
+	}
+	for {
+		c, err := r.ReadByte()
+		if err != nil {
+			return true
+		}
+		if c != '<' {
+			continue
+		}
+		next, err := r.Peek(1)
+		if err != nil {
+			return true
+		}
+		switch next[0] {
+		case '?':
+			if !skipPast(r, "?>") {
+				return true
+			}
+		case '!':
+			if b, _ := r.Peek(3); string(b) == "!--" {
+				if !skipPast(r, "-->") {
+					return true
+				}
+				continue
+			}
+			return true // <!DOCTYPE
+		default:
+			return false // the first element
+		}
+	}
+}
+
+// skipPast reads r past the next end.
+func skipPast(r *bufio.Reader, end string) bool {
+	k := 0
+	for {
+		c, err := r.ReadByte()
+		if err != nil {
+			return false
+		}
+		switch {
+		case c == end[k]:
+			k++
+			if k == len(end) {
+				return true
+			}
+		case c == end[0]:
+			k = 1
+		default:
+			k = 0
+		}
+	}
+}
+
+// typedValue reports whether a split that atomizes the element el, a view
+// or the parse's record at its start tag, must take its typed value: el
+// carries a type (only a validated stream types its records) and the split
+// does not want its string value.
+func typedValue(s *streamSplit, el *xdm.Node) bool {
+	return s.tailText != "string" && el != nil && el.Kind() == xdm.KindElement &&
+		xdm.TypingOf(el) != (xdm.Typing{})
+}
+
+// groundAtomized is the typed value of the element the cursor is at: its
+// grounded copy, which has its typing, atomized as the tree atomizes it
+// (FOTY0012 for element-only content).
+func groundAtomized(c *xdmstream.Cursor) (xdm.Sequence, error) {
+	g, err := c.Ground()
+	if err != nil {
+		return nil, err
+	}
+	return xdm.AtomizeChecked(xdm.One(g))
+}

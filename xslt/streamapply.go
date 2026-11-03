@@ -432,7 +432,10 @@ func patternClasses(p *Pattern) (can [numClasses]bool, why string) {
 			c[classElem] = !last.attribute
 			c[classAttr] = last.attribute
 		case *xpath.KindTest:
-			if t.TypeName != "" || t.SchemaDeclared || t.Content != nil || last.namespace {
+			// A type or a schema declaration is matched on the node's own
+			// annotation, which a validated stream has written by the time
+			// the node is matched (streamvalidin.go); an untyped one has none.
+			if t.Content != nil || last.namespace {
 				return can, "pattern " + p.src + ": kind test " + t.String()
 			}
 			switch {
