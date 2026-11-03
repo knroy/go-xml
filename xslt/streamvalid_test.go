@@ -27,5 +27,21 @@ func TestStreamResultValidation(t *testing.T) {
 		} {
 			coreCheck(t, coreSheet(body), dir, name+": "+body, true, TransformOptions{})
 		}
+		// xsl:copy assessing an attribute of the stream against a type: the
+		// validator copies the attribute's whole tree, a view's (si-copy-116,
+		// -117). Refused, or run on a copy: never a guard hit.
+		for _, body := range []string{
+			`<o><xsl:copy select="/*/*/@v" type="xs:decimal"/></o>`,
+			`<o><xsl:copy select="doc/rec[1]/@k" type="xs:date"/></o>`,
+			`<o><xsl:copy select="doc/rec[1]/@v" validation="strict"/></o>`,
+			`<o><xsl:for-each select="doc/rec"><xsl:copy select="@v" type="xs:decimal"/></xsl:for-each></o>`,
+			`<o><xsl:for-each select="doc/rec/@v"><xsl:copy type="xs:decimal"/></xsl:for-each></o>`,
+		} {
+			so, se, st := coreRun(coreSheet(body), dir, true, TransformOptions{})
+			to, te, _ := coreRun(coreSheet(body), dir, false, TransformOptions{})
+			if so != to || se != te || st.Guards != 0 {
+				t.Errorf("%s: %s:\ncore %q %q (%d guard hits)\ntree %q %q", name, body, so, se, st.Guards, to, te)
+			}
+		}
 	}
 }
