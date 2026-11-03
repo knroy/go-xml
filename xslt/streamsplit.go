@@ -139,6 +139,8 @@ type streamSplit struct {
 	// noRoot gives up (errSplitGiveUp) at a match that would ground the
 	// document element: that copy is the tree (C5's streamed copy-of).
 	noRoot bool
+	// hold caps what the split collects at what the tree holds (streamhold.go).
+	hold bool
 }
 
 // splitStream splits e, an expression whose context item is the document
@@ -1482,6 +1484,8 @@ type splitRun struct {
 	// src, for a group split, hands over the members: the walk's context is
 	// then a stand-in at the depth above them, whose children they are.
 	src memberSource
+	// hold is what a holding split has collected (streamhold.go).
+	hold *splitHold
 }
 
 // read is the walk's next event: the cursor's, through the filter f
@@ -2090,6 +2094,11 @@ func (r *splitRun) take(items xdm.Sequence) error {
 	case "":
 		if s.atomize {
 			items = xdm.Atomize(items)
+		}
+		if s.hold {
+			if err := r.holdOn(items); err != nil {
+				return err
+			}
 		}
 		r.items = append(r.items, items...)
 	case "count":

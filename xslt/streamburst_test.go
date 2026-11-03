@@ -261,11 +261,11 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"boolean, not", `<xsl:value-of select="not(boolean(doc/rec/x))"/>`, recs, true, false},
 		{"general comparison", `<xsl:value-of select="doc/rec/@v = 10"/>`, recs, true, false},
 		{"value comparison error", `<xsl:value-of select="doc/rec/@v eq 10"/>`, recs, true, true},
-		{"some", `<xsl:value-of select="some $r in doc/rec satisfies $r/@v > 5"/>`, recs, false, false},
-		{"some, type error", `<xsl:value-of select="some $r in doc/rec satisfies $r/@v gt 5"/>`, recs, false, false},
+		{"some", `<xsl:value-of select="some $r in doc/rec satisfies $r/@v > 5"/>`, recs, true, false},             // held at the document node (streamhold.go)
+		{"some, type error", `<xsl:value-of select="some $r in doc/rec satisfies $r/@v gt 5"/>`, recs, true, true}, // held at the document node (streamhold.go)
 		{"literal position", `<xsl:value-of select="(doc/rec/@v)[2] + 1"/>`, recs, true, false},
 		{"head", `<xsl:copy-of select="head(doc/rec/@k/string())"/>`, recs, true, false},
-		{"exactly-one error", `<xsl:copy-of select="exactly-one(doc/rec)"/>`, recs, false, false},
+		{"exactly-one error", `<xsl:copy-of select="exactly-one(doc/rec)"/>`, recs, true, true}, // held at the document node (streamhold.go)
 		{"deep-equal", `<xsl:value-of select="deep-equal(doc/rec/@k/string(), ('a', 'B', 'a'))"/>`, recs, true, false},
 		{"cast", `<xsl:value-of select="xs:string(doc/rec[@k = 'B']/@v)"/>`, recs, true, false},
 		{"positional within the record", `<xsl:value-of select="count(doc/rec/x[1])"/>`, recs, true, false},
@@ -274,12 +274,12 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"simple map", `<xsl:value-of select="doc/rec/@k ! string()"/>`, recs, true, false}, // the path doc/rec/@k/string() (M6)
 		{"string-join", `<xsl:value-of select="string-join(doc/rec/@k, '-')"/>`, recs, true, false},
 		{"copy-of path", `<out><xsl:copy-of select="doc/rec[@v > 2]"/></out>`, recs, true, false},
-		{"copy-of filtered", `<xsl:copy-of select="copy-of(doc/rec)[x = 'r']"/>`, recs, false, false},
+		{"copy-of filtered", `<xsl:copy-of select="copy-of(doc/rec)[x = 'r']"/>`, recs, true, false}, // held at the document node (streamhold.go)
 		{"sequence data", `<xsl:sequence select="doc/rec/x/data()"/>`, recs, true, false},
 		{"for", `<xsl:value-of select="for $v in doc/rec/@v/data() return $v * 2"/>`, recs, true, false},
 		{"path from the items", `<xsl:value-of select="tail(doc/rec)/@v"/>`, recs, false, false},
 		{"path from copies", `<xsl:value-of select="count(copy-of(doc/rec)/x)"/>`, recs, false, false},
-		{"unordered", `<xsl:value-of select="sum(unordered(doc/rec/@v))"/>`, recs, false, false},
+		{"unordered", `<xsl:value-of select="sum(unordered(doc/rec/@v))"/>`, recs, true, false}, // held at the document node (streamhold.go)
 		{"malformed tail", `<xsl:value-of select="doc/rec/@v"/>`, tail, true, true},
 		// the same consumers over values: admitted
 		{"boolean over values", `<xsl:value-of select="not(boolean(doc/rec/x/data()))"/>`, recs, true, true},

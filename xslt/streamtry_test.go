@@ -37,12 +37,13 @@ var tryBodies = []struct {
 	{`<o><xsl:try><xsl:value-of select="avg(/doc/rec/@v)"/><xsl:catch>` + errOut + `</xsl:catch></xsl:try></o>`, true},
 	{`<o><xsl:try select="sum(doc/rec/@v)"><xsl:catch select="'caught', $err:code"/></xsl:try></o>`, true},
 	{`<o><xsl:try><xsl:copy-of select="doc/rec[xs:integer(@v) gt 0]"/><xsl:catch errors="*:FORG0001">` + errOut + `</xsl:catch></xsl:try></o>`, true},
-	{`<o><xsl:try><xsl:value-of select="(doc/rec/@v) treat as xs:integer+"/><xsl:catch errors="*:XPDY0050">t</xsl:catch></xsl:try></o>`, false},
+	{`<o><xsl:try><xsl:value-of select="(doc/rec/@v) treat as xs:integer+"/><xsl:catch errors="*:XPDY0050">t</xsl:catch></xsl:try></o>`, true}, // held (streamhold.go)
 	{`<o><xsl:try><xsl:value-of select="round(avg(doc/rec[position() lt 3]/@v), 2)"/><xsl:catch>c</xsl:catch></xsl:try></o>`, true},
 	// treat as tests the items, not their values: an atomized P would
-	// fail it (XPDY0050) where the tree does not.
-	{`<o><xsl:value-of select="sum((doc/rec/@v) treat as attribute()+)"/></o>`, false},
-	{`<o><xsl:try><xsl:value-of select="sum((doc/rec/@v) treat as attribute()+)"/><xsl:catch errors="*:XPDY0050">t</xsl:catch></xsl:try></o>`, false},
+	// fail it (XPDY0050) where the tree does not; the attributes are held
+	// (streamhold.go).
+	{`<o><xsl:value-of select="sum((doc/rec/@v) treat as attribute()+)"/></o>`, true},
+	{`<o><xsl:try><xsl:value-of select="sum((doc/rec/@v) treat as attribute()+)"/><xsl:catch errors="*:XPDY0050">t</xsl:catch></xsl:try></o>`, true},
 	// A catch that does not match: the error goes on (re-run on the tree).
 	{`<o><xsl:try><xsl:value-of select="sum(doc/rec/@v)"/><xsl:catch errors="*:XTDE0000">no</xsl:catch></xsl:try></o>`, true},
 	// A try in a loop's body, per match; the catch writes the match's view.
