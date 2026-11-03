@@ -271,7 +271,7 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"positional within the record", `<xsl:value-of select="count(doc/rec/x[1])"/>`, recs, true, false},
 		{"positional record", `<xsl:copy-of select="doc/rec[2]"/>`, recs, true, false},
 		// pipelined
-		{"simple map", `<xsl:value-of select="doc/rec/@k ! string()"/>`, recs, false, false},
+		{"simple map", `<xsl:value-of select="doc/rec/@k ! string()"/>`, recs, true, false}, // the path doc/rec/@k/string() (M6)
 		{"string-join", `<xsl:value-of select="string-join(doc/rec/@k, '-')"/>`, recs, true, false},
 		{"copy-of path", `<out><xsl:copy-of select="doc/rec[@v > 2]"/></out>`, recs, true, false},
 		{"copy-of filtered", `<xsl:copy-of select="copy-of(doc/rec)[x = 'r']"/>`, recs, false, false},

@@ -168,7 +168,8 @@ func TestStreamTrustReproducers(t *testing.T) {
 			// The record loop streams, and since M2 so do the controls that
 			// apply templates in a verified streamable mode.
 			mustStream := tc.name == "control: record loop" ||
-				strings.HasPrefix(tc.name, "M") && strings.Contains(tc.name, "control")
+				strings.HasPrefix(tc.name, "M") && strings.Contains(tc.name, "control") ||
+				tc.name == "F1d control: motionless attribute set" // since M6
 			if burstRuns != mustStream {
 				t.Fatalf("streamed path taken: %v", burstRuns)
 			}
