@@ -812,7 +812,8 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 	case *xpath.InstanceOfExpr:
 		return w.slot(x.Operand, func(y xpath.Expr) { x.Operand = y }, useKeep)
 	case *xpath.TreatExpr:
-		return w.slot(x.Operand, func(y xpath.Expr) { x.Operand = y }, use)
+		// The treat tests the items as they are: nodes, not their values.
+		return w.slot(x.Operand, func(y xpath.Expr) { x.Operand = y }, useKeep)
 	case *xpath.IfExpr:
 		return w.slot(x.Cond, func(y xpath.Expr) { x.Cond = y }, useEBV) &&
 			w.noPath(x.Then, use, "the consuming path in a branch below the top") &&
