@@ -25,7 +25,11 @@ package xslt
 //     rule's copy of a leaf or an attribute, a deep-copy's grounded element,
 //     an attribute rule's): Result.Nodes would hold a copy where the tree's
 //     holds the source's own node, which a source-document run sends to the
-//     tree; refused by linkMain, and caught at run time if it slips through;
+//     tree; refused by linkMain, and caught at run time if it slips through.
+//     So is one at the top of an xsl:result-document's body, which
+//     SecondaryResult.Nodes holds as it is (keptStreamNode): a built-in's
+//     attribute or deep copy there (a leaf's copy is a new node, as in a
+//     container), and an xsl:sequence (resultKeeps);
 //   - a select at the document node that gives up (errSplitGiveUp), which a
 //     source-document run evaluates on its tree: refused by linkMain.
 //
@@ -132,20 +136,49 @@ func (s *streamSplit) givesUp() bool {
 
 // atTop reports whether what the instruction el writes may be an item of
 // the result of the template rule it is in: no constructor holds it.
-func atTop(el *xdm.Node) bool {
+func atTop(el *xdm.Node) bool { return topOf(el) == "template" }
+
+// atResultTop reports whether what el writes may be an item of the body of
+// an xsl:result-document, which SecondaryResult.Nodes holds as it is.
+func atResultTop(el *xdm.Node) bool { return topOf(el) == "result-document" }
+
+// topOf names the sequence what el writes may be an item of: "template"
+// (the rule's result), "result-document" (its body), or "" when a
+// constructor holds it.
+func topOf(el *xdm.Node) string {
 	for n := el.Parent(); n != nil && n.Kind() == xdm.KindElement; n = n.Parent() {
 		if n.Name().URI != xdm.NSXSL {
-			return false // a literal result element
+			return "" // a literal result element
 		}
-		switch n.Name().Local {
-		case "template":
-			return true
+		switch l := n.Name().Local; l {
+		case "template", "result-document":
+			return l
 		case "element", "copy", "document", "attribute", "comment", "processing-instruction", "namespace",
-			"value-of", "message", "result-document", "variable", "param", "with-param":
-			return false
+			"value-of", "message", "variable", "param", "with-param":
+			return ""
 		}
 	}
-	return true
+	return "template"
+}
+
+// resultKeeps says why a node of the stream may be an item of the body of
+// an xsl:result-document in el, a template rule, or "": an instruction there
+// that returns the items it selects as they are. A container re-runs on its
+// tree when one is (keptStreamNode); a principal input has none, so
+// linkMain refuses it. The built-in rules' copies are linkMain's top.
+func resultKeeps(el *xdm.Node) string {
+	for d := range el.Descendants() {
+		if d.Kind() != xdm.KindElement || d.Name().URI != xdm.NSXSL {
+			continue
+		}
+		switch d.Name().Local {
+		case "sequence", "on-empty", "on-non-empty", "break", "on-completion":
+			if atResultTop(d) {
+				return elName(d) + " in xsl:result-document may return a node of the stream"
+			}
+		}
+	}
+	return ""
 }
 
 // streamsMain reports whether TransformReader streams its document under

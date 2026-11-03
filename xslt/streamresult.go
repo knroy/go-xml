@@ -20,6 +20,7 @@ package xslt
 //     is (SecondaryResult.Nodes holds it); a node of the stream there (a
 //     view, a grounded copy) is not that node, so the container runs on the
 //     tree instead (errKeptStreamNode), as a container's own result does.
+//     A principal input has no tree: linkMain refuses such a body.
 
 import (
 	"strings"

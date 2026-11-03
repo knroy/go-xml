@@ -421,7 +421,9 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 //     item a grounded one), no accumulator, no input-type-annotations="strip";
 //   - the result keeps no node of the document itself: no built-in rule
 //     copies a node of it to the top of the principal result, where
-//     Result.Nodes would hold the document's own node;
+//     Result.Nodes would hold the document's own node, or to the top of an
+//     xsl:result-document's body (SecondaryResult.Nodes), where no
+//     xsl:sequence is either;
 //   - the stylesheet is a single module, as for a streamed
 //     xsl:source-document.
 //

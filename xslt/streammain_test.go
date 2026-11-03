@@ -43,7 +43,12 @@ func mainRun(sheet, doc string, streamed bool, opts TransformOptions) (out strin
 	if err != nil {
 		return "error: " + err.Error(), tr
 	}
-	return res.String() + "\n" + nodesShape(res.Nodes), tr
+	out = res.String() + "\n" + nodesShape(res.Nodes)
+	for i := range res.Secondary {
+		sr := &res.Secondary[i]
+		out += "\n" + sr.Href + ": " + sr.String()
+	}
+	return out, tr
 }
 
 // nodesShape describes each item of nodes: kind, name, value, parent, root,
@@ -121,6 +126,19 @@ var mainCases = []struct {
 	{`<xsl:mode streamable="yes" on-no-match="deep-copy"/><xsl:template match="/*"><o><xsl:apply-templates/></o></xsl:template>`, false},
 	// A max at the document node may give up for the tree to answer.
 	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:value-of select="max(//rec/@v)"/></o></xsl:template>`, false},
+	// A secondary result holds the items of its body as they are, as
+	// Result.Nodes does: a node of the stream there is not the tree's, and
+	// a principal input has no tree to re-run on. A copy (a built-in's of a
+	// leaf too, as in a container), or a node inside a literal result
+	// element, is the result's own.
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><xsl:result-document href="r.xml"><xsl:sequence select="."/></xsl:result-document></xsl:template>`, false},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><xsl:result-document href="r.xml"><xsl:sequence select="copy-of(.)"/></xsl:result-document></xsl:template>`, false},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><xsl:result-document href="r.xml"><xsl:sequence select="text()"/></xsl:result-document></xsl:template>`, false},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/*"><xsl:result-document href="r.xml"><xsl:apply-templates select="@*"/></xsl:result-document></xsl:template>`, false},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><xsl:result-document href="r.xml"><o><xsl:sequence select="."/></o></xsl:result-document></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><xsl:result-document href="r.xml"><xsl:copy-of select="."/></xsl:result-document></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/*"><xsl:result-document href="r.xml"><xsl:apply-templates/></xsl:result-document></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/*"><xsl:result-document href="r.xml"><o><xsl:apply-templates/></o></xsl:result-document></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

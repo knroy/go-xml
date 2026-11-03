@@ -274,6 +274,8 @@ type rulePlan struct {
 	// attribute, why the body reads more than it has).
 	x   [numClasses]*streamExec
 	why [numClasses]string
+	// keeps is resultKeeps of the body (streammain.go).
+	keeps string
 }
 
 // rulesPlan is the record of the trusting walk over the rules of every
@@ -331,6 +333,7 @@ func (c *compiler) planRule(el *xdm.Node, p *Pattern, from int) *rulePlan {
 	}
 	r := &rulePlan{}
 	r.can, r.pattern = patternClasses(p)
+	r.keeps = resultKeeps(el)
 	kids := el.ChildElements()
 	for cl := range numClasses {
 		if !r.can[cl] {
@@ -530,12 +533,21 @@ func (x *streamExec) eachApply(fn func(*streamOp)) {
 }
 
 // modeClass is a mode handed a class of node; top says at the top of the
-// principal result (linkMain).
+// principal result, or of an xsl:result-document's body (linkMain).
 type modeClass struct {
 	mode  string
 	class nodeClass
-	top   bool
+	top   topKind
 }
+
+// topKind is where what a rule returns goes as it is, for linkMain.
+type topKind uint8
+
+const (
+	notTop    topKind = iota
+	mainTop           // the principal result (Result.Nodes)
+	resultTop         // a secondary result (SecondaryResult.Nodes)
+)
 
 // linkApply checks what the apply ops of x reach, transitively: each mode
 // streamable and verified by rs's walk, its built-in rule one the stream
@@ -552,7 +564,7 @@ func (s *Stylesheet) linkApply(x *streamExec, rs *rulesPlan) string {
 // (Result.Nodes), and nothing at the document node that would fall back to
 // a tree there is none of.
 func (s *Stylesheet) linkMain(m string, rs *rulesPlan) string {
-	return s.link(rs, nil, modeClass{m, classDoc, true})
+	return s.link(rs, nil, modeClass{m, classDoc, mainTop})
 }
 
 // link is linkApply from the apply ops of x, or, x nil, linkMain from main.
@@ -562,7 +574,7 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 	}
 	seen := map[modeClass]bool{}
 	var work []modeClass
-	add := func(m string, cl nodeClass, top bool) {
+	add := func(m string, cl nodeClass, top topKind) {
 		if k := (modeClass{m, cl, top}); !seen[k] {
 			seen[k] = true
 			work = append(work, k)
@@ -570,12 +582,12 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 	}
 	type visitKey struct {
 		x   *streamExec
-		top bool
+		top topKind
 	}
 	visited := map[visitKey]bool{}
 	var why string
 	streamed := x == nil // a principal input: no tree to fall back to
-	visit := func(x *streamExec, top bool) {
+	visit := func(x *streamExec, top topKind) {
 		if visited[visitKey{x, top}] {
 			return
 		}
@@ -601,7 +613,15 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 			if len(modes) == 0 && why == "" {
 				why = elName(op.el) + ": no template rule's mode to name"
 			}
-			t := top && atTop(op.el)
+			// A secondary result holds its body's items as Result.Nodes
+			// does (SecondaryResult.Nodes).
+			t := notTop
+			switch {
+			case streamed && atResultTop(op.el):
+				t = resultTop
+			case atTop(op.el):
+				t = top
+			}
 			for _, m := range modes {
 				switch op.apply {
 				case applyKids:
@@ -620,7 +640,7 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 		})
 	}
 	if x != nil {
-		visit(x, false)
+		visit(x, notTop)
 	} else {
 		add(main.mode, main.class, main.top)
 	}
@@ -633,13 +653,20 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 		}
 		nm := s.modeNoMatch[k.mode]
 		copies := nm == "shallow-copy" || nm == "copy" || nm == "deep-copy"
-		if k.top && (copies && k.class != classDoc && (k.class != classElem || nm == "deep-copy")) {
+		// A built-in's copy of a leaf in a secondary result is a new node,
+		// as a container's is there (keptStreamNode): its bytes are the
+		// tree's; SecondaryResult.Nodes holds the copy, not the source's.
+		if k.top != notTop && (copies && k.class != classDoc && (k.class != classElem || nm == "deep-copy")) &&
+			(k.top == mainTop || k.class != classLeaf) {
 			return label() + ": the built-in " + nm + " would put a node of the stream at the top of the result"
 		}
 		if k.class == classElem || k.class == classDoc {
 			// Inside the copy a shallow-copy makes, its descent is not at
 			// the top of the result.
-			in := k.top && nm != "shallow-copy" && nm != "copy"
+			in := k.top
+			if nm == "shallow-copy" || nm == "copy" {
+				in = notTop
+			}
 			switch nm {
 			case "", "text-only-copy", "deep-skip":
 			case "shallow-copy", "copy", "shallow-skip":
@@ -673,6 +700,8 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 				continue
 			case r.why[k.class] != "":
 				return label() + ": rule " + t.Match.String() + ": " + r.why[k.class]
+			case streamed && r.keeps != "":
+				return label() + ": rule " + t.Match.String() + ": " + r.keeps
 			}
 			if x := r.x[k.class]; x != nil {
 				visit(x, k.top)
