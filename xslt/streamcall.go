@@ -414,3 +414,55 @@ func isLiteralArg(a xpath.Expr) bool {
 	}
 	return false
 }
+
+// useSets checks a, a use-attribute-sets attribute (xsl:use-attribute-sets
+// on a literal result element) of el at focus f: every set it names is
+// declared streamable, and its xsl:attribute instructions, and the sets
+// they use in turn, are motionless at f (§19.8.4.4: a streamable attribute
+// set is motionless). They then run as the tree runs them, on the view.
+func (b *streamBuilder) useSets(el, a *xdm.Node, f vfocus) bool {
+	lre := el.Name().URI != xdm.NSXSL
+	if n := a.Name(); n.Local != "use-attribute-sets" || lre && n.URI != xdm.NSXSL ||
+		!lre && (n.URI != "" || !isXSL(el, "element") && !isXSL(el, "copy")) {
+		return false
+	}
+	sets := attributeSetDeclarations(documentElementOf(el))
+	return b.setsOK(el, a.Value(), f, sets, map[xdm.QName]bool{})
+}
+
+func (b *streamBuilder) setsOK(el *xdm.Node, names string, f vfocus, sets map[xdm.QName][]*xdm.Node, seen map[xdm.QName]bool) bool {
+	for _, n := range strings.Fields(names) {
+		q, err := resolveQNameAttr(el, n)
+		if err != nil || len(sets[q]) == 0 {
+			return b.refuse("attribute set " + n)
+		}
+		if seen[q] {
+			continue
+		}
+		seen[q] = true
+		for _, d := range sets[q] {
+			if !isYes(strings.TrimSpace(d.AttrValue("streamable"))) {
+				return b.refuse("attribute set " + n + " is not streamable")
+			}
+			for a := range d.Attrs() {
+				switch a.Name().Local {
+				case "name", "streamable", "visibility":
+				case "use-attribute-sets":
+					if !b.setsOK(d, a.Value(), f, sets, seen) {
+						return false
+					}
+				default:
+					if a.Name().URI == "" {
+						return b.refuse("attribute " + a.Name().Local + " of xsl:attribute-set")
+					}
+				}
+			}
+			for ch := range d.Children() {
+				if ch.Kind() == xdm.KindElement && (!isXSL(ch, "attribute") || !b.motionless(ch, f)) {
+					return b.refuse("attribute set " + n + ": " + elName(ch))
+				}
+			}
+		}
+	}
+	return true
+}

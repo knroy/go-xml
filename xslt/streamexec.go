@@ -333,7 +333,7 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 func (b *streamBuilder) avtOps(el *xdm.Node, f vfocus) bool {
 	var op *streamOp
 	for a := range el.Attrs() {
-		if !lreAttrOK(a) {
+		if !lreAttrOK(a) && !b.useSets(el, a, f) {
 			return b.refuse("attribute xsl:" + a.Name().Local)
 		}
 		if a.Name().URI == xdm.NSXSL || !strings.ContainsAny(a.Value(), "{}") {
@@ -664,7 +664,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 	for a := range el.Attrs() {
 		name := a.Name()
 		if !xslEl {
-			if !lreAttrOK(a) {
+			if !lreAttrOK(a) && !b.useSets(el, a, f) {
 				return b.refuse("attribute xsl:" + name.Local)
 			}
 			if !b.avt(el, a.Value(), f) {
@@ -675,7 +675,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 		if name.URI != "" {
 			continue
 		}
-		if !streamAttrsOK[name.Local] {
+		if !streamAttrsOK[name.Local] && !b.useSets(el, a, f) {
 			return b.refuse("attribute " + name.Local + " of " + elName(el))
 		}
 		switch name.Local {

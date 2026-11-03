@@ -83,3 +83,38 @@ func TestStreamCallMatchesTree(t *testing.T) {
 		t.Error("nothing streamed without a re-run")
 	}
 }
+
+// TestStreamAttributeSets: streamable attribute sets on streamed literal
+// result elements and xsl:element run on the view, as the tree runs them;
+// a set that reads content, or is not streamable, leaves the container on
+// the tree.
+func TestStreamAttributeSets(t *testing.T) {
+	decls := `<xsl:attribute-set name="s1" streamable="yes"><xsl:attribute name="n" select="name()"/><xsl:attribute name="k" select="@k"/></xsl:attribute-set>
+<xsl:attribute-set name="s2" streamable="yes" use-attribute-sets="s1"><xsl:attribute name="d" select="count(ancestor::*)"/></xsl:attribute-set>
+<xsl:attribute-set name="s2" streamable="yes"><xsl:attribute name="v" select="xs:integer(@v)"/></xsl:attribute-set>
+<xsl:attribute-set name="deep" streamable="yes"><xsl:attribute name="c" select="count(sub)"/></xsl:attribute-set>
+<xsl:attribute-set name="plain"><xsl:attribute name="p" select="1"/></xsl:attribute-set>`
+	dir := t.TempDir()
+	streamed := 0
+	for name, doc := range map[string]string{"flat": coreDocs["flat"], "ns": coreDocs["ns"], "nan": tryDocs["nan3"], "bad": tryDocs["bad"]} {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range []struct {
+			body   string
+			stream bool
+		}{
+			{`<o><xsl:for-each select="*/*"><r xsl:use-attribute-sets="s1"><xsl:copy-of select="sub"/></r></xsl:for-each></o>`, true},
+			{`<o><xsl:for-each select="*/*"><xsl:element name="r" use-attribute-sets="s2"><xsl:value-of select="."/></xsl:element></xsl:for-each></o>`, true},
+			{`<o xsl:use-attribute-sets="s1"><xsl:value-of select="count(//sub)"/></o>`, false}, // @k of the document node
+			{`<o><xsl:for-each select="*/*"><r xsl:use-attribute-sets="deep"/></xsl:for-each></o>`, false},
+			{`<o><xsl:for-each select="*/*"><r xsl:use-attribute-sets="plain"><xsl:copy-of select="sub"/></r></xsl:for-each></o>`, false},
+		} {
+			where := fmt.Sprintf("doc %s, body %s", name, c.body)
+			streamed += coreCheck(t, coreSheetWith(decls, c.body), dir, where, c.stream, TransformOptions{})
+		}
+	}
+	if streamed == 0 {
+		t.Error("nothing streamed without a re-run")
+	}
+}
