@@ -1022,6 +1022,9 @@ type viewCheck struct {
 	kids, pos, noIdent, key bool
 	acc, after, up, curOK   bool
 	cur                     vfocus
+	// lookup admits $value(k): a lookup in an accumulator's value, a map or
+	// an array by its declared type, which atomizes k.
+	lookup bool
 }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
@@ -1107,6 +1110,16 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		return true
 	case *xpath.FuncCall:
 		return vc.call(x, f, nodeOK)
+	case *xpath.DynamicCall:
+		if !vc.lookup || !isVarRef(x.Target, xdm.QName{Local: "value"}) {
+			return false
+		}
+		for _, a := range x.Args {
+			if !vc.safe(a, f, false) {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }

@@ -34,9 +34,9 @@ var accumDecls = []string{
 	   <xsl:accumulator-rule match="/" phase="end" select="'end:' || $value"/></xsl:accumulator>`,
 	`<xsl:accumulator name="n" as="xs:integer" initial-value="0" streamable="yes">
 	   <xsl:accumulator-rule match="rec" select="$value + 10 idiv (2 - xs:integer(@v))"/></xsl:accumulator>
-	 <xsl:accumulator name="v" initial-value="map{}" streamable="yes" xmlns:map="http://www.w3.org/2005/xpath-functions/map">
+	 <xsl:accumulator name="v" as="map(xs:string, xs:integer)" initial-value="map{}" streamable="yes" xmlns:map="http://www.w3.org/2005/xpath-functions/map">
 	   <xsl:accumulator-rule match="rec">
-	     <xsl:sequence select="map:put($value, string(@k), sum((map:get($value, string(@k)), 1)))"/>
+	     <xsl:sequence select="map:put($value, string(@k), ($value(string(@k)), 0)[1] + 1)"/>
 	   </xsl:accumulator-rule></xsl:accumulator>`,
 }
 

@@ -75,6 +75,10 @@ func accumStreamWhy(def *accumulatorDef) string {
 		return name + ": initial-value " + def.el.AttrValue("initial-value")
 	}
 	atomic := atomicSequenceType(def.el.AttrValue("as"))
+	// A map or array $value is a lookup's target: what it is applied to is
+	// atomized, and what it returns is a value it holds.
+	as := strings.TrimSpace(def.el.AttrValue("as"))
+	lookup := strings.HasPrefix(as, "map(") || strings.HasPrefix(as, "array(")
 	for _, r := range def.rules {
 		can, why := accumPatternClasses(r.match)
 		if why != "" {
@@ -111,7 +115,7 @@ func accumStreamWhy(def *accumulatorDef) string {
 		}
 		for cl, f := range [numClasses]vfocus{classElem: vElem, classLeaf: vLeaf, classDoc: vNone} {
 			if can[cl] && nodeClass(cl) != classAttr &&
-				!(viewCheck{noIdent: true, up: true, curOK: true, cur: f}).safe(e, f, false) {
+				!(viewCheck{noIdent: true, up: true, curOK: true, cur: f, lookup: lookup}).safe(e, f, false) {
 				return name + ": a rule's value reads more than the node has: " + src
 			}
 		}
@@ -210,6 +214,8 @@ func accumValueSafe(e xpath.Expr) bool {
 		return true
 	case *xpath.IfExpr:
 		return accumValueSafe(x.Then) && accumValueSafe(x.Else)
+	case *xpath.DynamicCall:
+		return isVarRef(x.Target, xdm.QName{Local: "value"}) // a value $value holds
 	case *xpath.MapConstructor:
 		for _, v := range x.Values {
 			if !accumValueSafe(v) {
