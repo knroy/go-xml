@@ -380,6 +380,11 @@ func patternExprFreeRangingIn(e xpath.Expr, at *xdm.Node, matchedAllowsChildren 
 	case *xpath.Step:
 		return patternStepFreeRanging(x, at, matchedAllowsChildren)
 
+	case *xpath.ContextItem:
+		// The pattern "." (§5.5.2) has no RootedPath and no predicate, so
+		// §19.8.10 makes it motionless.
+		return false, true
+
 	case *xpath.FilterExpr:
 		// XSLT 3.0 extends the pattern grammar with "." as a PatternAxis-free
 		// alternative, so ".[starts-with(., ':B:')]" is a legal pattern that

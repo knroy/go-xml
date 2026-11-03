@@ -91,6 +91,9 @@ func TestStreamTrustReproducers(t *testing.T) {
 			hdr + mode + `<xsl:template match="rec[fold-right((), ` + sib + `, concat#2) = '3']" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
 		{"M5 rule body unknown", "unverified", nil,
 			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="fold-right((), string(` + sib + `), concat#2)"/></v></xsl:template>` + apply + end, ""},
+		// M8: "." is a motionless pattern (§19.8.10).
+		{"M8 rule pattern . (verified; the planner does not take it)", "verified", nil,
+			hdr + mode + `<xsl:template match="." mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
 		{"M5 control: grounded rule", "verified", nil,
 			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="@k"/></v></xsl:template>` + apply + end, ""},
 		// Another module can add rules or override declarations.
