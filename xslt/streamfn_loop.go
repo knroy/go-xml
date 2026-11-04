@@ -35,6 +35,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -284,13 +285,27 @@ func (i *inlineCallInstr) executeLoop(rt *runtime, out *outputBuilder, f *burstF
 
 // loopOps compiles the loop of in, a loop call at n, in each plan: the
 // path's split, a bare path, the op's instruction in.
-func (c *compiler) loopOps(n *xdm.Node, in *inlineCallInstr, path *xpath.Compiled, ns xpath.NamespaceResolver, plans map[*streamExec]bool) string {
+func (c *compiler) loopOps(n *xdm.Node, in *inlineCallInstr, sel, path *xpath.Compiled, ns xpath.NamespaceResolver, plans map[*streamExec]bool) string {
 	for x := range plans {
 		op := x.ops[n]
 		if op == nil || !op.loop {
 			return "the loop call has no loop op"
 		}
-		split, dead := c.splitFor(path, ns, op.doc, false, op.inGroup, op.key)
+		// path's source is the whole select (WithExpr keeps it), so a
+		// split of it would read the call: the loop path of a fresh parse.
+		lp := freshLoopPath(n, sel, ns)
+		if lp == nil {
+			return "the loop path is not found again"
+		}
+		e, checks := foreignSets(c.inlineCalls(lp))
+		split, dead := splitStreamIn(e, path, op.doc, op.inGroup, op.key)
+		if split != nil {
+			for _, ck := range checks {
+				split.checks = append(split.checks, xpathleaf.WithExpr(path, ck).(*xpath.Compiled))
+			}
+		} else {
+			dead = "split: " + dead
+		}
 		if dead == "" && !split.bare() {
 			dead = "the loop path is not a bare path"
 		}
@@ -301,4 +316,37 @@ func (c *compiler) loopOps(n *xdm.Node, in *inlineCallInstr, path *xpath.Compile
 		x.byInstr[in] = op
 	}
 	return ""
+}
+
+// freshLoopPath is the loop path of n's select sel, parsed again: Q of
+// Q ! f(.), or the call's first argument.
+func freshLoopPath(n *xdm.Node, sel *xpath.Compiled, ns xpath.NamespaceResolver) xpath.Expr {
+	e := reparse(sel, ns)
+	root := documentElementOf(n)
+	if e == nil || root == nil {
+		return nil
+	}
+	x, _ := inlineTarget(e, root)
+	if x == nil {
+		return nil
+	}
+	if sm, ok := e.(*xpath.SimpleMap); ok && sm.Right == xpath.Expr(x) {
+		return sm.Left
+	}
+	return x.Args[0]
+}
+
+// loopRead is e, an expression of a loop call's body (b.sub), with S read
+// as "." (S is the match's view while the body runs, and its focus); e
+// itself elsewhere.
+func (b *streamBuilder) loopRead(e xpath.Expr) xpath.Expr {
+	if e == nil || b.sub == nil || !b.sub.loop {
+		return e
+	}
+	bad := false
+	e2 := dropContextMaps(substS(e, b.sub.param, func() xpath.Expr { return &xpath.ContextItem{} }, &bad))
+	if bad {
+		return e
+	}
+	return e2
 }

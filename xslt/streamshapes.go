@@ -82,6 +82,8 @@ func (s *streamSplit) mapPath(w *splitter, tail, r xpath.Expr, leaf, elem bool, 
 		s.mode = matchView
 	case !s.nests || s.fresh:
 		s.mode = matchGround
+	case s.atomize && climbMapCalls(tail) && climbMapCheck(tail, true) == "": // streamfn_climb.go
+		s.mode = matchGround
 	default:
 		return "simple map " + r.String() + ": nodes of nested matches"
 	}

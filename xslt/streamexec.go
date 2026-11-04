@@ -166,9 +166,10 @@ type streamOp struct {
 	// group says it is an xsl:for-each-group (streamgroup.go), fromGroup
 	// that its population is the current group of the one it is in; inGroup
 	// that it is in the body of one, where current-group() is that group's,
-	// and key that current-grouping-key() is in scope.
-	group, fromGroup, inGroup, key bool
-	keyAttr                        *xdm.QName // a grouping's key attribute (keyAttribute)
+	// and key that current-grouping-key() is in scope; tailGroup that the
+	// population is tail() of that group (streamfn_frame.go).
+	group, fromGroup, inGroup, key, tailGroup bool
+	keyAttr                                   *xdm.QName // a grouping's key attribute (keyAttribute)
 	// groundPop says a grouping's population is grounded: its select is
 	// read as a select op's, the tree's code groups it (groundedGroup).
 	groundPop bool
@@ -864,8 +865,8 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 // expr checks the expression src written on el: it reads of focus f only
 // what f has, and returns nodes of it only where nodeOK.
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
-	e := parseAt(el, src)
-	peek := b.kidsAt(el, e, f) // streamkids_l6.go
+	e := b.loopRead(parseAt(el, src)) // streamfn_loop.go
+	peek := b.kidsAt(el, e, f)        // streamkids_l6.go
 	vc := viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek}
 	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) { // streamcopy_l3doc.go
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)

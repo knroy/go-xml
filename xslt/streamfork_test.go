@@ -297,6 +297,11 @@ func TestStreamDynamicCallTargets(t *testing.T) {
 		decls  string
 		stream bool
 	}{
+		// The function item's focus is the global context item: absent
+		// under TransformReader's streamable initial mode (§2.3.2,
+		// streamglobal_l7.go), so the oracle is TransformReader's fallback
+		// and both raise XTDE3350; the call reads nothing of the stream and
+		// streams (844cd8f5, streamtee_dyncall.go).
 		{globalItemRow + `<xsl:param name="aa" select="accumulator-after#1"/>` + accum +
 			`<xsl:template match="fig"><p n="{accumulator-before('p:n')}"/><xsl:apply-templates/><p><xsl:value-of select="../$aa('p:n')"/></p></xsl:template>`, true},
 		{globalItemRow + `<xsl:param name="aa" select="accumulator-before#1"/>` + accum +

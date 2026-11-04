@@ -147,6 +147,20 @@ func climbMapUp(r xpath.Expr) bool {
 	return up
 }
 
+// climbMapCalls reports whether R holds a call whose body climbs: on nested
+// matches' copies it answers what the tree's nodes do (an ancestor's copy
+// has its name and attributes), so an atomized R, keeping no node, may run
+// on each (climbMapCheck judges R whole).
+func climbMapCalls(r xpath.Expr) bool {
+	climb := false
+	walkExprCalls(r, func(x *xpath.FuncCall) {
+		if sc, ok := sheetCallOf(x); ok && sc.climb {
+			climb = true
+		}
+	})
+	return climb
+}
+
 // climbMapKind is the kind of R, the right of a simple map evaluated on a
 // grounded copy of a match.
 func climbMapKind(r xpath.Expr) (ckind, bool) {
