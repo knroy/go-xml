@@ -244,7 +244,9 @@ func hoistChoice(e xpath.Expr, focus vfocus, key bool) xpath.Expr {
 	if !ok || len(f.Args) != 1 || f.Name.URI != fnNS && f.Name.URI != xdm.NSXS {
 		return e
 	}
-	x, ok := hoistChoice(f.Args[0], focus, key).(*xpath.IfExpr)
+	// The argument may be a map over a choice: simple content's
+	// data((if (c) then A else B) ! R) (splitFor) hoists both ways.
+	x, ok := hoistMapChoice(hoistChoice(f.Args[0], focus, key), focus, key).(*xpath.IfExpr) // streamsplit_k2.go
 	if !ok || !(viewCheck{kids: true, key: key}).safe(x.Cond, focus, true) {
 		return e
 	}
