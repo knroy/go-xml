@@ -73,7 +73,7 @@ func newDeclTrust(root *xdm.Node, shared bool) *declTrust {
 	return &declTrust{
 		shared: shared || reachesOtherModules(root),
 		sets:   attributeSetDeclarations(root),
-		funcs:  collectStreamFuncs(root),
+		funcs:  withPkgFuncs(collectStreamFuncs(root), root), // streampkgfn_l7.go
 		state:  map[any]trustState{},
 	}
 }

@@ -141,6 +141,9 @@ func TestStreamL7UsePackageTrust(t *testing.T) {
 	for i, c := range []struct{ use, body string }{
 		{``, `<b n="{count(//*)}" acc="{accumulator-after('ac')}"/>`},
 		{over, `<b><xsl:value-of select="doc/rec ! f:pick(.) / sub/@x"/></b>`},
+		// su-filter-101: the used package's own f:pick, run as itself
+		// (streampkgfn_l7.go), its $cat the package's.
+		{``, `<b><xsl:value-of select="doc/rec ! f:pick(.) / sub/@x"/></b>`},
 	} {
 		src := strings.Replace(strings.Replace(top, "USE", c.use, 1), "BODY", c.body, 1)
 		dir := t.TempDir()

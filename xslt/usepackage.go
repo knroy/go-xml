@@ -889,6 +889,13 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 			return err
 		}
 	}
+	if c.usedPackageDepth == 0 && root == firstElement(c.sheet.source) { // streampkgfn_l7.go
+		roots := make([]*xdm.Node, 0, len(uses))
+		for _, u := range uses {
+			roots = append(roots, u.root)
+		}
+		notePkgFuncs(root, roots)
+	}
 	return nil
 }
 
