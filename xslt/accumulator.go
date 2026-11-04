@@ -737,9 +737,14 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 		// is the circularity XTDE3400 names -- a start-phase rule reading
 		// accumulator-before of its own node, or an end-phase rule reading
 		// accumulator-after of it.
-		return nil, fmt.Errorf(
+		return nil, accumCircularError{fmt.Sprintf(
 			"XTDE3400: accumulator %s is defined circularly: a rule reads "+
-				"the value of %s(%q) it is computing", def.name.Lexical(), fname, lex)
+				"the value of %s(%q) it is computing", def.name.Lexical(), fname, lex)}
+	}
+	if vals.err != nil && errors.Is(vals.err, errAccumCircular) {
+		// XTDE3400 is the accumulator's, not a failed computation's
+		// (§18.2.5): every read raises it, as before lane L4 (error-3410a).
+		return nil, vals.err
 	}
 	return table[i], nil
 }

@@ -1,6 +1,9 @@
 package xslt
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -52,4 +55,28 @@ func TestStreamValuesApplyTakesNoParams(t *testing.T) {
 			`</xsl:for-each-group></out></xsl:template>` +
 			`<xsl:template match="d"><xsl:param name="c" tunnel="yes"/><c><xsl:copy-of select="$c"/></c></xsl:template>`,
 	})
+}
+
+// TestStreamAccumCircularAfterCopy: an accumulator rule reading its own
+// accumulator-before is XTDE3400 at every read, the document node's too,
+// streamed or not (error-3410a): the cycle is the accumulator's, not a
+// failed computation §18.2.5 confines to the values depending on it.
+func TestStreamAccumCircularAfterCopy(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(`<doc><a/></doc>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:accumulator name="a" initial-value="0" streamable="yes"><xsl:accumulator-rule match="*" select="$value + accumulator-before('a')"/></xsl:accumulator>
+<xsl:template name="main"><out><xsl:source-document streamable="true" href="doc.xml" use-accumulators="a">
+<xsl:copy-of select="."/><in><xsl:value-of select="accumulator-before('a')"/></in></xsl:source-document></out></xsl:template></xsl:stylesheet>`
+	for _, core := range []bool{true, false} {
+		_, e, st := coreRun(sheet, dir, core, TransformOptions{})
+		if !strings.Contains(e, "XTDE3400") {
+			t.Errorf("core %v: got error %q, want XTDE3400", core, e)
+		}
+		if st.Guards != 0 {
+			t.Errorf("core %v: %d guard hits", core, st.Guards)
+		}
+	}
 }
