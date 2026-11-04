@@ -6,12 +6,14 @@ package xslt
 // (xdmbuild/tryfwd.go start): with attributes before its content, or one
 // after it (XTDE0410, which a catch may take); or an html element, which
 // decides the output method when the try is the result's first output
-// (a rollback leaves it to the catch).
+// (a rollback leaves it to the catch); or attributes first, which go on to
+// the element the try writes to while it is empty (a rollback takes them
+// off).
 
 import "math/rand"
 
 func fuzzTryElement(r *rand.Rand, inner string) string {
-	switch r.Intn(7) {
+	switch r.Intn(8) {
 	case 0:
 		return `<tw>` + inner + `</tw>`
 	case 1:
@@ -20,6 +22,8 @@ func fuzzTryElement(r *rand.Rand, inner string) string {
 		return `<tw><tz/>` + inner + `<xsl:attribute name="late" select="'x'"/></tw>`
 	case 3:
 		return `<html><br/>` + inner + `<p>p<br/></p></html>`
+	case 4:
+		return `<xsl:attribute name="fa" select="'1'"/><xsl:attribute name="at" select="'2'"/>` + inner
 	}
 	return inner
 }

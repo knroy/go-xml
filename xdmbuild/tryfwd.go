@@ -26,10 +26,13 @@ package xdmbuild
 // provisionally; a rollback puts its value back, unwritten, for the catch's
 // text to merge with. Settling is not done, and the try's output is held to
 // its end as before, when out is not open and cannot be opened by the first
-// item, when the sink never will start, and when the first item is an
-// attribute, a
-// namespace or a function item (appended at the end in tree mode, where it
-// joins out's element or fails).
+// item, when the sink never will start, and when the first item is a
+// namespace or a function item, or an attribute that cannot go on to out's
+// element yet (appended at the end in tree mode, where it joins out's
+// element or fails). Attributes first go on to out's element when it has
+// nothing in it (attrsOK): its start is written when its first child
+// comes, so only that is held; the mark keeps a copy of the element, put
+// back in its place on a rollback.
 //
 // An element the body starts at its top, with everything before it handed
 // on, is built in place in out (start), so a try around one large element
@@ -75,6 +78,9 @@ type tryFwd struct {
 	to      *Builder // the builder the try appends to
 	mode    tryMode
 	stopped bool // an item came that cannot go early: the rest is held
+	// attrs: the body's first items are attributes that may go on to to's
+	// element, not opened yet (attrsOK), until another item comes.
+	attrs bool
 	// produced counts the items the body appended, handed on or not (tree
 	// mode's len(Sequence()), for XTDE3530).
 	produced int
@@ -94,6 +100,10 @@ type tryMark struct {
 	// rollback puts it back as it was, for the catch to merge into.
 	text    string
 	hasText bool
+	// elem is a copy of base's element, taken when attributes go on to it:
+	// a rollback puts it back in its place (xdm has no taking an attribute
+	// off), before anything is in it.
+	elem    *xdm.Node
 	frames  int
 	stamp   int64
 	items   int
@@ -141,7 +151,7 @@ func init() {
 		b := New(p.(Policy))
 		b.fwd = &tryFwd{to: o, mode: tryPending}
 		if !rollback {
-			b.fwd.mode = tryThrough
+			b.fwd.mode, b.fwd.attrs = tryThrough, attrsOK(o)
 		}
 		return b
 	}
@@ -188,15 +198,36 @@ func early(it xdm.Item) bool {
 // live takes the checkpoint of b, a pending buffer, before its first item
 // is handed on.
 func (f *tryFwd) live(b *Builder) bool {
-	if len(b.items) > 0 && !early(b.items[0]) {
+	attr := len(b.items) > 0 && isAttr(b.items[0])
+	if len(b.items) > 0 && !early(b.items[0]) && (!attr || !attrsOK(f.to)) {
 		return false
 	}
 	m := &tryMark{}
 	if !settle(f.to, m) {
 		return false
 	}
+	if attr {
+		m.elem = xdm.Copy(f.to.open)
+		xdm.CopyTypeEnvs(m.elem, f.to.open)
+		f.attrs = true
+	}
 	f.cp, f.mode = m, tryLive
 	return true
+}
+
+func isAttr(it xdm.Item) bool {
+	n, ok := it.(*xdm.Node)
+	return ok && n.Kind() == xdm.KindAttribute
+}
+
+// attrsOK reports whether attributes at the top of a try's body may be
+// handed on to t ahead of the try's end: t streams, and its element has
+// nothing in it yet, so the sink has not written its start (it does when
+// the first child comes), and the attributes join it as the end-of-try
+// append would. t's mark, when there is one, keeps a copy to put back.
+func attrsOK(t *Builder) bool {
+	return t.fwd == nil && t.sink != nil && t.fr == 0 && t.doc == 0 &&
+		t.open != nil && t.open.Kind() == xdm.KindElement && t.open.FirstChild() == nil
 }
 
 // forward hands b's items, all complete, on to f.to, as far as they can go.
@@ -206,10 +237,11 @@ func (f *tryFwd) forward(b *Builder) {
 	to.policy = countPolicy{p, &f.charged}
 	n := 0
 	for _, it := range b.items {
-		if !early(it) {
+		if !early(it) && (!f.attrs || !isAttr(it)) {
 			f.stopped = true
 			break
 		}
+		f.attrs = f.attrs && isAttr(it)
 		if v, ok := it.(*xdm.Node); ok {
 			to.AppendNode(v)
 		} else {
@@ -243,6 +275,7 @@ func (f *tryFwd) start(b *Builder, name xdm.QName, refused *error, p Policy) *Bu
 		f.mode = tryHeld
 		return nil
 	}
+	f.attrs = false
 	xdmsink.Forwarded.Add(1)
 	t := f.to
 	t.lastAtomic = false
@@ -403,6 +436,9 @@ func (m *tryMark) rollback() int64 {
 		}
 		if m.hasText {
 			t.open.AppendText(m.text) // written since, merged into, or neither
+		}
+		if m.elem != nil {
+			t.ReplaceOpen(m.elem) // the attributes the try handed on taken off
 		}
 		s.kept = nil
 	} else {
