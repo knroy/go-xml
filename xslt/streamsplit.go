@@ -950,12 +950,12 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 		}
 		return w.slot(x.Left, func(y xpath.Expr) { x.Left = y }, useKeep)
 	case *xpath.QuantifiedExpr:
-		if !burstSafe(x.Test, false) || !focusFree(x.Test) {
+		if (!burstSafe(x.Test, false) || !focusFree(x.Test)) && !valueFor(x.Bindings, x.Test) { // streamsplit_k2.go
 			return w.refuse("quantified test " + x.Test.String())
 		}
 		return w.bindings(x.Bindings)
 	case *xpath.ForExpr:
-		if !burstSafe(x.Return, false) || !focusFree(x.Return) {
+		if (!burstSafe(x.Return, false) || !focusFree(x.Return)) && !valueFor(x.Bindings, x.Return) { // streamsplit_k2.go
 			return w.refuse("for return " + x.Return.String())
 		}
 		return w.bindings(x.Bindings)

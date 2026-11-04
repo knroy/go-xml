@@ -24,6 +24,11 @@ var k2Bodies = []struct {
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b/></xsl:variable><out><xsl:copy-of select="/doc/rec ! ($ins intersect *)"/></out>`, true},
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b/></xsl:variable><out><xsl:value-of select="/doc/rec ! ($ins except node()) ! name()" separator=","/></out>`, true},
 	{`<xsl:variable name="ins" select="2"/><out><xsl:copy-of select="/doc/rec ! (* union $ins)"/></out>`, true},
+	// for / some / every over values, the return reading only its variables (valueFor).
+	{`<out><xsl:value-of select="for $x in //rec/@k/node-name() return ('Q{' || namespace-uri-from-QName($x) || '}' || local-name-from-QName($x))"/></out>`, true},
+	{`<out><xsl:value-of select="some $x in //sub/@x/node-name() satisfies (local-name-from-QName($x) || 'y')"/></out>`, true},
+	{`<out><xsl:value-of select="sum(for $v in /doc/rec/xs:integer(@v) return let $w := $v * 2 return xs:decimal($w) div 4)"/></out>`, true},
+	{`<out><xsl:value-of select="every $v in //rec/xs:integer(@v) satisfies xs:integer($v) gt 0"/></out>`, true},
 }
 
 func TestStreamK2MatchesTree(t *testing.T) {

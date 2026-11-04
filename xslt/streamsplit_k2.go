@@ -3,7 +3,10 @@ package xslt
 // Expression shapes of the streamed split (lane K2): set operators whose
 // foreign operand sits inside a path or a simple map.
 
-import "github.com/knroy/go-xml/v2/xpath"
+import (
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+)
 
 // foreignPath rewrites (F union P)/T and (P union F)/T, F foreign and T axis
 // steps whose predicates cannot fail, as (F union ())/T union P/T: a path's
@@ -76,3 +79,73 @@ func mapSetSafe(r xpath.Expr) bool {
 	}
 	return foreignVar(l) && !foreign(o) && unionNodes(o) && (mapSafe(o) || mapSetSafe(o))
 }
+
+// valueFor reports whether a for or quantified expression binds only atomic
+// values (each binding's last step makes values: P/node-name(),
+// P/xs:date(.)) and its return or test reads nothing but its variables:
+// then no streamed node reaches it, and the outer evaluates it once, over
+// the values, as the tree does. burstSafe's list of functions does not
+// matter there; focusFree's does not know || or the xs constructors.
+func valueFor(bs []xpath.Binding, ret xpath.Expr) bool {
+	for _, b := range bs {
+		if !valueTail(b.Seq) {
+			return false
+		}
+	}
+	return varsOnly(ret)
+}
+
+// varsOnly reports, conservatively, whether e reads neither the focus nor
+// a document nor a stylesheet function: literals, variables, and operators
+// and fn or xs functions over them.
+func varsOnly(e xpath.Expr) bool {
+	all := func(es ...xpath.Expr) bool {
+		for _, x := range es {
+			if !varsOnly(x) {
+				return false
+			}
+		}
+		return true
+	}
+	switch x := e.(type) {
+	case *xpath.Literal, *xpath.VarRef:
+		return true
+	case *xpath.FuncCall:
+		switch {
+		case x.Name.URI == xdm.NSXS && len(x.Args) == 1:
+		case x.Name.URI == fnNS && !focusDependent[keyOf(x.Name, len(x.Args))] && !docFns[x.Name.Local]:
+		default:
+			return false
+		}
+		return all(x.Args...)
+	case *xpath.StringConcat:
+		return all(x.Left, x.Right)
+	case *xpath.BinaryOp:
+		return all(x.Left, x.Right)
+	case *xpath.UnaryOp:
+		return all(x.Operand)
+	case *xpath.IfExpr:
+		return all(x.Cond, x.Then, x.Else)
+	case *xpath.SequenceExpr:
+		return all(x.Items...)
+	case *xpath.CastExpr:
+		return all(x.Operand)
+	case *xpath.InstanceOfExpr:
+		return all(x.Operand)
+	case *xpath.TreatExpr:
+		return all(x.Operand)
+	case *xpath.LetExpr:
+		return all(append(bindingExprs(x.Bindings), x.Return)...)
+	case *xpath.ForExpr:
+		return all(append(bindingExprs(x.Bindings), x.Return)...)
+	case *xpath.QuantifiedExpr:
+		return all(append(bindingExprs(x.Bindings), x.Test)...)
+	}
+	return false
+}
+
+// docFns read a document or a resource: not a value of the variables alone.
+var docFns = map[string]bool{"doc": true, "document": true, "doc-available": true, "collection": true,
+	"uri-collection": true, "unparsed-text": true, "unparsed-text-lines": true,
+	"unparsed-text-available": true, "json-doc": true, "parse-xml": true, "parse-xml-fragment": true,
+	"transform": true, "load-xquery-module": true}
