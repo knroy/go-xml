@@ -179,7 +179,7 @@ func TestStreamPlanAgreesWithAnalysis(t *testing.T) {
 					}
 					n.exprs++
 					a := &analyzer{ctxPosture: r.ctx, ctxAllowsChildren: r.ctxAllowsChildren, known: true,
-						funcs: tr.funcs, currentPosture: r.ctx,
+						funcs: tr.funcs, trust: tr, currentPosture: r.ctx,
 						currentAllowsChildren: r.ctxAllowsChildren, currentInScope: true}
 					if got := a.expr(e); got != r.props {
 						t.Errorf("%s: sub-expression %s (%T) re-analysed alone %v, map %v", name, e, e, got, r.props)
@@ -196,7 +196,7 @@ func TestStreamPlanAgreesWithAnalysis(t *testing.T) {
 				}
 				n.instrs++
 				a := &instrAnalyzer{ctxPosture: r.ctx, ctxAllowsChildren: r.ctxAllowsChildren,
-					known: true, attrSets: tr.sets, funcs: tr.funcs}
+					known: true, attrSets: tr.sets, funcs: tr.funcs, trust: tr}
 				if got := a.instruction(el); got != r.props {
 					t.Errorf("%s: <%s> re-analysed alone %v, map %v", name, el.Name().Local, got, r.props)
 				}
@@ -213,7 +213,7 @@ func TestStreamPlanAgreesWithAnalysis(t *testing.T) {
 				}
 				n.sites++
 				a := &analyzer{ctxPosture: r.ctx, ctxAllowsChildren: r.ctxAllowsChildren, known: true,
-					decl: s.el, funcs: tr.funcs, currentPosture: r.ctx,
+					decl: s.el, funcs: tr.funcs, trust: tr, currentPosture: r.ctx,
 					currentAllowsChildren: r.ctxAllowsChildren, currentInScope: true}
 				if got := a.expr(e); got != r.props {
 					t.Errorf("%s: %q re-analysed alone %v, map %v", name, s.src, got, r.props)
