@@ -18,7 +18,8 @@ package xslt
 //
 //   - the global context item is the tree's document node, which a global
 //     variable may read in any order (section 5.3.3 makes it grounded): a
-//     global whose value may depend on it, an xsl:global-context-item, and
+//     global whose value may depend on it, an xsl:global-context-item with
+//     a type, and
 //     an accumulator are refused, as are input-type-annotations="strip"
 //     and a stylesheet of more than one module (streamtrust.go);
 //   - a node of the stream at the top of the principal result (a built-in
@@ -101,7 +102,10 @@ func (c *compiler) planMainStreams() {
 // a streamed principal input, or "".
 func (s *Stylesheet) mainRefusal() string {
 	switch {
-	case s.globalContextItem != nil:
+	case s.globalContextItem != nil && s.globalContextItem.decl.as != nil:
+		// With no type, the declaration's check reads nothing of the
+		// document node, the stand-in's answer is the tree's; the globals
+		// that might read it are refused below.
 		return "xsl:global-context-item"
 	case s.stripTypeAnnotations:
 		return "input-type-annotations"

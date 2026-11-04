@@ -98,6 +98,12 @@ var coreBodies = []struct {
 	{`<out><xsl:for-each select="doc/rec"><r><xsl:for-each select="@*"><a c="{has-children(..)}"/></xsl:for-each></r></xsl:for-each></out>`, false},
 	// Select at the document node, under wrappers.
 	{`<out><xsl:value-of select="count(//rec)"/></out>`, true},
+	// xsl:comment and xsl:processing-instruction with a consuming select
+	// (si-where-populated s-019, s-020; si-on-empty s-008).
+	{`<out><xsl:comment select="count(//rec)"/></out>`, true},
+	{`<out><xsl:processing-instruction name="p" select="sum(//rec/@v)"/></out>`, true},
+	{`<out><xsl:for-each select="doc/rec"><xsl:comment select="count(sub)"/></xsl:for-each></out>`, true},
+	{`<out><xsl:where-populated><xsl:processing-instruction name="p" select="head(//sub)"/></xsl:where-populated></out>`, true},
 	{`<out><xsl:value-of select="sum(//rec/@v)"/></out>`, true},
 	{`<out><xsl:value-of select="max(//rec/@k)"/></out>`, true},
 	{`<out><xsl:value-of select="max(//rec/@v)"/></out>`, true},

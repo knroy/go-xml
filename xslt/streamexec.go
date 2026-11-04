@@ -315,6 +315,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 			return b.selectOp(el, f)
 		case "on-empty", "on-non-empty":
 			return b.selectOp(el, f) // streamonempty.go
+		case "comment", "processing-instruction":
+			return b.selectOp(el, f) // their text constructed from the values, as xsl:sequence's
 		case "for-each", "iterate":
 			return b.loopOp(el, f)
 		case "copy":
@@ -816,7 +818,8 @@ func (b *streamBuilder) avt(el *xdm.Node, src string, f vfocus) bool {
 // --- Compiling ---------------------------------------------------------------
 
 // noteStreamSelect splits the select of n, a consuming value-of, copy-of,
-// sequence or attribute of the core plan being compiled; sel is its
+// sequence, attribute, comment or processing-instruction of the core plan
+// being compiled; sel is its
 // compiled select, written where ns resolves names.
 func (c *compiler) noteStreamSelect(n *xdm.Node, instr Instruction, sel *xpath.Compiled,
 	ns xpath.NamespaceResolver) {
