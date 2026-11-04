@@ -152,8 +152,9 @@ var popBodies = []struct {
 	{`<out><xsl:value-of select="count(//rec except $three)"/></out>`, true},
 	// Refused: the path's side gives values, which the operator rejects (XPTY0004).
 	{`<out><xsl:value-of select="count(doc/rec/number(@v) intersect $extra)"/></out>`, false},
-	// Refused: a union whose order is not known statically.
-	{`<out><xsl:copy-of select="doc/rec union $extra"/></out>`, false},
+	// A union under copy-of: the outer unions the matches with the
+	// variable's nodes, ordered as the tree orders them (streamsplit_foreign.go).
+	{`<out><xsl:copy-of select="doc/rec union $extra"/></out>`, true},
 	// apply-templates over windows of a bare path; an insertion or a motionless part refused.
 	{`<out><xsl:apply-templates select="head(doc/rec)" mode="m"/></out>`, true},
 	{`<out><xsl:apply-templates select="tail(doc/rec)" mode="m"/></out>`, true},
