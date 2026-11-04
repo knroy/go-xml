@@ -24,6 +24,12 @@ func TestStreamResultValidation(t *testing.T) {
 			`<o><xsl:element name="n" type="xs:integer"><xsl:value-of select="count(doc/rec)"/></xsl:element></o>`,
 			`<o><xsl:element name="n" type="xs:date"><xsl:value-of select="count(doc/rec)"/></xsl:element></o>`,
 			`<xsl:document validation="strip"><o><xsl:copy-of select="doc/rec"/></o></xsl:document>`,
+			// xsl:copy of what is never an attribute (si-copy-024, -121..-130).
+			`<o><xsl:for-each select="doc/rec"><xsl:copy validation="lax"><xsl:value-of select="."/></xsl:copy></xsl:for-each></o>`,
+			`<o><xsl:for-each select="doc/rec"><xsl:copy type="xs:string"/></xsl:for-each></o>`,
+			`<o><xsl:copy select="*" validation="lax"><xsl:copy-of select="child::node()"/></xsl:copy></o>`,
+			`<o><xsl:copy select="*" type="xs:untyped"><xsl:copy-of select="child::node()"/></xsl:copy></o>`,
+			`<o><xsl:copy select="doc/rec" validation="strict"/></o>`,
 		} {
 			coreCheck(t, coreSheet(body), dir, name+": "+body, true, TransformOptions{})
 		}
