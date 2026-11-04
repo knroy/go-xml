@@ -673,6 +673,7 @@ func (c *compiler) compileValueOf(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 			return nil, fmt.Errorf("in xsl:value-of/@separator: %w", err)
 		}
 		instr.separator, instr.hasSeparator = sep, true
+		c.noteStreamAVT(n, sep, ns) // streamavt_k2.go
 	}
 	if sel := n.AttrValue("select"); sel != "" {
 		comp, err := compileExpr(sel, ns)
@@ -1039,6 +1040,7 @@ func (c *compiler) compileElement(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	}
 	instr := &elementInstr{name: nameAVT, scope: inScopeNamespacesShared(n), attrSets: sets,
 		baseURI: n.BaseURI(), noInherit: noAttr(n, "inherit-namespaces")}
+	c.noteStreamAVT(n, nameAVT, ns) // streamavt_k2.go
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
 	}
@@ -1051,6 +1053,7 @@ func (c *compiler) compileElement(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 			return nil, err
 		}
 		instr.namespace = avt
+		c.noteStreamAVT(n, avt, ns) // streamavt_k2.go
 	}
 	body, err := c.compileSequence(n, n)
 	if err != nil {
@@ -1066,12 +1069,14 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 		return nil, err
 	}
 	instr := &attributeInstr{name: nameAVT, scope: inScopeNamespacesShared(n)}
+	c.noteStreamAVT(n, nameAVT, ns) // streamavt_k2.go
 	if sepAttr := n.Attr("", "separator"); sepAttr != nil {
 		sep, err := compileAVT(sepAttr.Value(), ns)
 		if err != nil {
 			return nil, err
 		}
 		instr.separator, instr.hasSeparator = sep, true
+		c.noteStreamAVT(n, sep, ns) // streamavt_k2.go
 	}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
@@ -1085,6 +1090,7 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 			return nil, err
 		}
 		instr.namespace = avt
+		c.noteStreamAVT(n, avt, ns) // streamavt_k2.go
 	}
 	if sel := n.AttrValue("select"); sel != "" {
 		comp, err := compileExpr(sel, ns)

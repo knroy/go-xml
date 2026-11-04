@@ -472,7 +472,7 @@ func patternClasses(p *Pattern) (can [numClasses]bool, why string) {
 				}
 				ok := true
 				if i < len(a.steps)-1 || c[classElem] {
-					ok = (viewCheck{}).safe(pr, vElem, true)
+					ok = (viewCheck{acc: patternAccOK(i, len(a.steps), c[classElem], c[classLeaf], c[classAttr])}).safe(pr, vElem, true) // streamview_k2.go
 				}
 				if i == len(a.steps)-1 && (c[classLeaf] || c[classAttr]) {
 					ok = ok && (viewCheck{noIdent: c[classLeaf], up: c[classLeaf]}).safe(pr, vLeaf, true)

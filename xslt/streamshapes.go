@@ -93,6 +93,9 @@ func mapSafe(r xpath.Expr) bool {
 	if climbsAny(r) {
 		return false
 	}
+	if mapSetSafe(r) { // streamsplit_k2.go
+		return true
+	}
 	if f, ok := r.(*xpath.FuncCall); ok && stylesheetFn(f.Name) {
 		for _, a := range f.Args {
 			if !mapAtomic(a) || !burstSafe(a, true) {

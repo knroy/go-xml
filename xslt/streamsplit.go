@@ -196,6 +196,7 @@ func splitStreamIn(e xpath.Expr, base *xpath.Compiled, doc, group, key bool) (*s
 		focus = vNone
 	}
 	e = hoistChoice(e, focus, key)
+	e = hoistMapChoice(e, focus, key) // streamsplit_k2.go
 	if x, ok := e.(*xpath.IfExpr); ok {
 		vc := viewCheck{kids: true, key: key}
 		if vc.safe(x.Cond, focus, true) && !(vc.safe(x.Then, focus, false) && vc.safe(x.Else, focus, false)) {
@@ -509,6 +510,9 @@ var splitClassRank = map[string]int{"bounded": 0, "output": 1, "nodes": 2, "subt
 // valueTail reports, conservatively, whether a tail makes only atomic
 // values: its last step does, perhaps filtered.
 func valueTail(e xpath.Expr) bool {
+	if seqOfValues(e) { // streamsplit_k2.go
+		return true
+	}
 	if pe, ok := e.(*xpath.PathExpr); ok && len(pe.Steps) > 0 {
 		e = pe.Steps[len(pe.Steps)-1]
 	}
@@ -614,7 +618,7 @@ func tailKindOK(e xpath.Expr) bool {
 	if f, ok := e.(*xpath.FuncCall); ok && f.Name.URI == fnNS && splitAtomicFns[f.Name.Local] {
 		return true
 	}
-	return atomicValued(e) || tailValue(e) || nodeValued(e) || copyTail(e)
+	return atomicValued(e) || tailValue(e) || nodeValued(e) || copyTail(e) || seqOfValues(e) // streamsplit_k2.go
 }
 
 // splitAtomicFns return atomic values, beside those atomicValued knows.
@@ -891,7 +895,7 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 		if done, ok := w.foreignUnion(x); done { // streamsplit_foreign.go
 			return ok
 		}
-		if !burstOps[x.Op] {
+		if !burstOps[x.Op] && x.Op != "to" { // to: both atomized, as + is (lane K2)
 			return w.refuse("operator " + x.Op)
 		}
 		if x.Op == "and" || x.Op == "or" {
@@ -950,12 +954,12 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 		}
 		return w.slot(x.Left, func(y xpath.Expr) { x.Left = y }, useKeep)
 	case *xpath.QuantifiedExpr:
-		if !burstSafe(x.Test, false) || !focusFree(x.Test) {
+		if (!burstSafe(x.Test, false) || !focusFree(x.Test)) && !valueFor(x.Bindings, x.Test) { // streamsplit_k2.go
 			return w.refuse("quantified test " + x.Test.String())
 		}
 		return w.bindings(x.Bindings)
 	case *xpath.ForExpr:
-		if !burstSafe(x.Return, false) || !focusFree(x.Return) {
+		if (!burstSafe(x.Return, false) || !focusFree(x.Return)) && !valueFor(x.Bindings, x.Return) { // streamsplit_k2.go
 			return w.refuse("for return " + x.Return.String())
 		}
 		return w.bindings(x.Bindings)
@@ -966,6 +970,10 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 			return ok
 		}
 		if u := distributedPath(e); u != nil { // streamsplit_foreign.go
+			put(u)
+			return w.walk(u, put, use)
+		}
+		if u := foreignPath(e); u != nil { // streamsplit_k2.go
 			put(u)
 			return w.walk(u, put, use)
 		}
@@ -1384,6 +1392,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		if (n == "accumulator-before" && vc.acc || n == "accumulator-after" && vc.after) && len(x.Args) == 1 {
 			lit, ok := x.Args[0].(*xpath.Literal)
 			return ok && lit.Val != nil && (f == vElem || f == vNone)
+		}
+		if viewIdentOK(vc, x, f) { // streamview_k2.go
+			return true
 		}
 		if (n == "copy-of" || n == "snapshot") && len(x.Args) == 1 && focusFree(x.Args[0]) {
 			// A copy of a variable's value: nothing of the focus; but a
