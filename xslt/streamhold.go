@@ -122,5 +122,5 @@ func (s *streamSplit) holdAt() {
 	if s.countAt() {
 		return // counted, not held (streamfold.go)
 	}
-	s.noRoot, s.hold = s.minDepth() < 2, true
+	s.noRoot, s.hold = s.minDepth() < 2 && !s.itemsOnlyCopied(), true // streamfn_copies.go
 }

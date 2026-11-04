@@ -80,6 +80,9 @@ func TestStreamSheetCallsMatchTree(t *testing.T) {
 		// Lane L2: an atomic parameter's argument read as values, whatever
 		// the other parameters are (su-shallow-descent-101's shape).
 		{`<v><xsl:value-of select="p:two((), outermost(//rec))"/></v>`, true},
+		// Lane L2 round 5: a copy of the document element the stylesheet asks
+		// for, as an argument (su-shallow-descent-003's shape).
+		{`<v><xsl:value-of select="p:cnt(copy-of(doc))"/></v>`, true},
 	}
 	n := 0
 	for name, doc := range coreDocs {
