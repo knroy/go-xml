@@ -14,7 +14,10 @@ package xslt
 // outer, as any held split's: under the cap at the document node
 // (streamhold.go).
 
-import "github.com/knroy/go-xml/v2/xpath"
+import (
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+)
 
 // foreignUnion takes x, P union F with F foreign (no focus, no document) on
 // either side, as the holder of P; done says x is such a union.
@@ -101,4 +104,54 @@ func (w *splitter) pathOverClimbed(e xpath.Expr) (done, ok bool) {
 		return false, false
 	}
 	return w.outerOfClimbed(f)
+}
+
+// distributedPath rewrites (A, B)/T and insert-before(A, n, B)/T, n a
+// literal integer, as A/T union B/T: a path sorts and de-duplicates what
+// its last steps give, so the order of the sequence on its left is lost,
+// and T, axis steps, gives nodes of each item alone. The union is then a
+// set operator the split takes (of two paths of the stream, or of one and a
+// variable's nodes: foreignUnion). nil when e is not such a path.
+func distributedPath(e xpath.Expr) xpath.Expr {
+	pe, ok := e.(*xpath.PathExpr)
+	if !ok || pe.Root || len(pe.Steps) < 2 {
+		return nil
+	}
+	rest := pe.Steps[1:]
+	for _, st := range rest {
+		if _, ok := st.(*xpath.Step); !ok {
+			return nil
+		}
+	}
+	var items []xpath.Expr
+	switch x := pe.Steps[0].(type) {
+	case *xpath.SequenceExpr:
+		items = x.Items
+	case *xpath.FuncCall:
+		if !isFn(x, "insert-before", 3) {
+			return nil
+		}
+		if l, ok := x.Args[1].(*xpath.Literal); !ok || l.Val.Type != xdm.TypeInteger {
+			return nil
+		}
+		items = []xpath.Expr{x.Args[0], x.Args[2]}
+	}
+	if len(items) < 2 {
+		return nil
+	}
+	var u xpath.Expr
+	for _, it := range items {
+		var p *xpath.PathExpr
+		if ip, ok := it.(*xpath.PathExpr); ok {
+			p = &xpath.PathExpr{Root: ip.Root, Steps: append(ip.Steps[:len(ip.Steps):len(ip.Steps)], rest...)}
+		} else {
+			p = &xpath.PathExpr{Steps: append([]xpath.Expr{it}, rest...)}
+		}
+		if u == nil {
+			u = p
+		} else {
+			u = &xpath.BinaryOp{Op: "union", Left: u, Right: p}
+		}
+	}
+	return u
 }

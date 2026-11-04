@@ -80,6 +80,13 @@ var unionBodies = []struct {
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="($ins | /doc/rec) ! sub"/></out>`, true},
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="copy-of(//sub) except $ins"/></out>`, true},
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:value-of select="count($ins intersect copy-of(//rec))"/></out>`, true},
+	// (A, B)/T and insert-before(A, n, B)/T as A/T union B/T (distributedPath);
+	// an atomic item: XPTY0019 as the tree raises it.
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="($ins, /doc/rec)/sub"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:value-of select="(/doc/rec, $ins)/@v" separator=","/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="insert-before(/doc/rec, 2, $ins)/sub"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="insert-before($ins, 1, /doc/rec)/*"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="(1, /doc/rec)/sub"/></out>`, true},
 	// A loop over it is a population (streampop.go): still the tree.
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:for-each select="/doc/rec union $ins"><e n="{name()}"/></xsl:for-each></out>`, false},
 }

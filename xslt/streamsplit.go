@@ -965,6 +965,10 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 		if done, ok := w.pathOverClimbed(e); done { // streamsplit_foreign.go
 			return ok
 		}
+		if u := distributedPath(e); u != nil { // streamsplit_foreign.go
+			put(u)
+			return w.walk(u, put, use)
+		}
 		return w.refuse("path " + e.String())
 	}
 	return w.refuse("expression " + e.String())
