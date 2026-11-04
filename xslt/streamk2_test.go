@@ -17,6 +17,13 @@ var k2Bodies = []struct {
 	{`<xsl:variable name="ins" as="element()*"><rec k="i"><sub x="9"/></rec></xsl:variable><out><xsl:copy-of select="($ins | /doc/rec)/sub"/></out>`, true},
 	{`<xsl:variable name="ins" as="element()*"><rec k="i"><sub x="9"/></rec></xsl:variable><out><xsl:value-of select="(/doc/rec union $ins)/sub/@x" separator=","/></out>`, true},
 	{`<xsl:variable name="ins" select="1"/><out><xsl:copy-of select="($ins | /doc/rec)/sub"/></out>`, true},
+	// P ! (* union $v) and the other set operators (mapSetSafe).
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b/></xsl:variable><out><xsl:copy-of select="/doc/rec[1] ! (* union $ins)"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b/></xsl:variable><out><xsl:copy-of select="/doc/rec ! ($ins union sub)"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b/></xsl:variable><out><xsl:copy-of select="/doc/rec[1] ! (* except $ins)"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b/></xsl:variable><out><xsl:copy-of select="/doc/rec ! ($ins intersect *)"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b/></xsl:variable><out><xsl:value-of select="/doc/rec ! ($ins except node()) ! name()" separator=","/></out>`, true},
+	{`<xsl:variable name="ins" select="2"/><out><xsl:copy-of select="/doc/rec ! (* union $ins)"/></out>`, true},
 }
 
 func TestStreamK2MatchesTree(t *testing.T) {

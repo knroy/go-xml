@@ -59,3 +59,20 @@ func foreignVar(e xpath.Expr) bool {
 	_, ok := e.(*xpath.VarRef)
 	return ok
 }
+
+// mapSetSafe reports whether R, mapped over a grounded copy of a match, is a
+// set operator of a variable's nodes and an operand mapSafe takes that
+// gives nodes: * union $v, $v except *. The copy's nodes are the
+// originals to order and identity (xdm streamview.go), so the operator
+// sorts and compares them against the variable's as the tree does.
+func mapSetSafe(r xpath.Expr) bool {
+	x, ok := r.(*xpath.BinaryOp)
+	if !ok || x.Op != "union" && x.Op != "intersect" && x.Op != "except" {
+		return false
+	}
+	l, o := x.Left, x.Right
+	if !foreignVar(l) {
+		l, o = o, l
+	}
+	return foreignVar(l) && !foreign(o) && unionNodes(o) && (mapSafe(o) || mapSetSafe(o))
+}
