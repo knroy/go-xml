@@ -267,6 +267,9 @@ func (pb *popBuilder) stream(p *streamPop, e xpath.Expr) bool {
 	if x, ok := snapshotTail(e); ok { // streampop_snapshot.go
 		return pb.snapshot(p, x)
 	}
+	if x := rangeWindow(e); x != nil { // streampop_snapshot.go
+		return pb.stream(p, x)
+	}
 	// The expression itself, taken apart (splitFor would parse the whole
 	// select again from its source).
 	s, why := splitStreamIn(e, pb.sel, pb.doc, pb.group, pb.key)

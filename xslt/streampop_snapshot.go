@@ -10,7 +10,10 @@ package xslt
 // snapshot over each item handed, as it maps copy-of: the result is the
 // tree's snapshot, new nodes in trees of their own, as in tree mode.
 
-import "github.com/knroy/go-xml/v2/xpath"
+import (
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+)
 
 // snapshot makes snapshot(P), x, p's stream part.
 func (pb *popBuilder) snapshot(p *streamPop, x *xpath.FuncCall) bool {
@@ -52,3 +55,34 @@ func snapshotTail(e xpath.Expr) (*xpath.FuncCall, bool) {
 // it reads of them -- their ancestors and root, for a snapshot -- so loopOp
 // takes it as grounded (b.groundedSelect, streamgroup.go) even when the
 // burst rules (burstBody) would refuse it.
+
+// rangeWindow reads (P)[position() = L to H], L <= H integer literals, as
+// subsequence(P, L, H - L + 1): the general comparison holds at exactly
+// the positions L to H. nil when e is not that.
+func rangeWindow(e xpath.Expr) xpath.Expr {
+	f, ok := e.(*xpath.FilterExpr)
+	if !ok || len(f.Predicates) != 1 {
+		return nil
+	}
+	c, ok := f.Predicates[0].(*xpath.BinaryOp)
+	if !ok || c.Op != "=" {
+		return nil
+	}
+	if pos, ok := c.Left.(*xpath.FuncCall); !ok || !isFn(pos, "position", 0) {
+		return nil
+	}
+	r, ok := c.Right.(*xpath.BinaryOp)
+	if !ok || r.Op != "to" {
+		return nil
+	}
+	lo, ok1 := r.Left.(*xpath.Literal)
+	hi, ok2 := r.Right.(*xpath.Literal)
+	if !ok1 || !ok2 || lo.Val.Type != xdm.TypeInteger || hi.Val.Type != xdm.TypeInteger || !lo.Val.FitsInt64() || !hi.Val.FitsInt64() {
+		return nil
+	}
+	l, h := lo.Val.Int64(), hi.Val.Int64()
+	if l < 1 || h < l {
+		return nil
+	}
+	return fnCall("subsequence", f.Base, &xpath.Literal{Val: xdm.NewInteger(l)}, &xpath.Literal{Val: xdm.NewInteger(h - l + 1)})
+}

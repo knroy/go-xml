@@ -142,6 +142,10 @@ var popBodies = []struct {
 	{`<out><xsl:iterate select="doc/rec" expand-text="yes">{position()}:{@k} </xsl:iterate></out>`, true},
 	{`<out><xsl:for-each select="//sub" expand-text="yes">[{name(..)}/{@x}]</xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="doc/rec" expand-text="yes">{count(sub)} </xsl:for-each></out>`, false},
+	// (P)[position() = L to H] as subsequence(P, L, H - L + 1) (J1, rangeWindow).
+	{`<out><xsl:for-each select="(//*)[position() = 1 to 3]"><e p="{position()}" n="{name()}"/></xsl:for-each></out>`, true},
+	{`<out><xsl:iterate select="(doc/rec)[position() = 2 to 9]"><e p="{position()}" k="{@k}"/></xsl:iterate></out>`, true},
+	{`<out><xsl:for-each select="(//sub)[position() = 3 to 2]"><e/></xsl:for-each></out>`, false},
 	// Populations of kept leaves (G4): each a complete copy, its body off the
 	// cursor (fuzz seed 31: 9679, 16992, 23798, 30006, 75161).
 	{`<out><xsl:for-each select="tail(doc/rec/node())"><e p="{position()}"><xsl:value-of select=". || '|'"/></e></xsl:for-each></out>`, true},
