@@ -88,6 +88,7 @@ type splitPred struct {
 	at   int64
 	e    *xpath.Compiled
 	kids bool // e reads $splitKids
+	up   bool // e reads a leaf's ancestors: its focus is Cursor.Leaf's copy
 	// pe, with e nil, is a positional test other than a literal, of the
 	// position counted as for at (positionPred, streamsplit_union.go).
 	pe *xpath.Compiled
@@ -359,11 +360,20 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 			}
 			vc := viewCheck{kids: true, key: w.key}
 			// safe first: it rewrites has-children(.) to boolean($kids).
-			if elem && !vc.safe(pr, vElem, true) || leaf && !vc.safe(pr, vLeaf, true) || !booleanShaped(pr) {
+			// A leaf's open ancestors are read as views (up), on its copy
+			// under theirs (Cursor.Leaf), as a pattern's are.
+			ok := !elem || vc.safe(pr, vElem, true)
+			up := false
+			if ok && leaf && !vc.safe(pr, vLeaf, true) {
+				lc := vc
+				lc.up = true
+				ok, up = lc.safe(pr, vLeaf, true), true
+			}
+			if !ok || !booleanShaped(pr) {
 				return "predicate " + pr.String() + ": not motionless or positional"
 			}
 			c := part(pr)
-			ss.preds = append(ss.preds, splitPred{e: c, kids: readsKids(c)})
+			ss.preds = append(ss.preds, splitPred{e: c, kids: readsKids(c), up: up})
 			if !splitCannotFail(pr) {
 				s.predFail = true
 			}
@@ -1728,6 +1738,13 @@ func (a *splitAt) preds(st *splitStep, in *splitInst) (bool, error) {
 				return false, nil
 			}
 			continue
+		}
+		if p.up && a.leaf && !a.stable && a.focus == nil {
+			l, err := a.r.c.Leaf()
+			if err != nil {
+				return false, err
+			}
+			a.focus = l
 		}
 		n, err := a.node()
 		if err != nil {

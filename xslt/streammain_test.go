@@ -233,6 +233,10 @@ var mainCases = []struct {
 	// (currentFilter, streamlast_mm2.go); copy-of() is copy-of(.)
 	// (si-iterate-036).
 	{mm2IterateMax("@v ge current()/@v"), true},
+	// A predicate of a node() or text() step reading its parent's attribute:
+	// a leaf's open ancestors, as views (sf-xml-to-json-005).
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:copy-of select="descendant::node()[../@k = 'a']"/></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:value-of select="count(//text()[ancestor::*/@k = 'b'])"/></o></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
