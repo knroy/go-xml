@@ -248,3 +248,32 @@ func TestStreamCommentSelectValues(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamValueOfTextBeside: value-of of text nodes beside a consuming
+// path of elements reads the path as values and keeps the text nodes'
+// merging: two text nodes with no match between them are one string, as in
+// the tree (streamcopy_l3text.go).
+func TestStreamValueOfTextBeside(t *testing.T) {
+	dir := t.TempDir()
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, rule := range []string{
+			`<r><xsl:value-of select="$t, sub, $t"/></r>`,
+			`<r><xsl:value-of select="$t, sub[@x = '9'], $t" separator=":"/></r>`,
+			`<r><xsl:value-of select="$t, $e, sub, $t, $t"/></r>`,
+			`<r a="{$t, sub, $t}"/>`,
+		} {
+			sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:variable name="t" as="text()"><xsl:text>##</xsl:text></xsl:variable>
+<xsl:variable name="e" as="text()"><xsl:value-of select="''"/></xsl:variable>
+<xsl:mode name="s" streamable="yes"/>
+<xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml"><xsl:apply-templates select="." mode="s"/></xsl:source-document></top></xsl:template>
+<xsl:template match="rec" mode="s">` + rule + `</xsl:template>
+<xsl:template match="text()" mode="s"/>
+</xsl:stylesheet>`
+			coreCheck(t, sheet, dir, name+": "+rule, true, TransformOptions{})
+		}
+	}
+}

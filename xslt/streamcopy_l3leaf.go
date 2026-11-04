@@ -48,14 +48,27 @@ func (s *streamSplit) laxAtomize() {
 	}
 }
 
-// groundAtomizedAs is groundAtomized, unchecked with lax.
-func groundAtomizedAs(c *xdmstream.Cursor, lax bool) (xdm.Sequence, error) {
-	if !lax {
+// groundAtomized is groundAtomized of the cursor for s: unchecked for an
+// xsl:comment or xsl:processing-instruction (laxAtom); and with keepEmpty a
+// match whose typed value is empty is the copy itself, which simple content
+// atomizes to nothing but which separates the text nodes beside it, as the
+// element does in the tree (streamcopy_l3text.go).
+func (s *streamSplit) groundAtomized(c *xdmstream.Cursor) (xdm.Sequence, error) {
+	if !s.laxAtom && !s.keepEmpty {
 		return groundAtomized(c)
 	}
 	g, err := c.Ground()
 	if err != nil {
 		return nil, err
 	}
-	return xdm.Atomize(xdm.One(g)), nil
+	var items xdm.Sequence
+	if s.laxAtom {
+		items = xdm.Atomize(xdm.One(g))
+	} else if items, err = xdm.AtomizeChecked(xdm.One(g)); err != nil {
+		return nil, err
+	}
+	if len(items) == 0 && s.keepEmpty {
+		return xdm.One(g), nil
+	}
+	return items, nil
 }

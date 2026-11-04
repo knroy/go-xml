@@ -939,7 +939,9 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 		return nil, "select does not parse again"
 	}
 	e, checks := foreignSets(c.inlineCalls(e)) // streamsplit_union.go
-	if _, ctx := e.(*xpath.ContextItem); simple && (ctx || noTextNodes(e)) {
+	_, ctx := e.(*xpath.ContextItem)
+	wrapped := simple && (ctx || noTextNodes(e))
+	if wrapped {
 		// Simple content (§5.7.2) drops zero-length text nodes, merges
 		// adjacent ones, then atomizes: with no text node in the value the
 		// first two do nothing, so it is data() of it, which the split
@@ -954,7 +956,17 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 			e = liftData(data(e))
 		}
 	}
-	s, why := splitStreamIn(e, sel, doc, group, key)
+	var s *streamSplit
+	if simple && !wrapped {
+		// A fresh parse: the split takes the expression apart.
+		if s, checks = c.splitDataItems(sel, ns, doc, group, key, checks); s != nil { // streamcopy_l3text.go
+			e = nil
+		}
+	}
+	why := ""
+	if s == nil {
+		s, why = splitStreamIn(e, sel, doc, group, key)
+	}
 	if s == nil {
 		return nil, "split: " + why
 	}

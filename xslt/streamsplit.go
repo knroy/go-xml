@@ -183,6 +183,9 @@ type streamSplit struct {
 	// laxAtom says a typed match is atomized as xdm.Atomize does, without
 	// AtomizeChecked's errors (streamcopy_l3leaf.go).
 	laxAtom bool
+	// keepEmpty says a typed match whose typed value is empty is kept as
+	// the node, its outer simple content (streamcopy_l3text.go).
+	keepEmpty bool
 	// docCopy says the expression is a copy of the document, built off the
 	// cursor; docText that it is the document's string value, read off it
 	// (streamcopy_l3.go).
@@ -1879,7 +1882,7 @@ func (r *splitRun) run(v *xdm.Node, d int) error {
 			return r.jsonContext(v, d) // streamfn_json.go
 		}
 		if s.atomize && v != nil && typedValue(s, v) { // streamvalidin.go
-			items, err := groundAtomizedAs(c, s.laxAtom)
+			items, err := s.groundAtomized(c)
 			if err != nil {
 				return err
 			}
@@ -2076,7 +2079,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					break
 				}
 				if typedValue(s, ev.Node) { // streamvalidin.go
-					items, err := groundAtomizedAs(c, s.laxAtom)
+					items, err := s.groundAtomized(c)
 					if err != nil {
 						return err
 					}
@@ -2416,7 +2419,7 @@ func (r *splitRun) take(items xdm.Sequence) error {
 	}
 	switch s.red {
 	case "":
-		if s.atomize {
+		if s.atomize && !s.keepEmpty { // streamcopy_l3text.go
 			items = xdm.Atomize(items)
 		}
 		if s.counted {
