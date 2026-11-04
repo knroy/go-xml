@@ -203,20 +203,20 @@ func (t *declTrust) accumulatorOK(acc *xdm.Node) bool {
 	// Conditions 4 and 5 of §18.2.9 on an expression: grounded and
 	// motionless, the posture forgiven where the declared type atomizes
 	// (checkOneAccumulator's reading of §18.2.1).
-	exprOK := func(src string, at *xdm.Node, kids, atomic bool) bool {
+	exprOK := func(src string, at *xdm.Node, kids, atomic bool, phase string) bool {
 		ns := newNSResolver(at, xpathDefaultNamespace(at))
 		e, err := xpath.ParseVersion(src, ns, xpathVersionAt(at))
 		if err != nil {
 			return false
 		}
 		a := &analyzer{ctxPosture: postureStriding, ctxAllowsChildren: kids,
-			known: true, decl: at, funcs: t.funcs, trust: t}
+			known: true, decl: at, funcs: t.funcs, trust: t, accumAfter: accumAfterState{rulePhase: phase}}
 		p := a.expr(e)
 		return a.known && !a.unverified && p.sweep == sweepMotionless &&
 			(p.posture == postureGrounded || atomic)
 	}
 	atomic := atomicSequenceType(acc.AttrValue("as"))
-	if a := acc.Attr("", "initial-value"); a != nil && !exprOK(a.Value(), acc, true, false) {
+	if a := acc.Attr("", "initial-value"); a != nil && !exprOK(a.Value(), acc, true, false, "") {
 		return false
 	}
 	for _, rule := range acc.ChildElements() {
@@ -228,7 +228,11 @@ func (t *declTrust) accumulatorOK(acc *xdm.Node) bool {
 		}
 		kids := matchedNodeAllowsChildren(rule.AttrValue("match"), rule)
 		if a := rule.Attr("", "select"); a != nil {
-			if !exprOK(a.Value(), rule, kids, atomic) {
+			phase := strings.TrimSpace(rule.AttrValue("phase"))
+			if phase == "" {
+				phase = "start"
+			}
+			if !exprOK(a.Value(), rule, kids, atomic, phase) {
 				return false
 			}
 			continue
