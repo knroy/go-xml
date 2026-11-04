@@ -904,6 +904,11 @@ func (b *Builder) StartElement(name xdm.QName) *Builder {
 	b.countNodes(1)
 	b.lastAtomic = false
 	b.note(xdm.KindElement, "")
+	if b.fwd != nil {
+		if eb := b.fwd.start(b, name, b.refused, b.policy); eb != nil {
+			return eb // built in place in what the try writes to (tryfwd.go)
+		}
+	}
 	var el *xdm.Node
 	if b.open != nil {
 		// A constructed element's base URI is its parent's until something

@@ -95,6 +95,7 @@ func fuzzTryAround(r *rand.Rand, body string, depth int) string {
 	if depth == 0 && r.Intn(4) == 0 {
 		inner = fuzzTryAround(r, body, 1)
 	}
+	inner = fuzzTryElement(r, inner) // streamtryoutfuzz_element_test.go
 	var t strings.Builder
 	t.WriteString(`<xsl:try rollback-output="` + pick("yes", "yes", "no") + `" xmlns:err="http://www.w3.org/2005/xqt-errors">`)
 	t.WriteString(items())

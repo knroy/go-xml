@@ -50,19 +50,21 @@ type sink struct {
 	scratchSeq   xdm.Sequence
 	path         []*Builder
 	// For an xsl:try's checkpoints (tryfwd.go): cps counts those open;
-	// anchor and kept are children of the builder they were taken on that
-	// are written and still in its tree -- anchor while a checkpoint needs
-	// it there, kept until the next append takes it back. opened counts
-	// the frames opened, which a rollback takes back from xdmsink.Opened.
-	cps          int
-	anchor, kept *xdm.Node
-	opened       int64
+	// anchors and kept are children of the builder they were taken on that
+	// are written and still in its tree -- an anchor while a checkpoint
+	// needs it there (one a frame at most, its first child), kept until the
+	// next append takes it back. opened counts the frames opened, which a
+	// rollback takes back from xdmsink.Opened.
+	cps     int
+	anchors map[*xdm.Node]bool
+	kept    *xdm.Node
+	opened  int64
 }
 
 func init() {
 	xdmsink.Attach = func(b any, w xdmsink.Writer) {
 		r := b.(*Builder)
-		r.sink = &sink{w: w, root: r, streamed: map[*xdm.Node]bool{}}
+		r.sink = &sink{w: w, root: r, streamed: map[*xdm.Node]bool{}, anchors: map[*xdm.Node]bool{}}
 	}
 	xdmsink.Hold = func(b any) {
 		if r := b.(*Builder); r.sink != nil {
@@ -192,7 +194,8 @@ func (s *sink) open(x *Builder, kind xdm.NodeKind, text string) bool {
 	}
 	switch {
 	case p.open != nil:
-		if p.open.FirstChild() != x.open {
+		// A checkpoint's anchor (tryfwd.go) is written; x comes after it.
+		if c := p.open.FirstChild(); c != x.open && (!s.anchors[c] || c.NextSibling() != x.open) {
 			return false
 		}
 	case x.doc != 0:
@@ -268,12 +271,12 @@ func (s *sink) close(t *Builder, done *xdm.Node) {
 	d := s.depths[k]
 	if t.open != nil {
 		for c := range t.open.Children() {
-			switch c {
-			case s.anchor:
-				s.anchor = nil
-			case s.kept:
+			switch {
+			case s.anchors[c]:
+				delete(s.anchors, c)
+			case c == s.kept:
 				s.kept = nil
-			case done:
+			case c == done:
 			default:
 				s.w.Child(c, d+1)
 			}
@@ -299,16 +302,14 @@ func (s *sink) flush(t *Builder) {
 		return
 	}
 	for c := range t.open.Children() {
-		if c != s.anchor && c != s.kept {
+		if !s.anchors[c] && c != s.kept {
 			s.w.Child(c, d+1)
 		}
 	}
 	// A checkpoint's anchor stays (tryfwd.go); kept and the rest go.
-	for c := t.open.LastChild(); c != nil && (s.cps == 0 || c != s.anchor); c = t.open.LastChild() {
-		switch c {
-		case s.anchor:
-			s.anchor = nil
-		case s.kept:
+	for c := t.open.LastChild(); c != nil && (s.cps == 0 || !s.anchors[c]); c = t.open.LastChild() {
+		delete(s.anchors, c)
+		if c == s.kept {
 			s.kept = nil
 		}
 		t.open.RemoveLastChild()

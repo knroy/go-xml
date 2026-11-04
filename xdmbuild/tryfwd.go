@@ -29,6 +29,14 @@ package xdmbuild
 // namespace or a function item (appended at the end in tree mode, where it
 // joins out's element or fails).
 //
+// An element the body starts at its top, with everything before it handed
+// on, is built in place in out (start), so a try around one large element
+// writes its content as the sink writes any element's, provisionally: tree
+// mode appends the finished element to out with nothing between. A
+// checkpoint's anchor then stays in out's tree across the tries that follow
+// (everything appended after it was under a checkpoint): the sink keeps a
+// set of them, one a frame at most.
+//
 // A buffer whose out is another try's buffer hands its items to that one,
 // and its checkpoint nests: it covers the outer buffer's state as well.
 //
@@ -204,6 +212,41 @@ func (f *tryFwd) forward(b *Builder) {
 	}
 }
 
+// start is told that b, a try's buffer, starts an element named name at the
+// top of the body, with everything before it handed on: when b may hand on,
+// the element is built in place in f.to instead, under the checkpoint, so
+// the sink writes its content as it is made rather than b holding it as a
+// tree to its end. Tree mode appends the finished element to f.to with
+// nothing between, which is building it there: the same calls on f.to, in
+// the same order, only earlier. The element is charged and latched as b's
+// (refused, p). nil when the element stays in b.
+func (f *tryFwd) start(b *Builder, name xdm.QName, refused *error, p Policy) *Builder {
+	if f.stopped || f.mode == tryHeld || len(b.items) > 0 {
+		return nil
+	}
+	if f.mode == tryPending && !f.live(b) {
+		f.mode = tryHeld
+		return nil
+	}
+	xdmsink.Forwarded.Add(1)
+	t := f.to
+	t.lastAtomic = false
+	t.note(xdm.KindElement, "")
+	if t.fwd != nil {
+		if eb := t.fwd.start(t, name, refused, p); eb != nil {
+			return eb
+		}
+	}
+	var el *xdm.Node
+	if t.open != nil {
+		el = t.open.AppendElementInheriting(name)
+	} else {
+		el = t.newItem(xdm.KindElement, name, "")
+		t.items = append(t.items, el)
+	}
+	return &Builder{open: el, parent: t, policy: p, refused: refused, sink: t.sink}
+}
+
 // settle readies t, the builder a try's buffer hands its items to, for a
 // checkpoint, and records its state in m: a buffer hands on what it holds
 // and its own builder is settled in turn; a streaming builder's sink writes
@@ -287,7 +330,7 @@ func (s *sink) settle(t *Builder) bool {
 		s.items_(t, nil)
 		return true
 	}
-	if c := t.open.LastChild(); c != nil && c != s.kept && c != s.anchor {
+	if c := t.open.LastChild(); c != nil && c != s.kept && !s.anchors[c] {
 		if c.Kind() == xdm.KindText {
 			return false
 		}
@@ -295,7 +338,15 @@ func (s *sink) settle(t *Builder) bool {
 		s.kept = c
 	}
 	if s.cps == 0 && s.kept != nil {
-		s.anchor, s.kept = s.kept, nil
+		if a := t.open.FirstChild(); s.anchors[a] && a.NextSibling() == s.kept {
+			// An earlier checkpoint's anchor, never taken back (everything
+			// appended since was under that checkpoint): it stays this
+			// frame's anchor, and the newest child, written, goes.
+			t.open.RemoveLastChild()
+		} else {
+			s.anchors[s.kept] = true
+		}
+		s.kept = nil
 	}
 	return true
 }
@@ -313,11 +364,16 @@ func (m *tryMark) rollback() int64 {
 	}
 	t := m.base.b
 	if t.open != nil {
-		for c := t.open.LastChild(); c != nil && c != s.anchor; c = t.open.LastChild() {
+		for c := t.open.LastChild(); c != nil && !s.anchors[c]; c = t.open.LastChild() {
 			t.open.RemoveLastChild()
 		}
 		s.kept = nil
 	} else {
+		for _, it := range t.items[m.base.items:] {
+			if nd, ok := it.(*xdm.Node); ok {
+				delete(s.streamed, nd) // an element started in place (start) and closed
+			}
+		}
 		clear(t.items[m.base.items:])
 		t.items = t.items[:m.base.items]
 	}
