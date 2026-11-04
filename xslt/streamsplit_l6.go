@@ -3,50 +3,56 @@ package xslt
 // Lane L6: shapes and populations the planner left on the tree.
 
 import (
+	"strings"
+
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
-// leafLoopBody plans the body of el, an xsl:for-each whose select gives
-// only attributes, text, comment or processing-instruction nodes, or values
+// leafLoop plans the body of el, an xsl:for-each whose select gives only
+// attributes, text, comment or processing-instruction nodes, or values
 // (leafItems), when every instruction of it reads of each item only what a
-// complete parentless node has (focus vLeaf): its value, its name, a copy of
-// it. Each item the loop is handed is such a node -- an attribute of its
-// match's view, or a leaf's copy (Cursor.Leaf) -- and the body runs off the
-// cursor (matchView, or a population's off), as a template rule on a leaf
-// does (planRule). Planned at an element's view (members), data(.) and
-// copy-of(.) are refused there; a body that climbs (`..`) is refused here
-// and is left to members, as before.
-//
-// The check runs in a builder of its own on a plan of its own: nothing it
-// meets is registered in b's, so a refusal leaves b as it was. A body in
-// which anything would be registered (a consumer, a value template's op) is
-// refused.
-func (b *streamBuilder) leafLoopBody(el *xdm.Node, body []*xdm.Node) bool {
+// complete parentless node has (leafBody). Each item the loop is handed is
+// such a node -- an attribute of its match's view, or a leaf's copy
+// (Cursor.Leaf) -- and the body runs off the cursor (matchView, or a
+// population's off), as a template rule on a leaf does (planRule). Planned
+// at an element's view (members), data(.) and copy-of(.) are refused; a
+// body that climbs (`..`) is refused here and is left to members, as before.
+func (b *streamBuilder) leafLoop(el *xdm.Node, body []*xdm.Node) bool {
+	if !b.leafBody(el, body) {
+		return false
+	}
+	b.kinds[streamtrace.KindSeq]++
+	b.kinds[streamtrace.KindTree] += int64(len(body))
+	return true
+}
+
+// leafBody checks body, the instructions of el, an xsl:for-each over
+// leafItems, at focus vLeaf, as a leaf rule's body is checked: a strict
+// builder (every expression checked), noIdent, no upward step. It runs in a
+// builder on a plan of its own: nothing it meets is registered in b's, so a
+// refusal leaves b as it was; a body in which anything would be registered
+// (a consumer, a value template's op) is refused.
+func (b *streamBuilder) leafBody(el *xdm.Node, body []*xdm.Node) bool {
 	if !isXSL(el, "for-each") || !leafItems(parseAt(el, el.AttrValue("select"))) {
 		return false
+	}
+	for ch := range el.Children() {
+		if ch.Kind() == xdm.KindText && strings.ContainsAny(ch.Value(), "{}") {
+			return false
+		}
 	}
 	var ops []*streamOp
 	var kinds [streamtrace.NumKinds]int64
 	sb := &streamBuilder{pl: &streamPlan{recs: map[any]*planRec{}}, x: newStreamExec(),
 		ops: &ops, kinds: &kinds, noIdent: true, key: b.key}
-	n := int64(0)
 	for _, ch := range body {
-		if fallbackIgnored(ch) {
-			continue
-		}
-		if !sb.motionless(ch, vLeaf) {
+		if !fallbackIgnored(ch) && !sb.motionless(ch, vLeaf) {
 			return false
 		}
-		n++
 	}
-	if len(ops) != 0 || len(sb.x.ops) != 0 || len(sb.x.exprOps) != 0 || len(sb.x.tries) != 0 {
-		return false
-	}
-	b.kinds[streamtrace.KindSeq]++
-	b.kinds[streamtrace.KindTree] += n
-	return true
+	return len(ops) == 0 && len(sb.x.ops) == 0 && len(sb.x.exprOps) == 0 && len(sb.x.tries) == 0
 }
 
 // leafItems reports whether e gives no element and no document node: a

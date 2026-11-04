@@ -13,11 +13,26 @@ var l6Bodies = []struct {
 	body   string
 	stream bool
 }{
-	// A loop over attributes or leaves whose body reads the item whole (leafLoopBody).
+	// A loop over attributes or leaves whose body reads the item whole (leafLoop).
 	{`<out><xsl:for-each select="doc/rec/@k"><xsl:document><xsl:sequence select="data(.)"/></xsl:document></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="//sub/text()"><xsl:document><xsl:copy-of select="."/></xsl:document></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="//rec/@*"><a n="{name()}"><xsl:value-of select="."/></a></xsl:for-each></out>`, true},
 	{`<xsl:variable name="d" as="document-node()*"><xsl:for-each select="doc/rec[@v gt 1]/@v"><xsl:document><xsl:sequence select="data(.)"/></xsl:document></xsl:for-each></xsl:variable><out><xsl:copy-of select="data($d)"/></out>`, true},
+	// The range operator as a loop's population, the body reading each value (streamable-077).
+	{`<out><xsl:for-each select="doc/rec"><e><xsl:for-each select="1 to count(.//*)"><xsl:value-of select="concat(., ' ')"/></xsl:for-each></e></xsl:for-each></out>`, true},
+	// A motionless loop over the view's attributes (motionlessLoop, leafBody).
+	{`<out><xsl:for-each select="doc/rec"><e><xsl:for-each select="@*"><n><xsl:value-of select="name(.)"/></n><v><xsl:value-of select="."/></v></xsl:for-each></e></xsl:for-each></out>`, true},
+}
+
+// l6DeclBodies are l6Bodies that need top-level declarations.
+var l6DeclBodies = []struct {
+	decl, body string
+	stream     bool
+}{
+	// si-apply-templates-001's rule: loops over its own and its ancestors' attributes.
+	{`<xsl:mode name="m" streamable="yes" on-no-match="shallow-skip"/>
+<xsl:template match="rec" mode="m"><r><xsl:for-each select="@*"><n><xsl:value-of select="name(.)"/></n><v><xsl:value-of select="."/></v></xsl:for-each><xsl:for-each select="ancestor::*"><a n="{name(.)}"><xsl:for-each select="@*"><xsl:value-of select="."/></xsl:for-each></a></xsl:for-each></r></xsl:template>`,
+		`<out><xsl:apply-templates mode="m"/></out>`, true},
 }
 
 func TestStreamL6MatchesTree(t *testing.T) {
@@ -31,6 +46,12 @@ func TestStreamL6MatchesTree(t *testing.T) {
 			for _, d := range coreDecls {
 				where := fmt.Sprintf("doc %s, decls %q, body %s", name, d, c.body)
 				streamed += coreCheck(t, coreSheetWith(d, c.body), dir, where, c.stream, TransformOptions{})
+			}
+		}
+		for _, c := range l6DeclBodies {
+			for _, d := range coreDecls {
+				where := fmt.Sprintf("doc %s, decls %q, body %s %s", name, d, c.decl, c.body)
+				streamed += coreCheck(t, coreSheetWith(d+c.decl, c.body), dir, where, c.stream, TransformOptions{})
 			}
 		}
 	}

@@ -582,7 +582,7 @@ func (b *streamBuilder) loopOp(el *xdm.Node, f vfocus) bool {
 	// The body is planned in a builder of its own: a refusal there leaves
 	// the grounded strategy, whose rules are the burst path's.
 	// A loop over leaves first (streamsplit_l6.go).
-	op.planned = inner.leafLoopBody(el, body) || inner.members(el, body, vElem)
+	op.planned = inner.leafLoop(el, body) || inner.members(el, body, vElem)
 	op.grounded = burstBody(el) || !op.planned && b.groundedSelect(el) // streampop_snapshot.go
 	if !op.planned && !op.grounded {
 		return b.refuse(inner.why)

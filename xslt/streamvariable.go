@@ -61,5 +61,8 @@ func (b *streamBuilder) motionlessLoop(el *xdm.Node, f vfocus) bool {
 	if !(viewCheck{up: b.up}).safe(e, f, true) {
 		return b.refuse("motionless xsl:for-each over " + sel.Value())
 	}
+	if b.leafBody(el, el.ChildElements()) { // streamsplit_l6.go
+		return true
+	}
 	return b.content(el, vElem)
 }
