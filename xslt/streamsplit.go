@@ -1939,13 +1939,17 @@ func (r *splitRun) run(v *xdm.Node, d int) error {
 	var root splitFrame
 	if s.steps != nil && s.rootFrame(&root) && !s.doc {
 		// .//@a: the context is a match (path admits only a view tail).
-		items, err := r.tailOf(v)
-		if err != nil {
-			return err
-		}
-		r.seen++
-		if err := r.take(items); err != nil {
-			return err
+		if r.skipOne() {
+			r.seen++
+		} else {
+			items, err := r.tailOf(v)
+			if err != nil {
+				return err
+			}
+			r.seen++
+			if err := r.take(items); err != nil {
+				return err
+			}
 		}
 	}
 	if err := r.walk(root, d); err != nil {
@@ -2158,6 +2162,9 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					return err
 				}
 				items := xdm.One(v) // a loop's: the match itself
+				if s.tail != nil && !s.innermost && r.skipOne() {
+					break
+				}
 				if s.tail != nil {
 					if items, err = r.tailOf(v); err != nil {
 						return err
@@ -2295,6 +2302,9 @@ func (r *splitRun) leaf(n *xdm.Node, d int) error {
 			return err
 		}
 		if s.tail != nil {
+			if r.skipOne() {
+				return nil
+			}
 			items, err := s.tail.Eval(r.ctx.WithFocus(n, 1, 1))
 			if err != nil {
 				return err
@@ -2423,6 +2433,9 @@ func (r *splitRun) yield(n *xdm.Node) error {
 	s := r.s
 	switch {
 	case s.tail != nil:
+		if r.skipOne() {
+			return nil
+		}
 		items, err := s.tail.Eval(r.ctx.WithFocus(n, 1, 1))
 		if err != nil {
 			return err
@@ -2436,12 +2449,24 @@ func (r *splitRun) yield(n *xdm.Node) error {
 	return r.take(xdm.One(n))
 }
 
+// skipOne reports whether the match at hand is one tail(Q) leaves out, and
+// counts it. A match's tail is evaluated only after it: tail(Q) ! R and
+// tail(Q)/T apply R or T to Q's matches but the first, so the first's tail
+// must not run (its error is not the tree's: tail(//PRICE) ! (.+1) on a
+// first PRICE of "x").
+func (r *splitRun) skipOne() bool {
+	if r.skipped < r.s.skip {
+		r.skipped++
+		return true
+	}
+	return false
+}
+
 // take hands items to the reducer or the collection. A nil item stands for
 // a match that is only counted.
 func (r *splitRun) take(items xdm.Sequence) error {
 	s := r.s
-	if r.skipped < s.skip {
-		r.skipped++
+	if r.skipOne() {
 		return nil
 	}
 	if r.each != nil {
