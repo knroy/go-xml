@@ -40,8 +40,9 @@ var accumReadDecls = []struct {
 	   <xsl:accumulator-rule match="rec" phase="end" select="accumulator-after('a') + 1"/></xsl:accumulator>
 	 <xsl:accumulator name="b" as="xs:integer" initial-value="0" streamable="yes">
 	   <xsl:accumulator-rule match="rec" phase="end" select="accumulator-after('a')"/></xsl:accumulator>`, true},
-	// A read of an accumulator that fails later in the document: the
-	// tree's walk of a fails at that read, with b's error.
+	// A read of an accumulator that fails later in the document: a's
+	// reads before b's failure stand, after it a fails with b's error
+	// (§18.2.5).
 	{`<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes">
 	   <xsl:accumulator-rule match="rec" select="accumulator-before('b') + xs:integer(if (@k = 'c') then 'x' else '1')"/></xsl:accumulator>
 	 <xsl:accumulator name="b" as="xs:integer" initial-value="0" streamable="yes">
