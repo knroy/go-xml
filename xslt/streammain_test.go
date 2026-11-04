@@ -107,7 +107,11 @@ var mainCases = []struct {
 	// since M4 (streamaccum.go).
 	{`<xsl:mode streamable="yes"/><xsl:variable name="g" select="count(//rec)"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:variable name="g"><xsl:value-of select="name(/*)"/></xsl:variable><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, false},
-	{`<xsl:mode streamable="yes"/><xsl:global-context-item use="required"/><xsl:template match="rec"><r/></xsl:template>`, false},
+	// An xsl:global-context-item with no type reads nothing of it
+	// (accumulator-034s..036s); a type is checked against the tree's.
+	{`<xsl:mode streamable="yes"/><xsl:global-context-item use="required"/><xsl:template match="rec"><r/></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:global-context-item use="absent"/><xsl:template match="rec"><r/></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:global-context-item as="document-node(element(doc))"/><xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:accumulator name="a" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>`, true},
 	// At the top of the principal result the tree keeps the source's own
 	// nodes: the built-ins' copies of leaves, a deep-copy, an attribute rule.
