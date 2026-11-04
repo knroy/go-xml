@@ -166,6 +166,9 @@ type streamOp struct {
 	// pop, for a loop whose select is not a bare path, is its population
 	// (streampop.go); split is then its stream part's.
 	pop *streamPop
+	// tee, for a variable's map constructor whose entries each consume, is
+	// its plan in place of a split (streamtee_map.go).
+	tee *streamTee
 }
 
 // streamBuilder builds a plan from the source of a container.
@@ -479,6 +482,9 @@ func (c *compiler) noteStreamParam(n *xdm.Node, sel *xpath.Compiled, ns xpath.Na
 			if op.el == n && op.avt == "" && op.instr == nil {
 				op.instr, op.sel = exprInstr{}, sel
 				if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead == "" {
+					x.byExpr[sel] = op
+				} else if op.tee = c.teeFor(op, sel, ns); op.tee != nil { // streamtee_map.go
+					op.dead = ""
 					x.byExpr[sel] = op
 				}
 			}
@@ -1065,6 +1071,9 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 	if copiedPopulation(op) {
 		return "" // streamgroup.go
 	}
+	if op.tee != nil {
+		return op.tee.ready(op) // streamtee_map.go
+	}
 	s := op.split
 	copies := isXSL(op.el, "copy-of") || isXSL(op.el, "sequence") && inElement(op.el)
 	if c := s.class(); copies && (c == "nodes" || c == "subtree") &&
@@ -1286,7 +1295,15 @@ func (run *streamRun) evalOp(rt *runtime, op *streamOp) (xdm.Sequence, error) {
 		return nil, errStreamPlan
 	}
 	run.used = true
-	seq, err := op.split.evalAt(rt.ctx, run.c, run.d, g)
+	var (
+		seq xdm.Sequence
+		err error
+	)
+	if op.tee != nil {
+		seq, err = run.teeEval(rt, op) // streamtee_map.go
+	} else {
+		seq, err = op.split.evalAt(rt.ctx, run.c, run.d, g)
+	}
 	if err == errSplitGiveUp && run.d == 0 && run.i != nil {
 		return run.fallback(rt, op.sel)
 	}

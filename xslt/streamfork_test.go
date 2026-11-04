@@ -43,6 +43,14 @@ var forkBodies = []struct {
 		`<m n="{$m?n}" s="{$m?s}" k="{$m?k}"/>`, true},
 	{`<xsl:variable name="m" as="map(*)"><xsl:map><xsl:map-entry key="'a'" select="count(//rec)"/>` +
 		`<xsl:map-entry key="'a'" select="count(//sub)"/></xsl:map></xsl:variable><m n="{$m?a}"/>`, true}, // XTDE3365
+	// A map constructor whose values each read the document, in a
+	// variable's select: a tee of its entries (streamtee_map.go;
+	// sx-MapExpr-002/004/005). The second fails on the nested document's
+	// v="x" (FORG0001) as the tree's does.
+	{`<xsl:variable name="m" as="map(*)" select="map{'n': count(//rec), 'k': string-join(//rec/@k, ','), 'c': 1}"/>` +
+		`<m n="{$m?n}" k="{$m('k')}" c="{$m?c}"/>`, true},
+	{`<xsl:variable name="m" as="map(*)" select="map{'lo': min(//rec/@v/number()), 'hi': max(//rec/@v/number()), 's': sum(//rec/@v)}"/>` +
+		`<m lo="{$m?lo}" hi="{$m?hi}" s="{$m?s}"/>`, true},
 	// At most one prong reads: a sequence constructor.
 	{`<out><xsl:fork><xsl:sequence select="'['"/><xsl:sequence><a/></xsl:sequence><xsl:sequence select="']'"/></xsl:fork></out>`, true},
 	{`<out><xsl:fork><xsl:sequence select="'['"/><xsl:sequence><a><xsl:value-of select="count(//rec)"/></a></xsl:sequence></xsl:fork></out>`, true},
