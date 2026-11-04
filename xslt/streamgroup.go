@@ -106,7 +106,8 @@ func (b *streamBuilder) groupOp(el *xdm.Node, f vfocus) bool {
 			}
 		}
 	}
-	fromGroup := isCurrentGroup(b.selectOf(el)) // streamfn_frame.go
+	tailGroup := tailOfCurrentGroup(b.selectOf(el)) // streamfn_frame.go
+	fromGroup := tailGroup || isCurrentGroup(b.selectOf(el))
 	if fromGroup && !b.grp {
 		return b.refuse("xsl:for-each-group over a current group out of reach")
 	}
@@ -128,7 +129,7 @@ func (b *streamBuilder) groupOp(el *xdm.Node, f vfocus) bool {
 		}
 	}
 	op := &streamOp{x: b.x, el: el, doc: f == vNone, group: true, fromGroup: fromGroup,
-		inGroup: b.grp, key: b.key}
+		inGroup: b.grp, key: b.key, tailGroup: tailGroup}
 	inner := &streamBuilder{pl: b.pl, x: b.x, ops: &op.inner, kinds: &op.kinds, grp: true, key: true}
 	if !inner.members(el, body, vElem) {
 		return b.refuse(inner.why)

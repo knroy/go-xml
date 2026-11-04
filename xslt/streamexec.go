@@ -163,9 +163,10 @@ type streamOp struct {
 	// group says it is an xsl:for-each-group (streamgroup.go), fromGroup
 	// that its population is the current group of the one it is in; inGroup
 	// that it is in the body of one, where current-group() is that group's,
-	// and key that current-grouping-key() is in scope.
-	group, fromGroup, inGroup, key bool
-	keyAttr                        *xdm.QName // a grouping's key attribute (keyAttribute)
+	// and key that current-grouping-key() is in scope; tailGroup that the
+	// population is tail() of that group (streamfn_frame.go).
+	group, fromGroup, inGroup, key, tailGroup bool
+	keyAttr                                   *xdm.QName // a grouping's key attribute (keyAttribute)
 	// groundPop says a grouping's population is grounded: its select is
 	// read as a select op's, the tree's code groups it (groundedGroup).
 	groundPop bool

@@ -39,6 +39,7 @@ package xslt
 import (
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -259,6 +260,31 @@ func ofCurrentGroup(e xpath.Expr) bool {
 		return ofCurrentGroup(x.Base)
 	}
 	return false
+}
+
+// tailOfCurrentGroup reports whether e is tail(current-group()): a
+// recursive call's part of the current group a grouping takes whole, its
+// first member passed over (tailSource).
+func tailOfCurrentGroup(e xpath.Expr) bool {
+	x, ok := e.(*xpath.FuncCall)
+	return ok && x.Name.URI == fnNS && x.Name.Local == "tail" && len(x.Args) == 1 && isCurrentGroup(x.Args[0])
+}
+
+// tailSource is the members of src but its first, which is skipped.
+type tailSource struct {
+	src     memberSource
+	started bool
+}
+
+func (t *tailSource) next(read bool) (xdmstream.Event, bool, error) {
+	if !t.started {
+		t.started = true
+		if ev, ok, err := t.src.next(read); !ok || err != nil {
+			return ev, ok, err
+		}
+		read = false
+	}
+	return t.src.next(read)
 }
 
 // substAllowed is inlineAttr's rule for a body whose first parameter is
