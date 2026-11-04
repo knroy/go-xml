@@ -969,6 +969,10 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 			put(u)
 			return w.walk(u, put, use)
 		}
+		if u := foreignPath(e); u != nil { // streamsplit_k2.go
+			put(u)
+			return w.walk(u, put, use)
+		}
 		return w.refuse("path " + e.String())
 	}
 	return w.refuse("expression " + e.String())
