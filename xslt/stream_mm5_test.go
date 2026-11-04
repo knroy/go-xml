@@ -143,3 +143,27 @@ func TestStreamMergeCollectedPathKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamGroupMapOfAtomics: a group-by in xsl:fork whose body returns a
+// map constructor of atomic values streams over the pruned population, as
+// xsl:map does (si-fork-814), duplicate keys the same error; a map that
+// holds the group's nodes is refused.
+func TestStreamGroupMapOfAtomics(t *testing.T) {
+	sheet := func(m string) string {
+		return `<xsl:mode streamable="yes"/><xsl:param name="c" select="'k'"/>
+		  <xsl:template match="/"><xsl:variable name="v" as="map(xs:string, item()*)*"><xsl:apply-templates/></xsl:variable>
+		  <o><xsl:for-each select="$v"><m k="{?k}" n="{?n}" v="{?v}"/></xsl:for-each></o></xsl:template>
+		  <xsl:template match="d"><xsl:fork><xsl:for-each-group select="rec" group-by="@k">
+		    <xsl:sequence select="` + m + `"/></xsl:for-each-group></xsl:fork></xsl:template>`
+	}
+	mm5Rows(t, mm5Doc, []struct{ name, decls string }{
+		{"atomic values", sheet(`map{'k': current-grouping-key(), 'n': sum(current-group()/@v), 'v': current-group()/@v/string()}`)},
+		{"a duplicate key", sheet(`map{'k': current-grouping-key(), $c: 'uk'}`)},
+	})
+	s := strings.Replace(mainSheet(sheet(`map{'k': current-grouping-key(), 'v': current-group()}`)), `exclude-result-prefixes="xs p"`,
+		`xmlns:map="http://www.w3.org/2005/xpath-functions/map" exclude-result-prefixes="xs p map"`, 1)
+	so, st := mainRun(s, mm5Doc, true, TransformOptions{})
+	if to, _ := mainRun(s, mm5Doc, false, TransformOptions{}); so != to || st.Runs[streamtrace.Main] != 0 {
+		t.Errorf("a map of the group's nodes: streamed %d\nstreamed %s\ntree     %s", st.Runs[streamtrace.Main], so, to)
+	}
+}
