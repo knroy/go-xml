@@ -370,8 +370,10 @@ func (run *streamRun) observeAccumsOf(rt *runtime, set *modeAccumulators, stream
 	r.bursts = nil // the rules are no instruction of a plan
 	sa := &streamAccums{rt: &r, ctx: rt.ctx, run: run, root: run.root, at: map[*accumulatorDef]int{}}
 	// The rules run on a runtime of their own, which their calls of
-	// accumulator-before and -after find this run on (streamaccum_l4.go).
-	r.streamAccums = []*streamAccums{sa}
+	// accumulator-before and -after find this run on (streamaccum_l4.go)
+	// through the transform's list of runs, innermost last: the list is
+	// the transform's, shared with r, so r is given no list of its own,
+	// which would drop an enclosing run's observer from it.
 	sa.ctx = bindRuntime(rt.ctx, &r)
 	for _, k := range slices.Sorted(maps.Keys(s.accumulators)) {
 		if def := s.accumulators[k]; (def.streamable || all) && def.pkg == 0 && accumApplies(set, def) {

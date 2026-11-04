@@ -55,6 +55,9 @@ var accumBodies = []struct {
 	{`<xsl:value-of select="serialize(accumulator-after('v'), map{'method':'adaptive'})"/>`, true},
 	{`<xsl:apply-templates select="*" mode="a"/>`, true},
 	{`<xsl:apply-templates mode="a"/><xsl:value-of select="accumulator-after('n')"/>`, true},
+	// A streamed source-document inside, done before the rule reads the
+	// outer document's accumulators: its observer leaves the outer's be.
+	{`<xsl:source-document streamable="yes" href="doc.xml"><i><xsl:value-of select="count(//rec)"/></i></xsl:source-document><xsl:apply-templates select="*" mode="a"/>`, true},
 	// A group's body has read past its first member, its focus.
 	{`<xsl:for-each-group select="*/rec" group-adjacent="@k"><g n="{count(current-group())}" b="{accumulator-before('n')}"/></xsl:for-each-group>`, false},
 	{`<xsl:for-each-group select="*/rec" group-adjacent="@k"><g b="{accumulator-before('n')}"><xsl:copy-of select="current-group()"/></g></xsl:for-each-group>`, false},
