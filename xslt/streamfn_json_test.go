@@ -42,6 +42,9 @@ func TestStreamXMLToJSONMatchesTree(t *testing.T) {
 		`<j><xsl:value-of select="xml-to-json(*, map{'indent': false(), 'other': 1})"/></j>`,
 		`<j><xsl:value-of select="xml-to-json(/*, map{'indent': true()})"/></j>`,
 		// One match at most (sf-xml-to-json-005's shape): nested candidates.
+		// Compared with the tree only: the split refuses a predicate reading
+		// the parent of node() candidates (a text candidate is a copy with
+		// no parent), so it does not stream.
 		`<j><xsl:value-of select="xml-to-json(/descendant::node()[../@key='a'][1])"/></j>`,
 	}
 	for name, d := range docs {
@@ -66,7 +69,7 @@ func TestStreamXMLToJSONMatchesTree(t *testing.T) {
 				if bi < 4 && d.valid != (te == "") { // the whole document's JSON
 					t.Errorf("%s decl %d body %d: tree error %q, valid %v", name, di, bi, te, d.valid)
 				}
-				if te == "" && st.Runs[0] == 0 {
+				if te == "" && st.Runs[0] == 0 && bi < 4 {
 					t.Errorf("%s decl %d body %d: not streamed", name, di, bi)
 				}
 			}

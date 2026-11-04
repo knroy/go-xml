@@ -44,22 +44,28 @@ var callBodies = []struct {
 	// A call in a motionless instruction is not inlined (the builder's
 	// view check refuses it): the container stays on the tree.
 	{`<o><xsl:for-each select="/doc/rec"><r d="{p:depth(.)}"><xsl:value-of select="p:cd(.)"/></r></xsl:for-each></o>`, false},
-	{`<o><xsl:value-of select="count(p:kids(/doc/rec[1]))"/></o>`, false},
+	// K1 (19593eda): the split reads the call on the match's grounded copy.
+	{`<o><xsl:value-of select="count(p:kids(/doc/rec[1]))"/></o>`, true},
 	// The simple map of atomic values as a path, with no function.
 	{`<o><xsl:value-of select="/doc/rec ! name()"/></o>`, true},
 	{`<o><xsl:value-of select="sum(/doc/rec ! string-length(@k))"/></o>`, true},
 	{`<o><xsl:value-of select="/doc/rec ! (@k || '-')"/></o>`, true}, // R the per-match tail (streamshapes.go)
-	// Refused: a result that may be empty where the type wants one (p:num),
-	// a recursive call, a global, a cache, an atomic parameter given a
-	// path, a node result kept.
-	{`<o><xsl:value-of select="/doc/rec ! p:num(.)"/></o>`, false},
-	{`<o><xsl:value-of select="/doc/rec ! p:rec(.)"/></o>`, false},
-	{`<o><xsl:value-of select="/doc/rec ! p:wrong(.)"/></o>`, false},
-	{`<o><xsl:value-of select="/doc/rec ! count(p:pred(.))"/></o>`, false}, // $e in a predicate
-	{`<o><xsl:value-of select="/doc/rec ! p:glob(.)"/></o>`, false},
+	// Not inlined, but read by the split as calls the function's own code
+	// runs on each match's grounded copy or on values (K1, 19593eda): a
+	// result that may be empty where the type wants one (p:num), a wrong
+	// result type, $e in a predicate, a global, an atomic parameter given a
+	// path, a node result kept. A recursive call climbing to the parent
+	// (lane L2, d2a31582: an ancestor's copy answers its name and
+	// existence). Their errors are the tree's.
+	{`<o><xsl:value-of select="/doc/rec ! p:num(.)"/></o>`, true},
+	{`<o><xsl:value-of select="/doc/rec ! p:rec(.)"/></o>`, true},
+	{`<o><xsl:value-of select="/doc/rec ! p:wrong(.)"/></o>`, true},
+	{`<o><xsl:value-of select="/doc/rec ! count(p:pred(.))"/></o>`, true},
+	{`<o><xsl:value-of select="/doc/rec ! p:glob(.)"/></o>`, true},
+	{`<o><xsl:value-of select="p:sum(/doc/rec/@v)"/></o>`, true},
+	{`<o><xsl:copy-of select="/doc/rec ! p:keep(., true())"/></o>`, true},
+	// Refused: a cache.
 	{`<o><xsl:value-of select="/doc/rec ! p:cached(.)"/></o>`, false},
-	{`<o><xsl:value-of select="p:sum(/doc/rec/@v)"/></o>`, false},
-	{`<o><xsl:copy-of select="/doc/rec ! p:keep(., true())"/></o>`, false},
 }
 
 // TestStreamCallMatchesTree: calls on stylesheet functions in streamed
