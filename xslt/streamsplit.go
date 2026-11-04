@@ -1226,8 +1226,10 @@ const (
 // admitted as a node of kind cur (an accumulator rule's matched node).
 type viewCheck struct {
 	kids, pos, noIdent, key bool
-	acc, after, up, curOK   bool
-	cur                     vfocus
+	// last admits fn:last() of the focus (streamBuilder.last).
+	last                  bool
+	acc, after, up, curOK bool
+	cur                   vfocus
 	// lookup admits $value(k): a lookup in an accumulator's value, a map or
 	// an array by its declared type, which atomizes k.
 	lookup bool
@@ -1469,7 +1471,7 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 				return true
 			}
 		}
-		if n == "position" && vc.pos && len(x.Args) == 0 || n == "current-grouping-key" && vc.key && len(x.Args) == 0 {
+		if n == "position" && vc.pos && len(x.Args) == 0 || n == "last" && vc.last && len(x.Args) == 0 || n == "current-grouping-key" && vc.key && len(x.Args) == 0 {
 			return true
 		}
 		if n == "current" && vc.curOK && len(x.Args) == 0 {

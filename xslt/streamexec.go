@@ -232,6 +232,10 @@ type streamBuilder struct {
 	// docRead says a consumer before it in its sequence constructor, an op
 	// itself (run unconditionally), has read the document (streamcopy_l3doc.go).
 	docRead bool
+	// last says fn:last() is the focus's: the instructions are a motionless
+	// xsl:for-each's body, whose select the tree evaluates whole before the
+	// body runs (streamlast_mm2.go).
+	last bool
 	// sub is the inlined call whose body is being planned at this level
 	// (streamfn_inline.go): its first parameter reads as the call's argument.
 	sub *inlinedCall
@@ -867,7 +871,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := b.loopRead(parseAt(el, src)) // streamfn_loop.go
 	peek := b.kidsAt(el, e, f)        // streamkids_l6.go
-	vc := viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek}
+	vc := viewCheck{pos: true, last: b.last, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek}
 	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) { // streamcopy_l3doc.go
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
 	}

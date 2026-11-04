@@ -199,6 +199,10 @@ var mainCases = []struct {
 	// past the leaves before it (streamtee_docnode.go; sf-unparsed-entity-05).
 	{`<xsl:mode streamable="yes"/><xsl:template match="/"><out><a><xsl:value-of select="unparsed-entity-uri('pic')"/></a>` +
 		`<b><xsl:value-of select="unparsed-entity-public-id('pic')"/></b><xsl:copy-of select="*"/></out></xsl:template>`, true},
+	// last() in a motionless for-each over the ancestors' views is the loop's
+	// (streamlast_mm2.go; streamable-137).
+	{`<xsl:mode streamable="yes"/><xsl:template match="*"><p><xsl:for-each select="ancestor-or-self::node()"><xsl:value-of select="name()"/>` +
+		`<xsl:if test="position() != last()">/</xsl:if></xsl:for-each></p><xsl:apply-templates/></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
