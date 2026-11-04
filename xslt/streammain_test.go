@@ -236,6 +236,14 @@ var mainCases = []struct {
 	// (streamview_leafcall.go, streamcopy_l3leaf.go; su-absorbing-016).
 	{`<xsl:function name="p:len" as="xs:integer" streamability="absorbing"><xsl:param name="n" as="node()"/><xsl:sequence select="string-length($n)"/></xsl:function>` +
 		`<xsl:mode streamable="yes"/><xsl:template match="sub/text()"><xsl:sequence select="p:len(.)"/></xsl:template>`, true},
+	// Each member of a group copied: a grounded member copied by the tail and
+	// let go, the copies what the tree makes too (streamgroup_copies.go;
+	// si-group-064). The rule's element may be the document element.
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:mode name="c" on-no-match="shallow-copy"/>` +
+		`<xsl:template match="rec"><xsl:copy><xsl:for-each-group select="*" group-adjacent="node-name()"><xsl:apply-templates select="current-group()!copy-of()" mode="c"/></xsl:for-each-group></xsl:copy></xsl:template>` +
+		`<xsl:template match="*[not(parent::*)]" mode="c"><e n="{name()}" p="{position()}" l="{last()}" b="{base-uri()}"><xsl:copy-of select="@*, node()"/></e></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:mode name="c" on-no-match="shallow-copy"/>` +
+		`<xsl:template match="rec"><xsl:copy><xsl:for-each-group select="*" group-adjacent="node-name()"><xsl:apply-templates select="current-group()!(copy-of(), .)" mode="c"/></xsl:for-each-group></xsl:copy></xsl:template>`, false},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

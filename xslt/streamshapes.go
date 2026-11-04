@@ -31,7 +31,7 @@ import (
 // mapPathOf is pathOf for "P ! R": P's parts with R to map over each match.
 func (w *splitter) mapPathOf(x *xpath.SimpleMap) (splitPathParts, bool) {
 	pp, ok := w.pathOf(x.Left)
-	if !ok || pp.ctxItem || pp.group || !mapSafe(x.Right) || climbsAny(&xpath.PathExpr{Steps: pp.tail}) || climbBranched(pp) {
+	if !ok || pp.ctxItem || pp.group && !groupCopyMap(x.Right) || !mapSafe(x.Right) || climbsAny(&xpath.PathExpr{Steps: pp.tail}) || climbBranched(pp) { // streamgroup_copies.go
 		// A tail climbing to ancestors is the walk's (G4, mapClimb and the
 		// items check): those are shared by matches, which a path
 		// deduplicates and a per-match map would not (G2).
@@ -65,6 +65,7 @@ func (s *streamSplit) mapPath(w *splitter, tail, r xpath.Expr, leaf, elem bool, 
 		s.red, w.putRed = "", nil
 	}
 	s.atomize, s.fresh = w.use == useAtomize || w.use == useString || splitFolds[s.red], mapFresh(r)
+	s.fresh = s.fresh || s.group && groupCopyMap(r) // streamgroup_copies.go
 	s.strVal = w.use == useString
 	switch {
 	case leaf && (elem || !(viewCheck{}).safe(tail, vLeaf, splitCounts[s.red])):
