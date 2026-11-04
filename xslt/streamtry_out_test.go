@@ -144,6 +144,12 @@ var tryOutSheets = []struct {
 	{"element-inner-rollback-late-attr", ``, `<xsl:template match="/"><out><xsl:try><tw><tz/><xsl:try><a/><b/><xsl:sequence select="error()"/><xsl:catch/></xsl:try><xsl:attribute name="late">x</xsl:attribute></tw><xsl:catch><caught code="{$err:code}"/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
 	{"element-inner-rollback-late-attr-frame", ``, `<xsl:template match="/"><out><xsl:try><tw><tz><q/></tz><xsl:try><a/><b/><xsl:sequence select="error()"/><xsl:catch>c</xsl:catch></xsl:try><xsl:attribute name="late">x</xsl:attribute></tw><xsl:catch><caught code="{$err:code}"/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
 	{"element-inner-rollback-ok", ``, `<xsl:template match="/"><out><xsl:try><tw><tz/><xsl:try><a/><b/><xsl:sequence select="error()"/><xsl:catch/></xsl:try><y/></tw><xsl:catch><caught/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
+	// The inner body's first item handed on takes that child back, and the
+	// next node made may get its place in the store: the rollback must not
+	// take it for the child, nor the catch's text merge into it unwritten
+	// (TestStreamOutFuzz seed 56434).
+	{"element-inner-rollback-text-catch", ``, `<xsl:template match="/"><out><xsl:try><tw><tz/><xsl:try><xsl:sequence select="1, 2"/><xsl:sequence select="error()"/><xsl:catch>caught</xsl:catch></xsl:try></tw><xsl:catch><outer/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
+	{"element-inner-rollback-atoms-late-attr", ``, `<xsl:template match="/"><out><xsl:try><tw><tz/><xsl:try><xsl:sequence select="1, 2"/><xsl:sequence select="error()"/><xsl:catch/></xsl:try><xsl:attribute name="late">x</xsl:attribute></tw><xsl:catch><caught code="{$err:code}"/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
 	{"element-then-attr", ``, `<xsl:template match="/"><out><xsl:try><a><b/></a><xsl:attribute name="late">1</xsl:attribute><xsl:catch><c/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
 	// rollback-output="no": XTDE3530 when the body produced an item before
 	// the error, a zero-length text node included; caught otherwise.
