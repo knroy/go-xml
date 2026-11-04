@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
 )
 
 // TestStreamStringOfTyped: fn:string of a consumed node on a validated
@@ -58,5 +60,23 @@ func TestStreamCopyNamespaceOrder(t *testing.T) {
 		`<xsl:copy-of select="*"/>`,
 	} {
 		coreCheck(t, coreSheet(body), dir, body, true, TransformOptions{})
+	}
+	// The pruned copy of a grouping over attributes (streamgroup_pruned.go)
+	// stands in for the source: the members' parents and their ancestors
+	// declare their namespaces as the source does, which snapshot()'s copy
+	// of them shows.
+	pdoc := `<doc xmlns:z="urn:z" xmlns:a="urn:a"><rec k="1" xmlns:y="urn:y" xmlns:b="urn:b"/><rec k="2"/></doc>`
+	for _, decls := range []string{
+		`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:for-each-group select="rec/@k" group-adjacent="."><g><xsl:copy-of select="snapshot(current-group())/.."/></g></xsl:for-each-group></o></xsl:template>`,
+		`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:for-each-group select="doc/rec/@k" group-adjacent="."><g><xsl:copy-of select="snapshot(current-group())/../.."/></g></xsl:for-each-group></o></xsl:template>`,
+	} {
+		co, ct := mainRun(mainSheet(decls), pdoc, true, TransformOptions{})
+		tr, _ := mainRun(mainSheet(decls), pdoc, false, TransformOptions{})
+		if co != tr {
+			t.Errorf("%s:\nstreamed %s\ntree     %s", decls, co, tr)
+		}
+		if ct.Runs[streamtrace.Main] == 0 {
+			t.Errorf("%s: not streamed", decls)
+		}
 	}
 }
