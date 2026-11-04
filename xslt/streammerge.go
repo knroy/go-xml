@@ -68,12 +68,8 @@ func mergeStreams(i *mergeInstr, action *xdm.Node) (bool, []int) {
 	any := false
 	for _, src := range i.sources {
 		if !src.streamed || src.sourceURIs == nil {
-			if any {
-				// Collected after a streamed one: its nodes would be made
-				// before that one's, where the tree makes them after
-				// (mergeInput.take).
-				return false, nil
-			}
+			// Collected before the streamed ones, as the tree collects it
+			// (executeTree), even after a streamed one.
 			continue
 		}
 		if src.split == nil || src.sortBeforeMerge { // validation: mergeDocOf; accumulators: streammerge_accum.go
@@ -378,50 +374,59 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 			}
 		}
 	}
-	var inputs []*mergeInput
+	// The collected sources first, then the streamed ones, as the tree
+	// collects them (executeTree); the inputs stay in source order, the
+	// order of the merge's ties.
+	bySrc := make([][]*mergeInput, len(i.sources))
 	var docs []*mergeDoc
-	for s, src := range i.sources {
-		if !src.streamed || src.sourceURIs == nil {
-			got, err := src.collect(rt, s, resolved[s], colls[s])
+	for pass := range 2 {
+		for s, src := range i.sources {
+			if onCursor := src.streamed && src.sourceURIs != nil; onCursor != (pass == 1) {
+				continue
+			}
+			if pass == 0 {
+				got, err := src.collect(rt, s, resolved[s], colls[s])
+				if err != nil {
+					return mergePreRead{err} // nothing read: the tree's first error
+				}
+				for len(got) > 0 {
+					n := 1
+					for n < len(got) && got[n].anchor == got[0].anchor {
+						n++
+					}
+					bySrc[s] = append(bySrc[s], &mergeInput{src: s, anchor: got[0].anchor, entries: got[:n]})
+					got = got[n:]
+				}
+				continue
+			}
+			uris, err := src.sourceURIStrings(rt)
 			if err != nil {
-				if len(docs) == 0 { // mergeStreams: no streamed source before it
-					return mergePreRead{err}
+				if len(docs) == 0 && !i.sawStreamed(s) {
+					return mergePreRead{err} // the first streamed source's, as the tree's collect
 				}
 				return err
 			}
-			for len(got) > 0 {
-				n := 1
-				for n < len(got) && got[n].anchor == got[0].anchor {
-					n++
+			base := src.baseURI
+			if base == "" {
+				base = rt.ctx.StaticBaseURI()
+			}
+			for a, u := range uris {
+				d, err := mergeDocOf(rt, u, base, unread, src.validation)
+				if err != nil {
+					return err
 				}
-				inputs = append(inputs, &mergeInput{src: s, anchor: got[0].anchor, entries: got[:n]})
-				got = got[n:]
+				d.in = &mergeInput{src: s, anchor: a}
+				d.split = src.split
+				root := xdm.NewTree().Root
+				d.ctx = rt.withCurrent(root, a+1, len(uris)).ctx
+				bySrc[s] = append(bySrc[s], d.in)
+				docs = append(docs, d)
 			}
-			continue
 		}
-		uris, err := src.sourceURIStrings(rt)
-		if err != nil {
-			if len(docs) == 0 && !i.sawStreamed(s) {
-				return mergePreRead{err} // the first streamed source's, as the tree's collect
-			}
-			return err
-		}
-		base := src.baseURI
-		if base == "" {
-			base = rt.ctx.StaticBaseURI()
-		}
-		for a, u := range uris {
-			d, err := mergeDocOf(rt, u, base, unread, src.validation)
-			if err != nil {
-				return err
-			}
-			d.in = &mergeInput{src: s, anchor: a}
-			d.split = src.split
-			root := xdm.NewTree().Root
-			d.ctx = rt.withCurrent(root, a+1, len(uris)).ctx
-			inputs = append(inputs, d.in)
-			docs = append(docs, d)
-		}
+	}
+	var inputs []*mergeInput
+	for _, l := range bySrc {
+		inputs = append(inputs, l...)
 	}
 	streamtrace.Run(streamtrace.Merge)
 	var accs []*mergeAccums

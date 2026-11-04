@@ -628,13 +628,27 @@ func (i *mergeInstr) executeTree(rt *runtime, out *outputBuilder) error {
 		return err
 	}
 
+	// The sources a streamed run collects (not read on a cursor) are
+	// collected first, then the others, as the streamed merge does
+	// (streammerge.go): their documents and snapshots are then made in the
+	// same order, which is document order across them. XPath 3.1 §2.4.1
+	// leaves "the relative order of nodes in distinct trees" stable but
+	// implementation-dependent, and which of several errors is raised is
+	// implementation-dependent too (§2.3.4), so the order is free. The
+	// entries' order is the sort's tie-break (source, anchor, position),
+	// not the order they are collected in.
 	var entries []mergeEntry
-	for s, src := range i.sources {
-		got, err := src.collect(rt, s, resolved[s], colls[s])
-		if err != nil {
-			return err
+	for pass := range 2 {
+		for s, src := range i.sources {
+			if onCursor := src.streamed && src.sourceURIs != nil; onCursor != (pass == 1) {
+				continue
+			}
+			got, err := src.collect(rt, s, resolved[s], colls[s])
+			if err != nil {
+				return err
+			}
+			entries = append(entries, got...)
 		}
-		entries = append(entries, got...)
 	}
 
 	if err := checkMergeKeysComparable(entries, len(i.sources)); err != nil {
