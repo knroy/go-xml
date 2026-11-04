@@ -928,15 +928,19 @@ func (run *streamRun) element(rt *runtime, v *xdm.Node, md int, mode string, par
 func (run *streamRun) leaf(focus focuser, pos int, n *xdm.Node, mode string,
 	params, tunnels paramValues, out *outputBuilder) error {
 
-	rt := focus.at(n, pos)
-	if err := rt.sheet.checkModeTyped(n, mode); err != nil {
+	s := focus.disp.sheet
+	if err := s.checkModeTyped(n, mode); err != nil {
 		return err
 	}
-	t, next, err := rt.sheet.findTemplateFrom(n, mode, rt.ctx, 0)
+	// A pattern focuses on its candidate and binds current() itself, so it
+	// is matched in disp's context: the node is given one runtime, its
+	// rule's (on its copy) or the built-in's.
+	t, next, err := s.findTemplateFrom(n, mode, focus.disp.ctx, 0)
 	if err != nil {
 		return err
 	}
 	if t == nil {
+		rt := focus.at(n, pos)
 		rt.sheet.warnNoMatch(rt, n, mode)
 		return run.builtIn(rt, n, mode, params, tunnels, out)
 	}
@@ -944,7 +948,7 @@ func (run *streamRun) leaf(focus focuser, pos int, n *xdm.Node, mode string,
 	if err != nil {
 		return err
 	}
-	rt = focus.at(c, pos)
+	rt := focus.at(c, pos)
 	if err := rt.sheet.warnMultipleMatch(rt, c, mode, t, next, rt.ctx); err != nil {
 		return err
 	}
