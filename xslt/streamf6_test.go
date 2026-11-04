@@ -38,3 +38,18 @@ func TestStreamGroupOuterReadsNoGroup(t *testing.T) {
 		head + `<xsl:variable name="m" select="copy-of(current-group())"/><g><xsl:copy-of select="$m"/></g>` + tail,
 	})
 }
+
+// TestStreamValuesApplyTakesNoParams: an xsl:apply-templates over a
+// population of values with an xsl:with-param is not dispatched as a values
+// population: the parameter, copy-of(current-group()) beside select="$t/*",
+// would be evaluated off the cursor (si-group-040).
+func TestStreamValuesApplyTakesNoParams(t *testing.T) {
+	groupF6Check(t, []string{
+		`<xsl:mode streamable="yes" on-no-match="shallow-copy"/>` +
+			`<xsl:param name="t"><r><d/></r></xsl:param>` +
+			`<xsl:template match="/"><out><xsl:for-each-group select="doc/s/*" group-adjacent="(position() - 1) idiv 3">` +
+			`<xsl:apply-templates select="$t/*"><xsl:with-param name="c" select="copy-of(current-group())" tunnel="yes"/></xsl:apply-templates>` +
+			`</xsl:for-each-group></out></xsl:template>` +
+			`<xsl:template match="d"><xsl:param name="c" tunnel="yes"/><c><xsl:copy-of select="$c"/></c></xsl:template>`,
+	})
+}
