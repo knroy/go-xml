@@ -99,7 +99,7 @@ func (b *streamBuilder) groupOp(el *xdm.Node, f vfocus) bool {
 			}
 		}
 	}
-	fromGroup := isCurrentGroup(parseAt(el, el.AttrValue("select")))
+	fromGroup := isCurrentGroup(b.selectOf(el)) // streamfn_frame.go
 	if fromGroup && !b.grp {
 		return b.refuse("xsl:for-each-group over a current group out of reach")
 	}

@@ -117,6 +117,13 @@ type streamExec struct {
 	// inlines are the calls planned as their functions' bodies, by the
 	// caller's instruction (streamfn_inline.go).
 	inlines map[*xdm.Node]*inlinedCall
+	// The call frames of recursive inlined calls (streamfn_frame.go): on a
+	// root plan, frames by call site and planning the functions being
+	// inlined now; on a frame, frameRoot its root plan and code its body.
+	frames    map[*xdm.Node]*streamExec
+	frameRoot *streamExec
+	planning  map[*xdm.Node]bool
+	code      *frameCode
 }
 
 func newStreamExec() *streamExec {
@@ -199,6 +206,9 @@ type streamBuilder struct {
 	// after says accumulator-after of the focus may be read: a consumer
 	// before it in its sequence constructor has read the focus (streamaccum.go).
 	after bool
+	// sub is the inlined call whose body is being planned at this level
+	// (streamfn_inline.go): its first parameter reads as the call's argument.
+	sub *inlinedCall
 }
 
 func (b *streamBuilder) refuse(why string) bool {
@@ -1270,6 +1280,9 @@ type streamRun struct {
 // runs as usual; rt is the runtime the instruction runs in.
 func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 	op := run.x.byInstr[instr]
+	if op == nil {
+		op = run.x.frameOp(instr) // streamfn_frame.go: nil without frames
+	}
 	if op == nil || run.off {
 		return nil
 	}

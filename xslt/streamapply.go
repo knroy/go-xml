@@ -86,6 +86,9 @@ func (b *streamBuilder) strict() *streamBuilder {
 
 // applyOp plans an xsl:apply-templates that reads its context, focus f.
 func (b *streamBuilder) applyOp(el *xdm.Node, f vfocus) bool {
+	if done, ok := b.inlineCallOp(el, f); done { // streamfn_inline.go
+		return ok
+	}
 	if f == vLeaf {
 		return b.refuse("xsl:apply-templates on a node with no content")
 	}

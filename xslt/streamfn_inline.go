@@ -52,6 +52,9 @@ type inlinedCall struct {
 	nParam int
 	clear  bool   // clear the function context (not in a streamed group's body)
 	failed string // the body's compile failed: the plan is not ready
+	// frame, for a call on the function from inside its own body, is the
+	// call frame its body runs in (streamfn_frame.go).
+	frame *streamExec
 }
 
 // inlineSubst is the compiler's substitution while an inlined body
@@ -71,7 +74,7 @@ var inlineFunctionAttrs = map[string]bool{"name": true, "as": true, "streamabili
 // body of the stylesheet function its select calls, when it is one this
 // takes; done false when el's select calls no function with such a body.
 func (b *streamBuilder) inlineCallOp(el *xdm.Node, f vfocus) (done, ok bool) {
-	if !isXSL(el, "sequence") && !isXSL(el, "copy-of") {
+	if !isXSL(el, "sequence") && !isXSL(el, "copy-of") && !isXSL(el, "apply-templates") {
 		return false, false
 	}
 	e := parseAt(el, el.AttrValue("select"))
@@ -87,19 +90,33 @@ func (b *streamBuilder) inlineCallOp(el *xdm.Node, f vfocus) (done, ok bool) {
 	if why != "" {
 		return true, b.refuse("call on " + x.Name.Local + "(): " + why)
 	}
+	params, body := splitFunction(fn)
+	q, _ := paramName(params[0])
+	ic := &inlinedCall{call: el, fn: fn, param: q, nParam: len(params), clear: !b.grp}
 	if b.x.inlines == nil {
 		b.x.inlines = map[*xdm.Node]*inlinedCall{}
+	}
+	top := b.x.rootPlan() // streamfn_frame.go
+	if top.planning[fn] {
+		// A call from inside the body being planned: its call frame.
+		return true, b.frameCall(el, ic, body, f)
 	}
 	for _, other := range b.x.inlines {
 		if other.fn == fn {
 			return true, b.refuse("call on " + x.Name.Local + "(): inlined twice in one plan")
 		}
 	}
-	params, body := splitFunction(fn)
-	q, _ := paramName(params[0])
-	ic := &inlinedCall{call: el, fn: fn, param: q, nParam: len(params), clear: !b.grp}
 	b.x.inlines[el] = ic
-	if !b.members(fn, body, f) {
+	if top.planning == nil {
+		top.planning = map[*xdm.Node]bool{}
+	}
+	top.planning[fn] = true
+	prev := b.sub
+	b.sub = ic
+	ok = b.members(fn, body, f)
+	b.sub = prev
+	delete(top.planning, fn)
+	if !ok {
 		delete(b.x.inlines, el)
 		return true, false
 	}
@@ -173,10 +190,18 @@ func splitFunction(fn *xdm.Node) (params, body []*xdm.Node) {
 // inlineCheck says why el's call x on fn cannot be planned as fn's body at
 // focus f, or "".
 func (b *streamBuilder) inlineCheck(el *xdm.Node, e xpath.Expr, x *xpath.FuncCall, fn *xdm.Node, f vfocus) string {
+	apply := isXSL(el, "apply-templates")
 	for a := range el.Attrs() {
-		if n := a.Name(); n.URI == "" && n.Local != "select" {
+		if n := a.Name(); n.URI == "" && n.Local != "select" && !(apply && n.Local == "mode") {
 			return "attribute " + n.Local
 		}
+	}
+	if apply && len(el.ChildElements()) > 0 {
+		return "xsl:with-param or xsl:sort on the apply"
+	}
+	rec := within(el, fn) // streamfn_frame.go: a call from inside fn's own body
+	if rec && !insideFocusChange(el, fn) {
+		return "a recursive call at the body's own focus"
 	}
 	for a := range fn.Attrs() {
 		n := a.Name()
@@ -221,7 +246,7 @@ func (b *streamBuilder) inlineCheck(el *xdm.Node, e xpath.Expr, x *xpath.FuncCal
 	if post == nil || !vc.safe(post, f, true) {
 		return "what surrounds the call is not motionless"
 	}
-	if !streamParamTakes(params[0], p, b.grp, f) {
+	if !streamParamTakes(params[0], p, b.grp, f) && !(rec && groupOfS(el, fn, s) && ofCurrentGroup(p)) {
 		return "the first parameter's type converts " + p.String()
 	}
 	if why := inlineBody(fn, s, !b.grp); why != "" {
@@ -269,8 +294,8 @@ func streamParamTakes(p *xdm.Node, a xpath.Expr, grp bool, f vfocus) bool {
 	switch t {
 	case "", "item()*", "node()*":
 		return true
-	case "element()*":
-		if grp && isCurrentGroup(a) {
+	case "element()*", namedElements(p, t):
+		if grp && isCurrentGroup(a) && t == "element()*" {
 			return true // a streamed group's members are elements
 		}
 		var last xpath.Expr = a
@@ -281,8 +306,11 @@ func streamParamTakes(p *xdm.Node, a xpath.Expr, grp bool, f vfocus) bool {
 		if !ok || st.Axis != xpath.AxisChild && st.Axis != xpath.AxisDescendant {
 			return false
 		}
-		_, name := st.Test.(*xpath.NameTest)
+		nt, name := st.Test.(*xpath.NameTest)
 		kt, kind := st.Test.(*xpath.KindTest)
+		if t != "element()*" {
+			return name && sameElementName(p, t, nt) // streamfn_frame.go
+		}
 		return name || kind && kt.Kind == xdm.KindElement && !kt.Any
 	}
 	return false
@@ -310,7 +338,7 @@ func inlineBody(fn *xdm.Node, s xdm.QName, clear bool) string {
 			}
 			if !clear && ch.Name().URI == xdm.NSXSL {
 				switch ch.Name().Local {
-				case "apply-templates", "call-template", "next-match", "apply-imports", "evaluate":
+				case "evaluate":
 					why = "xsl:" + ch.Name().Local + " in a group's body"
 					return
 				}
@@ -374,6 +402,9 @@ func inlineAttr(el *xdm.Node, name, src string, s xdm.QName, inner, clear bool) 
 		}
 		if !focusFree(e) {
 			return "an expression reading the focus a function body has not: " + src
+		}
+		if mentionsVar(e, s) && !(name == "select" && substSite(el)) { // streamfn_frame.go
+			return "the first parameter outside a select the plan substitutes: " + src
 		}
 		if !clear && readsFunctionContext(e) {
 			return "current-group() or the like in a group's body"
@@ -570,7 +601,7 @@ func (x *streamExec) readyInlines() string {
 			return ic.failed
 		}
 	}
-	return ""
+	return x.readyFrames() // streamfn_frame.go
 }
 
 // inlineInstrFor compiles n, a caller's xsl:sequence or xsl:copy-of whose
@@ -579,6 +610,7 @@ func (x *streamExec) readyInlines() string {
 // to, stands). sel is n's select, written where ns resolves names.
 func (c *compiler) inlineInstrFor(n *xdm.Node, orig Instruction, sel *xpath.Compiled, ns xpath.NamespaceResolver) Instruction {
 	plans := map[*streamExec]bool{}
+	frames := map[*streamExec]bool{}
 	var ic *inlinedCall
 	for _, x := range append([]*streamExec{c.stream}, c.ruleExecs...) {
 		if x == nil {
@@ -586,6 +618,9 @@ func (c *compiler) inlineInstrFor(n *xdm.Node, orig Instruction, sel *xpath.Comp
 		}
 		if v := x.inlines[n]; v != nil {
 			plans[x], ic = true, v
+			if v.frame != nil {
+				frames[v.frame] = true
+			}
 		}
 	}
 	if ic == nil {
@@ -635,6 +670,29 @@ func (c *compiler) inlineInstrFor(n *xdm.Node, orig Instruction, sel *xpath.Comp
 		}
 		in.returns = t
 	}
+	switch o := orig.(type) {
+	case *sequenceInstr:
+		in.seq = o
+	case *copyOfInstr:
+		in.copyOf = o
+	case *applyTemplatesInstr:
+		in.apply = o
+	default:
+		return fail("caller")
+	}
+	if len(frames) > 0 {
+		// A recursive call: its frame's body, compiled once per call site
+		// (streamfn_frame.go), the frame's own call to it included.
+		if len(frames) != len(plans) {
+			return fail("a call both framed and not")
+		}
+		code, why := c.frameCodeFor(ic, frames, len(params))
+		if why != "" {
+			return fail(why)
+		}
+		in.code = code
+		return in
+	}
 	prev := c.inline
 	c.inline = &inlineSubst{ic: ic, prev: prev}
 	body, err := c.compileSequenceFrom(ic.fn, ic.fn, len(params))
@@ -643,14 +701,6 @@ func (c *compiler) inlineInstrFor(n *xdm.Node, orig Instruction, sel *xpath.Comp
 		return fail(err.Error())
 	}
 	in.body = body
-	switch o := orig.(type) {
-	case *sequenceInstr:
-		in.seq = o
-	case *copyOfInstr:
-		in.copyOf = o
-	default:
-		return fail("caller")
-	}
 	return in
 }
 
@@ -660,6 +710,8 @@ type inlineCallInstr struct {
 	orig    Instruction
 	seq     *sequenceInstr
 	copyOf  *copyOfInstr
+	apply   *applyTemplatesInstr // the call's value applied to, off the cursor
+	code    *frameCode           // a recursive call's: its frame's body
 	plans   map[*streamExec]bool
 	name    xdm.QName
 	params  []*Variable
@@ -673,8 +725,20 @@ type inlineCallInstr struct {
 
 func (i *inlineCallInstr) Execute(rt *runtime, out *outputBuilder) error {
 	f := rt.bursts
-	if f == nil || f.run == nil || f.run.off || !i.plans[f.run.x] {
+	if f == nil || f.run == nil || f.run.off {
 		return i.orig.Execute(rt, out)
+	}
+	if !i.plannedIn(f.run.x) { // streamfn_frame.go
+		// A streamed run this was not compiled for: decline, the
+		// container runs on the tree.
+		return errStreamPlan
+	}
+	body := i.body
+	if i.code != nil {
+		if !i.code.done {
+			return errStreamPlan
+		}
+		body = i.code.body
 	}
 	vals := make([]xdm.Sequence, len(i.params))
 	for k := 1; k < len(i.params); k++ {
@@ -684,12 +748,22 @@ func (i *inlineCallInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		vals[k] = v
 	}
-	res, err := i.run(rt, vals)
+	res, err := i.run(rt, vals, body)
 	if err != nil {
 		return err
 	}
 	v, err := i.post.Eval(rt.ctx.WithVar(inlineR, res))
 	if err != nil {
+		return err
+	}
+	if i.apply != nil {
+		// The tree's dispatch over the call's value, as an apply over
+		// items not of the stream runs (executeForeign).
+		run := f.run
+		off := run.off
+		run.off = true
+		err := i.apply.applySelected(rt, out, v)
+		run.off = off
 		return err
 	}
 	if i.copyOf != nil {
@@ -710,7 +784,7 @@ func (i *inlineCallInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 // run is userFunction.call over the inlined body, the streaming parameter
 // left unbound.
-func (i *inlineCallInstr) run(rt *runtime, vals []xdm.Sequence) (xdm.Sequence, error) {
+func (i *inlineCallInstr) run(rt *runtime, vals []xdm.Sequence, body []Instruction) (xdm.Sequence, error) {
 	defer rt.leaveFrame(rt.enterFrame())
 	sub := rt.globalBindings()
 	for k, p := range i.params {
@@ -744,7 +818,7 @@ func (i *inlineCallInstr) run(rt *runtime, vals []xdm.Sequence) (xdm.Sequence, e
 	}
 	sub = sub.withOutputURI("")
 	tmp := newOutputBuilder(rt)
-	if err := execSequence(i.body, sub, tmp); err != nil {
+	if err := execSequence(body, sub, tmp); err != nil {
 		return nil, err
 	}
 	return i.returns.convertAsLazy(tmp.Sequence(),

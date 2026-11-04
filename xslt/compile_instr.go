@@ -776,6 +776,11 @@ func (c *compiler) compileApplyTemplates(n *xdm.Node, ns xpath.NamespaceResolver
 		return nil, err
 	}
 	instr.params, instr.sorts = params, sorts
+	if instr.sel != nil {
+		if inl := c.inlineInstrFor(n, instr, instr.sel, ns); inl != nil { // streamfn_inline.go
+			return inl, nil
+		}
+	}
 	c.noteStreamApply(n, instr, instr.sel, ns)
 	return instr, nil
 }

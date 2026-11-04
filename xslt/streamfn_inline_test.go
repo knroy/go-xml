@@ -28,7 +28,19 @@ func TestStreamInlinedCallsMatchTree(t *testing.T) {
 		`<xsl:function name="p:focus" streamability="absorbing"><xsl:param name="n" as="node()*"/>` +
 		`<f><xsl:value-of select="name(.)"/></f><xsl:copy-of select="$n"/></xsl:function>` +
 		`<xsl:function name="p:inner" streamability="absorbing"><xsl:param name="n" as="node()*"/>` +
-		`<xsl:for-each select="1 to 2"><xsl:copy-of select="$n"/></xsl:for-each></xsl:function>`
+		`<xsl:for-each select="1 to 2"><xsl:copy-of select="$n"/></xsl:for-each></xsl:function>` +
+		// Lane L2 round 4: recursion on the streamed current group (call
+		// frames, streamfn_frame.go), su-absorbing-202's shape.
+		`<xsl:function name="p:nest" streamability="absorbing"><xsl:param name="n" as="element()*"/><xsl:param name="d" as="xs:integer"/>` +
+		`<xsl:for-each-group select="$n" group-starting-with="rec[@k = 'a']"><xsl:choose>` +
+		`<xsl:when test="self::rec[@k = 'a']"><g k="{@k}" d="{$d}"><xsl:sequence select="p:nest(tail(current-group()), $d + 1)"/></g></xsl:when>` +
+		`<xsl:otherwise><xsl:apply-templates select="p:nest(tail(current-group()), $d + 1)" mode="m"/></xsl:otherwise>` +
+		`</xsl:choose></xsl:for-each-group></xsl:function>` +
+		`<xsl:function name="p:nestn" streamability="absorbing"><xsl:param name="n" as="element(rec)*"/><xsl:param name="d" as="xs:integer"/>` +
+		`<xsl:for-each-group select="$n" group-starting-with="rec[@k = 'a']"><xsl:choose>` +
+		`<xsl:when test="self::rec[@k = 'a']"><g k="{@k}" d="{$d}"><xsl:sequence select="p:nestn(tail(current-group()), $d + 1)"/></g></xsl:when>` +
+		`<xsl:otherwise><xsl:apply-templates select="p:nestn(tail(current-group()), $d + 1)" mode="m"/></xsl:otherwise>` +
+		`</xsl:choose></xsl:for-each-group></xsl:function>`
 	bodies := []struct {
 		body   string
 		stream bool
@@ -43,6 +55,8 @@ func TestStreamInlinedCallsMatchTree(t *testing.T) {
 		{`<xsl:variable name="c" select="copy-of(doc/rec)"/><o><xsl:sequence select="p:wrap($c)"/></o>`, true},
 		{`<o><xsl:copy-of select="p:focus(doc/rec)"/></o>`, false},
 		{`<o><xsl:copy-of select="p:inner(doc/rec)"/></o>`, false},
+		{`<o><xsl:sequence select="p:nest(doc/rec, 1)"/></o>`, true},
+		{`<o><xsl:sequence select="p:nestn(doc/rec, 1)"/></o>`, true},
 	}
 	n := 0
 	for name, doc := range coreDocs {
