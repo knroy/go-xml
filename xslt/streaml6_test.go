@@ -36,7 +36,19 @@ var l6DeclBodies = []struct {
 	{`<xsl:mode name="m" streamable="yes" on-no-match="shallow-skip"/>
 <xsl:template match="rec" mode="m"><r><xsl:for-each select="@*"><n><xsl:value-of select="name(.)"/></n><v><xsl:value-of select="."/></v></xsl:for-each><xsl:for-each select="ancestor::*"><a n="{name(.)}"><xsl:for-each select="@*"><xsl:value-of select="."/></xsl:for-each></a></xsl:for-each></r></xsl:template>`,
 		`<out><xsl:apply-templates mode="m"/></out>`, true},
+	// xsl:apply-templates over copies of the matches, to the tree's rules of a mode
+	// that is not streamable (executeCopies): positions and last() are the tree's.
+	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, true},
+	{l6CopyRules, `<out><xsl:apply-templates select="copy-of(doc/rec)" mode="t"/></out>`, true},
+	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of()" mode="t"><xsl:with-param name="p" select="'w'"/></xsl:apply-templates></out>`, true},
+	{l6CopyRules, `<out><xsl:apply-templates select=".//rec/copy-of(.)" mode="t"><xsl:with-param name="p" select="7"/></xsl:apply-templates></out>`, true},
+	// Accumulators declared: the copies' values are not held (copiesLinkWhy).
+	{l6CopyRules + `<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>`,
+		`<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, false},
 }
+
+// l6CopyRules are the rules of a mode that is not streamable, for copies.
+const l6CopyRules = `<xsl:template match="rec" mode="t"><xsl:param name="p" select="'-'"/><r k="{@k}" p="{$p}" n="{position()}" of="{last()}"><xsl:value-of select="count(.//sub)"/></r></xsl:template>`
 
 func TestStreamL6MatchesTree(t *testing.T) {
 	dir := t.TempDir()

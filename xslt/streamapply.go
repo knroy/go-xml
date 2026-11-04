@@ -218,10 +218,10 @@ func (c *compiler) noteStreamApply(n *xdm.Node, instr Instruction, sel *xpath.Co
 		}
 		op.instr, op.sel = instr, sel
 		if op.apply == applySplit {
-			if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" {
+			if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" && !c.applyCopies(op, ns) {
 				continue
 			}
-			if !op.split.bare() {
+			if op.pop == nil && !op.split.bare() {
 				// A window over a bare path (streampop.go): head(), subsequence() ...
 				pop, s, _ := c.popFor(op, ns)
 				if pop == nil || !pop.windowsOnly() && !applyPop(pop, instr) { // streamapply_pop.go
@@ -237,6 +237,9 @@ func (c *compiler) noteStreamApply(n *xdm.Node, instr Instruction, sel *xpath.Co
 
 // readyApply readies an apply op once it has compiled.
 func (op *streamOp) readyApply() string {
+	if groundApplyOp(op) {
+		return op.readyCopies() // streamsplit_l6.go
+	}
 	if s := op.split; op.apply == applySplit {
 		if s.nests && (!s.outermost || s.predFail) {
 			// A rule may read a match whole, and with it the matches inside.
@@ -571,6 +574,9 @@ func (s *Stylesheet) linkMain(m string, rs *rulesPlan) string {
 // link is linkApply from the apply ops of x, or, x nil, linkMain from main.
 func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 	if rs == nil {
+		if x != nil && x.onlyCopies() { // streamsplit_l6.go
+			return s.copiesLinkWhy()
+		}
 		return "apply-templates: no streamable mode"
 	}
 	seen := map[modeClass]bool{}
@@ -597,6 +603,12 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 			why = "a select at the document node may fall back to its tree"
 		}
 		x.eachApply(func(op *streamOp) {
+			if groundApplyOp(op) { // streamsplit_l6.go: copies go to the tree's rules
+				if w := s.copiesLinkWhy(); w != "" && why == "" {
+					why = w
+				}
+				return
+			}
 			var modes []string
 			switch i := op.instr.(type) {
 			case *applyTemplatesInstr:

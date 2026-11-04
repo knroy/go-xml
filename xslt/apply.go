@@ -73,6 +73,13 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 	}
 
+	return i.applySelected(rt, out, seq)
+}
+
+// applySelected sorts seq, the selection i's select gave, evaluates the
+// parameters and dispatches each item: the rest of Execute, which an apply
+// over copies of streamed matches runs too (streamsplit_l6.go).
+func (i *applyTemplatesInstr) applySelected(rt *runtime, out *outputBuilder, seq xdm.Sequence) error {
 	if len(i.sorts) > 0 {
 		var err error
 		if seq, err = applySorts(rt, seq, i.sorts); err != nil {

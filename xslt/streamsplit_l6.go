@@ -100,3 +100,116 @@ func atomicSelect(el *xdm.Node) bool {
 	e := parseAt(el, el.AttrValue("select"))
 	return e != nil && atomicValued(e)
 }
+
+// --- xsl:apply-templates over copies of the stream's matches ---------------
+//
+// copy-of(P), P/copy-of(.), P/copy-of() (and snapshot(P)) as the select of
+// an xsl:apply-templates make a population whose matches are grounded one
+// at a time and copied (streamPop.ground). What the rules are handed are
+// those copies: new trees, which the tree's own rules process as in tree
+// mode, in any mode, streamable or not. The copies are collected as the
+// stream is read, then dispatched by the tree's code (applySelected): the
+// select is evaluated whole first, then xsl:sort and xsl:with-param, as
+// applyTemplatesInstr.Execute does, so positions, last(), sorting and the
+// order of errors are the tree's. Memory: the tree mode holds the document
+// and the same copies (its select's value); the stream holds the copies and
+// one grounded match at a time (a nested match's copy is taken from its
+// outermost one's).
+
+// copyOfTail reads P/copy-of(.) (or P/copy-of()) as copy-of(P): each
+// match's copy, in trees made in P's order, which the path's sort keeps (as
+// snapshotTail does for snapshot).
+func copyOfTail(e xpath.Expr) (*xpath.FuncCall, bool) {
+	pe, ok := e.(*xpath.PathExpr)
+	if !ok || len(pe.Steps) < 2 {
+		return nil, false
+	}
+	f, ok := pe.Steps[len(pe.Steps)-1].(*xpath.FuncCall)
+	if !ok || !isFn(f, "copy-of", len(f.Args)) || !copyTail(f) { // streamsplit_fns.go
+		return nil, false
+	}
+	rest := &xpath.PathExpr{Root: pe.Root, Steps: pe.Steps[:len(pe.Steps)-1]}
+	return &xpath.FuncCall{Name: f.Name, Args: []xpath.Expr{rest}}, true
+}
+
+// groundApply reports whether p hands only copies of the stream's matches
+// (and motionless parts' items): no choice, no values read off the cursor.
+func groundApply(p *streamPop) bool {
+	return p.cond == nil && p.ground && p.fn != nil && !p.values
+}
+
+// groundApplyOp reports whether op is an apply op over such a population.
+func groundApplyOp(op *streamOp) bool {
+	return op.pop != nil && groundApply(op.pop)
+}
+
+// applyCopies takes, for an apply op whose select the split refused (a
+// nested P in P/copy-of(.): "not within the match"), the population of
+// copies instead; it reports whether it did.
+func (c *compiler) applyCopies(op *streamOp, ns xpath.NamespaceResolver) bool {
+	e := reparse(op.sel, ns)
+	if e == nil {
+		return false
+	}
+	if _, ok := copyOfTail(e); !ok {
+		return false
+	}
+	pop, s, why := c.popFor(op, ns)
+	if why != "" || pop == nil || !groundApply(pop) || !applyPop(pop, op.instr) {
+		return false
+	}
+	op.pop, op.split, op.dead = pop, s, ""
+	return true
+}
+
+// readyCopies readies an apply op over copies: each match is grounded
+// (none is the document node).
+func (op *streamOp) readyCopies() string {
+	if op.split.minDepth() < 1 {
+		return "apply-templates over copies: a match may be the document node"
+	}
+	op.split.mode = matchGround
+	return ""
+}
+
+// copiesLinkWhy is why an apply op over copies cannot run: the rules would
+// read accumulator values of the copies, which the grounded matches' copies
+// (copy-accumulators) do not hold once the stream has moved on.
+func (s *Stylesheet) copiesLinkWhy() string {
+	if len(s.accumulators) != 0 {
+		return "apply-templates over copies with accumulators declared"
+	}
+	return ""
+}
+
+// onlyCopies reports whether every apply op of x is one over copies, which
+// reaches no streamed rule.
+func (x *streamExec) onlyCopies() bool {
+	ok := true
+	x.eachApply(func(op *streamOp) { ok = ok && groundApplyOp(op) })
+	return ok
+}
+
+// executeCopies runs i, an apply op over copies: the population is read
+// whole, its items collected, then handed to the tree's dispatch.
+func (i *applyTemplatesInstr) executeCopies(rt *runtime, out *outputBuilder, run *streamRun, op *streamOp) error {
+	if run.used {
+		return errStreamPlan
+	}
+	var seq xdm.Sequence
+	err := op.pop.read(run, rt, op, func(it xdm.Item) error {
+		seq = append(seq, it)
+		return nil
+	}, func(item func(xdm.Item) error, _ func() (bool, error)) error {
+		run.used = true
+		return op.split.loopAt(rt.ctx, run.c, run.d, run.groupAt(op), item, nil)
+	})
+	if err != nil {
+		return err
+	}
+	off := run.off
+	run.off = true
+	err = i.applySelected(rt, out, seq)
+	run.off = off
+	return err
+}
