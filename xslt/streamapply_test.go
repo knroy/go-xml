@@ -51,14 +51,17 @@ var applyCases = []struct {
 		`<xsl:apply-templates select="."/>`, true},
 	{`<xsl:mode streamable="yes"/><xsl:template match="/"><v><xsl:value-of select="upper-case(.)"/></v></xsl:template>`,
 		`<xsl:apply-templates select="."/>`, false},
+	// The document node's string value as simple content, read off the text
+	// events (29cc3e96).
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/"><xsl:attribute name="a" select="."/></xsl:template>`,
-		`<xsl:apply-templates select="."/>`, false},
+		`<xsl:apply-templates select="."/>`, true},
 	// xsl:copy of the document node, its children applied (streamable-001):
 	// the copy takes the DOCTYPE and base URI the dispatch gave the stand-in.
 	{`<xsl:mode streamable="yes"/><xsl:template match="/"><xsl:copy><xsl:apply-templates/></xsl:copy></xsl:template>` +
 		`<xsl:template match="*"><xsl:copy><xsl:apply-templates/></xsl:copy></xsl:template><xsl:template match="sub"/>`,
 		`<xsl:variable name="d"><xsl:apply-templates select="."/></xsl:variable><b u="{base-uri($d/*)}"/><xsl:copy-of select="$d"/>`, true},
-	{`<xsl:mode streamable="yes"/>`, `<xsl:copy><xsl:apply-templates select="*/rec"/></xsl:copy>`, false},
+	// xsl:copy of the document node, whatever its body reads (b9cbc6d0).
+	{`<xsl:mode streamable="yes"/>`, `<xsl:copy><xsl:apply-templates select="*/rec"/></xsl:copy>`, true},
 	// Built-in rules: deep-skip, shallow-skip, deep-copy, fail.
 	{`<xsl:mode streamable="yes" on-no-match="deep-skip"/><xsl:template match="/"><o><xsl:apply-templates/></o></xsl:template>` +
 		`<xsl:template match="doc|rec"><xsl:apply-templates/></xsl:template><xsl:template match="sub"><s x="{@x}"/></xsl:template>`,
