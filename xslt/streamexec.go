@@ -1144,7 +1144,7 @@ func (s *streamSplit) memory(minD int) string {
 		s.holdAt() // streamhold.go: held, capped at the tree's records
 	case (c == "nodes" || c == "subtree") && minD < 2:
 		return "collects grounded copies (" + c + ") of the document element"
-	case (s.red == "min" || s.red == "max") && (minD > 0 || s.group):
+	case (s.red == "min" || s.red == "max") && (minD > 0 || s.group) && !s.oneTake(): // streamsplit_onetake.go
 		return s.red + "() below the document node cannot fall back to the tree"
 	}
 	return ""
@@ -1481,7 +1481,7 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		}
 	}()
 	stream := br.streamDoc
-	if vin != nil {
+	if vin != nil && !vin.asRead {
 		stream = func(ctx *xpath.Context, uri, base string, fn func(*xdmstream.Cursor) error) error {
 			return br.(*FileResolver).streamDocAs(ctx, uri, base, false, fn) // the copy's: no document URI
 		}
