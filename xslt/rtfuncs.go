@@ -80,6 +80,11 @@ func init() {
 		if rt == nil {
 			return nil
 		}
+		if rt.savesAbsentFocus(c.(*xpath.Context), name.Local) { // accumdyn_l4.go
+			return func(call any) any {
+				return bindRuntime(call.(*xpath.Context), rt).WithFocus(nil, 0, 0)
+			}
+		}
 		return func(call any) any {
 			return bindRuntime(call.(*xpath.Context), rt)
 		}

@@ -364,6 +364,11 @@ type TransformOptions struct {
 	nestedLock   *xpath.EvalLock
 	nestedLocals *xpathleaf.Locals
 
+	// readerInput says the principal input was supplied to TransformReader,
+	// in streamable form, whether it streams or falls back to a tree
+	// (accumdyn_l4.go). Unexported because only TransformReader sets it.
+	readerInput bool
+
 	// disableMessages is fn:transform's enable-messages=false: a
 	// non-terminating xsl:message is not evaluated, and a terminating one
 	// terminates without recording its text. Unexported because only
@@ -479,6 +484,8 @@ const (
 // for xdm.Parse; set them for fn:base-uri, fn:document-uri and relative
 // fn:doc references from the document to answer.
 func (s *Stylesheet) TransformReader(ctx context.Context, r io.Reader, opts TransformOptions) (*Result, error) {
+	// The input is supplied in streamable form, streamed or not (accumdyn_l4.go).
+	opts.readerInput = true
 	if !s.streamsMain(opts) || !s.sourceValidationStreams(opts.SourceValidation) { // streamvalidin.go
 		tree, err := xdm.Parse(r, opts.SourceParseOptions)
 		if err != nil {

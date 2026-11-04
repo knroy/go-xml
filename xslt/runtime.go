@@ -81,6 +81,10 @@ type runtime struct {
 type transformState struct {
 	sheet *Stylesheet
 
+	// readerRoot is the principal input's document node when it was
+	// supplied to TransformReader (accumdyn_l4.go), else nil.
+	readerRoot *xdm.Node
+
 	// globalsForced counts the global variables evaluated so far, so that a
 	// streamed item that forced one keeps charged what it built (liveItem).
 	globalsForced int
@@ -798,6 +802,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 			baseURIUsed:   new(bool),
 			baseOutputURI: opts.BaseOutputURI,
 			opts:          &opts,
+			readerRoot:    readerRootOf(root, opts), // accumdyn_l4.go
 			goCtx:         ctx,
 			blocking:      map[*xdm.Node]bool{},
 		},

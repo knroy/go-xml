@@ -506,6 +506,7 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 	// It shares the calling transform's lock and locals stack. See
 	// TransformOptions.nestedLock.
 	topts.nestedLock, topts.nestedLocals = nil, nil
+	topts.readerInput = false // accumdyn_l4.go: the nested input is not the reader's
 	if prt := runtimeOf(ctx); prt != nil && prt.transformState != nil && prt.evalLock != nil {
 		topts.nestedLock, topts.nestedLocals = prt.evalLock, prt.locals
 	}

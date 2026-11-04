@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
@@ -146,6 +147,33 @@ func TestStreamTryAccumFailsAtStart(t *testing.T) {
 			if m := st.Runs[streamtrace.Main]; c.stream != (m != 0) {
 				t.Errorf("%s: %d main runs, want streamed %v", where, m, c.stream)
 			}
+		}
+	}
+}
+
+// TestAccumDynamicCallStreamedInput: accumulator-after#1 made at the global
+// context item saves an absent focus when the input is supplied to
+// TransformReader (§10.3.6, accumulator-061): XTDE3350, streamed or on its
+// tree fallback; over a tree given to Transform it keeps its focus.
+func TestAccumDynamicCallStreamedInput(t *testing.T) {
+	const decls = `<xsl:param name="aa" select="accumulator-after#1"/>
+	  <xsl:accumulator name="n" as="xs:integer" initial-value="0" streamable="yes">
+	    <xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>
+	  <xsl:mode streamable="yes" use-accumulators="#all" on-no-match="shallow-skip"/>`
+	for _, body := range []string{
+		// Refused by the planner (two consumers): the tree fallback.
+		`<xsl:template match="rec"><r b="{accumulator-before('n')}"><xsl:apply-templates/></r><e><xsl:value-of select="../$aa('n')"/></e></xsl:template>`,
+		`<xsl:template match="/"><o><xsl:value-of select="$aa('n')"/></o></xsl:template>`,
+	} {
+		sheet := mainSheet(decls + body)
+		doc := mainDocs["flat"]
+		so, _ := mainRun(sheet, doc, true, TransformOptions{})
+		to, _ := mainRun(sheet, doc, false, TransformOptions{})
+		if !strings.Contains(so, "XTDE3350") {
+			t.Errorf("%s: TransformReader gave %s, want XTDE3350", body, so)
+		}
+		if strings.Contains(to, "XTDE3350") {
+			t.Errorf("%s: Transform of a tree gave %s, want a value", body, to)
 		}
 	}
 }
