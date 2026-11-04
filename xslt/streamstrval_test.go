@@ -39,3 +39,24 @@ func TestStreamStringOfTyped(t *testing.T) {
 		coreCheck(t, sheet(body), dir, body, true, TransformOptions{})
 	}
 }
+
+// TestStreamCopyNamespaceOrder: a copy of the document made off the cursor
+// declares each element's namespaces in the order the tree's copy-of does,
+// its own as written, then the inherited ones, not sorted by prefix as
+// xsl:copy sorts them (si-result-document-107 and -127).
+func TestStreamCopyNamespaceOrder(t *testing.T) {
+	dir := t.TempDir()
+	doc := `<r xmlns="urn:r" xmlns:z="urn:z" xmlns:a="urn:a"><L><N>1</N>` +
+		`<your:extra my:value="22" xmlns:your="http://your.com/ns" xmlns:my="http://my.com/ns" xmlns:hers="http://hers.com/ns">242</your:extra>` +
+		`<b:x xmlns:b="urn:b" xmlns:z="urn:z2" xmlns:a="urn:a"/></L></r>`
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		`<xsl:copy-of select="."/>`,
+		`<xsl:copy-of select="child::node()"/>`,
+		`<xsl:copy-of select="*"/>`,
+	} {
+		coreCheck(t, coreSheet(body), dir, body, true, TransformOptions{})
+	}
+}
