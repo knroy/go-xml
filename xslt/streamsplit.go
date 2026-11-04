@@ -261,6 +261,16 @@ func splitStreamIn(e xpath.Expr, base *xpath.Compiled, doc, group, key bool) (*s
 		w.put(&xpath.VarRef{Name: splitItems})
 	}
 	s.outer = part(root)
+	if group {
+		// The outer runs on the tree's code, where a streamed group's
+		// current-group() is the posture guard's mark (streamgroup.go):
+		// only the path may read the group (sx-MapExpr-101, si-group-040).
+		cg := false
+		walkExprCalls(root, func(x *xpath.FuncCall) { cg = cg || isCurrentGroup(x) })
+		if cg {
+			return nil, "current-group() outside the consuming path: " + root.String()
+		}
+	}
 	if s.climbElems && (s.red == "" || s.red == "nth") && !(viewCheck{items: true}).safe(root, focus, false) {
 		return nil, "ancestors climbed to read beyond their views: " + root.String()
 	}
