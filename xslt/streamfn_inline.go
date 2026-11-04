@@ -707,7 +707,7 @@ func (c *compiler) inlineInstrFor(n *xdm.Node, orig Instruction, sel *xpath.Comp
 		return fail("caller")
 	}
 	if ic.loop {
-		if why := c.loopOps(n, in, part(loopPath), ns, plans); why != "" { // streamfn_loop.go
+		if why := c.loopOps(n, in, sel, part(loopPath), ns, plans); why != "" { // streamfn_loop.go
 			return fail(why)
 		}
 		in.loop, in.one = true, ic.one

@@ -862,8 +862,8 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 // expr checks the expression src written on el: it reads of focus f only
 // what f has, and returns nodes of it only where nodeOK.
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
-	e := parseAt(el, src)
-	peek := b.kidsAt(el, e, f) // streamkids_l6.go
+	e := b.loopRead(parseAt(el, src)) // streamfn_loop.go
+	peek := b.kidsAt(el, e, f)        // streamkids_l6.go
 	vc := viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek}
 	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) { // streamcopy_l3doc.go
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
