@@ -104,6 +104,13 @@ var applyCases = []struct {
 	{`<xsl:mode name="s" streamable="yes"/><xsl:template match="rec" mode="s"><xsl:variable name="c"><xsl:copy-of select="."/></xsl:variable>` +
 		`<r><xsl:apply-templates select="$c/rec/sub"/></r></xsl:template><xsl:template match="sub"><s x="{@x}"/></xsl:template>`,
 		`<xsl:apply-templates select="*/rec" mode="s"/>`, true},
+	// xsl:fork with two consuming prongs in a streamed group's body in a
+	// rule (si-fork-808's shape): the rule on a grounded copy, the group
+	// and the fork the tree's code on it (streamtee_ground.go).
+	{`<xsl:mode streamable="yes"/><xsl:mode name="n" streamable="yes"/><xsl:template match="doc"><o><xsl:for-each-group select="*" group-starting-with="rec">` +
+		`<g><xsl:fork><xsl:sequence><xsl:apply-templates select="node()[1]" mode="n"/></xsl:sequence>` +
+		`<xsl:sequence><c><xsl:value-of select="count(current-group())"/></c></xsl:sequence></xsl:fork></g></xsl:for-each-group></o></xsl:template>`,
+		`<xsl:apply-templates/>`, true},
 	// The document node's names through self or ancestor-or-self, beside
 	// its consumer (accumulator-087s's shape, streamtee_docnode.go).
 	{`<xsl:mode streamable="yes"/><xsl:template match="/|*"><e p="/{string-join(ancestor-or-self::node()/node-name(), '/')}">` +
