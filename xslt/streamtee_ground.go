@@ -45,6 +45,7 @@ var groundReasons = []string{
 	"two consuming tests in xsl:choose",
 	"two consuming parts of a text value template",
 	"several prongs consume an element",
+	"current-group() outside the consuming path", // streamsplit.go: the group read beside its path
 }
 
 // groundRuleExec returns the plan of the rule el for an element when its

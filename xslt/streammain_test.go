@@ -211,6 +211,11 @@ var mainCases = []struct {
 	// A filter over tokenize()'s strings: the predicates read those, never
 	// the stream (si-iterate-037).
 	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:value-of select="//text()!tokenize(., ' ')[matches(., 't')]"/></o></xsl:template>`, true},
+	// A group read beside its consuming path, as a map's two copies: refused
+	// as the plan readies, the rule runs on a grounded copy of its element
+	// (streamtee_ground.go; sx-MapExpr-101, su-absorbing-201).
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="rec"><xsl:copy><xsl:for-each-group select="*" group-starting-with="sub">` +
+		`<xsl:variable name="m" select="map{1: copy-of(.), 2: copy-of(current-group()[position() gt 1])}"/><g n="{count($m?2)}"><xsl:copy-of select="$m?1"/></g></xsl:for-each-group></xsl:copy></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
