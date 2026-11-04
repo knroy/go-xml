@@ -29,6 +29,7 @@ package xslt
 import (
 	"reflect"
 	goruntime "runtime"
+	"strings"
 	"sync"
 	"weak"
 
@@ -101,7 +102,8 @@ func withPkgFuncs(fns map[funcKey]*streamFunc, root *xdm.Node) map[funcKey]*stre
 }
 
 // selfContainedFn reports whether f's body is the inliner's shape and
-// reaches no stylesheet function.
+// reaches no stylesheet function and no accumulator: the package's own
+// (§3.5.5), which no streamed run observes (accumRefusal).
 func selfContainedFn(f *streamFunc) bool {
 	body := sheetBody(f.body)
 	if body == nil {
@@ -118,7 +120,7 @@ func selfContainedFn(f *streamFunc) bool {
 		case *xpath.NamedFunctionRef:
 			ok = !stylesheetFn(x.Name)
 		case *xpath.FuncCall:
-			ok = !stylesheetFn(x.Name)
+			ok = !stylesheetFn(x.Name) && !(x.Name.URI == fnNS && strings.HasPrefix(x.Name.Local, "accumulator-"))
 		}
 	})
 	return ok
