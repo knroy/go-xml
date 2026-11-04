@@ -700,3 +700,94 @@ func (i *applyTemplatesInstr) executeForeign(rt *runtime, out *outputBuilder, ru
 func treeApplyOp(op *streamOp) bool {
 	return op.apply == applyForeign || groundApplyOp(op)
 }
+
+// callTemplateOp plans an xsl:call-template whose one consuming parameter is
+// read off the cursor, as nextIteration plans xsl:next-iteration's
+// (si-call-template-002: with-param select="PRICE" at each ITEM): an
+// expression op on the parameter's select (noteStreamParam; the tree's
+// evalParams reads it through evalStreamExpr), the other parameters
+// motionless. The template called, of this module, reads nothing of the
+// focus a view lacks: xsl:context-item use="absent", or every instruction
+// motionless at f (on a plan of its own). Its value, grounded (§19.8.4.41),
+// stands in for the tree's node only where it is atomized: the with-param
+// or the template's xsl:param of that name has an atomic @as.
+func (b *streamBuilder) callTemplateOp(el *xdm.Node, f vfocus) bool {
+	t := namedTemplate(el)
+	if t == nil || !b.calleeMotionless(t, f) {
+		return b.refuse("consuming xsl:call-template")
+	}
+	var op *streamOp
+	for ch := range el.Children() {
+		switch {
+		case ch.Kind() == xdm.KindText && strings.TrimSpace(ch.Value()) == "",
+			ch.Kind() == xdm.KindComment, ch.Kind() == xdm.KindPI:
+			continue
+		case !isXSL(ch, "with-param"):
+			return b.refuse(elName(ch) + " in xsl:call-template")
+		}
+		if sb := b.strict(); sb.motionless(ch, f) {
+			continue
+		}
+		if op != nil || ch.Attr("", "select") == nil {
+			return b.refuse("consuming xsl:with-param of xsl:call-template")
+		}
+		for a := range ch.Attrs() {
+			if n := a.Name(); n.URI == "" && !streamAttrsOK[n.Local] {
+				return b.refuse("attribute " + n.Local + " of xsl:with-param")
+			}
+		}
+		if !atomicAs(ch, ch.AttrValue("as")) && !calleeAtomic(t, ch) {
+			return b.refuse("consuming xsl:with-param of xsl:call-template: not atomized")
+		}
+		op = &streamOp{x: b.x, el: ch, doc: f == vNone, inGroup: b.grp, key: b.key}
+	}
+	if op != nil {
+		*b.ops = append(*b.ops, op)
+		b.x.exprOps = append(b.x.exprOps, op)
+		b.kinds[streamtrace.KindSelect]++
+	}
+	b.kinds[streamtrace.KindElement]++
+	return true
+}
+
+// calleeMotionless reports whether t, a named template, reads of the focus
+// it is called with (f) only what a view has.
+func (b *streamBuilder) calleeMotionless(t *xdm.Node, f vfocus) bool {
+	for ch := range t.Children() {
+		if ch.Kind() == xdm.KindElement && isXSL(ch, "context-item") && ch.AttrValue("use") == "absent" {
+			return true
+		}
+	}
+	var ops []*streamOp
+	var kinds [streamtrace.NumKinds]int64
+	sb := &streamBuilder{pl: &streamPlan{recs: map[any]*planRec{}}, x: newStreamExec(),
+		ops: &ops, kinds: &kinds, key: b.key, noIdent: b.noIdent, up: b.up}
+	for ch := range t.Children() {
+		switch {
+		case ch.Kind() == xdm.KindText && strings.ContainsAny(ch.Value(), "{}"):
+			return false
+		case ch.Kind() != xdm.KindElement, isXSL(ch, "context-item"):
+		case isXSL(ch, "param"):
+			if !sb.attrs(ch, f) || !sb.content(ch, f) {
+				return false
+			}
+		default:
+			if !sb.motionless(ch, f) {
+				return false
+			}
+		}
+	}
+	return len(ops) == 0 && len(sb.x.ops) == 0 && len(sb.x.exprOps) == 0
+}
+
+// calleeAtomic reports whether t declares the parameter wp passes with an
+// atomic @as (the value is atomized there).
+func calleeAtomic(t, wp *xdm.Node) bool {
+	name, tunnel := wp.AttrValue("name"), isYes(wp.AttrValue("tunnel"))
+	for _, ch := range t.ChildElements() {
+		if isXSL(ch, "param") && ch.AttrValue("name") == name && isYes(ch.AttrValue("tunnel")) == tunnel {
+			return atomicAs(ch, ch.AttrValue("as"))
+		}
+	}
+	return false
+}

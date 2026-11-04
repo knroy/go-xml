@@ -114,6 +114,10 @@ var l6DeclBodies = []struct {
 	// streamable (offApplies; si-iterate-139).
 	{`<xsl:template match="rec" mode="t9"><r k="{@k}" up="{name(..)}"/></xsl:template>`,
 		`<out><xsl:iterate select="snapshot(//rec)"><xsl:param name="n" select="1"/><o c="{$n}"/><xsl:apply-templates select="." mode="t9"/><xsl:next-iteration><xsl:with-param name="n" select="$n + 1"/></xsl:next-iteration></xsl:iterate></out>`, true},
+	// xsl:call-template whose one consuming parameter is atomized by the callee
+	// (callTemplateOp; si-call-template-002).
+	{`<xsl:template name="ct"><xsl:context-item use="absent"/><xsl:param name="x" as="xs:integer?"/><c v="{$x * 2}"/></xsl:template>`,
+		`<out><xsl:for-each select="doc/rec"><xsl:call-template name="ct"><xsl:with-param name="x" select="sub[1]/@x"/></xsl:call-template></xsl:for-each></out>`, true},
 	// xsl:apply-templates over copies of the matches, to the tree's rules of a mode
 	// that is not streamable (executeCopies): positions and last() are the tree's.
 	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, true},

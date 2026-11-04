@@ -400,6 +400,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		return b.nextOp(el, f)
 	case "next-iteration":
 		return b.nextIteration(el, f)
+	case "call-template":
+		return b.callTemplateOp(el, f) // streamsplit_l6.go
 	}
 	return b.refuse("consuming xsl:" + local)
 }
