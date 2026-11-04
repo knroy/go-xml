@@ -42,6 +42,18 @@ var k2Bodies = []struct {
 	{`<xsl:variable name="c" select="false()"/><out><xsl:value-of select="(if ($c) then /doc/rec[1]/sub/ancestor-or-self::* else /doc/rec[1]/sub/ancestor::*) ! name()" separator=","/></out>`, true},
 }
 
+// k2DeclBodies are k2Bodies that need top-level declarations.
+var k2DeclBodies = []struct {
+	decl, body string
+	stream     bool
+}{
+	// accumulator-before in a pattern's predicate on an element (patternAccOK).
+	{`<xsl:accumulator name="n" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>
+<xsl:mode name="k" streamable="yes" on-no-match="shallow-skip"/>
+<xsl:template match="rec[accumulator-before('n') mod 2 = 1]" mode="k"><odd k="{@k}"/></xsl:template>`,
+		`<out><xsl:apply-templates mode="k"/></out>`, true},
+}
+
 func TestStreamK2MatchesTree(t *testing.T) {
 	dir := t.TempDir()
 	streamed := 0
@@ -53,6 +65,12 @@ func TestStreamK2MatchesTree(t *testing.T) {
 			for _, d := range coreDecls {
 				where := fmt.Sprintf("doc %s, decls %q, body %s", name, d, c.body)
 				streamed += coreCheck(t, coreSheetWith(d, c.body), dir, where, c.stream, TransformOptions{})
+			}
+		}
+		for _, c := range k2DeclBodies {
+			for _, d := range coreDecls {
+				where := fmt.Sprintf("doc %s, decls %q, body %s %s", name, d, c.decl, c.body)
+				streamed += coreCheck(t, coreSheetWith(d+c.decl, c.body), dir, where, c.stream, TransformOptions{})
 			}
 		}
 	}
