@@ -114,6 +114,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A streamed leaf a rule matched got one runtime for matching and another for its copy | It gets one: 76 → 64 allocations per record. | [`a41d41d`][a41d41d] |
 | A matched streamed node's runtime was copied twice, for its focus and its selection | Once: 64 → 52 allocations per record (the tree's 61), two-instruction identity 1.58× → 1.39× CPU. | [`f34dfa2`][f34dfa2] |
 | An `xsl:try` rolled back under `Output` before the sink began could panic, or lose whitespace written ahead of the mark | A rollback puts back the items of the result's top and document level written after the mark. (untested) | [`a7befda`][a7befda] |
+| A nested `xsl:try` rolled back on an element an outer try built in place under `Output` could miss XTDE0410 for a later attribute | The rollback keeps the child written before its mark. (untested) | [`7ff197b`][7ff197b] |
 | A streamed expression calling a recursive or non-inlinable stylesheet function sent the container to the tree | The call runs on values, or on each match's grounded copy, when its body allows. (untested) | [`19593ed`][19593ed] |
 | `[A, B]?*/T` over a streamed path sent the container to the tree | It streams as `(A, B)/T`, the union of the paths. (untested) | [`ae36f0b`][ae36f0b] |
 | A simple map over streamed text, comment or PI nodes sent the container to the tree | R runs on each kept leaf, as a path's tail over leaves does. (untested) | [`94181b7`][94181b7] |
@@ -2120,6 +2121,7 @@ here so every entry in this file sits under a release.
 [a41d41d]: https://github.com/knroy/go-xml/commit/a41d41d
 [f34dfa2]: https://github.com/knroy/go-xml/commit/f34dfa2
 [a7befda]: https://github.com/knroy/go-xml/commit/a7befda
+[7ff197b]: https://github.com/knroy/go-xml/commit/7ff197b0
 [19593ed]: https://github.com/knroy/go-xml/commit/19593ed
 [ae36f0b]: https://github.com/knroy/go-xml/commit/ae36f0b
 [94181b7]: https://github.com/knroy/go-xml/commit/94181b7
