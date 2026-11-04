@@ -196,6 +196,7 @@ func splitStreamIn(e xpath.Expr, base *xpath.Compiled, doc, group, key bool) (*s
 		focus = vNone
 	}
 	e = hoistChoice(e, focus, key)
+	e = hoistMapChoice(e, focus, key) // streamsplit_k2.go
 	if x, ok := e.(*xpath.IfExpr); ok {
 		vc := viewCheck{kids: true, key: key}
 		if vc.safe(x.Cond, focus, true) && !(vc.safe(x.Then, focus, false) && vc.safe(x.Else, focus, false)) {

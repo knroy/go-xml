@@ -149,3 +149,24 @@ var docFns = map[string]bool{"doc": true, "document": true, "doc-available": tru
 	"uri-collection": true, "unparsed-text": true, "unparsed-text-lines": true,
 	"unparsed-text-available": true, "json-doc": true, "parse-xml": true, "parse-xml-fragment": true,
 	"transform": true, "load-xquery-module": true}
+
+// hoistMapChoice rewrites (if (c) then A else B) ! R, c motionless at the
+// focus, as if (c) then A ! R else B ! R: R maps over whichever branch c
+// chooses, and c is evaluated first in both. The choice is then the
+// split's own (splitStreamIn), each branch's split run only when chosen.
+// Both branches share R: the split writes into the consuming path's place
+// only, which is in A or B, never in R (viewCheck's has-children rewrite
+// in place is the same either time).
+func hoistMapChoice(e xpath.Expr, focus vfocus, key bool) xpath.Expr {
+	m, ok := e.(*xpath.SimpleMap)
+	if !ok {
+		return e
+	}
+	x, ok := hoistMapChoice(m.Left, focus, key).(*xpath.IfExpr)
+	if !ok || !(viewCheck{kids: true, key: key}).safe(x.Cond, focus, true) {
+		return e
+	}
+	return &xpath.IfExpr{Cond: x.Cond,
+		Then: &xpath.SimpleMap{Left: x.Then, Right: m.Right},
+		Else: &xpath.SimpleMap{Left: x.Else, Right: m.Right}}
+}
