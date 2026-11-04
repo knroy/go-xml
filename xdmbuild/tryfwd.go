@@ -58,6 +58,7 @@ package xdmbuild
 // output are appended when the try ends, as in tree mode.
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/xdmsink"
@@ -95,6 +96,10 @@ type tryFwd struct {
 type tryMark struct {
 	s       *sink
 	started bool // the sink had begun: a mark taken before can un-begin it
+	// levels are the top of the result and the document level pending
+	// there, as they were, when the sink had not begun: their items are
+	// written once it begins, after the mark, and a rollback puts them back.
+	levels []levelItems
 	// text is the value of base's newest child when it is text, left
 	// unwritten (sink.settle): what is handed on may merge into it, and a
 	// rollback puts it back as it was, for the catch to merge into.
@@ -113,6 +118,12 @@ type tryMark struct {
 	w       any
 	base    levelMark
 	fwds    []fwdMark // the buffers between this one and base, outermost last
+}
+
+type levelItems struct {
+	b     *Builder
+	items xdm.Sequence
+	frag  *xdm.Tree
 }
 
 type levelMark struct {
@@ -346,6 +357,13 @@ func settle(t *Builder, m *tryMark) bool {
 	*m = tryMark{s: s, started: s.started, text: text, hasText: hasText, frames: len(s.frames), stamp: s.stamp, items: s.items, opened: s.opened,
 		faults: len(s.faults), pending: s.pending, fwds: m.fwds,
 		base: levelMark{t, len(t.items), t.lastAtomic, *t.refused}}
+	if !s.started {
+		for _, l := range []*Builder{s.root, s.pending} {
+			if l != nil {
+				m.levels = append(m.levels, levelItems{l, slices.Clone(l.items), l.frag})
+			}
+		}
+	}
 	m.w = cw.Mark()
 	s.cps++
 	return true
@@ -450,7 +468,7 @@ func (m *tryMark) rollback() int64 {
 			t.ReplaceOpen(m.elem) // the attributes the try handed on taken off
 		}
 		s.kept = nil
-	} else {
+	} else if m.started {
 		for _, it := range t.items[m.base.items:] {
 			if nd, ok := it.(*xdm.Node); ok {
 				delete(s.streamed, nd) // an element started in place (start) and closed
@@ -458,6 +476,17 @@ func (m *tryMark) rollback() int64 {
 		}
 		clear(t.items[m.base.items:])
 		t.items = t.items[:m.base.items]
+	}
+	for _, l := range m.levels {
+		for _, seq := range []xdm.Sequence{l.b.items, l.items} {
+			for _, it := range seq {
+				if nd, ok := it.(*xdm.Node); ok {
+					delete(s.streamed, nd)
+				}
+			}
+		}
+		clear(l.b.items)
+		l.b.items, l.b.frag = append(l.b.items[:0], l.items...), l.frag
 	}
 	m.base.restore()
 	var charged int64

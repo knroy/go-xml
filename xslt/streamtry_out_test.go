@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -48,6 +49,15 @@ var tryOutSheets = []struct {
 	{"top-nested", ``, `<xsl:template match="/"><xsl:try><xsl:try><html><body/></html><xsl:sequence select="error()"/><xsl:catch errors="err:XPTY0004"/></xsl:try><xsl:catch><xsl:try><doc/><e/><xsl:catch/></xsl:try></xsl:catch></xsl:try><f/></xsl:template>`, true, ""},
 	{"top-two-tries", ``, `<xsl:template match="/"><xsl:try><html/><x/><xsl:sequence select="error()"/><xsl:catch/></xsl:try><xsl:try><doc/><y/><xsl:catch/></xsl:try></xsl:template>`, true, ""},
 	{"top-catch-undecided", ``, `<xsl:template match="/"><xsl:try><html/><x/><xsl:sequence select="error()"/><xsl:catch>only text</xsl:catch></xsl:try></xsl:template>`, true, ""},
+	// Items before the try that do not decide the method yet (whitespace,
+	// atomics) are written once the sink begins, after the mark: a rollback
+	// puts them back (TestStreamOutFuzz seed 2885, a built-in rule's
+	// whitespace in a document level).
+	{"top-space-before", ``, `<xsl:template match="/"><xsl:text> </xsl:text><xsl:text>&#10;</xsl:text><xsl:try>t<x><y/></x><xsl:sequence select="error()"/><xsl:catch><c/></xsl:catch></xsl:try></xsl:template>`, true, ""},
+	{"top-space-before-ok", ``, `<xsl:template match="/"><xsl:text> </xsl:text><xsl:try>t<x><y/></x><xsl:catch><c/></xsl:catch></xsl:try></xsl:template>`, true, ""},
+	{"top-atomic-before", ``, `<xsl:template match="/"><xsl:sequence select="' ', ' '"/><xsl:try><x><y/></x><xsl:sequence select="error()"/><xsl:catch>c<c/></xsl:catch></xsl:try></xsl:template>`, true, ""},
+	{"copy-document-space-before", ``, `<xsl:template match="/"><xsl:copy><xsl:text> </xsl:text><xsl:text>&#10;</xsl:text><xsl:try>t<x><y/></x><xsl:sequence select="error()"/><xsl:catch><c/></xsl:catch></xsl:try></xsl:copy></xsl:template>`, true, ""},
+	{"builtin-text-only-copy", `<xsl:mode on-no-match="text-only-copy"/>`, `<xsl:template match="/"><xsl:text> </xsl:text><xsl:apply-templates/></xsl:template><xsl:template match="rec[@k = '1']"><xsl:try><xsl:text>t</xsl:text><tw><tz/><xsl:copy-of select="n"/><xsl:attribute name="late" select="'x'"/></tw><xsl:catch><caught/></xsl:catch></xsl:try></xsl:template>`, true, ""},
 	{"top-atomic", ``, `<xsl:template match="/"><xsl:try><xsl:sequence select="1, 2"/><html/><xsl:sequence select="error()"/><xsl:catch><html/><z/></xsl:catch></xsl:try></xsl:template>`, true, ""},
 	{"top-started", ``, `<xsl:template match="/"><z/><y/><xsl:try><a/><xsl:sequence select="1, 2"/><b/><xsl:catch/></xsl:try><c/></xsl:template>`, true, ""},
 	{"top-fail", ``, `<xsl:template match="/"><z/><y/><xsl:try><a/><xsl:sequence select="1, 2"/><b/><xsl:sequence select="error()"/><xsl:catch><caught/></xsl:catch></xsl:try><c/></xsl:template>`, true, ""},
@@ -163,7 +173,14 @@ func tryOutCheck(t *testing.T, sheet *Stylesheet, where, code string) int64 {
 	for _, main := range []bool{false, true} {
 		want, werr := outRun(sheet, tryOutDoc, main, false, TransformOptions{})
 		before := xdmsink.Forwarded.Load()
-		got, gerr := outRun(sheet, tryOutDoc, main, true, TransformOptions{})
+		got, gerr := func() (got string, err error) {
+			defer func() {
+				if p := recover(); p != nil {
+					err = fmt.Errorf("panic: %v", p) // reported, not a crash of the test binary
+				}
+			}()
+			return outRun(sheet, tryOutDoc, main, true, TransformOptions{})
+		}()
 		fwd += xdmsink.Forwarded.Load() - before
 		switch {
 		case code != "":
