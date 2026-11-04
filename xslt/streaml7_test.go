@@ -27,6 +27,9 @@ var l7Rows = []struct {
 	// A for-each over a union of two paths of child steps at one depth,
 	// its body absorbing "." with || (sx-union-315; disjointDepthPaths).
 	{``, `<out><xsl:for-each select="/doc/rec union /doc/other"><xsl:value-of select=". || '|'"/></xsl:for-each></out>`, true},
+	// copy-of() of the attributes a climbing tail reaches (sx-square-array-135;
+	// viewLeafCopyOK).
+	{``, `<out><xsl:value-of select="//sub/ancestor-or-self::*/@*/copy-of()" separator="|"/></out>`, true},
 }
 
 // l7Analysis are §19.8 verdicts lane L7 models (streamability_l7.go).
