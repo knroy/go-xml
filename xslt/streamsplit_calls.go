@@ -98,6 +98,11 @@ func judgeSheetCall(x *xpath.FuncCall, fns map[funcKey]*streamFunc) (sheetCall, 
 	if f == nil {
 		return sheetCall{}, false
 	}
+	if sheetBody(f.body) == nil {
+		if sc, ok := valuesOnlyCall(f); ok { // streamvaluefn_l7.go: an instruction body given values
+			return sc, true
+		}
+	}
 	bodies := map[*streamFunc]xpath.Expr{}
 	if !sheetClosure(f, fns, bodies) {
 		return sheetCall{}, false
