@@ -132,7 +132,7 @@ func (c *compiler) popFor(op *streamOp, ns xpath.NamespaceResolver) (*streamPop,
 	if pb.why == "" {
 		pb.why = "loop select is not a bare path"
 	}
-	if s := op.split; s.valuesOnly() {
+	if s := op.split; s.valuesOnly() || sheetCopiesPop(s, op.el) { // streamfn_copies.go
 		return &streamPop{values: true, off: true}, s, ""
 	}
 	return nil, nil, pb.why

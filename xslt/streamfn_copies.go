@@ -15,6 +15,7 @@ package xslt
 import (
 	"reflect"
 
+	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
@@ -44,4 +45,39 @@ func (s *streamSplit) itemsOnlyCopied() bool {
 		}
 	})
 	return copied > 0 && copied == bare
+}
+
+// sheetCopiesPop reports whether the loop el's select, split as s, is a
+// call on a stylesheet function marked burst (streamsplit_calls.go) over
+// the split's grounded matches: its value holds no node of the stream (the
+// copies' nodes, or nodes it makes), so the loop runs over it off the cursor
+// as over values (su-shallow-descent-001: for-each select="f(/BOOKLIST/BOOKS)").
+// The call itself is the tree's code over the copies: a parameter's type
+// raises the tree's XPTY0004 for two matches or none. The body runs on
+// nodes of the copies, so it must read of them only what a copy has
+// (burstBody: no ancestors' content, siblings beyond the match, root, key,
+// identity across matches).
+func sheetCopiesPop(s *streamSplit, el *xdm.Node) bool {
+	if s.cond != nil || s.outer == nil || s.mode != matchGround || !burstBody(el) {
+		return false
+	}
+	x, ok := s.outer.Expr().(*xpath.FuncCall)
+	if !ok {
+		return false
+	}
+	sc, marked := sheetCallOf(x)
+	if !marked || !sc.burst || sc.values || sc.climb || sc.up {
+		return false
+	}
+	items := 0
+	for _, a := range x.Args {
+		if r, ok := a.(*xpath.VarRef); ok && isSplitItems(r) {
+			items++
+			continue
+		}
+		if !foreign(a) || refsSplitItems(a) {
+			return false
+		}
+	}
+	return items == 1
 }
