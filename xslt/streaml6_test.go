@@ -139,9 +139,15 @@ var l6DeclBodies = []struct {
 	{l6CopyRules, `<out><xsl:apply-templates select=".//rec/copy-of(.)" mode="t"><xsl:with-param name="p" select="7"/></xsl:apply-templates></out>`, true},
 	// A filter over the copies (filteredCopies; si-copy-of-801), a tunnel parameter.
 	{l6CopyRules, `<out><xsl:apply-templates select="copy-of(outermost(//rec))[.//sub[@x = '1']]" mode="t"><xsl:with-param name="p" select="'f'"/></xsl:apply-templates></out>`, true},
-	// Accumulators declared: the copies' values are not held (copiesLinkWhy).
-	{l6CopyRules + `<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>`,
-		`<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, false},
+	// Accumulators declared and read on the copies: the observer keeps the
+	// grounded matches' values (streamaccum_l6.go; accumulator-046s/047s).
+	{l6CopyRules + `<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec|sub" select="$value + 1"/></xsl:accumulator>
+<xsl:template match="rec" mode="ta"><r a="{accumulator-before('a')}" b="{accumulator-after('a')}"><xsl:apply-templates select="sub" mode="ta"/></r></xsl:template>
+<xsl:template match="sub" mode="ta"><s a="{accumulator-before('a')}"/></xsl:template>`,
+		`<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="ta"/></out>`, true},
+	{l6CopyRules + `<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec|sub" select="$value + 1"/></xsl:accumulator>
+<xsl:template match="rec" mode="ta"><r a="{accumulator-before('a')}"/></xsl:template>`,
+		`<out><xsl:apply-templates select="snapshot(doc/rec)" mode="ta"/></out>`, true},
 }
 
 // l6ForeignRules are the rules of a mode that is not streamable, for items not

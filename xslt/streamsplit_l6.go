@@ -192,10 +192,10 @@ func (op *streamOp) readyCopies() string {
 // copiesLinkWhy is why an apply op over copies cannot run: the rules would
 // read accumulator values of the copies, which the grounded matches' copies
 // (copy-accumulators) do not hold once the stream has moved on.
+//
+// Since streamaccum_l6.go the observer keeps those values while the copies
+// are read: nothing is refused. Kept as the one place to refuse again.
 func (s *Stylesheet) copiesLinkWhy() string {
-	if len(s.accumulators) != 0 {
-		return "apply-templates over copies with accumulators declared"
-	}
 	return ""
 }
 
@@ -238,6 +238,11 @@ func (x *streamExec) offApplies() map[*streamOp]bool {
 func (i *applyTemplatesInstr) executeCopies(rt *runtime, out *outputBuilder, run *streamRun, op *streamOp) error {
 	if run.used {
 		return errStreamPlan
+	}
+	if sa := rt.runAccums(run); sa != nil {
+		// The copies' originals' values, for the rules (streamaccum_l6.go).
+		sa.keep++
+		defer func() { sa.keep-- }()
 	}
 	var seq xdm.Sequence
 	err := op.pop.read(run, rt, op, func(it xdm.Item) error {
