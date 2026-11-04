@@ -34,7 +34,9 @@ func TestStreamSheetCallsMatchTree(t *testing.T) {
 		`<xsl:function name="p:top" streamability="ascent" as="element()"><xsl:param name="n" as="node()"/>` +
 		`<xsl:sequence select="if ($n/ancestor::rec) then p:top($n/ancestor::rec[1]) else $n"/></xsl:function>` +
 		`<xsl:function name="p:par" streamability="filter" as="node()?"><xsl:param name="n" as="node()"/>` +
-		`<xsl:sequence select="$n[parent::rec]"/></xsl:function>`
+		`<xsl:sequence select="$n[parent::rec]"/></xsl:function>` +
+		`<xsl:function name="p:big" as="xs:boolean"><xsl:param name="a" as="item()"/>` +
+		`<xsl:sequence select="number($a) gt 1"/></xsl:function>`
 	bodies := []struct {
 		body   string
 		stream bool
@@ -65,6 +67,14 @@ func TestStreamSheetCallsMatchTree(t *testing.T) {
 		{`<v><xsl:value-of select="//sub ! p:top(.)"/></v>`, false},
 		{`<v><xsl:value-of select="count(//sub ! p:top(.) ! @k)"/></v>`, false},
 		{`<o><xsl:copy-of select="//sub ! p:top(.) ! @k"/></o>`, false},
+		// Lane L2: function items in a burst expression, and outermost or
+		// innermost of copies (streamfn_refs.go).
+		{`<v><xsl:value-of select="doc/rec ! filter((@k, @v), p:big#1)"/></v>`, true},
+		{`<v><xsl:value-of select="doc/rec ! filter(tokenize(string(.), ' '), p:big#1)"/></v>`, true},
+		{`<v><xsl:value-of select="doc/rec ! for-each(sub, string#1)"/></v>`, true},
+		{`<o><xsl:copy-of select="outermost(copy-of(doc/rec/sub))"/></o>`, true},
+		{`<o><xsl:copy-of select="innermost(copy-of(doc/rec))"/></o>`, true},
+		{`<v><xsl:value-of select="count(outermost(copy-of(//rec)))"/></v>`, false},
 	}
 	n := 0
 	for name, doc := range coreDocs {
