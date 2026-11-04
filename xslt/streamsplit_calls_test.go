@@ -25,7 +25,16 @@ func TestStreamSheetCallsMatchTree(t *testing.T) {
 		`<xsl:function name="p:up" streamability="absorbing" as="xs:string"><xsl:param name="n" as="node()"/>` +
 		`<xsl:sequence select="string($n/..)"/></xsl:function>` +
 		`<xsl:function name="p:self" streamability="filter" as="node()"><xsl:param name="n" as="node()"/>` +
-		`<xsl:sequence select="$n"/></xsl:function>`
+		`<xsl:sequence select="$n"/></xsl:function>` +
+		// Lane L2: bodies that climb (streamfn_climb.go).
+		`<xsl:function name="p:depth" streamability="inspection" as="xs:integer"><xsl:param name="n" as="node()"/>` +
+		`<xsl:sequence select="if ($n/.. instance of document-node()) then 1 else p:depth($n/..) + 1"/></xsl:function>` +
+		`<xsl:function name="p:inh" streamability="inspection" as="xs:string?"><xsl:param name="n" as="node()?"/>` +
+		`<xsl:sequence select="if (empty($n)) then () else if (exists($n/@k)) then string($n/@k) else p:inh($n/..)"/></xsl:function>` +
+		`<xsl:function name="p:top" streamability="ascent" as="element()"><xsl:param name="n" as="node()"/>` +
+		`<xsl:sequence select="if ($n/ancestor::rec) then p:top($n/ancestor::rec[1]) else $n"/></xsl:function>` +
+		`<xsl:function name="p:par" streamability="filter" as="node()?"><xsl:param name="n" as="node()"/>` +
+		`<xsl:sequence select="$n[parent::rec]"/></xsl:function>`
 	bodies := []struct {
 		body   string
 		stream bool
@@ -45,6 +54,17 @@ func TestStreamSheetCallsMatchTree(t *testing.T) {
 		{`<v><xsl:value-of select="doc/rec ! p:up(.)"/></v>`, false},
 		{`<v><xsl:value-of select="count(//rec ! p:self(.))"/></v>`, false},
 		{`<v><xsl:value-of select="p:cnts(//rec)"/></v>`, false},
+		// Lane L2: climbing bodies on each match's copy, whose ancestors
+		// are shallow copies: names, attributes, existence only.
+		{`<v><xsl:value-of select="doc/rec ! p:depth(.)"/></v>`, true},
+		{`<v><xsl:value-of select="//sub ! p:depth(.)"/></v>`, true},
+		{`<v><xsl:value-of select="//sub ! p:inh(.)"/></v>`, true},
+		{`<v><xsl:value-of select="//sub ! p:top(.) ! @k"/></v>`, true},
+		{`<v><xsl:value-of select="//sub ! p:par(.)/@x"/></v>`, true},
+		// Refused: an ancestor's copy kept, or its string value read.
+		{`<v><xsl:value-of select="//sub ! p:top(.)"/></v>`, false},
+		{`<v><xsl:value-of select="count(//sub ! p:top(.) ! @k)"/></v>`, false},
+		{`<o><xsl:copy-of select="//sub ! p:top(.) ! @k"/></o>`, false},
 	}
 	n := 0
 	for name, doc := range coreDocs {

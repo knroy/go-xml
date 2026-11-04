@@ -73,7 +73,7 @@ func rewriteCalls(e xpath.Expr, fns map[funcKey]*streamFunc) xpath.Expr {
 		for i := range x.Args {
 			x.Args[i] = re(x.Args[i])
 		}
-		if body := inlineCall(x, fns); body != nil {
+		if body := inlineCall(x, fns); body != nil && !climbKeepsCall(x) { // streamfn_climb.go
 			return body
 		}
 		if v := traceValue(x); v != nil {

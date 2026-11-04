@@ -73,6 +73,11 @@ func (s *streamSplit) mapPath(w *splitter, tail, r xpath.Expr, leaf, elem bool, 
 		if why := s.branchChecks(); s.hasBranches() && why != "" {
 			return why
 		}
+	case climbMapUp(tail): // streamfn_climb.go
+		if why := climbMapCheck(tail, s.atomize); why != "" {
+			return why
+		}
+		s.mode = matchGround
 	case (viewCheck{}).safe(tail, vElem, splitCounts[s.red]):
 		s.mode = matchView
 	case !s.nests || s.fresh:
@@ -99,6 +104,10 @@ func (s *streamSplit) mapPath(w *splitter, tail, r xpath.Expr, leaf, elem bool, 
 func mapSafe(r xpath.Expr) bool {
 	if climbsAny(r) {
 		return false
+	}
+	if climbMapUp(r) { // streamfn_climb.go; mapPath checks R whole
+		_, ok := climbMapKind(r)
+		return ok
 	}
 	if mapSetSafe(r) { // streamsplit_k2.go
 		return true

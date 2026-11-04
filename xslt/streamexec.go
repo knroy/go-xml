@@ -944,6 +944,8 @@ func noTextNodes(e xpath.Expr) bool {
 		if isCurrentGroup(x) {
 			return true // a streamed group's members are elements
 		}
+	case *xpath.SimpleMap:
+		return noTextNodes(x.Right) // lane L2: what R gives
 	case *xpath.SequenceExpr:
 		for _, it := range x.Items {
 			if !noTextNodes(it) {
