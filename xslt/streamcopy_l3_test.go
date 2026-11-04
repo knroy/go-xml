@@ -322,18 +322,27 @@ func TestStreamGroupByEventCopies(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		for _, body := range []string{
-			`<g p="{position()}" k="{current-grouping-key()}" n="{count(current-group())}"><xsl:value-of select="sum(current-group()/@v[. castable as xs:double])"/></g>`,
-			`<xsl:variable name="m" select="map { 'x' : current-group()/sub/@x/string() }"/><g><xsl:value-of select="$m?x" separator=","/><xsl:copy-of select="current-group()/sub"/></g>`,
+		for _, c := range []struct {
+			body   string
+			stream bool
+		}{
+			{`<g p="{position()}" k="{current-grouping-key()}"><xsl:value-of select="sum(current-group()/@v[. castable as xs:double])"/></g>`, true},
+			{`<xsl:variable name="m" select="map { 'x' : current-group()/sub/@x/string(), 'n' : count(current-group()) }"/><g n="{$m?n}"><xsl:value-of select="$m?x" separator=","/></g>`, true},
+			{`<g k="{current-grouping-key()}"><xsl:copy-of select="current-group()/sub"/></g>`, true},
+			// Two consuming operands (current-group() is consuming, §19.8.9.4):
+			// roaming and free-ranging by §19.8.1's general rules, a verdict
+			// the core does not trust.
+			{`<g p="{position()}" k="{current-grouping-key()}" n="{count(current-group())}"><xsl:value-of select="sum(current-group()/@v[. castable as xs:double])"/></g>`, false},
+			{`<xsl:variable name="m" select="map { 'x' : current-group()/sub/@x/string() }"/><g><xsl:value-of select="$m?x" separator=","/><xsl:copy-of select="current-group()/sub"/></g>`, false},
 		} {
 			for _, by := range []string{`group-by="@k"`, `group-by="@k, @v" composite="yes"`} {
 				sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema">
 <xsl:mode name="s" streamable="yes"/>
 <xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml"><xsl:apply-templates select="." mode="s"/></xsl:source-document></top></xsl:template>
-<xsl:template match="doc | rec" mode="s"><o><xsl:fork><xsl:for-each-group select="rec" ` + by + `>` + body + `</xsl:for-each-group></xsl:fork></o></xsl:template>
+<xsl:template match="doc | rec" mode="s"><o><xsl:fork><xsl:for-each-group select="rec" ` + by + `>` + c.body + `</xsl:for-each-group></xsl:fork></o></xsl:template>
 <xsl:template match="text()" mode="s"/>
 </xsl:stylesheet>`
-				coreCheck(t, sheet, dir, name+": "+by+body, true, TransformOptions{})
+				coreCheck(t, sheet, dir, name+": "+by+c.body, c.stream, TransformOptions{})
 			}
 		}
 	}
