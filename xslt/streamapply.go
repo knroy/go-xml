@@ -832,7 +832,7 @@ func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, par
 	}
 	run.used = true
 	d, c := run.d, run.c
-	f := xdmstream.Filter{Leaves: true, Depth: d}
+	f := run.kidFilter(d)
 	pos, skip := 0, false
 	for {
 		var (
@@ -840,9 +840,9 @@ func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, par
 			err error
 		)
 		if skip {
-			ev, err = c.SkipTag(&f)
+			ev, err = c.SkipTag(f)
 		} else {
-			ev, err = c.NextTag(&f)
+			ev, err = c.NextTag(f)
 		}
 		skip = false
 		switch {

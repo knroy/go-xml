@@ -1,6 +1,9 @@
 package xslt
 
-import "github.com/knroy/go-xml/v2/xdm"
+import (
+	"github.com/knroy/go-xml/v2/internal/xdmstream"
+	"github.com/knroy/go-xml/v2/xdm"
+)
 
 // A built-in rule on the parse's own record (lane J4).
 //
@@ -47,4 +50,30 @@ func (run *streamRun) liveBuiltIn(focus focuser, pos int, el *xdm.Node, md int, 
 	read = run.used
 	run.d, run.used, run.grp = d, true, grp
 	return read, true, err
+}
+
+// applyFeed is the feed of instr, the apply op op, made once per run: the
+// feed is the same each time the op runs.
+func (run *streamRun) applyFeed(instr Instruction, op *streamOp) *burstFeed {
+	f := run.applyFeeds[op]
+	if f == nil {
+		if run.applyFeeds == nil {
+			run.applyFeeds = map[*streamOp]*burstFeed{}
+		}
+		f = &burstFeed{instr: instr, run: run, apply: op}
+		run.applyFeeds[op] = f
+	}
+	return f
+}
+
+// kidFilter is the filter children reads the children of an element at
+// depth d with, made once per run and depth. Never changed once made.
+func (run *streamRun) kidFilter(d int) *xdmstream.Filter {
+	for len(run.kidFilters) <= d {
+		run.kidFilters = append(run.kidFilters, nil)
+	}
+	if run.kidFilters[d] == nil {
+		run.kidFilters[d] = &xdmstream.Filter{Leaves: true, Depth: d}
+	}
+	return run.kidFilters[d]
 }

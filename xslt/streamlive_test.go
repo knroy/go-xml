@@ -60,3 +60,47 @@ func TestStreamLiveBuiltIn(t *testing.T) {
 		t.Errorf("%d bytes allocated per record, want at most 1,700 (a view per element: about 1,940)", per)
 	}
 }
+
+// TestStreamDispatchAllocs: the streamed two-instruction identity transform
+// (a rule for @*|node(): xsl:copy, apply-templates to @*, then to the
+// children) allocates within 1.3x of the tree's run of it per record: an
+// apply op's feed and a children's filter are made once per run, not per
+// element. Measured at the change: 76.2 against the tree's 61.1; a feed
+// and a filter per element made it 88.2.
+func TestStreamDispatchAllocs(t *testing.T) {
+	doc := liveOrders(3000)
+	sheet := mainSheet(`<xsl:mode streamable="yes"/><xsl:template match="@*|node()">` +
+		`<xsl:copy><xsl:apply-templates select="@*"/><xsl:apply-templates/></xsl:copy></xsl:template>`)
+	if st, tr := mainRun(sheet, doc, true, TransformOptions{}); tr.Runs[streamtrace.Main] != 1 {
+		t.Fatalf("not streamed: %v", tr.Runs)
+	} else if want, _ := mainRun(sheet, doc, false, TransformOptions{}); st != want {
+		t.Fatal("streamed differs from the tree")
+	}
+	tree, err := xdm.ParseString(sheet, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Compile(tree.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := TransformOptions{Output: io.Discard}
+	streamed := testing.AllocsPerRun(2, func() {
+		if _, err := s.TransformReader(context.Background(), strings.NewReader(doc), opts); err != nil {
+			t.Fatal(err)
+		}
+	})
+	treeRun := testing.AllocsPerRun(2, func() {
+		d, err := xdm.Parse(strings.NewReader(doc), xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Transform(context.Background(), d.Root, opts); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Logf("allocations per record: streamed %.1f, tree %.1f", streamed/3000, treeRun/3000)
+	if streamed > 1.3*treeRun {
+		t.Errorf("streamed %.0f allocations, tree %.0f: more than 1.3x", streamed, treeRun)
+	}
+}

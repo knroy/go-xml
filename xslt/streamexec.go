@@ -1171,6 +1171,10 @@ type streamRun struct {
 	// pre, for a prong of a fused fork, is what the walk read for its op
 	// (streamfuse.go).
 	pre *fusedValue
+	// applyFeeds and kidFilters are applyFeed's and kidFilter's
+	// (streamlive.go).
+	applyFeeds map[*streamOp]*burstFeed
+	kidFilters []*xdmstream.Filter
 }
 
 // feed returns the feed that drives instr from the cursor, or nil when instr
@@ -1181,7 +1185,7 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 		return nil
 	}
 	if op.apply != applyNone {
-		return &burstFeed{instr: instr, run: run, apply: op}
+		return run.applyFeed(instr, op)
 	}
 	if op.group && !op.groundPop {
 		return &burstFeed{instr: instr, run: run, group: op}
