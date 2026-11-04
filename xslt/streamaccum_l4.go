@@ -387,3 +387,24 @@ func (s *Stylesheet) accumClark(lex string) (string, bool) {
 	}
 	return "", false
 }
+
+// accumDocURIOK reports whether x, in an accumulator rule, is base-uri of
+// the document node: of "/" or root(), or root(.). (Not document-uri: a
+// validated tree copy has none, the parse's root keeps it.) The
+// rule runs on the parse's own node, whose root is the parse's document
+// node, which the parse gives the document's URIs as the tree's parse does
+// (xdm.Parse: the options' BaseURI and DocumentURI), with no content read
+// (merge-065a: concat(base-uri(/), ...)).
+func accumDocURIOK(vc viewCheck, x *xpath.FuncCall) bool {
+	if !vc.accum || x.Name.URI != fnNS || x.Name.Local != "base-uri" || len(x.Args) != 1 {
+		return false
+	}
+	switch a := x.Args[0].(type) {
+	case *xpath.PathExpr:
+		return a.Root && len(a.Steps) == 0
+	case *xpath.FuncCall:
+		return a.Name.URI == fnNS && a.Name.Local == "root" &&
+			(len(a.Args) == 0 || len(a.Args) == 1 && isContextItem(a.Args[0]))
+	}
+	return false
+}

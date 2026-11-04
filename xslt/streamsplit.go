@@ -1445,6 +1445,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		if docURIOK(vc, x, f) { // streamtee_docnode.go
 			return true
 		}
+		if accumDocURIOK(vc, x) { // streamaccum_l4.go
+			return true
+		}
 		if viewLeafCopyOK(x, f) { // streamview_l7.go
 			return true
 		}

@@ -85,6 +85,8 @@ func TestStreamMergeAccums(t *testing.T) {
 	  <xsl:accumulator name="w" as="xs:string" initial-value="''">
 	    <xsl:accumulator-rule match="e/n/text()" select="string()"/>
 	    <xsl:accumulator-rule match="e" phase="end" select="$value || '.'"/></xsl:accumulator>
+	  <xsl:accumulator name="p" initial-value="''">
+	    <xsl:accumulator-rule match="*" select="concat(base-uri(/), ' - ', string-join(ancestor::*/name(), '/'))"/></xsl:accumulator>
 	  <xsl:accumulator name="bad" as="xs:integer" initial-value="0">
 	    <xsl:accumulator-rule match="e" select="xs:integer(@t) idiv (7 - xs:integer(@t))"/></xsl:accumulator>`
 	cases := []struct {
@@ -96,6 +98,9 @@ func TestStreamMergeAccums(t *testing.T) {
 			`<g k="{current-merge-key()}"><xsl:for-each select="current-merge-group()"><i a="{accumulator-after('c')}"/></xsl:for-each></g>`, false},
 		{mergeSrc("A", "'a.xml'", "log/e", "xs:integer(@t)", `use-accumulators="c w"`),
 			`<g><xsl:for-each select="current-merge-group()"><i w="{accumulator-after('w')}"/></xsl:for-each></g>`, false},
+		// base-uri(/) in a rule (merge-065a).
+		{mergeSrc("A", "('a.xml', 'b.xml')", "log/e", "xs:integer(@t)", `use-accumulators="p"`),
+			`<g><xsl:for-each select="current-merge-group()"><i p="{accumulator-before('p')}"/></xsl:for-each></g>`, false},
 		// Not applicable to B's documents: XTDE3362 in both.
 		{mergeSrc("A", "'b.xml'", "log/e", "xs:integer(@t)", `use-accumulators="c"`),
 			`<g w="{current-merge-group()[1]/accumulator-before('w')}"/>`, true},
