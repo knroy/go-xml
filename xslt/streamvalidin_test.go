@@ -346,6 +346,17 @@ func TestStreamMainValidation(t *testing.T) {
 				`<xsl:template match="/"><o><xsl:value-of select="count(r/*)"/></o></xsl:template>`},
 			map[string]string{"ok": `<r xmlns:o="urn:o"><o:x>a</o:x><i>1</i>` + "\n" + `<o:y/><i>2</i></r>`,
 				"bad-name": `<r><i>1</i><x/></r>`, "bad-count": `<r xmlns:o="urn:o"><i>1</i><o:x/><i>2</i><i>3</i><i>4</i></r>`}},
+		{"ns defaults", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:a="urn:a" targetNamespace="urn:a"
+   elementFormDefault="qualified" attributeFormDefault="qualified">
+ <xs:element name="r"><xs:complexType><xs:sequence><xs:element name="e" maxOccurs="unbounded"><xs:complexType><xs:sequence>
+   <xs:element name="c" minOccurs="0"><xs:complexType><xs:attribute name="k" type="xs:int" default="3"/></xs:complexType></xs:element>
+ </xs:sequence><xs:attribute name="foo" type="xs:int" default="1"/></xs:complexType></xs:element></xs:sequence></xs:complexType></xs:element></xs:schema>`,
+			[]string{`<xsl:template match="*:e"><v f="{data(@*:foo) + 1}" n="{@*/name()}"><xsl:apply-templates/></v></xsl:template>`,
+				`<xsl:template match="*:c"><w k="{@*/name()}"/></xsl:template>`,
+				`<xsl:template match="*:e"><xsl:copy-of select="."/></xsl:template>`,
+				``},
+			map[string]string{"ok": `<r xmlns="urn:a"><e><c/></e><e xmlns:p="urn:a"><c/></e><e xmlns:ns0="urn:o"/></r>`,
+				"bad-value": `<r xmlns="urn:a" xmlns:a="urn:a"><e a:foo="x"/></r>`}},
 	} {
 		for _, r := range c.rules {
 			for name, doc := range c.docs {

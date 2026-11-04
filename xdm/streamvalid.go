@@ -18,6 +18,20 @@ func init() {
 		}
 		return a
 	}
+	xdmburst.AddNamespace = func(el any, prefix, uri string) bool {
+		n := el.(*Node)
+		t := n.tree
+		if n.Kind() != KindElement || t.frozen || n.v1 != noIdx || t.n != n.self+1+n.attrCount() {
+			return false
+		}
+		n.AddNamespace(prefix, uri)
+		s := t.ownSource()
+		if s.nsAdded == nil {
+			s.nsAdded = map[uint32]int{}
+		}
+		s.nsAdded[n.self]++
+		return true
+	}
 	xdmburst.RemoveAttr = func(el, a any) bool {
 		n, x := el.(*Node), a.(*Node)
 		t := n.tree
@@ -43,4 +57,15 @@ func init() {
 		n.nattr--
 		return true
 	}
+}
+
+// takeAddedNS is how many of el's namespace declarations AddNamespace added,
+// which the parse's scope does not hold, forgetting them: el is closing.
+func (t *Tree) takeAddedNS(el *Node) int {
+	if t.source == nil || t.source.nsAdded == nil {
+		return 0
+	}
+	k := t.source.nsAdded[el.self]
+	delete(t.source.nsAdded, el.self)
+	return k
 }

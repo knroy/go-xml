@@ -154,6 +154,21 @@ const svOpenDoc = `<r xmlns:o="urn:o" xmlns:e="urn:e">
  <emp x="1">text<e:q><e:w/></e:q></emp>
 </r>`
 
+// svNSDefaults: defaulted attributes in a namespace: a prefix in scope is
+// used, and under XSD 1.1 one is declared when none is (namespace fixup),
+// which a descendant's default then finds in scope.
+const svNSDefaults = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:a="urn:a"
+   targetNamespace="urn:a" elementFormDefault="qualified" attributeFormDefault="qualified">
+ <xs:attribute name="g" type="xs:QName" default="a:q"/>
+ <xs:element name="r"><xs:complexType><xs:sequence>
+   <xs:element name="e" minOccurs="0" maxOccurs="unbounded"><xs:complexType><xs:sequence>
+     <xs:element name="c" minOccurs="0"><xs:complexType><xs:attribute name="k" type="xs:int" default="3"/></xs:complexType></xs:element>
+   </xs:sequence><xs:attribute name="foo" default="x"/><xs:attribute ref="a:g"/><xs:attribute name="plain" form="unqualified" default="p"/></xs:complexType></xs:element>
+ </xs:sequence></xs:complexType></xs:element>
+</xs:schema>`
+
+const svNSDefaultsDoc = `<r xmlns="urn:a"><e><c/></e><e xmlns:p="urn:a"><c/></e><e xmlns:ns0="urn:other"/><x:e xmlns:x="urn:a" x:foo="y"/></r>`
+
 // svRun streams doc and returns the grounded document element, the
 // validator's verdict, and whether it ran.
 func svRun(t *testing.T, s *Schema, doc string, m xsdstream.Mode, ground bool) (*xdm.Node, error) {
@@ -219,6 +234,9 @@ func svSame(a, b *xdm.Node, path string) string {
 		}
 		return ""
 	}
+	if na, nb := fmt.Sprint(a.InScopeNamespaces()), fmt.Sprint(b.InScopeNamespaces()); na != nb {
+		return fmt.Sprintf("%s: namespaces %s, stream %s", path, na, nb)
+	}
 	var aa, ba []*xdm.Node
 	for x := range a.Attrs() {
 		aa = append(aa, x)
@@ -262,6 +280,15 @@ func svLoad(t *testing.T, src string) *Schema {
 
 func TestStreamValidationMatchesTree(t *testing.T) {
 	books, misc, values, open := svLoad(t, svBooks), svLoad(t, svMisc), svLoad(t, svValues), svLoad(t, svOpenSchema)
+	nsd := svLoad(t, svNSDefaults)
+	nsTree, err := xdm.ParseString(svNSDefaults, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nsd10, err := Load(nsTree.Root, "s.xsd", Options{Version: Version10})
+	if err != nil {
+		t.Fatal(err)
+	}
 	strict, doc := xsdstream.Mode{Root: xsdstream.Strict}, xsdstream.Mode{Root: xsdstream.Strict, Doc: true}
 	lax := xsdstream.Mode{Root: xsdstream.Lax}
 	typed := xsdstream.Mode{Root: xsdstream.Type, Type: xdm.QName{Local: "BOOKLIST-type"}}
@@ -283,6 +310,9 @@ func TestStreamValidationMatchesTree(t *testing.T) {
 		{"misc root xsi:type", misc, `<r xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:m="urn:m" xsi:type="m:base"><v xmlns="urn:m">3</v></r>`, strict, false},
 		{"values strict", values, svValuesDoc, strict, false},
 		{"values doc", values, svValuesDoc, doc, false},
+		{"ns defaults", nsd, svNSDefaultsDoc, strict, false},
+		{"ns defaults doc", nsd, svNSDefaultsDoc, doc, false},
+		{"ns defaults 1.0", nsd10, svNSDefaultsDoc, strict, false},
 		{"open strict", open, svOpenDoc, strict, false},
 		{"open doc", open, svOpenDoc, doc, false},
 		// Invalid, each for one reason the tree finds.

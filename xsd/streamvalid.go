@@ -38,8 +38,7 @@ import (
 // a valid document, and exact about whether a document is valid.
 //
 // What it cannot do as the tree does is refused for the whole schema
-// (streamRefusal): identity constraints and a defaulted attribute in a
-// namespace.
+// (streamRefusal): identity constraints.
 
 func init() {
 	xsdstream.Open = func(schema any, m xsdstream.Mode) xsdstream.Validator {
@@ -543,6 +542,16 @@ func (s *streamV) applyDefaults(el *xdm.Node) {
 	if len(as) == 0 {
 		return
 	}
+	// XSD 1.1 namespace fixup (declareFixupPrefix): the binding a default
+	// in a namespace needed goes on the start tag, after the element's own,
+	// where the typed copy declares it; lookupPrefix then finds it there.
+	for _, ns := range v.fixups[el] {
+		if !xdmburst.AddNamespace(el, ns.prefix, ns.uri) {
+			v.fail(el, "", "streaming: a namespace cannot be declared here")
+			return
+		}
+	}
+	delete(v.fixups, el)
 	for _, a := range as {
 		q := a.Name()
 		live, _ := xdmburst.AppendAttr(el, q.Prefix, q.URI, q.Local, a.Value()).(*xdm.Node)
@@ -1003,14 +1012,6 @@ func (s *Schema) streamRefusal() string {
 			return ""
 		}
 		seenT[t] = true
-		for _, u := range ct.AttributeUses {
-			if u.Decl == nil || u.Prohibited || u.Decl.Name.URI == "" {
-				continue
-			}
-			if c := effectiveValueConstraint(u); c != nil && c.Lexical != "" {
-				return fmt.Sprintf("attribute %s in a namespace has a default", showName(u.Decl.Name))
-			}
-		}
 		if w := part(ct.Particle); w != "" {
 			return w
 		}

@@ -10,6 +10,13 @@ package xdmburst
 // copy's are not either. Package xdm sets it.
 var AppendAttr func(el any, prefix, uri, local, value string) any
 
+// AddNamespace declares prefix bound to uri on el, as AppendAttr adds an
+// attribute, and reports whether it did. It is how a validator on the stream
+// makes XSD 1.1 namespace fixup for a defaulted attribute in a namespace,
+// as the typed copy declares it. The parse does not bind the prefix: the
+// document's own names resolve as written. Package xdm sets it.
+var AddNamespace func(el any, prefix, uri string) bool
+
 // RemoveAttr takes a, an attribute of el, off el's start tag while the start
 // tag is being told to an observer, as AppendAttr adds one, and reports
 // whether it did. It is how input-type-annotations="strip" drops xsi:nil from
