@@ -45,3 +45,30 @@ xslt30 si-fork/si-fork-952 (?s).+
 # read in an xsl:copy's select and again in its content, a higher-order
 # operand (§19.8.4.12's note), is not singular (§19.8.5.2).
 xslt30 su-absorbing/su-absorbing-205 (?s).+
+
+# Round L and fix round F, against base 3fb9c066 (v2.1.1). Drop a line when
+# the base is moved past its commit.
+# The version string (5ea6e3a4, release v2.2.0 on this branch): these write
+# system-property('xsl:product-version') into a comment or @prod.
+xslt30 accumulator/accumulator-083 go-xml \d+\.\d+\.\d+
+xslt30 accumulator/accumulator-084 go-xml \d+\.\d+\.\d+
+xslt30 accumulator/accumulator-085 go-xml \d+\.\d+\.\d+
+xslt30 evaluate/evaluate-052 go-xml \d+\.\d+\.\d+
+xslt30 function-lookup/function-lookup-008 go-xml \d+\.\d+\.\d+
+xslt30 su-absorbing/su-absorbing-301 go-xml \d+\.\d+\.\d+
+xslt30 document/document-2011 prod="\d+\.\d+\.\d+"
+# supports-streaming is "yes" (the owner's decision for full streaming).
+xslt30 system-property/system-property-012 (?s).+
+# A whitespace-stripped source keeps its document URI (2e860a20, F&O §2.6,
+# XSLT §4.4): document-0103.xsl sorts documents by document-uri(.), so the
+# order of the copies moves; every assertion holds either way.
+xslt30 document/document-0113 (?s).+
+xslt30 document/document-0114 (?s).+
+xslt30 document/document-0115 (?s).+
+# TransformReader follows the spec where Transform of a parsed tree supplies a
+# global context item: absent in a streamable initial mode (§2.3.2, 6cc2247f),
+# so streamable-116 writes its output where the base and the off leg raise
+# XPDY0002; and an accumulator function item saving an absent focus on a
+# streamed input raises XTDE3350 (§10.3.6, be09e991): accumulator-061.
+xslt30 streamable/streamable-116 (?s).+
+xslt30 accumulator/accumulator-061 (?s).+
