@@ -190,7 +190,7 @@ func (s *Stylesheet) streamsMain(opts TransformOptions) bool {
 		return false
 	}
 	m, err := s.initialModeOf(opts)
-	return err == nil && s.mainStreams[m]
+	return err == nil && s.mainStreams[m] && !s.dynParamSupplied(&opts) // streamtee_dyncall.go
 }
 
 // mainInput is a principal input TransformReader streams: the cursor over
