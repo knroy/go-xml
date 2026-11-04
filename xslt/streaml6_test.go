@@ -36,6 +36,9 @@ var l6Bodies = []struct {
 	// motionless for-each over a variable's items with xsl:sort (foreignSort).
 	{`<out><xsl:for-each select="doc/rec/sub"><xsl:iterate select="ancestor::*"><a n="{name()}"><xsl:copy-of select="@*"/></a></xsl:iterate></xsl:for-each></out>`, true},
 	{`<xsl:variable name="ks" select="('b', 'a', 'c')"/><out><xsl:for-each select="doc/rec"><e><xsl:for-each select="$ks"><xsl:sort select="." order="descending"/><k><xsl:value-of select="."/></k></xsl:for-each></e></xsl:for-each></out>`, true},
+	// outermost(P)/T with P nesting: the outermost matches do not (sf-outermost-102).
+	{`<out><xsl:value-of select="outermost(//rec)/sub/@x" separator="|"/><xsl:text>;</xsl:text></out>`, true},
+	{`<out><xsl:copy-of select="outermost(//rec)/sub"/></out>`, true},
 	// A motionless loop over the view's attributes (motionlessLoop, leafBody).
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:for-each select="@*"><n><xsl:value-of select="name(.)"/></n><v><xsl:value-of select="."/></v></xsl:for-each></e></xsl:for-each></out>`, true},
 }

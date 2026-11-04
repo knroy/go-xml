@@ -444,9 +444,10 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		s.mode = matchView
 	case (viewCheck{}).safe(tail, vElem, splitCounts[s.red]):
 		s.mode = matchView
-	case (pathTail(p.tail) || burstSafe(tail, true)) && (!s.nests || tailValue(tail) || ownAttributes(p.tail)):
+	case (pathTail(p.tail) || burstSafe(tail, true)) && (!s.nests || s.outermost || tailValue(tail) || ownAttributes(p.tail)):
 		// Nested matches' copies overlap: a tail reaching below the match
-		// would give a node once per match holding it, the tree once.
+		// would give a node once per match holding it, the tree once. The
+		// matches of outermost(P) do not nest (streamsplit_l6.go: sf-outermost-102).
 		s.mode = matchGround
 	default:
 		return "tail " + tail.String() + ": not within the match"
