@@ -107,6 +107,9 @@ type streamExec struct {
 	rule bool
 	// tries are the consumers of each streamed xsl:try's body (streamtry.go).
 	tries [][]*streamOp
+	// groundRule says it is a rule's body that runs on a grounded copy of
+	// its element (streamtee_ground.go).
+	groundRule bool
 }
 
 func newStreamExec() *streamExec {
