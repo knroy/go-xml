@@ -175,6 +175,13 @@ var coreBodies = []struct {
 	// Nested container.
 	{`<out><xsl:source-document href="doc.xml" streamable="yes"><n><xsl:value-of select="count(//rec)"/></n></xsl:source-document>` +
 		`<xsl:value-of select="count(//sub)"/></out>`, true},
+	// What the document node's stand-in has beside its names: its URIs, its
+	// kind (streamtee_docnode.go; si-choose-009, si-on-empty-025, stream-005).
+	{`<xsl:choose><xsl:when test="document-uri(.) = 'urn:no'"><n/></xsl:when><xsl:when test=".//rec"><y/></xsl:when>` +
+		`<xsl:otherwise><z/></xsl:otherwise></xsl:choose>`, true},
+	{`<o b="{ends-with(base-uri(.), 'doc.xml')}" d="{ends-with(document-uri(), 'doc.xml')}" p="{position()}"` +
+		` i="{. instance of document-node()}"><xsl:value-of select="count(//rec)"/></o>`, true},
+	{`<o><xsl:sequence select="ends-with(base-uri(), 'doc.xml')[exists(1)]"/><xsl:copy-of select="doc/rec"/></o>`, true},
 	// Refused: the tree runs them (the analysis, the split, the memory rule).
 	{`<xsl:for-each select="//rec"><r><xsl:value-of select="."/></r></xsl:for-each>`, false},
 	{`<xsl:for-each select="//rec"><r n="{count(.//node())}"/></xsl:for-each>`, false},

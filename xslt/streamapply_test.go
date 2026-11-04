@@ -104,6 +104,10 @@ var applyCases = []struct {
 	{`<xsl:mode name="s" streamable="yes"/><xsl:template match="rec" mode="s"><xsl:variable name="c"><xsl:copy-of select="."/></xsl:variable>` +
 		`<r><xsl:apply-templates select="$c/rec/sub"/></r></xsl:template><xsl:template match="sub"><s x="{@x}"/></xsl:template>`,
 		`<xsl:apply-templates select="*/rec" mode="s"/>`, true},
+	// The document node's names through self or ancestor-or-self, beside
+	// its consumer (accumulator-087s's shape, streamtee_docnode.go).
+	{`<xsl:mode streamable="yes"/><xsl:template match="/|*"><e p="/{string-join(ancestor-or-self::node()/node-name(), '/')}">` +
+		`<xsl:apply-templates/></e></xsl:template>`, `<xsl:apply-templates select="."/>`, true},
 	// Refused: a positional pattern, a mode that is not streamable, a
 	// rule body that reads twice, a sort.
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, `<xsl:apply-templates select="*/rec"/>`, false},

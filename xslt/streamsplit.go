@@ -1231,7 +1231,7 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 	case *xpath.CastExpr:
 		return vc.safe(x.Operand, f, false)
 	case *xpath.InstanceOfExpr:
-		return vc.safe(x.Operand, f, true)
+		return vc.safe(x.Operand, f, true) || docInstanceOK(vc, x, f) // streamtee_docnode.go
 	case *xpath.TreatExpr:
 		return vc.safe(x.Operand, f, nodeOK)
 	case *xpath.IfExpr:
@@ -1312,9 +1312,13 @@ func (vc viewCheck) bound(bs []xpath.Binding, f vfocus) bool {
 // down. A path ending in elements returns view nodes, which may not be
 // atomized (nodeOK).
 func (vc viewCheck) path(steps []xpath.Expr, f vfocus, nodeOK bool) bool {
-	cur := f
+	cur, doc := f, false
 	for i, s := range steps {
 		st, ok := s.(*xpath.Step)
+		if ok && cur == vNone && vc.pos && docSelfStep(st) { // streamtee_docnode.go
+			doc = true // the stand-in, or nothing: it stays the focus
+			continue
+		}
 		if !ok {
 			if i == 0 && vc.curOK && isCurrentCall(s) {
 				cur = vc.cur
@@ -1353,7 +1357,7 @@ func (vc viewCheck) path(steps []xpath.Expr, f vfocus, nodeOK bool) bool {
 			}
 		}
 	}
-	return cur == vLeaf || nodeOK
+	return cur == vLeaf || nodeOK && !(doc && cur == vNone)
 }
 
 // splitViewFns are the focus-dependent functions a focus can answer: an
@@ -1397,6 +1401,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 			return ok && lit.Val != nil && (f == vElem || f == vNone)
 		}
 		if viewIdentOK(vc, x, f) { // streamview_k2.go
+			return true
+		}
+		if docURIOK(vc, x, f) { // streamtee_docnode.go
 			return true
 		}
 		if (n == "copy-of" || n == "snapshot") && len(x.Args) == 1 && focusFree(x.Args[0]) {

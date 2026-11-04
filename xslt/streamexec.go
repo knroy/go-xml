@@ -1501,7 +1501,7 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 			valid = vin.attach(c, strip) // streamvalidin.go
 		}
 		c.Handoff(func() func() { return xpathleaf.LockYield(rt.evalLock) }) // streamfork.go
-		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread, root: xdm.NewTree().Root, held: held}
+		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread, root: streamStandIn(br, href, base, vin), held: held}
 		defer func() { *kept = run.kept }()
 		acc := run.observeAccums(rt, i.accums, true)
 		defer acc.stop()
