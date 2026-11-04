@@ -444,7 +444,7 @@ func atomicValued(e xpath.Expr) bool {
 			return true
 		}
 		if x.Name.URI != fnNS {
-			return false
+			return sheetCallAtomic(x) // streamsplit_calls.go
 		}
 		switch x.Name.Local {
 		case "count", "sum", "avg", "min", "max", "string", "number", "concat",
@@ -560,7 +560,7 @@ func callSafe(x *xpath.FuncCall, noPos bool) bool {
 		}
 	case xdm.NSXS, xdm.NSMath, xdm.NSMap, xdm.NSArray:
 	default:
-		return false
+		return sheetCallSafe(x, noPos) // streamsplit_calls.go
 	}
 	return allBurstSafe(x.Args, noPos)
 }

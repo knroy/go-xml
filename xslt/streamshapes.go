@@ -96,7 +96,7 @@ func mapSafe(r xpath.Expr) bool {
 	if f, ok := r.(*xpath.FuncCall); ok && stylesheetFn(f.Name) {
 		for _, a := range f.Args {
 			if !mapAtomic(a) || !burstSafe(a, true) {
-				return false
+				return burstSafe(r, true) // a marked call (streamsplit_calls.go)
 			}
 		}
 		return true
@@ -127,7 +127,7 @@ func mapFresh(r xpath.Expr) bool {
 	switch x := r.(type) {
 	case *xpath.FuncCall:
 		if stylesheetFn(x.Name) {
-			return true // mapSafe gave it atomic values only
+			return sheetCallFresh(x) // streamsplit_calls.go
 		}
 		if x.Name.URI == fnNS && (x.Name.Local == "parse-xml" || x.Name.Local == "parse-xml-fragment") {
 			return true
