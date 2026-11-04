@@ -8,8 +8,8 @@ import (
 
 // TestStreamXMLToJSONMatchesTree: fn:xml-to-json of the document node, the
 // document element and a child path, written off the cursor
-// (streamfn_json.go), against the tree on valid and invalid JSON XML. A
-// valid document must stream; an invalid one raises the tree's error.
+// (streamfn_json.go), against the tree on valid and invalid JSON XML. What
+// the tree answers must stream; an invalid document raises the tree's error.
 func TestStreamXMLToJSONMatchesTree(t *testing.T) {
 	const fn = `xmlns="http://www.w3.org/2005/xpath-functions"`
 	docs := map[string]struct {
@@ -63,10 +63,10 @@ func TestStreamXMLToJSONMatchesTree(t *testing.T) {
 				if st.Reruns != 0 && te == "" {
 					t.Errorf("%s decl %d body %d: re-run where the tree succeeds", name, di, bi)
 				}
-				if d.valid != (te == "") {
+				if bi < 4 && d.valid != (te == "") { // the whole document's JSON
 					t.Errorf("%s decl %d body %d: tree error %q, valid %v", name, di, bi, te, d.valid)
 				}
-				if d.valid && st.Runs[0] == 0 {
+				if te == "" && st.Runs[0] == 0 {
 					t.Errorf("%s decl %d body %d: not streamed", name, di, bi)
 				}
 			}
