@@ -7,9 +7,9 @@ import (
 )
 
 // TestStreamMainLiteralGlobals: a global whose content is literal text or
-// literal result elements does not keep TransformReader from streaming; one
-// whose content holds an expression or a value template, or a select that
-// reads the context item, still does. Output equals Parse + Transform.
+// literal result elements does not keep TransformReader from streaming; nor,
+// since L7, does one reading the context item: the global context item is
+// absent for a streamed input (streamglobal_l7.go), XPDY0002 in both legs.
 func TestStreamMainLiteralGlobals(t *testing.T) {
 	mode := `<xsl:mode streamable="yes"/><xsl:template match="rec"><r k="{@k}" q="{$q}"><xsl:copy-of select="$t"/></r></xsl:template>`
 	cases := []struct {
@@ -18,10 +18,10 @@ func TestStreamMainLiteralGlobals(t *testing.T) {
 	}{
 		{`<xsl:variable name="q">"</xsl:variable><xsl:param name="t"><root><list a="1"/></root></xsl:param>`, true},
 		{`<xsl:variable name="q"><xsl:text>x</xsl:text></xsl:variable><xsl:variable name="t"/>`, true},
-		{`<xsl:variable name="q"><xsl:value-of select="count(//rec)"/></xsl:variable><xsl:variable name="t"/>`, false},
-		{`<xsl:variable name="q">q</xsl:variable><xsl:variable name="t"><a n="{name(/*)}"/></xsl:variable>`, false},
-		{`<xsl:variable name="q" expand-text="yes">{count(//rec)}</xsl:variable><xsl:variable name="t"/>`, false},
-		{`<xsl:variable name="q" select="count(//rec)"/><xsl:variable name="t"/>`, false},
+		{`<xsl:variable name="q"><xsl:value-of select="count(//rec)"/></xsl:variable><xsl:variable name="t"/>`, true},
+		{`<xsl:variable name="q">q</xsl:variable><xsl:variable name="t"><a n="{name(/*)}"/></xsl:variable>`, true},
+		{`<xsl:variable name="q" expand-text="yes">{count(//rec)}</xsl:variable><xsl:variable name="t"/>`, true},
+		{`<xsl:variable name="q" select="count(//rec)"/><xsl:variable name="t"/>`, true},
 	}
 	for i, c := range cases {
 		sheet := mainSheet(c.globals + mode)

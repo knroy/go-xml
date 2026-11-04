@@ -185,9 +185,12 @@ type compiler struct {
 	// over one and evaluate its use-when expressions a second time.
 	staticVars []staticVar
 	staticDone map[*xdm.Node]*xdm.Node
-	// l7Alias caches streamMayAlias (1 yes, -1 no) for l7AliasN modules (streamalias_l7.go).
-	l7Alias  int8
+	// l7Alias caches the scan streamMayAlias reads, made over l7AliasN modules (streamalias_l7.go).
+	l7Alias  *aliasScan
 	l7AliasN int
+	// l7Cross is the rules walk over every module, made once (streamtrust_xmod_l7.go).
+	l7Cross     *rulesPlan
+	l7CrossDone bool
 	// mergedText records, for each text node mergeAcrossComments built out
 	// of pieces separated by comments, the element the pieces were in.
 	mergedText map[*xdm.Node]*xdm.Node
@@ -2407,6 +2410,9 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 			c.sheet.modeNoMatch[name] = strings.TrimSpace(nm.Value())
 			c.sheet.modeNoMatchPrec[name] = rank
 		}
+	}
+	if a := el.Attr("", "streamable"); a != nil {
+		c.noteModeStreamable(name, isYes(a.Value()), precedence) // streamglobal_l7.go
 	}
 	if a := el.Attr("", "typed"); a != nil {
 		if c.sheet.modeTyped == nil {

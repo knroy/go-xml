@@ -80,6 +80,8 @@ type runtime struct {
 // that every focus, variable and selection change makes small.
 type transformState struct {
 	sheet *Stylesheet
+	// noGlobal says the global context item is absent (streamglobal_l7.go).
+	noGlobal bool
 
 	// accumHeld holds the accumulator values of the snapshots of streamed
 	// merge items (streammerge_accum.go), made on first use.
@@ -787,6 +789,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		transformState: &transformState{
 			sheet:       s,
 			evalLock:    opts.nestedLock,
+			noGlobal:    opts.noGlobalItem,
 			maxDepth:    maxDepth,
 			keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
 			keyBuilding: map[keyCacheKey]bool{},
@@ -1634,7 +1637,7 @@ func bodyVariableRefs(el *xdm.Node) []string {
 // with count(//*), which without this took the transform's source document as
 // its focus and quietly returned a number where XPDY0002 was due.
 func globalRuntimeFor(rt *runtime, g *Variable) *runtime {
-	if g.pkg == 0 {
+	if g.pkg == 0 && !rt.noGlobal { // streamglobal_l7.go
 		return rt
 	}
 	// A declaration inside an xsl:override belongs to the package containing

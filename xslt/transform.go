@@ -368,6 +368,11 @@ type TransformOptions struct {
 	// in streamable form, whether it streams or falls back to a tree
 	// (accumdyn_l4.go). Unexported because only TransformReader sets it.
 	readerInput bool
+	// noGlobalItem says the global context item is absent although a source
+	// is given: TransformReader's principal input in a streamable initial
+	// mode (streamglobal_l7.go). Unexported because only TransformReader
+	// sets it.
+	noGlobalItem bool
 
 	// disableMessages is fn:transform's enable-messages=false: a
 	// non-terminating xsl:message is not evaluated, and a terminating one
@@ -486,6 +491,7 @@ const (
 func (s *Stylesheet) TransformReader(ctx context.Context, r io.Reader, opts TransformOptions) (*Result, error) {
 	// The input is supplied in streamable form, streamed or not (accumdyn_l4.go).
 	opts.readerInput = true
+	opts.noGlobalItem = s.streamedSourceMode(opts)                                 // streamglobal_l7.go
 	if !s.streamsMain(opts) || !s.sourceValidationStreams(opts.SourceValidation) { // streamvalidin.go
 		tree, err := xdm.Parse(r, opts.SourceParseOptions)
 		if err != nil {
@@ -511,7 +517,7 @@ func (s *Stylesheet) transform(ctx context.Context, source *xdm.Node, opts Trans
 	// variable is evaluated from that item, and a mistyped one must not have
 	// half the globals bound before it is noticed.
 	var globalItem xdm.Item
-	if source != nil {
+	if source != nil && !opts.noGlobalItem {
 		globalItem = source
 	}
 	if err := s.checkGlobalContextItem(globalItem); err != nil {

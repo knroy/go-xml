@@ -54,6 +54,10 @@ type declTrust struct {
 
 	// plan, when set, records what the walk computes (streamplan.go).
 	plan *streamPlan
+	// xmods, when set, are every module of the stylesheet: a mode's rules
+	// are verified across them although the module is shared
+	// (streamtrust_xmod_l7.go).
+	xmods []*xdm.Node
 }
 
 type trustState int8
@@ -101,7 +105,7 @@ func (t *declTrust) local() bool { return t != nil && !t.shared }
 // demoted -- an over-approximation, in the safe direction, of the greatest
 // fixed point.
 func (t *declTrust) verified(key any, check func() bool) bool {
-	if t == nil || t.shared {
+	if t == nil || t.shared && !t.crossMode(key) { // streamtrust_xmod_l7.go
 		return false
 	}
 	switch t.state[key] {
@@ -289,17 +293,19 @@ type modeKey struct{ clark string }
 func (t *declTrust) modeVerified(root *xdm.Node, clark string) bool {
 	return t.verified(modeKey{clark}, func() bool {
 		ok := true
-		walkElements(root, func(el *xdm.Node) bool {
-			if !ok || !isXSL(el, "template") || el.Attr("", "match") == nil {
+		for _, r := range t.modeRoots(root) { // streamtrust_xmod_l7.go
+			walkElements(r, func(el *xdm.Node) bool {
+				if !ok || !isXSL(el, "template") || el.Attr("", "match") == nil {
+					return ok
+				}
+				if !strings.Contains(" "+el.AttrValue("mode")+" ", " #all ") &&
+					!containsString(templateModeNames(el), clark) {
+					return true
+				}
+				ok = t.ruleOK(el)
 				return ok
-			}
-			if !strings.Contains(" "+el.AttrValue("mode")+" ", " #all ") &&
-				!containsString(templateModeNames(el), clark) {
-				return true
-			}
-			ok = t.ruleOK(el)
-			return ok
-		})
+			})
+		}
 		return ok
 	})
 }
@@ -340,6 +346,9 @@ func (t *declTrust) enclosingRuleModesVerified(el *xdm.Node) bool {
 		}
 		root := documentElementOf(n)
 		streamable := streamableModeNames(root)
+		if t != nil && t.xmods != nil {
+			streamable = t.crossStreamableModes() // streamtrust_xmod_l7.go
+		}
 		modes := templateModeNames(n)
 		for _, m := range modes {
 			if !streamable[m] || !t.modeVerified(root, m) {

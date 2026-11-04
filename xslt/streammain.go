@@ -110,11 +110,8 @@ func (s *Stylesheet) mainRefusal() string {
 	case s.stripTypeAnnotations:
 		return "input-type-annotations"
 	}
-	for _, g := range s.globals {
-		if len(g.Body) > 0 && !s.literalGlobal(g) || g.Select != nil && !focusFree(g.Select.Expr()) { // streammain_globals.go
-			return "global $" + g.Name.Lexical() + " may read the context item"
-		}
-	}
+	// The globals read no focus: TransformReader makes the global context
+	// item absent for a streamable initial mode (streamglobal_l7.go).
 	return ""
 }
 

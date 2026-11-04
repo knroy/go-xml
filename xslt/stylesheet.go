@@ -166,6 +166,10 @@ type Stylesheet struct {
 	// about the type annotation of every node the mode is applied to.
 	modeTyped       map[string]string
 	modeWarnNoMatch map[string]bool
+	// modeStreamable is xsl:mode/@streamable by Clark mode name, the
+	// declaration of highest precedence winning (streamglobal_l7.go).
+	modeStreamable     map[string]bool
+	modeStreamablePrec map[string]int
 	// accumulators holds xsl:accumulator declarations by Clark name, and
 	// accumOrder keeps the declaration order that fn:accumulator-before
 	// resolves ties by. See accumulator.go.

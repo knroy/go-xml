@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
@@ -49,6 +50,8 @@ var l7Rows = []struct {
 	{`<xsl:variable name="g" select="doc('doc.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(/doc/rec intersect $g)"/></out>`, false},
 	{`<xsl:variable name="g" select="doc('doc.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(/doc/rec union $g)"/></out>`, false},
 	{``, `<xsl:variable name="g" select="doc('doc.xml')//sub"/><out><xsl:copy-of select="//sub except $g"/></out>`, false},
+	// doc() of another URI: another tree in both modes, so it streams.
+	{`<xsl:variable name="g" select="doc('other.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(/doc/rec union $g)"/></out>`, true},
 }
 
 // l7Analysis are §19.8 verdicts lane L7 models (streamability_l7.go).
@@ -72,6 +75,23 @@ var l7Analysis = []struct {
 // TestStreamL7MatchesTree runs l7Rows on every core document and
 // whitespace declaration against the tree.
 func TestStreamL7MatchesTree(t *testing.T) {
+	// streamable-116: a streamed principal input in a streamable mode has an
+	// absent global context item (§2.3.2): XPDY0002 from TransformReader,
+	// streamed or not; Transform of a tree keeps the source as the item.
+	g := mainSheet(`<xsl:mode streamable="yes"/><xsl:variable name="g" select="count(//rec)"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`)
+	for _, streamed := range []bool{true, false} {
+		if out, _ := mainRun(g, coreDocs["flat"], streamed, TransformOptions{}); !strings.Contains(out, "XPDY0002") {
+			t.Errorf("TransformReader (streamed %v): %q, want XPDY0002", streamed, out)
+		}
+	}
+	if tree, err := xdm.ParseString(g, xdm.ParseOptions{}); err == nil {
+		if s, err := Compile(tree.Root, CompileOptions{}); err == nil {
+			src, _ := xdm.ParseString(coreDocs["flat"], xdm.ParseOptions{})
+			if res, err := s.Transform(context.Background(), src.Root, TransformOptions{}); err != nil || !strings.Contains(res.String(), `g="3"`) {
+				t.Errorf("Transform of a tree: %v %v, want g=\"3\"", res, err)
+			}
+		}
+	}
 	// The analysis rows (l7Analysis): verdicts, no run.
 	for _, c := range l7Analysis {
 		p, known := analyzeInstrSource(t, c.src)
@@ -82,6 +102,9 @@ func TestStreamL7MatchesTree(t *testing.T) {
 	for name, doc := range coreDocs {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "other.xml"), []byte(coreDocs["flat"]), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		for di, d := range coreDecls {
@@ -97,47 +120,115 @@ func TestStreamL7MatchesTree(t *testing.T) {
 // accumulator on the core, with the tree's output (streamtrust_pkg_l7.go;
 // override-misc-007's principal container).
 func TestStreamL7UsePackageTrust(t *testing.T) {
-	const base = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform" name="urn:base" package-version="1.0.0" version="3.0">
+	const base = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:f="urn:f" name="urn:base" package-version="1.0.0" version="3.0">
 		<xsl:accumulator name="ac" initial-value="0" streamable="yes"><xsl:accumulator-rule match="*" select="$value + 1"/></xsl:accumulator>
+		<xsl:variable name="cat" select="'a'" visibility="public"/>
+		<xsl:function name="f:pick" as="node()?" streamability="filter" visibility="public">
+			<xsl:param name="n" as="node()"/><xsl:sequence select="$n[@k = $cat]"/>
+		</xsl:function>
 	</xsl:package>`
-	const top = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform" name="urn:top" package-version="1.0.0" version="3.0">
-		<xsl:use-package name="urn:base" package-version="1.0.0"/>
+	const top = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:f="urn:f" name="urn:top" package-version="1.0.0" version="3.0">
+		<xsl:use-package name="urn:base" package-version="1.0.0">USE</xsl:use-package>
 		<xsl:accumulator name="ac" initial-value="0" streamable="yes"><xsl:accumulator-rule match="*" select="$value - 1"/></xsl:accumulator>
 		<xsl:template name="main" visibility="public">
-			<xsl:source-document streamable="yes" href="doc.xml" use-accumulators="ac">
-				<b n="{count(//*)}" acc="{accumulator-after('ac')}"/>
-			</xsl:source-document>
+			<xsl:source-document streamable="yes" href="doc.xml" use-accumulators="ac">BODY</xsl:source-document>
 		</xsl:template>
 	</xsl:package>`
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["flat"]), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	run := func(core bool) (string, streamtrace.Counts) {
-		before := streamtrace.Snapshot()
-		defer func() { noBursts = false }()
-		tree, err := xdm.ParseString(top, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
-		if err != nil {
+	// override-misc-007: the module's own accumulator; su-filter-102: a
+	// function the module overrides, inlined in this package's scope.
+	over := `<xsl:override><xsl:function name="f:pick" as="node()?" streamability="filter" visibility="public">` +
+		`<xsl:param name="n" as="node()"/><xsl:sequence select="$n[not(@k = $cat)]"/></xsl:function></xsl:override>`
+	for i, c := range []struct{ use, body string }{
+		{``, `<b n="{count(//*)}" acc="{accumulator-after('ac')}"/>`},
+		{over, `<b><xsl:value-of select="doc/rec ! f:pick(.) / sub/@x"/></b>`},
+	} {
+		src := strings.Replace(strings.Replace(top, "USE", c.use, 1), "BODY", c.body, 1)
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["flat"]), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		s, err := Compile(tree.Root, CompileOptions{PackageResolver: fixedPackages{"urn:base": base}})
-		if err != nil {
-			t.Fatalf("compile: %v", err)
+		run := func(core bool) (string, streamtrace.Counts) {
+			before := streamtrace.Snapshot()
+			defer func() { noBursts = false }()
+			tree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := Compile(tree.Root, CompileOptions{PackageResolver: fixedPackages{"urn:base": base}})
+			if err != nil {
+				return "COMPILE " + err.Error(), streamtrace.Snapshot().Sub(before)
+			}
+			docs, _ := NewFileResolver(dir)
+			noBursts = !core
+			res, err := s.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: docs})
+			if err != nil {
+				return "ERR " + err.Error(), streamtrace.Snapshot().Sub(before)
+			}
+			return res.String(), streamtrace.Snapshot().Sub(before)
 		}
-		docs, _ := NewFileResolver(dir)
-		noBursts = !core
-		res, err := s.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: docs})
-		if err != nil {
-			return "ERR " + err.Error(), streamtrace.Snapshot().Sub(before)
+		so, st := run(true)
+		to, _ := run(false)
+		if so != to {
+			t.Errorf("case %d: core %q\ntree %q", i, so, to)
 		}
-		return res.String(), streamtrace.Snapshot().Sub(before)
+		if st.Runs[streamtrace.Core] == 0 {
+			t.Errorf("case %d: not on the core", i)
+		}
 	}
-	so, st := run(true)
-	to, _ := run(false)
-	if so != to {
-		t.Errorf("core %q\ntree %q", so, to)
+}
+
+// TestStreamL7ImportTrust: a streamable mode whose rules are spread over an
+// importing and an imported module, joined by xsl:apply-imports, streams
+// with the tree's output when every rule verifies (streamtrust_xmod_l7.go;
+// si-apply-imports-068..070); a rule in the imported module that reads a
+// sibling keeps it on the tree.
+func TestStreamL7ImportTrust(t *testing.T) {
+	const hdr = `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">`
+	cases := []struct {
+		imported, mode string
+		stream         bool
+	}{
+		{hdr + `<xsl:mode streamable="yes"/><xsl:template match="rec"><i k="{@k}"><xsl:value-of select="."/></i></xsl:template></xsl:stylesheet>`, ``, true},
+		{hdr + `<xsl:mode streamable="no"/><xsl:template match="rec"><i k="{@k}"><xsl:value-of select="."/></i></xsl:template></xsl:stylesheet>`, `<xsl:mode streamable="yes"/>`, true},
+		{hdr + `<xsl:mode streamable="yes"/><xsl:template match="rec"><i><xsl:value-of select="following-sibling::rec[1]/@k"/></i></xsl:template></xsl:stylesheet>`, ``, false},
 	}
-	if st.Runs[streamtrace.Core] == 0 {
-		t.Error("not on the core")
+	for i, c := range cases {
+		dir := t.TempDir()
+		for n, s := range map[string]string{"doc.xml": coreDocs["flat"], "a.xsl": c.imported} {
+			if err := os.WriteFile(filepath.Join(dir, n), []byte(s), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		main := hdr + `<xsl:import href="a.xsl"/>` + c.mode +
+			`<xsl:template match="rec"><o p="{position()}"><xsl:apply-imports/></o></xsl:template>` +
+			`<xsl:template name="main"><out><xsl:source-document streamable="yes" href="doc.xml"><xsl:apply-templates select="doc/rec"/></xsl:source-document></out></xsl:template></xsl:stylesheet>`
+		run := func(core bool) (string, streamtrace.Counts) {
+			before := streamtrace.Snapshot()
+			defer func() { noBursts = false }()
+			base := fileURIOf(filepath.Join(dir, "s.xsl"))
+			tree, err := xdm.ParseString(main, xdm.ParseOptions{BaseURI: base})
+			if err != nil {
+				t.Fatal(err)
+			}
+			docs, _ := NewFileResolver(dir)
+			s, err := Compile(tree.Root, CompileOptions{BaseURI: base, Resolver: docs})
+			if err != nil {
+				return "COMPILE " + err.Error(), streamtrace.Snapshot().Sub(before)
+			}
+			noBursts = !core
+			res, err := s.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: docs})
+			if err != nil {
+				return "ERR " + err.Error(), streamtrace.Snapshot().Sub(before)
+			}
+			return res.String(), streamtrace.Snapshot().Sub(before)
+		}
+		so, st := run(true)
+		to, _ := run(false)
+		if so != to {
+			t.Errorf("case %d: core %q\ntree %q", i, so, to)
+		}
+		if got := st.Runs[streamtrace.Core] > 0; got != c.stream {
+			t.Errorf("case %d: on the core %v, want %v", i, got, c.stream)
+		}
 	}
 }

@@ -75,10 +75,14 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 		// in others, is not the whole stylesheet (streamtrust.go).
 		shared := n.Root() != c.sheet.source
 		var why string
-		if core, why = planStream(n, shared); core == nil && traceCore != nil && why != "verdict not trusted" {
+		var xm []*xdm.Node
+		if !shared {
+			xm = c.crossModules() // streamtrust_xmod_l7.go
+		}
+		if core, why = planStream(n, shared, xm...); core == nil && traceCore != nil && why != "verdict not trusted" {
 			traceCore(n, why)
 		}
-		if core != nil && c.streamMayAlias() { // streamalias_l7.go
+		if core != nil && c.streamMayAlias(false) { // streamalias_l7.go
 			core = nil
 			if traceCore != nil {
 				traceCore(n, "a node of the stream may meet the tree's own node for it")

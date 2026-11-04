@@ -111,8 +111,9 @@ type planFrame struct {
 
 // buildStreamPlan runs the trusting walk of burstVerdict over the streamable
 // xsl:source-document sd, recording as it goes.
-func buildStreamPlan(sd *xdm.Node, shared bool) *streamPlan {
+func buildStreamPlan(sd *xdm.Node, shared bool, xmods ...*xdm.Node) *streamPlan {
 	t := newDeclTrust(documentElementOf(sd), shared)
+	t.xmods = xmods // streamtrust_xmod_l7.go
 	t.plan = &streamPlan{recs: map[any]*planRec{}, sites: map[planSite][]planRoot{}}
 	p, known, unverified := sequenceConstructorVerdict(sd, postureStriding, t.sets, t.funcs, t)
 	t.plan.verdict = planRec{props: p, known: known, unverified: unverified}

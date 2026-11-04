@@ -15,12 +15,15 @@ package xslt
 // a node from elsewhere would have to know which variables, functions and
 // lookups may hold such nodes; they read only the expression's text.
 //
-// ponytail: the check is stylesheet-wide and textual. When any module may
-// load a document by URI AND writes a node-identity operator (union, |,
-// intersect, except, is, <<, >>, generate-id) anywhere, nothing streams: no
-// xsl:source-document plan, no rule plan (so no streamed mode), no streamed
-// merge. Narrow it to the operators whose operands can reach such nodes
-// when that is worth the dataflow.
+// ponytail: the check is stylesheet-wide and textual. When a load may reach
+// a URI the stylesheet streams -- a literal that resolves to the same
+// absolute URI as a streamed literal href, or any load whose URI is not a
+// literal -- AND a node-identity operator (union, |, intersect, except, is,
+// <<, >>, generate-id) is written anywhere, nothing streams: no
+// xsl:source-document plan, no rule plan, no streamed merge. A literal load
+// of a different URI is safe: its nodes are another tree in both modes.
+// Narrow it to the operators whose operands can reach such nodes when that
+// is worth the dataflow.
 
 import (
 	"regexp"
@@ -30,16 +33,68 @@ import (
 )
 
 var (
-	loadsDocRE    = regexp.MustCompile(`\b(doc|document|collection|transform|function-lookup)\s*[(#]`)
+	loadCallRE    = regexp.MustCompile(`\b(doc|document|collection|transform|function-lookup)\s*[(#]`)
+	litLoadRE     = regexp.MustCompile(`\b(doc|document)\s*\(\s*(?:'([^']*)'|"([^"]*)")\s*\)`)
 	identityOpsRE = regexp.MustCompile(`\b(union|intersect|except|is)\b|\||<<|>>|generate-id`)
+	litStringRE   = regexp.MustCompile(`^\s*(?:'([^']*)'|"([^"]*)")\s*$`)
 )
 
-// streamMayAlias reports whether a streamed run of this stylesheet may
-// compare a node of the stream with the tree's own node for it.
-func (c *compiler) streamMayAlias() bool {
-	// Used packages compile last and add their modules: recomputed then.
-	if c.l7Alias != 0 && c.l7AliasN == len(c.staticDone) {
-		return c.l7Alias > 0
+// aliasScan is what streamMayAlias reads of the stylesheet's modules.
+type aliasScan struct {
+	// streamed holds the absolute URIs of the literal hrefs read as
+	// streams (a streamable xsl:source-document, a streamable
+	// xsl:merge-source's literal for-each-source); anyStream says one is
+	// not a literal.
+	streamed  map[string]bool
+	anyStream bool
+	// loads holds the absolute URIs of the literal loads (doc('x'),
+	// document('x'), a non-streamable source-document's literal href);
+	// anyLoad says a load's URI is not known here: a computed argument,
+	// collection, transform, function-lookup, a named reference doc#1,
+	// xsl:evaluate, xsl:use-package (its modules compile last).
+	loads   map[string]bool
+	anyLoad bool
+	ident   bool
+}
+
+// streamMayAlias reports whether a streamed run of a source-document or a
+// merge may compare a node of the stream with the tree's own node for it:
+// a load may reach a URI a container streams, and an identity operator is
+// written somewhere. main asks the same for the rule plans, which also
+// serve a streamed principal input, whose URI is not known at compile time
+// (the harness or a host may have it in the resolver's cache): there any
+// load counts.
+func (c *compiler) streamMayAlias(main bool) bool {
+	sc := c.aliasScanOf()
+	if !sc.ident {
+		return false
+	}
+	if sc.anyLoad || main && len(sc.loads) > 0 {
+		return true
+	}
+	if sc.anyStream && len(sc.loads) > 0 {
+		return true
+	}
+	for u := range sc.loads {
+		if sc.streamed[u] {
+			return true
+		}
+	}
+	return false
+}
+
+// aliasBase is the static base URI of el.
+func (c *compiler) aliasBase(el *xdm.Node) string {
+	if b := el.BaseURI(); b != "" {
+		return b
+	}
+	return c.opts.BaseURI
+}
+
+func (c *compiler) aliasScanOf() *aliasScan {
+	// Used packages compile last and add their modules: rescanned then.
+	if c.l7Alias != nil && c.l7AliasN == len(c.staticDone) {
+		return c.l7Alias
 	}
 	c.l7AliasN = len(c.staticDone)
 	roots := map[*xdm.Node]bool{}
@@ -61,31 +116,61 @@ func (c *compiler) streamMayAlias() bool {
 		add(k)
 		add(v)
 	}
-	loads, ident := false, false
+	sc := &aliasScan{streamed: map[string]bool{}, loads: map[string]bool{}}
+	lit := func(el *xdm.Node, v string, into map[string]bool, any *bool) {
+		if strings.ContainsAny(v, "{}") {
+			*any = true
+			return
+		}
+		into[resolveAgainst(c.aliasBase(el), strings.TrimSpace(v))] = true
+	}
+	litExpr := func(el *xdm.Node, v string, into map[string]bool, any *bool) {
+		m := litStringRE.FindStringSubmatch(v)
+		if m == nil {
+			*any = true
+			return
+		}
+		into[resolveAgainst(c.aliasBase(el), m[1]+m[2])] = true
+	}
+	scanText := func(el *xdm.Node, v string) {
+		calls := len(loadCallRE.FindAllString(v, -1))
+		lits := litLoadRE.FindAllStringSubmatch(v, -1)
+		if calls > len(lits) {
+			sc.anyLoad = true
+		}
+		for _, m := range lits {
+			sc.loads[resolveAgainst(c.aliasBase(el), m[2]+m[3])] = true
+		}
+		sc.ident = sc.ident || identityOpsRE.MatchString(strings.ReplaceAll(v, "||", ""))
+	}
 	for r := range roots {
 		walkElements(r, func(el *xdm.Node) bool {
-			if isXSL(el, "evaluate") || isXSL(el, "use-package") ||
-				(isXSL(el, "source-document") || isXSL(el, "merge-source")) && !isYes(el.AttrValue("streamable")) {
-				loads = true
+			streamable := isYes(el.AttrValue("streamable"))
+			switch {
+			case isXSL(el, "evaluate"), isXSL(el, "use-package"):
+				sc.anyLoad = true
+			case isXSL(el, "source-document") && streamable:
+				lit(el, el.AttrValue("href"), sc.streamed, &sc.anyStream)
+			case isXSL(el, "source-document"):
+				lit(el, el.AttrValue("href"), sc.loads, &sc.anyLoad)
+			case isXSL(el, "merge-source") && el.Attr("", "for-each-source") != nil:
+				if streamable {
+					litExpr(el, el.AttrValue("for-each-source"), sc.streamed, &sc.anyStream)
+				} else {
+					litExpr(el, el.AttrValue("for-each-source"), sc.loads, &sc.anyLoad)
+				}
 			}
 			for a := range el.Attrs() {
-				v := a.Value()
-				loads = loads || loadsDocRE.MatchString(v)
-				ident = ident || identityOpsRE.MatchString(strings.ReplaceAll(v, "||", ""))
+				scanText(el, a.Value())
 			}
 			for ch := range el.Children() {
 				if ch.Kind() == xdm.KindText && strings.Contains(ch.Value(), "{") {
-					v := ch.Value()
-					loads = loads || loadsDocRE.MatchString(v)
-					ident = ident || identityOpsRE.MatchString(strings.ReplaceAll(v, "||", ""))
+					scanText(el, ch.Value())
 				}
 			}
-			return !(loads && ident)
+			return true
 		})
 	}
-	c.l7Alias = -1
-	if loads && ident {
-		c.l7Alias = 1
-	}
-	return c.l7Alias > 0
+	c.l7Alias = sc
+	return sc
 }
