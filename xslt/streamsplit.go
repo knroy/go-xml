@@ -1495,8 +1495,11 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		if accumDocURIOK(vc, x) { // streamaccum_l4.go
 			return true
 		}
-		if vc.ents && f == vNone && len(x.Args) == 1 && (n == "unparsed-entity-uri" || n == "unparsed-entity-public-id") {
-			return vc.safe(x.Args[0], f, false) // streamcopy_l3doc.go
+		if (vc.ents && f == vNone || f == vElem) && len(x.Args) == 1 && (n == "unparsed-entity-uri" || n == "unparsed-entity-public-id") {
+			// streamcopy_l3doc.go; at an element's view, its tree's DTD is
+			// the document's (xdm newViews), read before the first start
+			// tag (sf-unparsed-entity-02).
+			return vc.safe(x.Args[0], f, false)
 		}
 		if viewLeafCopyOK(x, f) { // streamview_l7.go
 			return true

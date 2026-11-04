@@ -214,6 +214,10 @@ var mainCases = []struct {
 	{`<xsl:accumulator name="n" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>` +
 		`<xsl:mode streamable="yes" use-accumulators="n"/><xsl:template match="/"><o><xsl:for-each select="//sub/ancestor::rec">` +
 		`<e k="{@k}" n="{accumulator-before('n')}"/></xsl:for-each></o></xsl:template>`, false},
+	// unparsed-entity-uri#1 and -public-id#1 at an element's view: its
+	// tree's DTD is the document's (sf-unparsed-entity-02).
+	{`<xsl:mode streamable="yes"/><xsl:template match="doc"><o><xsl:value-of select="unparsed-entity-uri('pic'), unparsed-entity-public-id('pic')"/></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="doc"><o><xsl:for-each select="rec"><r u="{unparsed-entity-uri('pic')}" k="{@k}"/></xsl:for-each></o></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
