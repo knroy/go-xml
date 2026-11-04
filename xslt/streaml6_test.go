@@ -134,6 +134,8 @@ var l6DeclBodies = []struct {
 	{l6CopyRules, `<out><xsl:apply-templates select="copy-of(doc/rec)" mode="t"/></out>`, true},
 	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of()" mode="t"><xsl:with-param name="p" select="'w'"/></xsl:apply-templates></out>`, true},
 	{l6CopyRules, `<out><xsl:apply-templates select=".//rec/copy-of(.)" mode="t"><xsl:with-param name="p" select="7"/></xsl:apply-templates></out>`, true},
+	// A filter over the copies (filteredCopies; si-copy-of-801), a tunnel parameter.
+	{l6CopyRules, `<out><xsl:apply-templates select="copy-of(outermost(//rec))[.//sub[@x = '1']]" mode="t"><xsl:with-param name="p" select="'f'"/></xsl:apply-templates></out>`, true},
 	// Accumulators declared: the copies' values are not held (copiesLinkWhy).
 	{l6CopyRules + `<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>`,
 		`<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, false},

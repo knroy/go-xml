@@ -226,3 +226,21 @@ func flatArray(e xpath.Expr) xpath.Expr {
 	}
 	return &xpath.SequenceExpr{Items: a.Members}
 }
+
+// filteredCopies builds (B)[pred...] where B is a population of copies
+// (copy-of(P), si-copy-of-801's copy-of(outermost(//p))[.//*[...]]): the
+// population is B's; the predicates run on the tree's code over the whole
+// sequence of copies once it is collected (executeCopies), as the tree's
+// filter runs over the select's value: positions and last() are the whole
+// sequence's.
+func (pb *popBuilder) filteredCopies(x *xpath.FilterExpr) *streamPop {
+	if pb.split != nil {
+		return nil
+	}
+	p := pb.pop(x.Base)
+	if p == nil || !groundApply(p) || p.post != nil {
+		return nil
+	}
+	p.post = pb.part(&xpath.FilterExpr{Base: &xpath.VarRef{Name: splitItems}, Predicates: x.Predicates})
+	return p
+}

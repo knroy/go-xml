@@ -72,6 +72,9 @@ type streamPop struct {
 	// F union P, F's nodes merged into the matches by order (streampop_l6.go).
 	split *streamSplit
 	union *xpath.Compiled
+	// post, for (copy-of(P))[pred], filters the whole population once it is
+	// read: $splitItems[pred] (streampop_l6.go; apply ops only).
+	post *xpath.Compiled
 }
 
 // popWin is a window over the stream part's matches: of kind head, tail,
@@ -164,6 +167,10 @@ func (pb *popBuilder) pop(e xpath.Expr) *streamPop {
 		return &streamPop{cond: pb.part(x.Cond), then: t, els: f, off: t.off || f.off}
 	case *xpath.BinaryOp:
 		if p := pb.unionPop(x); p != nil { // streampop_l6.go
+			return p
+		}
+	case *xpath.FilterExpr:
+		if p := pb.filteredCopies(x); p != nil { // streampop_l6.go
 			return p
 		}
 	case *xpath.SequenceExpr:
@@ -328,6 +335,9 @@ func ownAttrTail(e xpath.Expr) bool {
 // each match; ok says it is readied.
 func (x *streamExec) readyPop(op *streamOp, ctxD, k int, kinds *[streamtrace.NumKinds]int64) (string, bool) {
 	p := op.pop
+	if p != nil && p.post != nil {
+		return "loop over a filtered population", true // streampop_l6.go: apply ops only
+	}
 	if p == nil || !p.off {
 		return "", false
 	}

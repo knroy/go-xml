@@ -250,6 +250,11 @@ func (i *applyTemplatesInstr) executeCopies(rt *runtime, out *outputBuilder, run
 	if err != nil {
 		return err
 	}
+	if op.pop.post != nil { // streampop_l6.go
+		if seq, err = op.pop.post.Eval(rt.ctx.WithVar(splitItems, seq)); err != nil {
+			return err
+		}
+	}
 	off := run.off
 	run.off = true
 	err = i.applySelected(rt, out, seq)
