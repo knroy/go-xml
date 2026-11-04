@@ -316,6 +316,10 @@ type rulesPlan struct {
 	pl    *streamPlan
 	trust *declTrust
 	modes map[string]bool // the streamable ones
+	// pkg are frame packages' modes the top-level plan may verify for apply
+	// ops written in pkgRoots (streampkgframe_l7.go).
+	pkg      map[string]*rulesPlan
+	pkgRoots map[*xdm.Node]bool
 }
 
 // rulesPlanFor returns the walk of the module of el, made on first use; nil
@@ -327,6 +331,14 @@ func (c *compiler) rulesPlanFor(el *xdm.Node) *rulesPlan {
 		return rp
 	}
 	var rp *rulesPlan
+	if st := c.l7PkgFrames[root]; st != nil {
+		rp = c.pkgRulesPlan(st) // streampkgframe_l7.go: a frame package's own modes
+		if c.rulePlans == nil {
+			c.rulePlans = map[*xdm.Node]*rulesPlan{}
+		}
+		c.rulePlans[root] = rp
+		return rp
+	}
 	if xm := c.crossModules(); xm != nil && reachesOtherModules(firstElement(c.sheet.source)) {
 		rp = c.crossRulesPlan(xm) // streamtrust_xmod_l7.go: one walk for every module
 	} else if modes := streamableModeNames(root); len(modes) > 0 && el.Root() == c.sheet.source && !c.streamMayAlias(true) { // streamalias_l7.go
@@ -343,6 +355,9 @@ func (c *compiler) rulesPlanFor(el *xdm.Node) *rulesPlan {
 			}
 			rp = &rulesPlan{pl: t.plan, trust: t, modes: modes}
 		}
+	}
+	if el.Root() == c.sheet.source {
+		c.attachPkgModes(rp) // streampkgframe_l7.go
 	}
 	if c.rulePlans == nil {
 		c.rulePlans = map[*xdm.Node]*rulesPlan{}
@@ -637,6 +652,7 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 		top topKind
 	}
 	visited := map[visitKey]bool{}
+	pkgOK := map[string]bool{} // modes named by apply ops written in a frame package
 	var why string
 	streamed := x == nil // a principal input: no tree to fall back to
 	visit := func(x *streamExec, top topKind) {
@@ -689,6 +705,9 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 				t = top
 			}
 			for _, m := range modes {
+				if rs.pkgApply(op) { // streampkgframe_l7.go
+					pkgOK[m] = true
+				}
 				switch op.apply {
 				case applyKids:
 					add(m, classElem, t)
@@ -714,7 +733,7 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 		k := work[0]
 		work = work[1:]
 		label := func() string { return fmt.Sprintf("mode %q, %s", k.mode, classNames[k.class]) }
-		if !rs.verified(k.mode) {
+		if !rs.verified(k.mode) && !(pkgOK[k.mode] && rs.pkgVerified(k.mode)) { // streampkgframe_l7.go
 			return label() + ": not a verified streamable mode"
 		}
 		nm := s.modeNoMatch[k.mode]
