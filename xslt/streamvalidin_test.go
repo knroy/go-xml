@@ -319,4 +319,45 @@ func TestStreamMainValidation(t *testing.T) {
 			t.Errorf("%v %q: streamed %v, want %v", r.v, r.code, streamed, r.stream)
 		}
 	}
+	// Schemas the stream once refused, streamed now: what the body reads,
+	// and the verdict, are the tree's.
+	for _, c := range []struct {
+		name, schema string
+		rules        []string
+		docs         map[string]string // name "bad..." is invalid
+	}{
+		{"values", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+ <xs:element name="r"><xs:complexType><xs:sequence>
+   <xs:element name="i" type="xs:integer" default="5" minOccurs="0" maxOccurs="unbounded"/>
+   <xs:element name="m" fixed="ab" minOccurs="0" maxOccurs="unbounded"><xs:complexType mixed="true"><xs:sequence>
+     <xs:element name="x" minOccurs="0"/></xs:sequence></xs:complexType></xs:element>
+ </xs:sequence></xs:complexType></xs:element></xs:schema>`,
+			[]string{`<xsl:template match="i|m"><v d="{data(.)}" t="{. instance of element(*, xs:integer)}"/></xsl:template>`,
+				`<xsl:template match="i|m"><v s="[{.}]"/></xsl:template>`,
+				`<xsl:template match="i|m"><v n="{count(node())}"/></xsl:template>`,
+				`<xsl:template match="/"><o><xsl:value-of select="r/i/string()" separator=","/></o></xsl:template>`},
+			map[string]string{"ok": `<r><i/><i>7</i><i></i><m/><m>ab</m><m>a<?p?>b</m></r>`,
+				"bad-fixed": `<r><m>ba</m></r>`, "bad-child": `<r><m>ab<x/></m></r>`, "bad-comment": `<r><i>x<!----></i></r>`}},
+	} {
+		for _, r := range c.rules {
+			for name, doc := range c.docs {
+				where := c.name + " " + name + " " + r
+				src := sheet(c.schema, "", r)
+				got, tr := run(src, doc, "reader", SourceStrict)
+				want, _ := run(src, doc, "field", SourceStrict)
+				if got != want {
+					t.Errorf("%s:\nreader %q\nfield  %q", where, got, want)
+				}
+				if strings.HasPrefix(want, "error") != strings.HasPrefix(name, "bad") {
+					t.Errorf("%s: %q", where, want)
+				}
+				if man, _ := run(src, doc, "manual", SourceStrict); !strings.HasPrefix(name, "bad") && man != want {
+					t.Errorf("%s:\nfield  %q\nmanual %q", where, want, man)
+				}
+				if tr.Runs[streamtrace.Main] == 0 {
+					t.Errorf("%s: not streamed", where)
+				}
+			}
+		}
+	}
 }

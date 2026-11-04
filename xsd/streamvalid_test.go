@@ -102,6 +102,24 @@ const svMiscDoc = `<doc xmlns="urn:m" xmlns:xsi="http://www.w3.org/2001/XMLSchem
   <mx>a<i>1</i>b<i>2</i></mx>
 </doc>`
 
+// svValues: element default and fixed values (effectiveValue,
+// checkFixedValueConstraint): an empty element takes its default, one with
+// any child (a comment too) does not.
+const svValues = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+ <xs:element name="r"><xs:complexType><xs:sequence>
+   <xs:element name="i" type="xs:integer" default="5" minOccurs="0" maxOccurs="unbounded"/>
+   <xs:element name="u" type="iord" default="2001-01-01" minOccurs="0" maxOccurs="unbounded"/>
+   <xs:element name="f" type="xs:decimal" fixed="1.5" minOccurs="0" maxOccurs="unbounded"/>
+   <xs:element name="s" default="7" minOccurs="0" maxOccurs="unbounded"><xs:complexType><xs:simpleContent>
+     <xs:extension base="xs:int"><xs:attribute name="a" type="xs:string"/></xs:extension></xs:simpleContent></xs:complexType></xs:element>
+   <xs:element name="m" fixed="ab" minOccurs="0" maxOccurs="unbounded"><xs:complexType mixed="true"><xs:sequence>
+     <xs:element name="x" minOccurs="0"/></xs:sequence></xs:complexType></xs:element>
+ </xs:sequence></xs:complexType></xs:element>
+ <xs:simpleType name="iord"><xs:union memberTypes="xs:integer xs:date"/></xs:simpleType>
+</xs:schema>`
+
+const svValuesDoc = `<r><i/><i></i><i>7</i><u/><u>3</u><f/><f>1.50</f><s a="z"/><s>8</s><m/><m>ab</m><m>a<!--c-->b</m></r>`
+
 // svRun streams doc and returns the grounded document element, the
 // validator's verdict, and whether it ran.
 func svRun(t *testing.T, s *Schema, doc string, m xsdstream.Mode, ground bool) (*xdm.Node, error) {
@@ -209,7 +227,7 @@ func svLoad(t *testing.T, src string) *Schema {
 }
 
 func TestStreamValidationMatchesTree(t *testing.T) {
-	books, misc := svLoad(t, svBooks), svLoad(t, svMisc)
+	books, misc, values := svLoad(t, svBooks), svLoad(t, svMisc), svLoad(t, svValues)
 	strict, doc := xsdstream.Mode{Root: xsdstream.Strict}, xsdstream.Mode{Root: xsdstream.Strict, Doc: true}
 	lax := xsdstream.Mode{Root: xsdstream.Lax}
 	typed := xsdstream.Mode{Root: xsdstream.Type, Type: xdm.QName{Local: "BOOKLIST-type"}}
@@ -229,6 +247,8 @@ func TestStreamValidationMatchesTree(t *testing.T) {
 		{"misc doc", misc, svMiscDoc, doc, false},
 		{"empty with whitespace", misc, strings.Replace(svMiscDoc, `<e/>`, `<e> </e>`, 1), strict, false},
 		{"misc root xsi:type", misc, `<r xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:m="urn:m" xsi:type="m:base"><v xmlns="urn:m">3</v></r>`, strict, false},
+		{"values strict", values, svValuesDoc, strict, false},
+		{"values doc", values, svValuesDoc, doc, false},
 		// Invalid, each for one reason the tree finds.
 		{"order", books, strings.Replace(svBooksDoc, "<TITLE>One</TITLE><PRICE cur=\"USD\">4.50</PRICE>", "<PRICE>4.50</PRICE><TITLE>One</TITLE>", 1), strict, true},
 		{"required attribute", books, strings.Replace(svBooksDoc, ` CAT="H"`, "", 1), strict, true},
@@ -251,6 +271,11 @@ func TestStreamValidationMatchesTree(t *testing.T) {
 		{"choice", misc, strings.Replace(svMiscDoc, `<p>z</p>`, `<p>z</p><p>z</p>`, 1), strict, true},
 		{"lax invalid", misc, strings.Replace(svMiscDoc, `<m:g>2002</m:g>`, `<m:g>never</m:g>`, 1), strict, true},
 		{"empty with text", misc, strings.Replace(svMiscDoc, `<e/>`, `<e>x</e>`, 1), strict, true},
+		{"default not taken: a comment", values, strings.Replace(svValuesDoc, `<i></i>`, `<i><!--c--></i>`, 1), strict, true},
+		{"fixed simple", values, strings.Replace(svValuesDoc, `<f>1.50</f>`, `<f>2</f>`, 1), strict, true},
+		{"fixed mixed", values, strings.Replace(svValuesDoc, `<m>ab</m>`, `<m>ba</m>`, 1), strict, true},
+		{"fixed mixed child", values, strings.Replace(svValuesDoc, `<m>ab</m>`, `<m>ab<x/></m>`, 1), strict, true},
+		{"fixed mixed space", values, strings.Replace(svValuesDoc, `<m>ab</m>`, `<m> </m>`, 1), strict, true},
 		{"xsi:type not derived", misc, strings.Replace(svMiscDoc, `xsi:type="m:ext"`, `xsi:type="m:shapeT"`, 1), strict, true},
 	}
 	for _, r := range rows {
@@ -284,8 +309,7 @@ func TestStreamValidationRefusals(t *testing.T) {
 			<xs:key name="K"><xs:selector xpath="k"/><xs:field xpath="@id"/></xs:key>
 			<xs:keyref name="R" refer="K"><xs:selector xpath="k"/><xs:field xpath="@id"/></xs:keyref></xs:element></xs:schema>`,
 			"element r has identity constraints"},
-		{"element default", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r" type="xs:int" default="1"/></xs:schema>`,
-			"element r has a value constraint"},
+		{"element default", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r" type="xs:int" default="1"/></xs:schema>`, ""},
 		{"open content", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType>
 			<xs:openContent><xs:any/></xs:openContent><xs:sequence/></xs:complexType></xs:element></xs:schema>`,
 			"has open content"},

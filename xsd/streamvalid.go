@@ -3,6 +3,7 @@ package xsd
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/internal/xsdstream"
@@ -37,8 +38,8 @@ import (
 // a valid document, and exact about whether a document is valid.
 //
 // What it cannot do as the tree does is refused for the whole schema
-// (streamRefusal): identity constraints, element value constraints, open
-// content, and a defaulted attribute in a namespace.
+// (streamRefusal): identity constraints, open content, and a defaulted
+// attribute in a namespace.
 
 func init() {
 	xsdstream.Open = func(schema any, m xsdstream.Mode) xsdstream.Validator {
@@ -81,9 +82,15 @@ type svFrame struct {
 	seq       *svSeq
 	all       *svAll
 	kids      int    // child elements
-	text      []byte // svSimple: the value
+	text      []byte // svSimple: the value; svMixed with a fixed value: its text
 	hasText   bool   // any text at all
 	nonSpace  string // the first text that is not all XML whitespace
+	// child says the element has a child node of any kind (FirstChild),
+	// which decides whether its value constraint is its value
+	// (effectiveValue) and whether a fixed one applies to its content
+	// (checkFixedValueConstraint); stripped says some of its text was
+	// whitespace the stream stripped before Observe could see it.
+	child, stripped bool
 	// held is the element's copy in the tree an enclosing (or its own)
 	// assertion reads (fillScopeCopy's shape); pre is the element's typing
 	// before it was annotated, which is what that copy's root carries.
@@ -172,6 +179,7 @@ func (s *streamV) Stripped(el *xdm.Node) {
 		return
 	}
 	if f := &s.frames[len(s.frames)-1]; f.el == el {
+		f.child, f.stripped = true, true
 		s.text(f, " ", nil) // whitespace: only that there was some matters
 	}
 }
@@ -190,6 +198,7 @@ func (s *streamV) Observe(n *xdm.Node, depth int, end bool) {
 		s.end(depth)
 	case depth >= 2 && depth-2 < len(s.frames):
 		f := &s.frames[depth-2]
+		f.child = true
 		switch n.Kind() {
 		case xdm.KindText:
 			s.text(f, n.Value(), n)
@@ -265,6 +274,7 @@ func (s *streamV) startChild(parent, f *svFrame, el *xdm.Node) {
 		f.held = parent.held.AppendShallowCopy(el)
 	}
 	parent.kids++
+	parent.child = true
 	switch parent.kind {
 	case svSkip:
 		return // f stays svSkip
@@ -540,6 +550,10 @@ func (s *streamV) text(f *svFrame, value string, n *xdm.Node) {
 		v.fail(f.el, "cvc-elt.3.2.1", "an element with xsi:nil=\"true\" must be empty")
 	case svSimple:
 		f.text = append(f.text, value...)
+	case svMixed:
+		if f.decl != nil && f.decl.Constraint != nil && f.decl.Constraint.Fixed {
+			f.text = append(f.text, value...)
+		}
 	case svEmpty, svEmptyElems:
 		if f.nonSpace != "" {
 			v.fail(f.el, "cvc-complex-type.2.1",
@@ -565,7 +579,7 @@ func (s *streamV) end(depth int) {
 	switch f.kind {
 	case svSimple:
 		if f.st != nil {
-			v.validateSimpleContent(el, string(f.text), f.st, f.decl)
+			v.validateSimpleContent(el, s.value(f), f.st, f.decl)
 		}
 	case svElems:
 		if !f.emptiable && f.kids == 0 {
@@ -588,7 +602,7 @@ func (s *streamV) end(depth int) {
 		if f.assert && len(v.errs) == 0 {
 			f.held.ApplyTyping(f.pre)
 			if f.kind == svSimple && f.st != nil {
-				_, _ = validateSimpleValueIn(string(f.text), f.st, v.schema.Version, &instance{f.held, v})
+				_, _ = validateSimpleValueIn(s.value(f), f.st, v.schema.Version, &instance{f.held, v})
 			}
 			v.checkAssertions(f.held, f.ct)
 		}
@@ -605,6 +619,9 @@ func (s *streamV) end(depth int) {
 	if f.held != nil {
 		f.held.ApplyTyping(xdm.TypingOf(el))
 	}
+	if f.typ != nil && f.kind != svNil {
+		s.checkFixed(f)
+	}
 	if f.path {
 		v.path = v.path[:len(v.path)-1]
 	}
@@ -619,6 +636,44 @@ func (s *streamV) end(depth int) {
 		}
 	}
 	s.frames = s.frames[:depth-1]
+}
+
+// value is effectiveValue for f's element, svSimple: its text, or its
+// declaration's value constraint when it has no child at all. The typed copy
+// adds no text for a defaulted value (an empty element stays empty, and
+// atomizes as its annotation reads ""), so neither does the stream.
+func (s *streamV) value(f *svFrame) string {
+	if !f.child && f.decl != nil && f.decl.Constraint != nil {
+		return f.decl.Constraint.Lexical
+	}
+	return string(f.text)
+}
+
+// checkFixed is checkFixedValueConstraint for f's element at its end.
+func (s *streamV) checkFixed(f *svFrame) {
+	v, decl := s.v, f.decl
+	if decl == nil || decl.Constraint == nil || !decl.Constraint.Fixed || !f.child {
+		return
+	}
+	if f.kids > 0 {
+		v.fail(f.el, "cvc-elt.5.2.2.1",
+			"an element with a fixed value constraint may not have element children")
+		return
+	}
+	if f.kind != svMixed {
+		return
+	}
+	got, want := string(f.text), decl.Constraint.Lexical
+	if f.stripped && strings.ContainsAny(want, " \t\r\n") {
+		// The whitespace the stream stripped is part of the value, and
+		// the stream saw only that there was some.
+		v.fail(f.el, "", "streaming: whitespace stripped before validation decides a fixed value")
+		return
+	}
+	if f.stripped || got != want {
+		v.fail(f.el, "cvc-elt.5.2.2.2.1",
+			"value %q does not equal the fixed value %q", truncate(got), truncate(want))
+	}
 }
 
 func (s *streamV) endModel(f *svFrame) {
@@ -881,8 +936,6 @@ func (s *Schema) streamRefusal() string {
 		switch {
 		case len(d.IdentityConstraints) > 0:
 			return fmt.Sprintf("element %s has identity constraints", showName(d.Name))
-		case d.Constraint != nil:
-			return fmt.Sprintf("element %s has a value constraint", showName(d.Name))
 		}
 		for _, alt := range d.Alternatives {
 			if w := typ(alt.Type); w != "" {
