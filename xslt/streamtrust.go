@@ -78,7 +78,7 @@ func newDeclTrust(root *xdm.Node, shared bool) *declTrust {
 func reachesOtherModules(root *xdm.Node) bool {
 	found := false
 	walkElements(root, func(el *xdm.Node) bool {
-		if isXSL(el, "import") || isXSL(el, "include") || isXSL(el, "use-package") {
+		if isXSL(el, "import") || isXSL(el, "include") || isXSL(el, "use-package") && usePackageOverrides(el) { // streamtrust_pkg_l7.go
 			found = true
 		}
 		return !found

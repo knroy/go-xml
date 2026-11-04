@@ -1,10 +1,14 @@
 package xslt
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // l7Rows are lane L7's container bodies, with the top-level declarations
@@ -85,5 +89,55 @@ func TestStreamL7MatchesTree(t *testing.T) {
 				coreCheck(t, coreSheetWith(d+b.decl, b.body), dir, fmt.Sprintf("%s decl %d row %d", name, di, bi), b.stream, TransformOptions{})
 			}
 		}
+	}
+}
+
+// TestStreamL7UsePackageTrust: a container in a top-level package that uses
+// another package without xsl:override reads its own streamable
+// accumulator on the core, with the tree's output (streamtrust_pkg_l7.go;
+// override-misc-007's principal container).
+func TestStreamL7UsePackageTrust(t *testing.T) {
+	const base = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform" name="urn:base" package-version="1.0.0" version="3.0">
+		<xsl:accumulator name="ac" initial-value="0" streamable="yes"><xsl:accumulator-rule match="*" select="$value + 1"/></xsl:accumulator>
+	</xsl:package>`
+	const top = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform" name="urn:top" package-version="1.0.0" version="3.0">
+		<xsl:use-package name="urn:base" package-version="1.0.0"/>
+		<xsl:accumulator name="ac" initial-value="0" streamable="yes"><xsl:accumulator-rule match="*" select="$value - 1"/></xsl:accumulator>
+		<xsl:template name="main" visibility="public">
+			<xsl:source-document streamable="yes" href="doc.xml" use-accumulators="ac">
+				<b n="{count(//*)}" acc="{accumulator-after('ac')}"/>
+			</xsl:source-document>
+		</xsl:template>
+	</xsl:package>`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["flat"]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(core bool) (string, streamtrace.Counts) {
+		before := streamtrace.Snapshot()
+		defer func() { noBursts = false }()
+		tree, err := xdm.ParseString(top, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Compile(tree.Root, CompileOptions{PackageResolver: fixedPackages{"urn:base": base}})
+		if err != nil {
+			t.Fatalf("compile: %v", err)
+		}
+		docs, _ := NewFileResolver(dir)
+		noBursts = !core
+		res, err := s.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: docs})
+		if err != nil {
+			return "ERR " + err.Error(), streamtrace.Snapshot().Sub(before)
+		}
+		return res.String(), streamtrace.Snapshot().Sub(before)
+	}
+	so, st := run(true)
+	to, _ := run(false)
+	if so != to {
+		t.Errorf("core %q\ntree %q", so, to)
+	}
+	if st.Runs[streamtrace.Core] == 0 {
+		t.Error("not on the core")
 	}
 }
