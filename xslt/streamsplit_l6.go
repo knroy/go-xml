@@ -307,3 +307,77 @@ func groundContextSplit(e xpath.Expr, base *xpath.Compiled, doc, group bool) *st
 	s.ctxOut = true
 	return s
 }
+
+// motionlessIterate checks el, an xsl:iterate the analysis found
+// motionless, as motionlessLoop checks a motionless xsl:for-each: its select
+// reads only what the focus f's view has (ancestor::*, @*), or no focus at
+// all (a variable's items); its parameters' defaults read no focus
+// (iterateParamOK, as loopOp's); xsl:on-completion has no focus; each
+// instruction of the body reads of its item only what a view (or, over
+// attributes and values, a complete parentless node: leafBody) has. The
+// tree's code runs it, over the views and their attributes.
+func (b *streamBuilder) motionlessIterate(el *xdm.Node, f vfocus) bool {
+	sel := el.Attr("", "select")
+	if sel == nil {
+		return b.refuse("motionless xsl:iterate")
+	}
+	for a := range el.Attrs() {
+		if n := a.Name(); n.URI == "" && !streamAttrsOK[n.Local] {
+			return b.refuse("attribute " + n.Local + " of xsl:iterate")
+		}
+	}
+	e := parseAt(el, sel.Value())
+	if e == nil {
+		return b.refuse("motionless xsl:iterate")
+	}
+	var body []*xdm.Node
+	for ch := range el.Children() {
+		switch {
+		case ch.Kind() == xdm.KindText && strings.ContainsAny(ch.Value(), "{}"):
+			return b.refuse("text with a brace")
+		case ch.Kind() != xdm.KindElement:
+		case isXSL(ch, "param"):
+			if !iterateParamOK(ch) {
+				return b.refuse("xsl:iterate parameter default reads the focus")
+			}
+		case isXSL(ch, "on-completion"):
+			if !b.attrs(ch, vNone) || !b.content(ch, vNone) {
+				return false
+			}
+		default:
+			body = append(body, ch)
+		}
+	}
+	if foreign(e) {
+		return true // a variable's items: never a node of the stream
+	}
+	if !(viewCheck{up: b.up}).safe(e, f, true) {
+		return b.refuse("motionless xsl:iterate over " + sel.Value())
+	}
+	if b.leafBody(el, body) {
+		return true
+	}
+	for _, ch := range body {
+		if !fallbackIgnored(ch) && !b.motionless(ch, vElem) {
+			return false
+		}
+	}
+	return true
+}
+
+// foreignSort reports whether ch, an xsl:sort of el, a motionless
+// xsl:for-each, sorts items that are not nodes of the stream (el's select
+// is foreign: a variable's items), its keys read off those items, and its
+// other attributes (order, lang, collation, ...) motionless at el's focus f.
+func (b *streamBuilder) foreignSort(el, ch *xdm.Node, f vfocus) bool {
+	e := parseAt(el, el.AttrValue("select"))
+	if e == nil || !foreign(e) {
+		return false
+	}
+	for a := range ch.Attrs() {
+		if n := a.Name(); n.URI == "" && n.Local != "select" && !b.avt(ch, a.Value(), f) {
+			return false
+		}
+	}
+	return true
+}

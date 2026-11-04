@@ -47,7 +47,7 @@ func (b *streamBuilder) motionlessLoop(el *xdm.Node, f vfocus) bool {
 		}
 	}
 	for _, ch := range el.ChildElements() {
-		if isXSL(ch, "sort") {
+		if isXSL(ch, "sort") && !b.foreignSort(el, ch, f) { // streamsplit_l6.go
 			return b.refuse("motionless xsl:for-each with xsl:sort")
 		}
 	}

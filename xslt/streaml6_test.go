@@ -32,6 +32,10 @@ var l6Bodies = []struct {
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:value-of select="descendant-or-self::*" separator="~"/></e></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:value-of select="(sub/@x, .//sub)" separator="|"/></e></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:attribute name="a" select="descendant-or-self::*/name()"/></e></xsl:for-each></out>`, true},
+	// A motionless xsl:iterate over the ancestors' views (motionlessIterate), and a
+	// motionless for-each over a variable's items with xsl:sort (foreignSort).
+	{`<out><xsl:for-each select="doc/rec/sub"><xsl:iterate select="ancestor::*"><a n="{name()}"><xsl:copy-of select="@*"/></a></xsl:iterate></xsl:for-each></out>`, true},
+	{`<xsl:variable name="ks" select="('b', 'a', 'c')"/><out><xsl:for-each select="doc/rec"><e><xsl:for-each select="$ks"><xsl:sort select="." order="descending"/><k><xsl:value-of select="."/></k></xsl:for-each></e></xsl:for-each></out>`, true},
 	// A motionless loop over the view's attributes (motionlessLoop, leafBody).
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:for-each select="@*"><n><xsl:value-of select="name(.)"/></n><v><xsl:value-of select="."/></v></xsl:for-each></e></xsl:for-each></out>`, true},
 }

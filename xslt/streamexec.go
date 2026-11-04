@@ -700,6 +700,9 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "for-each" {
 			return b.motionlessLoop(el, f) // streamvariable.go
 		}
+		if local == "iterate" {
+			return b.motionlessIterate(el, f) // streamsplit_l6.go
+		}
 		if !streamMotionless[local] || local == "copy" && f == vNone {
 			return b.refuse("motionless xsl:" + local)
 		}
