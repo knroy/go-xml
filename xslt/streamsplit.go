@@ -375,7 +375,7 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		tail = &xpath.PathExpr{Steps: p.tail}
 	}
 	if p.mapR != nil {
-		return s.mapPath(w, mapTail(tail, p.mapR), p.mapR, leaf, last.Axis, part)
+		return s.mapPath(w, mapTail(tail, p.mapR), p.mapR, leaf, elem, last.Axis, part)
 	}
 	nodes := tail == nil || endsInAttribute(tail)
 	if !nodes && (s.red == "boolean" || s.red == "not") {

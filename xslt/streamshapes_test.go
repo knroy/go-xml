@@ -36,6 +36,10 @@ var shapeBodies = []struct {
 	// node); output equal to the tree's.
 	{`<o><xsl:value-of select="string-join(/doc/rec ! (position(), sub), ',')"/></o>`, true},
 	{`<o><xsl:value-of select="count(/doc/rec/sub ! (.., .))"/></o>`, false}, // R climbs
+	// R over text, comment or PI matches alone: on each one's kept copy (K1).
+	{`<o><xsl:copy-of select="//sub/text() ! string-length(.)"/></o>`, true},
+	{`<o><xsl:copy-of select="tail(//text()) ! concat('[', ., ']')"/></o>`, true},
+	{`<o><xsl:value-of select="(//comment() union //processing-instruction()) ! string()" separator="|"/></o>`, true},
 	// tail(P): P's matches but the first.
 	{`<o><xsl:value-of select="sum(tail(/doc/rec)/@v)"/></o>`, true},
 	{`<o><xsl:value-of select="count(tail(//rec))"/></o>`, true},
