@@ -35,3 +35,35 @@ func TestStreamDocCopyEvents(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamCopyDocNode: xsl:copy of the document node runs on the core
+// whatever its body reads, or when it reads nothing: the copy has the
+// document's DOCTYPE (its unparsed entities) and base URI, as the tree's
+// (streamcopy_l3doc.go).
+func TestStreamCopyDocNode(t *testing.T) {
+	dir := t.TempDir()
+	docs := map[string]string{
+		"flat":  coreDocs["flat"],
+		"mixed": coreDocs["mixed"],
+		"ns":    coreDocs["ns"],
+		"bad":   coreDocs["bad"],
+		"dtd": `<!DOCTYPE doc [<!NOTATION gif SYSTEM "g.txt"><!ENTITY pic SYSTEM "pic.gif" NDATA gif>]>` +
+			`<doc><rec k="a" v="1"/></doc>`,
+	}
+	ent := `<xsl:value-of select="ends-with(unparsed-entity-uri('pic', $c), 'pic.gif'), ends-with(base-uri($c), 'doc.xml'), count($c/*)"/>`
+	for name, doc := range docs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, body := range []string{
+			`<o><xsl:copy><xsl:copy-of select="child::node()"/></xsl:copy></o>`,
+			`<o><xsl:copy select="."><xsl:copy-of select="node()"/></xsl:copy></o>`,
+			`<o><xsl:copy><xsl:for-each select="*"><e n="{name()}"/></xsl:for-each></xsl:copy></o>`,
+			`<xsl:variable name="c" as="document-node()"><xsl:copy><xsl:copy-of select="*"/></xsl:copy></xsl:variable><o>` + ent + `</o>`,
+			`<xsl:variable name="c" as="document-node()"><xsl:copy/></xsl:variable><o>` + ent + `</o>`,
+			`<o><xsl:where-populated><xsl:copy><xsl:if test="false()"><b/></xsl:if></xsl:copy></xsl:where-populated><xsl:on-empty><e/></xsl:on-empty></o>`,
+		} {
+			coreCheck(t, coreSheet(body), dir, name+": "+body, true, TransformOptions{})
+		}
+	}
+}

@@ -189,8 +189,15 @@ func (b *streamBuilder) copyDoc(el *xdm.Node) bool {
 	if !b.attrs(el, vNone) || !b.seq(el, vNone) {
 		return false
 	}
-	if ops := (*b.ops)[n:]; len(ops) != 1 || ops[0].apply != applyKids || ops[0].el.Parent() != el {
+	switch ops := (*b.ops)[n:]; {
+	case len(ops) == 1 && ops[0].apply == applyKids && ops[0].el.Parent() == el:
+	case len(ops) > 1:
 		return b.refuse("xsl:copy of the document node")
+	default:
+		// Any other consumer, or none: the stand-in is given the document's
+		// properties as the parse reads them (streamcopy_l3.go).
+		b.x.docProps = true
+		b.x.docMotionless = b.x.docMotionless || len(ops) == 0
 	}
 	b.kinds[streamtrace.KindElement]++
 	return true
@@ -1041,6 +1048,11 @@ func (run *streamRun) rule(rt *runtime, t *Template, node *xdm.Node, params, tun
 	}
 	if x == nil {
 		return errStreamPlan // linkApply has seen to it that there is one
+	}
+	if cl == classDoc && x.docProps {
+		if err := run.watchDoc(); err != nil { // streamcopy_l3.go
+			return err
+		}
 	}
 	defer rt.leaveFrame(rt.enterFrame())
 	prev := run.x

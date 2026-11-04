@@ -1030,6 +1030,9 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := execSequence(i.body, rt, sub); err != nil {
 			return err
 		}
+		if err := rt.streamDocRead(node); err != nil { // streamcopy_l3.go
+			return err
+		}
 		doc, err := sub.ToDocument()
 		if err != nil {
 			return err

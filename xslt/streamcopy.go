@@ -21,6 +21,11 @@ import (
 
 // copySelectOp plans el, an xsl:copy whose select consumes, as a loop.
 func (b *streamBuilder) copySelectOp(el *xdm.Node, f vfocus) bool {
+	if f == vNone && isDot(el) {
+		// The document node itself: its body is planned as xsl:copy's of it,
+		// and the select, ".", reads the stand-in (streamcopy_l3.go).
+		return b.copyDoc(el)
+	}
 	return b.loopOp(el, f)
 }
 

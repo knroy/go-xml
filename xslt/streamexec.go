@@ -107,6 +107,10 @@ type streamExec struct {
 	rule bool
 	// tries are the consumers of each streamed xsl:try's body (streamtry.go).
 	tries [][]*streamOp
+	// docProps says an xsl:copy of the document node reads the document's
+	// properties of the stand-in, and docMotionless that one reads nothing
+	// of the document (streamcopy_l3.go).
+	docProps, docMotionless bool
 }
 
 func newStreamExec() *streamExec {
@@ -699,7 +703,11 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "for-each" {
 			return b.motionlessLoop(el, f) // streamvariable.go
 		}
-		if !streamMotionless[local] || local == "copy" && f == vNone {
+		if local == "copy" && f == vNone && !b.noIdent && streamMotionless[local] {
+			// Of the document node: it reads the document's properties of
+			// the stand-in once the rest has been read (streamcopy_l3.go).
+			b.x.docProps, b.x.docMotionless = true, true
+		} else if !streamMotionless[local] || local == "copy" && f == vNone {
 			return b.refuse("motionless xsl:" + local)
 		}
 		// A node an xsl:with-param carries on is a copy, valid however
@@ -985,6 +993,9 @@ func (x *streamExec) ready() string {
 	minD := 0
 	if x.class == classElem {
 		minD = 1 // a rule's context element: the document element, or below
+	}
+	if why := x.readyDocCopy(); why != "" { // streamcopy_l3.go
+		return why
 	}
 	if why := x.readyOps(x.top, minD, &x.kinds); why != "" {
 		return why
@@ -1518,6 +1529,11 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread, root: xdm.NewTree().Root, held: held}
 		defer func() { *kept = run.kept }()
 		run.typed = vin != nil
+		if i.stream.docProps {
+			if err := run.watchDoc(); err != nil { // streamcopy_l3.go
+				return err
+			}
+		}
 		acc := run.observeAccums(rt, i.accums, true)
 		defer acc.stop()
 		// The body's focus is the document node, which the stream does not
