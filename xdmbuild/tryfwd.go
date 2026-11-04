@@ -100,6 +100,10 @@ type tryMark struct {
 	// there, as they were, when the sink had not begun: their items are
 	// written once it begins, after the mark, and a rollback puts them back.
 	levels []levelItems
+	// kept is base's child the sink had written and kept in its tree at
+	// the mark (a nested settle): a rollback leaves it there, so that what
+	// comes next still sees an element with content (XTDE0410).
+	kept *xdm.Node
 	// text is the value of base's newest child when it is text, left
 	// unwritten (sink.settle): what is handed on may merge into it, and a
 	// rollback puts it back as it was, for the catch to merge into.
@@ -357,6 +361,9 @@ func settle(t *Builder, m *tryMark) bool {
 	*m = tryMark{s: s, started: s.started, text: text, hasText: hasText, frames: len(s.frames), stamp: s.stamp, items: s.items, opened: s.opened,
 		faults: len(s.faults), pending: s.pending, fwds: m.fwds,
 		base: levelMark{t, len(t.items), t.lastAtomic, *t.refused}}
+	if t.open != nil && s.kept != nil && t.open.LastChild() == s.kept {
+		m.kept = s.kept
+	}
 	if !s.started {
 		for _, l := range []*Builder{s.root, s.pending} {
 			if l != nil {
@@ -458,7 +465,7 @@ func (m *tryMark) rollback() int64 {
 	}
 	t := m.base.b
 	if t.open != nil {
-		for c := t.open.LastChild(); c != nil && !s.anchors[c]; c = t.open.LastChild() {
+		for c := t.open.LastChild(); c != nil && !s.anchors[c] && c != m.kept; c = t.open.LastChild() {
 			t.open.RemoveLastChild()
 		}
 		if m.hasText {
@@ -467,7 +474,7 @@ func (m *tryMark) rollback() int64 {
 		if m.elem != nil {
 			t.ReplaceOpen(m.elem) // the attributes the try handed on taken off
 		}
-		s.kept = nil
+		s.kept = m.kept
 	} else if m.started {
 		for _, it := range t.items[m.base.items:] {
 			if nd, ok := it.(*xdm.Node); ok {
