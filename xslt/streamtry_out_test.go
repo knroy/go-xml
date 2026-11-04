@@ -137,6 +137,13 @@ var tryOutSheets = []struct {
 	{"element-inner-fails", ``, `<xsl:template match="/"><out><xsl:try><x/><xsl:try><a><b/><xsl:sequence select="error()"/></a><xsl:catch errors="err:XPTY0004"/></xsl:try><xsl:catch><o code="{$err:code}"/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
 	{"element-no", ``, `<xsl:template match="/"><out><xsl:try rollback-output="no"><all><xsl:for-each select="//rec"><r><xsl:value-of select="xs:integer(@v)"/></r></xsl:for-each></all><xsl:catch><bad/></xsl:catch></xsl:try></out></xsl:template>`, true, "XTDE3530"},
 	{"element-no-ok", ``, `<xsl:template match="/"><out><xsl:try rollback-output="no"><all><xsl:for-each select="//rec"><r/></xsl:for-each></all><xsl:catch/></xsl:try></out></xsl:template>`, true, ""},
+	// An inner try in an element built in place under an outer try's
+	// checkpoint: the child written before the inner mark stays in the tree
+	// through the inner rollback, so a later attribute is still XTDE0410
+	// (TestStreamOutFuzz seeds 37324, 70346, 79446, 80995).
+	{"element-inner-rollback-late-attr", ``, `<xsl:template match="/"><out><xsl:try><tw><tz/><xsl:try><a/><b/><xsl:sequence select="error()"/><xsl:catch/></xsl:try><xsl:attribute name="late">x</xsl:attribute></tw><xsl:catch><caught code="{$err:code}"/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
+	{"element-inner-rollback-late-attr-frame", ``, `<xsl:template match="/"><out><xsl:try><tw><tz><q/></tz><xsl:try><a/><b/><xsl:sequence select="error()"/><xsl:catch>c</xsl:catch></xsl:try><xsl:attribute name="late">x</xsl:attribute></tw><xsl:catch><caught code="{$err:code}"/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
+	{"element-inner-rollback-ok", ``, `<xsl:template match="/"><out><xsl:try><tw><tz/><xsl:try><a/><b/><xsl:sequence select="error()"/><xsl:catch/></xsl:try><y/></tw><xsl:catch><caught/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
 	{"element-then-attr", ``, `<xsl:template match="/"><out><xsl:try><a><b/></a><xsl:attribute name="late">1</xsl:attribute><xsl:catch><c/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
 	// rollback-output="no": XTDE3530 when the body produced an item before
 	// the error, a zero-length text node included; caught otherwise.
