@@ -249,7 +249,7 @@ func (run *streamRun) fork(rt *runtime, op *streamOp, body []Instruction, out *o
 		defer xpathleaf.LockYield(rt.evalLock) // done: let go, for good
 		k := cons[j]
 		pr := &streamRun{x: run.x, c: c, root: run.root, top: run.top, i: run.i, href: run.href,
-			unread: run.unread}
+			unread: run.unread, typed: run.typed}
 		sub := *rt
 		sub.bursts = &burstFeed{run: pr}
 		err := body[k].Execute(&sub, outs[k])

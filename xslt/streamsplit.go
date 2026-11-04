@@ -174,6 +174,10 @@ type streamSplit struct {
 	// matches give nothing (streamshapes.go).
 	fresh bool
 	skip  int64
+	// docCopy says the expression is a copy of the document, built off the
+	// cursor; docText that it is the document's string value, read off it
+	// (streamcopy_l3.go).
+	docCopy, docText bool
 }
 
 // splitStream splits e, an expression whose context item is the document
@@ -485,6 +489,8 @@ func (s *streamSplit) folds(w *splitter, part func(xpath.Expr) *xpath.Compiled) 
 // grounded whole).
 func (s *streamSplit) class() string {
 	switch {
+	case s.docCopy:
+		return "output" // the copy built is the result's own (streamcopy_l3.go)
 	case s.cond != nil:
 		a, b := s.then.class(), s.els.class()
 		if splitClassRank[a] > splitClassRank[b] {
@@ -1677,6 +1683,9 @@ type splitRun struct {
 	// climbSort one gave (streamleaf.go).
 	climbed *xdm.Node
 	held    []*xdm.Node
+	// rootCopy, when set, copies a match that is the document element as
+	// events instead of giving up (noRoot; streamcopy_l3.go).
+	rootCopy func() error
 }
 
 // read is the walk's next event: the cursor's, through the filter f
@@ -1811,6 +1820,16 @@ func (s *streamSplit) loopAt(ctx *xpath.Context, c *xdmstream.Cursor, d int, g *
 // run reads the context, the element whose view is v or the document.
 func (r *splitRun) run(v *xdm.Node, d int) error {
 	s, c := r.s, r.c
+	switch {
+	case s.docText && v == nil && d == 0: // streamcopy_l3.go
+		t, err := docString(c)
+		if err != nil {
+			return err
+		}
+		return r.take(xdm.One(xdm.NewUntypedAtomic(t)))
+	case s.docText || s.docCopy:
+		return errStreamPlan // docCopyEval builds the copy
+	}
 	if s.ctxItem {
 		if s.atomize && v != nil && typedValue(s, v) { // streamvalidin.go
 			items, err := groundAtomized(c)
@@ -2057,10 +2076,16 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					return err
 				}
 			case matchGround:
-				if s.noRoot && ev.Depth == 1 {
-					return errSplitGiveUp
-				}
 				decided = true
+				if s.noRoot && ev.Depth == 1 {
+					if r.rootCopy == nil {
+						return errSplitGiveUp
+					}
+					if err := r.rootCopy(); err != nil { // streamcopy_l3.go
+						return err
+					}
+					break
+				}
 				if err := r.ground(f); err != nil {
 					return err
 				}

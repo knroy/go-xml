@@ -475,7 +475,7 @@ func (c *compiler) noteStreamParam(n *xdm.Node, sel *xpath.Compiled, ns xpath.Na
 		for _, op := range x.exprOps {
 			if op.el == n && op.avt == "" && op.instr == nil {
 				op.instr, op.sel = exprInstr{}, sel
-				if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead == "" {
+				if op.split, op.dead = c.splitForDoc(sel, ns, op.doc, false, op.inGroup, op.key); op.dead == "" { // streamcopy_l3.go
 					x.byExpr[sel] = op
 				}
 			}
@@ -832,8 +832,15 @@ func (c *compiler) noteStreamSelect(n *xdm.Node, instr Instruction, sel *xpath.C
 			continue
 		}
 		op.instr, op.sel = instr, sel
+		if self := isXSL(n, "copy-of") || isXSL(n, "sequence") && inElement(n); op.doc && !op.inGroup && self {
+			if s := docCopySplit(sel.Expr(), sel, true); s != nil { // streamcopy_l3.go
+				op.split, op.dead = s, ""
+				op.x.byInstr[instr] = op
+				continue
+			}
+		}
 		simple := isXSL(n, "value-of") || isXSL(n, "attribute")
-		if op.split, op.dead = c.splitFor(sel, ns, op.doc, simple, op.inGroup, op.key); op.dead != "" {
+		if op.split, op.dead = c.splitForDoc(sel, ns, op.doc, simple, op.inGroup, op.key); op.dead != "" { // streamcopy_l3.go
 			continue
 		}
 		op.x.byInstr[instr] = op
@@ -1193,6 +1200,8 @@ type streamRun struct {
 	// (streamlive.go).
 	applyFeeds map[*streamOp]*burstFeed
 	kidFilters []*xdmstream.Filter
+	// typed says the document is validated as it is read (streamcopy_l3.go).
+	typed bool
 }
 
 // feed returns the feed that drives instr from the cursor, or nil when instr
@@ -1213,8 +1222,11 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 		return &burstFeed{instr: instr, read: func(func(xdm.Item) error) error { return errStreamPlan },
 			eval: func(*runtime) (xdm.Sequence, error) { return nil, errStreamPlan }}
 	}
+	if op.split != nil && op.split.docCopy {
+		return run.docCopyFeed(instr, rt, op) // streamcopy_l3.go
+	}
 	if op.copies {
-		return &burstFeed{instr: instr, read: func(each func(xdm.Item) error) error {
+		f := &burstFeed{instr: instr, read: func(each func(xdm.Item) error) error {
 			if run.used {
 				return errStreamPlan
 			}
@@ -1236,6 +1248,8 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 			}
 			return err
 		}}
+		f.readOut = run.copiesReadOut(rt, op, g, f.read) // streamcopy_l3.go
+		return f
 	}
 	if !op.loop {
 		return &burstFeed{instr: instr, eval: func(rt *runtime) (xdm.Sequence, error) { return run.evalOp(rt, op) }}
@@ -1277,6 +1291,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 func (run *streamRun) evalOp(rt *runtime, op *streamOp) (xdm.Sequence, error) {
 	if run.pre != nil {
 		return run.preEval(rt, op)
+	}
+	if op.split != nil && op.split.docCopy {
+		return run.docCopyEval(rt, op) // streamcopy_l3.go
 	}
 	g := run.groupAt(op)
 	if run.used || op.inGroup && g == nil {
@@ -1500,6 +1517,7 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		c.Handoff(func() func() { return xpathleaf.LockYield(rt.evalLock) }) // streamfork.go
 		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread, root: xdm.NewTree().Root, held: held}
 		defer func() { *kept = run.kept }()
+		run.typed = vin != nil
 		acc := run.observeAccums(rt, i.accums, true)
 		defer acc.stop()
 		// The body's focus is the document node, which the stream does not

@@ -142,7 +142,11 @@ func (i *sequenceInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if f := rt.burstsFor(i); f != nil && f.read != nil {
 		// Streamed (streamexec.go): in an element's content, each node is
 		// copied as it is read, in order, and let go.
-		return f.read(func(it xdm.Item) error { return i.appendItem(rt, out, it) })
+		each := func(it xdm.Item) error { return i.appendItem(rt, out, it) }
+		if f.readOut != nil {
+			return f.readOut(out, each) // streamcopy_l3.go
+		}
+		return f.read(each)
 	}
 	seq, err := rt.evalSelect(i, i.sel)
 	if err != nil {
@@ -210,7 +214,11 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if f := rt.burstsFor(i); f != nil && f.read != nil {
 		// Streamed (streamexec.go): each node of the select's value is
 		// copied as it is read, in order, and let go.
-		return f.read(func(it xdm.Item) error { return i.copyItem(rt, out, it) })
+		each := func(it xdm.Item) error { return i.copyItem(rt, out, it) }
+		if f.readOut != nil {
+			return f.readOut(out, each) // streamcopy_l3.go
+		}
+		return f.read(each)
 	}
 	seq, err := rt.evalSelect(i, i.sel)
 	if err != nil {
