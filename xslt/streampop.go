@@ -251,6 +251,8 @@ func (pb *popBuilder) stream(p *streamPop, e xpath.Expr) bool {
 		case isFn(x, "one-or-more", 1) && p.oneOrMore == nil:
 			p.oneOrMore = pb.part(&xpath.FuncCall{Name: x.Name, Args: []xpath.Expr{&xpath.SequenceExpr{}}})
 			return pb.stream(p, args[0])
+		case isFn(x, "snapshot", 1) && p.fn == nil && len(p.wins) == 0:
+			return pb.snapshot(p, x) // streampop_snapshot.go
 		case (isFn(x, "copy-of", 1) || isFn(x, "data", 1)) && p.fn == nil && len(p.wins) == 0:
 			p.fn = pb.part(&xpath.FuncCall{Name: x.Name, Args: []xpath.Expr{&xpath.VarRef{Name: splitItems}}})
 			if !pb.stream(p, args[0]) {
@@ -262,6 +264,12 @@ func (pb *popBuilder) stream(p *streamPop, e xpath.Expr) bool {
 	if pb.split != nil {
 		return false
 	}
+	if x, ok := snapshotTail(e); ok { // streampop_snapshot.go
+		return pb.snapshot(p, x)
+	}
+	if x := rangeWindow(e); x != nil { // streampop_snapshot.go
+		return pb.stream(p, x)
+	}
 	// The expression itself, taken apart (splitFor would parse the whole
 	// select again from its source).
 	s, why := splitStreamIn(e, pb.sel, pb.doc, pb.group, pb.key)
@@ -270,8 +278,10 @@ func (pb *popBuilder) stream(p *streamPop, e xpath.Expr) bool {
 		return false
 	}
 	switch {
+	case s.bare() && p.fn != nil && s.leafOnly && snapshotOf(p.fn): // streampop_snapshot.go
+		p.off = true
 	case s.bare() && p.fn != nil:
-		// copy-of(P): each match grounded, then copied.
+		// copy-of(P), snapshot(P): each match grounded, then copied.
 		_, elem := testKinds(s.steps[len(s.steps)-1].test)
 		if !elem || s.leaves {
 			return false

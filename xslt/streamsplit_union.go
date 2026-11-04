@@ -96,6 +96,7 @@ func (w *splitter) setOf(x *xpath.BinaryOp) (splitPathParts, bool) {
 	if !ok {
 		return pp, false
 	}
+	tail, l, r := sharedTail(x.Op, l, r) // streamsplit_foreign.go
 	for _, side := range []splitPathParts{l, r} {
 		if side.oi != "" || side.group || len(side.tail) > 0 {
 			w.refuse(x.Op + " of a path with a tail")
@@ -122,7 +123,7 @@ func (w *splitter) setOf(x *xpath.BinaryOp) (splitPathParts, bool) {
 		b.set = &splitSet{op: x.Op, l: ls, r: rs}
 	}
 	pp.steps = append(l.steps[:len(l.steps):len(l.steps)], r.steps...)
-	pp.br = b
+	pp.br, pp.tail = b, tail
 	return pp, true
 }
 
@@ -470,9 +471,9 @@ func foreignSets(e xpath.Expr) (xpath.Expr, []xpath.Expr) {
 		// P must give nodes only: the operator type-checks it too
 		// (XPTY0004 for P/number(), which no rewrite would raise).
 		switch {
-		case foreign(x.Right) && !foreign(x.Left) && nodeValued(x.Left):
+		case foreign(x.Right) && !foreign(x.Left) && unionNodes(x.Left):
 			return x.Left, x.Right, true
-		case foreign(x.Left) && !foreign(x.Right) && nodeValued(x.Right):
+		case foreign(x.Left) && !foreign(x.Right) && unionNodes(x.Right):
 			return x.Right, x.Left, false
 		}
 		return nil, nil, false

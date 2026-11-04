@@ -84,7 +84,7 @@ func (b *streamBuilder) groupOp(el *xdm.Node, f vfocus) bool {
 				return b.refuse("group-adjacent not motionless on the view: " + a.Value())
 			}
 		case "group-by":
-			return b.refuse("group-by over a streamed population")
+			return b.heldGroup(el, f) // streamgroup_held.go
 		case "collation":
 			if !b.avt(el, a.Value(), f) {
 				return false
@@ -107,7 +107,7 @@ func (b *streamBuilder) groupOp(el *xdm.Node, f vfocus) bool {
 			return b.refuse("text with a brace")
 		case ch.Kind() != xdm.KindElement:
 		case isXSL(ch, "sort"):
-			return b.refuse("xsl:sort over a streamed population")
+			return b.heldGroup(el, f) // streamgroup_held.go
 		default:
 			body = append(body, ch)
 		}
@@ -135,7 +135,7 @@ func dotPattern(p *Pattern) bool {
 // the tree makes too, so holding them is not the memory rule's concern
 // (the tree holds the document besides).
 func copiedPopulation(op *streamOp) bool {
-	return op.groundPop && op.split != nil && op.split.class() == "nodes"
+	return op.groundPop && !op.heldPop && op.split != nil && op.split.class() == "nodes"
 }
 
 // numberCopies is what the tree's evaluation of a path select does to

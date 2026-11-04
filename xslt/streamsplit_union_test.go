@@ -43,6 +43,12 @@ var unionBodies = []struct {
 	{`<out><xsl:for-each select="/doc/rec"><xsl:value-of select="(. | sub) ! local-name()"/></xsl:for-each></out>`, true},
 	// Refused: operands with a tail of their own.
 	{`<out><xsl:value-of select="(/doc/rec/@k | //sub/@x)[position() lt 3]" separator=","/></out>`, false},
+	// One tail of axis steps on both: (A union B)/T (J1, sharedTail).
+	{`<out><xsl:value-of select="(/doc/rec[1]/sub/ancestor::* union /doc/rec[2]/sub/ancestor::*) ! name()" separator=","/></out>`, true},
+	{`<out><xsl:value-of select="(//sub/ancestor-or-self::*/@* union //rec/ancestor-or-self::*/@*)" separator="|"/></out>`, true},
+	{`<out><xsl:value-of select="(/doc/rec/@k | //sub/@k)" separator=","/></out>`, true},
+	// ... a union only: except and intersect do not distribute.
+	{`<out><xsl:value-of select="(//sub/ancestor::* except //rec/ancestor::*) ! name()" separator=","/></out>`, false},
 	// A map reading position() is refused by the split, but held at the
 	// document node (streamhold.go) it streams.
 	{`<out><xsl:value-of select="(//rec | //sub) ! position()" separator=","/></out>`, true},
@@ -59,6 +65,30 @@ var unionBodies = []struct {
 	// another order); the context itself as a match not read on its view.
 	{`<out><xsl:value-of select="count(//rec[xs:integer(@v) gt 1] | //sub)"/></out>`, false},
 	{`<out><xsl:for-each select="/doc/rec"><xsl:value-of select="count(. | sub)"/></xsl:for-each></out>`, false},
+
+	// J1: a union with a variable's nodes under any holder: the outer sorts
+	// the matches against them as the tree does (streamsplit_foreign.go).
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="//rec union $ins"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="$ins | /doc/rec/sub"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:value-of select="sum(//rec/@v union $ins/@v)"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:value-of select="(//sub union $ins)[position() mod 2 = 0]" separator=","/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:value-of select="($ins union //rec) ! name()" separator=","/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="copy-of(//sub) union $ins"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="(//rec[1]//text() union $ins)[position() lt 4]"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:value-of select="(//sub/ancestor::* union $ins) ! name()" separator=","/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:value-of select="(//sub/ancestor-or-self::*/@k union $ins)" separator="|"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="($ins | /doc/rec) ! sub"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="copy-of(//sub) except $ins"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:value-of select="count($ins intersect copy-of(//rec))"/></out>`, true},
+	// (A, B)/T and insert-before(A, n, B)/T as A/T union B/T (distributedPath);
+	// an atomic item: XPTY0019 as the tree raises it.
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="($ins, /doc/rec)/sub"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:value-of select="(/doc/rec, $ins)/@v" separator=","/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="insert-before(/doc/rec, 2, $ins)/sub"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="insert-before($ins, 1, /doc/rec)/*"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="(1, /doc/rec)/sub"/></out>`, true},
+	// A loop over it is a population (streampop.go): still the tree.
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:for-each select="/doc/rec union $ins"><e n="{name()}"/></xsl:for-each></out>`, false},
 }
 
 func TestStreamUnionMatchesTree(t *testing.T) {

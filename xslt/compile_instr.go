@@ -436,6 +436,9 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		if err != nil {
 			return nil, err
 		}
+		if v.Select != nil {
+			c.noteStreamParam(n, v.Select, ns) // streamvariable.go
+		}
 		return &varInstr{v: v}, nil
 	case "element":
 		return c.compileElement(n, ns)

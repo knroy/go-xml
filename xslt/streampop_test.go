@@ -129,6 +129,23 @@ var popBodies = []struct {
 	{`<out><xsl:for-each select="insert-before(doc/rec, 1e30, $extra)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="remove(doc/rec, 1.0)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="insert-before(doc/rec, (), $extra)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	// snapshot(P): each item handed with its ancestors, snapshotted (J1,
+	// streampop_snapshot.go).
+	{`<out><xsl:for-each select="snapshot(doc/rec)"><e k="{@k}" d="{../@id}" r="{name(/*)}" n="{count(sub)}" s="{string(.)}"/></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="doc/rec/snapshot(.)"><e k="{@k}" d="{name(..)}" n="{count(../*)}"/></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="subsequence(snapshot(doc/rec/@k), 1, 2)"><e v="{.}" p="{../@v}" d="{name(../..)}"/></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="snapshot(subsequence(doc/rec/@k, 2))"><e v="{.}" p="{../@v}" n="{count(../../*)}"/></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="remove(snapshot(doc/rec), 2)"><e p="{position()}" v="{@v}"/></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="snapshot(doc/rec/sub/text())"><e v="{.}" p="{../@x}" a="{name(../..)}"/></xsl:for-each></out>`, true},
+	// A text value template motionless on the match's view in a loop body
+	// (J1); a consuming one refused.
+	{`<out><xsl:iterate select="doc/rec" expand-text="yes">{position()}:{@k} </xsl:iterate></out>`, true},
+	{`<out><xsl:for-each select="//sub" expand-text="yes">[{name(..)}/{@x}]</xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="doc/rec" expand-text="yes">{count(sub)} </xsl:for-each></out>`, false},
+	// (P)[position() = L to H] as subsequence(P, L, H - L + 1) (J1, rangeWindow).
+	{`<out><xsl:for-each select="(//*)[position() = 1 to 3]"><e p="{position()}" n="{name()}"/></xsl:for-each></out>`, true},
+	{`<out><xsl:iterate select="(doc/rec)[position() = 2 to 9]"><e p="{position()}" k="{@k}"/></xsl:iterate></out>`, true},
+	{`<out><xsl:for-each select="(//sub)[position() = 3 to 2]"><e/></xsl:for-each></out>`, false},
 	// Populations of kept leaves (G4): each a complete copy, its body off the
 	// cursor (fuzz seed 31: 9679, 16992, 23798, 30006, 75161).
 	{`<out><xsl:for-each select="tail(doc/rec/node())"><e p="{position()}"><xsl:value-of select=". || '|'"/></e></xsl:for-each></out>`, true},
@@ -152,8 +169,9 @@ var popBodies = []struct {
 	{`<out><xsl:value-of select="count(//rec except $three)"/></out>`, true},
 	// Refused: the path's side gives values, which the operator rejects (XPTY0004).
 	{`<out><xsl:value-of select="count(doc/rec/number(@v) intersect $extra)"/></out>`, false},
-	// Refused: a union whose order is not known statically.
-	{`<out><xsl:copy-of select="doc/rec union $extra"/></out>`, false},
+	// A union under copy-of: the outer unions the matches with the
+	// variable's nodes, ordered as the tree orders them (streamsplit_foreign.go).
+	{`<out><xsl:copy-of select="doc/rec union $extra"/></out>`, true},
 	// apply-templates over windows of a bare path; an insertion or a motionless part refused.
 	{`<out><xsl:apply-templates select="head(doc/rec)" mode="m"/></out>`, true},
 	{`<out><xsl:apply-templates select="tail(doc/rec)" mode="m"/></out>`, true},

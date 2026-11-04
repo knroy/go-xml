@@ -146,6 +146,9 @@ type streamOp struct {
 	// groundPop says a grouping's population is grounded: its select is
 	// read as a select op's, the tree's code groups it (groundedGroup).
 	groundPop bool
+	// heldPop says that population is the stream's own nodes, held as
+	// copies for the tree's grouping (streamgroup_held.go).
+	heldPop bool
 	// avt, for the consuming part of a literal result element's attribute
 	// value template, is that part's expression (avtOp).
 	avt string
@@ -320,6 +323,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 			return b.applyOp(el, f)
 		case "for-each-group":
 			return b.groupOp(el, f)
+		case "variable":
+			return b.variableOp(el, f) // streamvariable.go
 		}
 		return b.refuse("consuming select of xsl:" + local)
 	}
@@ -545,7 +550,11 @@ func (b *streamBuilder) loopOp(el *xdm.Node, f vfocus) bool {
 	for ch := range el.Children() {
 		if ch.Kind() != xdm.KindElement {
 			if ch.Kind() == xdm.KindText && strings.ContainsAny(ch.Value(), "{}") {
-				return b.refuse("text with a brace")
+				// A text value template motionless on each match's view
+				// (streamshapes.go); a consuming one is refused.
+				if tv, ok := inner.textTemplate(ch, el, vElem); !ok || tv != nil {
+					return b.refuse("text with a brace")
+				}
 			}
 			continue
 		}
@@ -568,7 +577,7 @@ func (b *streamBuilder) loopOp(el *xdm.Node, f vfocus) bool {
 	// The body is planned in a builder of its own: a refusal there leaves
 	// the grounded strategy, whose rules are the burst path's.
 	op.planned = inner.members(el, body, vElem)
-	op.grounded = burstBody(el)
+	op.grounded = burstBody(el) || !op.planned && b.groundedSelect(el) // streampop_snapshot.go
 	if !op.planned && !op.grounded {
 		return b.refuse(inner.why)
 	}
@@ -681,6 +690,9 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		}
 		if local == "message" {
 			return b.messageOp(el, f, false) // streammessage.go
+		}
+		if local == "for-each" {
+			return b.motionlessLoop(el, f) // streamvariable.go
 		}
 		if !streamMotionless[local] || local == "copy" && f == vNone {
 			return b.refuse("motionless xsl:" + local)
