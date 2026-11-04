@@ -144,7 +144,8 @@ func (s *streamSplit) valuesOnly() bool {
 	if s.cond != nil {
 		return s.then.valuesOnly() && s.els.valuesOnly()
 	}
-	return s.steps == nil && !s.ctxItem || s.red != "" && s.red != "nth" || s.atomize || s.tailText != ""
+	return s.steps == nil && !s.ctxItem || s.red != "" && s.red != "nth" || s.atomize || s.tailText != "" ||
+		s.tail != nil && atomicValued(oneStep(s.tail.Expr())) // P/name(): a value of each match
 }
 
 // pop builds the population e, or returns nil.
