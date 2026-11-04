@@ -895,7 +895,7 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 		if done, ok := w.foreignUnion(x); done { // streamsplit_foreign.go
 			return ok
 		}
-		if !burstOps[x.Op] {
+		if !burstOps[x.Op] && x.Op != "to" { // to: both atomized, as + is (lane K2)
 			return w.refuse("operator " + x.Op)
 		}
 		if x.Op == "and" || x.Op == "or" {

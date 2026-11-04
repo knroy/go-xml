@@ -40,6 +40,9 @@ var k2Bodies = []struct {
 	// A tail that is a sequence of values (seqOfValues).
 	{`<out><xsl:value-of select="doc/rec/(@k/string(), @v/string(), sub/string())" separator="|"/></out>`, true},
 	{`<out><xsl:value-of select="count(doc/rec/(@k/string(), sub/string()))"/></out>`, true},
+	// The range operator over a consumed operand.
+	{`<out><xsl:value-of select="1 to count(//rec)" separator=","/></out>`, true},
+	{`<out><xsl:value-of select="sum(//rec/@v) to 7" separator=","/></out>`, true},
 	// (if (c) then A else B) ! R as if (c) then A ! R else B ! R (hoistMapChoice).
 	{`<xsl:variable name="c" select="true()"/><out><xsl:value-of select="(if ($c) then /doc/rec[1]/sub/ancestor-or-self::* else /doc/rec[1]/sub/ancestor::*) ! name()" separator=","/></out>`, true},
 	{`<xsl:variable name="c" select="false()"/><out><xsl:value-of select="(if ($c) then /doc/rec[1]/sub/ancestor-or-self::* else /doc/rec[1]/sub/ancestor::*) ! name()" separator=","/></out>`, true},
