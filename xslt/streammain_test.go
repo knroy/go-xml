@@ -164,6 +164,11 @@ var mainCases = []struct {
 	{globalItemRow + `<xsl:param name="aa" select="accumulator-after#1"/><xsl:accumulator name="n" as="xs:integer" initial-value="0" streamable="yes">` +
 		`<xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator><xsl:mode streamable="yes" use-accumulators="n"/>` +
 		`<xsl:template match="rec"><r b="{accumulator-before('n')}"><xsl:apply-templates/><e><xsl:value-of select="../$aa('n')"/></e></r></xsl:template>`, true},
+	// unparsed-entity-uri and -public-id beside the consumer of a rule's
+	// element: the rule on a grounded copy, given the view's DTD
+	// (streamtee_ground.go; sf-unparsed-entity-01).
+	{`<xsl:mode streamable="yes"/><xsl:template match="doc"><o u="{unparsed-entity-uri('pic')}"><p><xsl:value-of select="unparsed-entity-public-id('pic')"/></p>` +
+		`<n><xsl:value-of select="count(rec)"/></n></o></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
@@ -179,7 +184,9 @@ var mainDocs = map[string]string{
 	"empty":   coreDocs["empty"],
 	"recroot": coreDocs["recroot"],
 	"doctype": `<!DOCTYPE doc [<!ENTITY e "ent">]><doc><rec k="a" v="1">&e;</rec><!--c--></doc><?tail t?>`,
-	"space":   "<doc>\n  <rec k=\"a\" v=\"1\">\n    <sub x=\"1\"> </sub>\n  </rec>\n  <rec k=\"b\" v=\"2\" xml:space=\"preserve\">\n    <sub/>\n  </rec>\n</doc>\n",
+	"ndata": `<!--c0--><!DOCTYPE doc [<!NOTATION gif PUBLIC "-//g//N" "gif"><!ENTITY pic PUBLIC "-//p//E" "pic.gif" NDATA gif>]>` +
+		`<?p0 x?><doc><rec k="a" v="1"/><rec k="b" v="2"/></doc>`,
+	"space": "<doc>\n  <rec k=\"a\" v=\"1\">\n    <sub x=\"1\"> </sub>\n  </rec>\n  <rec k=\"b\" v=\"2\" xml:space=\"preserve\">\n    <sub/>\n  </rec>\n</doc>\n",
 }
 
 // TestStreamMainMatchesTree: TransformReader gives Parse + Transform's
