@@ -1102,6 +1102,9 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 	if (x.Name.Local == "unparsed-entity-uri" || x.Name.Local == "unparsed-entity-public-id") && len(x.Args) == 1 {
 		return a.funcCall(&xpath.FuncCall{Name: x.Name, Args: []xpath.Expr{x.Args[0], &xpath.PathExpr{Root: true}}})
 	}
+	if p, ok := a.l7Builtin(x); ok { // streamability_l7.go
+		return p
+	}
 
 	usages, ok := builtinOperandUsages(x.Name.Local, len(x.Args))
 	if !ok && contextDefaultingBuiltin[x.Name.Local] {
