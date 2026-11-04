@@ -56,8 +56,29 @@ func groundRuleExec(el *xdm.Node, cl nodeClass, why string) *streamExec {
 	}
 	x := newStreamExec()
 	x.class, x.modes, x.rule, x.groundRule = cl, templateModeNames(el), true, true
+	x.groundTop = groundTopKeeps(el)
 	x.kinds[streamtrace.KindGround]++
 	return x
+}
+
+// groundTopMakes are the instructions that, at the top of a rule's body,
+// write only new nodes or nothing: none returns a node of the copy.
+var groundTopMakes = map[string]bool{"param": true, "variable": true, "value-of": true, "text": true,
+	"element": true, "attribute": true, "comment": true, "processing-instruction": true,
+	"namespace": true, "number": true, "copy": true, "message": true}
+
+// groundTopKeeps reports whether the rule el may return a node of its
+// grounded copy as an item of its result: an instruction at its top (or at
+// an xsl:result-document's) other than groundTopMakes. A body whose top is
+// literal result elements and such constructors returns only new nodes, as
+// the tree's does, so at the top of a principal result it is the tree's.
+func groundTopKeeps(el *xdm.Node) bool {
+	for d := range el.Descendants() {
+		if d.Kind() == xdm.KindElement && d.Name().URI == xdm.NSXSL && topOf(d) != "" && !groundTopMakes[d.Name().Local] {
+			return true
+		}
+	}
+	return false
 }
 
 func groundReason(why string) bool {

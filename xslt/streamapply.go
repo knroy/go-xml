@@ -660,7 +660,7 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 			return
 		}
 		visited[visitKey{x, top}] = true
-		if streamed && x.groundRule && top != notTop && why == "" {
+		if streamed && x.groundRule && x.groundTop && top != notTop && why == "" {
 			// The copy's nodes would be the principal result's (streamtee_ground.go).
 			why = "a rule on a grounded copy at the top of the result"
 		}
