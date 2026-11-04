@@ -164,6 +164,14 @@ var mainCases = []struct {
 	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:for-each-group select="*/text()" group-starting-with="text()[contains(., 't')]"><g><xsl:copy-of select="snapshot(current-group())/.."/></g></xsl:for-each-group></o></xsl:template>`, true},
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="rec"><xsl:copy><xsl:for-each-group select="node()" group-adjacent="node-name(.), @x" composite="yes">` +
 		`<xsl:copy><xsl:copy-of select="@x"/><xsl:apply-templates select="current-group()/node()"/></xsl:copy></xsl:for-each-group></xsl:copy></xsl:template>`, true},
+	// A group-by in xsl:fork over elements whose body applies templates to,
+	// or sequences, the group: the members copied with their ancestors
+	// (si-fork-802, si-group-205).
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/"><o><xsl:fork><xsl:for-each-group select="doc/rec" group-by="@k">` +
+		`<g k="{current-grouping-key()}"><xsl:apply-templates select="current-group()"/></g></xsl:for-each-group></xsl:fork></o></xsl:template>` +
+		`<xsl:template match="rec/@*"><xsl:element name="{name()}"><xsl:value-of select="."/></xsl:element></xsl:template><xsl:template match="rec/@k" priority="5"/>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:fork><xsl:for-each-group select="doc/rec" group-by="@k">` +
+		`<g k="{current-grouping-key()}"><xsl:sequence select="current-group()"/></g></xsl:for-each-group></xsl:fork></o></xsl:template>`, true},
 	// ... refused when the body counts siblings, which the copy prunes.
 	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:for-each-group select="rec/@k" group-adjacent="."><g n="{generate-id(current-group()[1]/..)}"/></xsl:for-each-group></o></xsl:template>`, false},
 	// Not a streamable mode, or a rule the core does not take.

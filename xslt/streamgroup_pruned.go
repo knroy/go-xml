@@ -38,11 +38,14 @@ import (
 )
 
 // prunedPop is the shape of a pruned population: k child steps P, then the
-// last step's test, of attributes (attr) or of P's matches' children.
+// last step's test, of attributes (attr) or of P's matches' children; or,
+// self, P's matches themselves (a group-by over elements whose body applies
+// templates, which streamcopy_l3group.go's parentless copies cannot serve).
 type prunedPop struct {
 	k    int
 	test xpath.NodeTest
 	attr bool
+	self bool
 }
 
 // prunedPopulation reports the shape of el's select, an xsl:for-each-group
@@ -71,17 +74,25 @@ func (b *streamBuilder) prunedPopulation(el *xdm.Node) *prunedPop {
 	if !ok || len(last.Predicates) > 0 {
 		return nil
 	}
-	switch leaf, _ := testKinds(last.Test); {
+	switch leaf, elem := testKinds(last.Test); {
 	case last.Axis == xpath.AxisAttribute:
 		p.attr = true
+	case last.Axis == xpath.AxisChild && !leaf && elem && heldByKey(el) && !copyFreeBody(el):
+		// Elements held for a group-by or a sort, whose body reaches more
+		// than a parentless copy has: the matches, with their ancestors.
+		p.self, p.k = true, p.k+1
 	case last.Axis != xpath.AxisChild || !leaf:
-		return nil // elements alone are popWalk's
+		return nil // elements alone are popWalk's, or streamcopy_l3group.go's
 	}
 	if p.k == 0 && p.attr {
 		return nil // the context's own attributes: motionless, not a population read
 	}
 	p.test = last.Test
-	if !prunedInstrOK(el, true, p.k) {
+	up := p.k // a member's depth below the document node, less one
+	if p.self {
+		up--
+	}
+	if !prunedInstrOK(el, true, up) {
 		return nil
 	}
 	return &p
@@ -96,7 +107,7 @@ func prunedReady(op *streamOp) bool {
 		return false
 	}
 	n := p.k
-	if !p.attr {
+	if !p.attr && !p.self {
 		n++
 	}
 	ok := s != nil && s.cond == nil && !s.group && !s.ctxItem && !s.outermost && !s.innermost &&
@@ -227,7 +238,7 @@ func (run *streamRun) prunedEval(rt *runtime, op *streamOp) (xdm.Sequence, error
 			copies, read = append(copies, sub.Open()), false
 			continue
 		}
-		if err := copyEvents(rt, parent, run.c, ev.Depth, false, nil); err != nil {
+		if err := copyEvents(rt, parent, run.c, ev.Depth, false, nil); err != nil { // whole
 			return nil, err
 		}
 		var el *xdm.Node
@@ -246,6 +257,10 @@ func (run *streamRun) prunedEval(rt *runtime, op *streamOp) (xdm.Sequence, error
 	}
 	var members xdm.Sequence
 	for _, el := range copies {
+		if p.self {
+			members = append(members, el)
+			continue
+		}
 		if p.attr {
 			for a := range el.Attrs() {
 				if p.test.Matches(a, xdm.KindAttribute) {
@@ -283,7 +298,21 @@ func copyStartOf(rt *runtime, out *outputBuilder, v *xdm.Node) (*outputBuilder, 
 
 // prunedInstrs are the instructions a body over pruned copies may not hold.
 var prunedInstrs = map[string]bool{"call-template": true, "source-document": true, "evaluate": true,
-	"number": true, "stream": true, "merge": true, "fork": true, "result-document": true}
+	"number": true, "stream": true, "merge": true, "fork": true}
+
+// heldByKey reports whether el, an xsl:for-each-group, groups by key or
+// sorts its groups: its population is held whole (heldGroup).
+func heldByKey(el *xdm.Node) bool {
+	if el.Attr("", "group-by") != nil {
+		return true
+	}
+	for ch := range el.Children() {
+		if isXSL(ch, "sort") {
+			return true
+		}
+	}
+	return false
+}
 
 // prunedFns read identity, a document, or what the copy left out.
 var prunedFns = map[string]bool{"generate-id": true, "root": true, "path": true, "base-uri": true,
@@ -377,7 +406,9 @@ func prunedInstrOK(n *xdm.Node, top bool, up int) bool {
 		case "import", "include", "use-package":
 			return false
 		case "template":
-			if ch.Attr("", "match") != nil {
+			// A rule for the document node alone is reached by no copy: the
+			// pruned copy has no document node.
+			if m := ch.Attr("", "match"); m != nil && strings.TrimSpace(m.Value()) != "/" {
 				check(ch, false)
 			}
 		}
