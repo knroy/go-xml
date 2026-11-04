@@ -305,3 +305,30 @@ func TestStreamApplyFreshCopies(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamGroupByEventCopies: group-by over the children of a rule's
+// context that may be the document element, its body reading only what a
+// copy of each member has, holds the members as one fragment of copies made
+// off the cursor (streamcopy_l3group.go).
+func TestStreamGroupByEventCopies(t *testing.T) {
+	dir := t.TempDir()
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, body := range []string{
+			`<g p="{position()}" k="{current-grouping-key()}" n="{count(current-group())}"><xsl:value-of select="sum(current-group()/@v[. castable as xs:double])"/></g>`,
+			`<xsl:variable name="m" select="map { 'x' : current-group()/sub/@x/string() }"/><g><xsl:value-of select="$m?x" separator=","/><xsl:copy-of select="current-group()/sub"/></g>`,
+		} {
+			for _, by := range []string{`group-by="@k"`, `group-by="@k, @v" composite="yes"`} {
+				sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+<xsl:mode name="s" streamable="yes"/>
+<xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml"><xsl:apply-templates select="." mode="s"/></xsl:source-document></top></xsl:template>
+<xsl:template match="doc | rec" mode="s"><o><xsl:fork><xsl:for-each-group select="rec" ` + by + `>` + body + `</xsl:for-each-group></xsl:fork></o></xsl:template>
+<xsl:template match="text()" mode="s"/>
+</xsl:stylesheet>`
+				coreCheck(t, sheet, dir, name+": "+by+body, true, TransformOptions{})
+			}
+		}
+	}
+}

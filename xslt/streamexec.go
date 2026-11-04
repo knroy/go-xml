@@ -174,6 +174,9 @@ type streamOp struct {
 	// select read as a select op's, its rules run on the tree
 	// (streamcopy_l3apply.go).
 	treeApply bool
+	// eventPop says a held grouping population is copied off the cursor as
+	// events, into one fragment (streamcopy_l3group.go).
+	eventPop bool
 	// tee, for a variable's map constructor whose entries each consume, is
 	// its plan in place of a split (streamtee_map.go).
 	tee *streamTee
@@ -1131,6 +1134,9 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 	}
 	s := op.split
 	copies := isXSL(op.el, "copy-of") || isXSL(op.el, "sequence") && inElement(op.el)
+	if eventPopulation(op) { // streamcopy_l3group.go
+		return ""
+	}
 	if copies && s.cond != nil && copiesChoice(s, minD) { // streamcopy_l3choice.go
 		op.copies = true
 		return ""
@@ -1363,6 +1369,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 func (run *streamRun) evalOp(rt *runtime, op *streamOp) (xdm.Sequence, error) {
 	if run.pre != nil {
 		return run.preEval(rt, op)
+	}
+	if op.eventPop {
+		return run.eventPopEval(rt, op) // streamcopy_l3group.go
 	}
 	if op.split != nil && op.split.docCopy {
 		return run.docCopyEval(rt, op) // streamcopy_l3.go
