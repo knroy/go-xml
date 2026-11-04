@@ -445,3 +445,21 @@ func docAttrSelect(el *xdm.Node) bool {
 	st, ok := oneStep(parseAt(el, el.AttrValue("select"))).(*xpath.Step)
 	return ok && len(st.Predicates) == 0 && st.Axis == xpath.AxisAttribute
 }
+
+// leafAttrSetOp reports whether x, a set operator, has as operands two
+// attribute steps of the focus with no predicate (@* except @length). At a
+// leaf (focus vLeaf: a text, comment or PI node or an attribute, which have
+// none; a value, where the tree raises the same XPTY0020; a variable's
+// complete node) both are read whole, and identity is the tree's: the
+// operator reads nothing noIdent guards (streamable-063's rule node() on a
+// text node).
+func leafAttrSetOp(x *xpath.BinaryOp) bool {
+	if x.Op != "union" && x.Op != "intersect" && x.Op != "except" {
+		return false
+	}
+	attr := func(e xpath.Expr) bool {
+		st, ok := oneStep(e).(*xpath.Step)
+		return ok && st.Axis == xpath.AxisAttribute && len(st.Predicates) == 0
+	}
+	return attr(x.Left) && attr(x.Right)
+}

@@ -1222,6 +1222,9 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 	case *xpath.BinaryOp:
 		switch x.Op {
 		case "is", "<<", ">>", "union", "intersect", "except":
+			if f == vLeaf && leafAttrSetOp(x) { // streamsplit_l6.go
+				return true
+			}
 			if vc.noIdent {
 				return false
 			}

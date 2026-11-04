@@ -71,6 +71,10 @@ var l6DeclBodies = []struct {
 	{`<xsl:mode name="dot" streamable="yes"/>
 <xsl:template match="." mode="dot"><xsl:copy><xsl:apply-templates select="@*" mode="dot"/><xsl:apply-templates select="node()" mode="dot"/></xsl:copy></xsl:template>`,
 		`<out><xsl:apply-templates select="." mode="dot"/></out>`, true},
+	// @* except @v in a rule that also matches text nodes (leafAttrSetOp, streamable-063).
+	{`<xsl:mode name="n" streamable="yes"/>
+<xsl:template match="node()" mode="n"><xsl:copy><xsl:copy-of select="@* except @v"/><xsl:apply-templates mode="n"/></xsl:copy></xsl:template>`,
+		`<out><xsl:apply-templates mode="n"/></out>`, true},
 	// xsl:apply-templates over copies of the matches, to the tree's rules of a mode
 	// that is not streamable (executeCopies): positions and last() are the tree's.
 	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, true},
