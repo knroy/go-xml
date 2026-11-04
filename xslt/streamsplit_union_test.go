@@ -67,9 +67,11 @@ var unionBodies = []struct {
 	{`<out><xsl:copy-of select="/doc/rec ! (node() union sub)"/></out>`, true},
 	{`<out><xsl:value-of select="count(//comment() | //sub)"/></out>`, true},
 	// Refused: a predicate that may fail (the operands' errors come in
-	// another order); the context itself as a match not read on its view.
+	// another order).
 	{`<out><xsl:value-of select="count(//rec[xs:integer(@v) gt 1] | //sub)"/></out>`, false},
-	{`<out><xsl:for-each select="/doc/rec"><xsl:value-of select="count(. | sub)"/></xsl:for-each></out>`, false},
+	// The context itself as a match: the split refuses it, but the loop body
+	// runs on each rec's grounded copy, which keeps identity (a4162b6f).
+	{`<out><xsl:for-each select="/doc/rec"><xsl:value-of select="count(. | sub)"/></xsl:for-each></out>`, true},
 
 	// J1: a union with a variable's nodes under any holder: the outer sorts
 	// the matches against them as the tree does (streamsplit_foreign.go).
@@ -92,9 +94,11 @@ var unionBodies = []struct {
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="insert-before(/doc/rec, 2, $ins)/sub"/></out>`, true},
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="insert-before($ins, 1, /doc/rec)/*"/></out>`, true},
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="(1, /doc/rec)/sub"/></out>`, true},
-	// [A, B]?*/T is (A, B)/T.
-	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="[$ins, /doc/rec]?*/sub"/></out>`, true},
-	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:value-of select="[/doc/rec, $ins]?*/@v" separator=","/></out>`, true},
+	// [A, B]?*/T is (A, B)/T to the split, but §19.8.8's table gives an
+	// array's members navigation, so a streamed member is free-ranging:
+	// XTSE3430 in both modes (sx-square-array-201, [$extraItem, //ITEM]?*/PRICE).
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="[$ins, /doc/rec]?*/sub"/></out>`, false},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:value-of select="[/doc/rec, $ins]?*/@v" separator=","/></out>`, false},
 	// A loop over it is a population (streampop.go): still the tree.
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:for-each select="/doc/rec union $ins"><e n="{name()}"/></xsl:for-each></out>`, false},
 }

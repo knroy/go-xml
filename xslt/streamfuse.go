@@ -256,6 +256,9 @@ func (p *fusedProng) matched(ev xdmstream.Event) error {
 	}
 	items := xdm.One(v)
 	if s.tail != nil {
+		if r.skipOne() {
+			return nil
+		}
 		if items, err = s.tail.Eval(r.ctx.WithFocus(v, 1, 1)); err != nil {
 			return err
 		}
