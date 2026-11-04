@@ -164,3 +164,59 @@ func TestStreamL7UsePackageTrust(t *testing.T) {
 		t.Error("not on the core")
 	}
 }
+
+// TestStreamL7ImportTrust: a streamable mode whose rules are spread over an
+// importing and an imported module, joined by xsl:apply-imports, streams
+// with the tree's output when every rule verifies (streamtrust_xmod_l7.go;
+// si-apply-imports-068..070); a rule in the imported module that reads a
+// sibling keeps it on the tree.
+func TestStreamL7ImportTrust(t *testing.T) {
+	const hdr = `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">`
+	cases := []struct {
+		imported, mode string
+		stream         bool
+	}{
+		{hdr + `<xsl:mode streamable="yes"/><xsl:template match="rec"><i k="{@k}"><xsl:value-of select="."/></i></xsl:template></xsl:stylesheet>`, ``, true},
+		{hdr + `<xsl:mode streamable="no"/><xsl:template match="rec"><i k="{@k}"><xsl:value-of select="."/></i></xsl:template></xsl:stylesheet>`, `<xsl:mode streamable="yes"/>`, true},
+		{hdr + `<xsl:mode streamable="yes"/><xsl:template match="rec"><i><xsl:value-of select="following-sibling::rec[1]/@k"/></i></xsl:template></xsl:stylesheet>`, ``, false},
+	}
+	for i, c := range cases {
+		dir := t.TempDir()
+		for n, s := range map[string]string{"doc.xml": coreDocs["flat"], "a.xsl": c.imported} {
+			if err := os.WriteFile(filepath.Join(dir, n), []byte(s), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		main := hdr + `<xsl:import href="a.xsl"/>` + c.mode +
+			`<xsl:template match="rec"><o p="{position()}"><xsl:apply-imports/></o></xsl:template>` +
+			`<xsl:template name="main"><out><xsl:source-document streamable="yes" href="doc.xml"><xsl:apply-templates select="doc/rec"/></xsl:source-document></out></xsl:template></xsl:stylesheet>`
+		run := func(core bool) (string, streamtrace.Counts) {
+			before := streamtrace.Snapshot()
+			defer func() { noBursts = false }()
+			base := fileURIOf(filepath.Join(dir, "s.xsl"))
+			tree, err := xdm.ParseString(main, xdm.ParseOptions{BaseURI: base})
+			if err != nil {
+				t.Fatal(err)
+			}
+			docs, _ := NewFileResolver(dir)
+			s, err := Compile(tree.Root, CompileOptions{BaseURI: base, Resolver: docs})
+			if err != nil {
+				return "COMPILE " + err.Error(), streamtrace.Snapshot().Sub(before)
+			}
+			noBursts = !core
+			res, err := s.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: docs})
+			if err != nil {
+				return "ERR " + err.Error(), streamtrace.Snapshot().Sub(before)
+			}
+			return res.String(), streamtrace.Snapshot().Sub(before)
+		}
+		so, st := run(true)
+		to, _ := run(false)
+		if so != to {
+			t.Errorf("case %d: core %q\ntree %q", i, so, to)
+		}
+		if got := st.Runs[streamtrace.Core] > 0; got != c.stream {
+			t.Errorf("case %d: on the core %v, want %v", i, got, c.stream)
+		}
+	}
+}

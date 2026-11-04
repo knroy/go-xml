@@ -185,6 +185,9 @@ type compiler struct {
 	// l7Alias caches the scan streamMayAlias reads, made over l7AliasN modules (streamalias_l7.go).
 	l7Alias  *aliasScan
 	l7AliasN int
+	// l7Cross is the rules walk over every module, made once (streamtrust_xmod_l7.go).
+	l7Cross     *rulesPlan
+	l7CrossDone bool
 	// mergedText records, for each text node mergeAcrossComments built out
 	// of pieces separated by comments, the element the pieces were in.
 	mergedText map[*xdm.Node]*xdm.Node

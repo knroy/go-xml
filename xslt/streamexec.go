@@ -208,9 +208,9 @@ func (b *streamBuilder) refuse(why string) bool {
 // planStream builds the core plan of the streamable xsl:source-document sd,
 // or returns nil and why not. shared says sd's module is not the whole
 // stylesheet (streamtrust.go).
-func planStream(sd *xdm.Node, shared bool) (*streamExec, string) {
+func planStream(sd *xdm.Node, shared bool, xmods ...*xdm.Node) (*streamExec, string) {
 	// @validation and @type: decided when the document is read (streamvalidin.go).
-	pl := buildStreamPlan(sd, shared)
+	pl := buildStreamPlan(sd, shared, xmods...)
 	if !pl.trusted() {
 		return nil, "verdict not trusted"
 	}

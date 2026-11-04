@@ -1854,6 +1854,14 @@ func (a *instrAnalyzer) modeStreamable(el *xdm.Node) modeVerdict {
 		// else the stylesheet imports: a mode may be declared only once.
 		return modeNotStreamable
 	case imports:
+		if a.trust != nil && a.trust.xmods != nil { // streamtrust_xmod_l7.go: the trusting walk only
+			if yes, known := a.trust.crossModeStreamable(xdm.QName{URI: want.URI, Local: want.Local}.Clark()); known {
+				if yes {
+					return modeStreamableYes
+				}
+				return modeNotStreamable
+			}
+		}
 		return modeUnresolved
 	}
 	return modeNotStreamable

@@ -303,7 +303,9 @@ func (c *compiler) rulesPlanFor(el *xdm.Node) *rulesPlan {
 		return rp
 	}
 	var rp *rulesPlan
-	if modes := streamableModeNames(root); len(modes) > 0 && el.Root() == c.sheet.source && !c.streamMayAlias(true) { // streamalias_l7.go
+	if xm := c.crossModules(); xm != nil && reachesOtherModules(firstElement(c.sheet.source)) {
+		rp = c.crossRulesPlan(xm) // streamtrust_xmod_l7.go: one walk for every module
+	} else if modes := streamableModeNames(root); len(modes) > 0 && el.Root() == c.sheet.source && !c.streamMayAlias(true) { // streamalias_l7.go
 		t := newDeclTrust(root, false)
 		if !t.shared {
 			t.plan = &streamPlan{recs: map[any]*planRec{}, sites: map[planSite][]planRoot{}}
