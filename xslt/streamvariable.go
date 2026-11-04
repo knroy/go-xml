@@ -29,3 +29,37 @@ func (b *streamBuilder) variableOp(el *xdm.Node, f vfocus) bool {
 	b.kinds[streamtrace.KindSelect]++
 	return true
 }
+
+// motionlessLoop checks el, an xsl:for-each the analysis found motionless:
+// its select reads only what the focus's view has. Over a variable's items
+// (a select reading no focus and no document) the body's focus is never a
+// node of the stream, and the body runs on it as the tree runs it; over
+// nodes of the view (ancestor::*, @*), the body must read of each only
+// what a view has.
+func (b *streamBuilder) motionlessLoop(el *xdm.Node, f vfocus) bool {
+	sel := el.Attr("", "select")
+	if sel == nil {
+		return b.refuse("motionless xsl:for-each")
+	}
+	for a := range el.Attrs() {
+		if n := a.Name(); n.URI == "" && !streamAttrsOK[n.Local] {
+			return b.refuse("attribute " + n.Local + " of xsl:for-each")
+		}
+	}
+	for _, ch := range el.ChildElements() {
+		if isXSL(ch, "sort") {
+			return b.refuse("motionless xsl:for-each with xsl:sort")
+		}
+	}
+	e := parseAt(el, sel.Value())
+	if e == nil {
+		return b.refuse("motionless xsl:for-each")
+	}
+	if foreign(e) {
+		return true
+	}
+	if !(viewCheck{up: b.up}).safe(e, f, true) {
+		return b.refuse("motionless xsl:for-each over " + sel.Value())
+	}
+	return b.content(el, vElem)
+}
