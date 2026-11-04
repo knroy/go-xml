@@ -119,6 +119,12 @@ var groupBodies = []struct {
 	{`<out><xsl:for-each-group select="/doc/t/copy-of()" group-adjacent="@v idiv 5"><g d="{current-group()/@d}" v="{current-group()/@v}"/></xsl:for-each-group></out>`, true},
 	{`<out><xsl:for-each-group select="copy-of(/doc/t)" group-by="@d"><g n="{count(current-group())}"/></xsl:for-each-group></out>`, true},
 	{`<out><xsl:for-each select="/doc/g"><xsl:for-each-group select="t/copy-of()" group-adjacent="@v idiv 5"><g d="{current-group()/@d}" v="{current-group()/@v}"/></xsl:for-each-group></xsl:for-each></out>`, true},
+	// A streamed population grouped by key (only in xsl:fork, by
+	// §19.8.4.19): held as copies, grouped by the tree's code (J1,
+	// streamgroup_held.go).
+	{`<out><xsl:fork><xsl:for-each-group select="/doc/t" group-by="@d"><g k="{current-grouping-key()}"><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></xsl:fork></out>`, true},
+	{`<out><xsl:fork><xsl:for-each-group select="/doc/*" group-by="@k"><g k="{current-grouping-key()}" n="{count(current-group())}"/></xsl:for-each-group></xsl:fork></out>`, true},
+	{`<out><xsl:for-each select="/doc/g"><xsl:fork><xsl:for-each-group select="t" group-by="@d"><g s="{sum(current-group()/@v)}"/></xsl:for-each-group></xsl:fork></xsl:for-each></out>`, true},
 	// Refused: group-by, sort, a crawling population, a key a view cannot
 	// decide, current-group() read twice.
 	{`<out><xsl:for-each-group select="/doc/t" group-by="@d"><g/></xsl:for-each-group></out>`, false},

@@ -146,6 +146,9 @@ type streamOp struct {
 	// groundPop says a grouping's population is grounded: its select is
 	// read as a select op's, the tree's code groups it (groundedGroup).
 	groundPop bool
+	// heldPop says that population is the stream's own nodes, held as
+	// copies for the tree's grouping (streamgroup_held.go).
+	heldPop bool
 	// avt, for the consuming part of a literal result element's attribute
 	// value template, is that part's expression (avtOp).
 	avt string
