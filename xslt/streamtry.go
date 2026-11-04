@@ -199,6 +199,9 @@ func (x *streamExec) readyTries() string {
 func (op *streamOp) exactInTry() string {
 	switch {
 	case op.apply != applyNone:
+		if op.applyCannotFail() { // streamtry_l4.go
+			return ""
+		}
 		return "xsl:apply-templates in its body"
 	case op.group:
 		return "xsl:for-each-group in its body"
