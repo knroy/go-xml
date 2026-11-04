@@ -381,8 +381,15 @@ func (run *streamRun) group(rt *runtime, out *outputBuilder, i *forEachGroupInst
 		traceGroup()
 	}
 	g := &groupRun{sr: run, rt: rt, i: i, keyAttr: op.keyAttr}
+	if st := rt.localStack(); st != nil {
+		g.locN, g.locBase = st.Len(), st.SetBase(0)
+		st.SetBase(g.locBase)
+	}
 	if op.fromGroup {
 		g.src = run.grp.src
+		if op.tailGroup {
+			g.src = &tailSource{src: g.src}
+		}
 	} else if crawlable(op) {
 		w, ok := newCrawlWalk(op.split, rt.ctx, run.c, run.d) // streamgroup_crawl.go
 		if !ok {
@@ -556,6 +563,25 @@ type groupRun struct {
 	keyErr error
 	// crawl is src when it is a crawling select's (streamgroup_crawl.go).
 	crawl *crawlWalk
+	// locN and locBase are the local stack's length and base when the
+	// grouping started: what its select, keys and patterns see (ownLocals).
+	locN, locBase int
+}
+
+// ownLocals makes the local stack what it was when g started, for g's
+// select, keys and patterns read by a member's reader: that may be inside
+// a frame (an inlined function's body, streamfn_inline.go) whose locals hide
+// g's or shadow them. It returns the restore.
+func (g *groupRun) ownLocals() func() {
+	st := g.rt.localStack()
+	if st == nil {
+		return func() {}
+	}
+	if old := st.SetBase(g.locBase); st.Len() != g.locN || old != g.locBase {
+		d := st.Detach(g.locN)
+		return func() { st.Reattach(d); st.SetBase(old) }
+	}
+	return func() {}
 }
 
 // classify reads what the grouping needs of the item at ev, its view's; an
@@ -596,6 +622,7 @@ func (g *groupRun) classify(ev xdmstream.Event) (groupItem, error) {
 
 // next implements memberSource: the members of the current group.
 func (g *groupRun) next(read bool) (xdmstream.Event, bool, error) {
+	defer g.ownLocals()()
 	switch {
 	case g.closed:
 		return xdmstream.Event{}, false, nil

@@ -45,6 +45,15 @@ func TestStreamInlinedCallsMatchTree(t *testing.T) {
 		`<r k="{$n/@k}"><xsl:value-of select="$n/sub/@x"/></r></xsl:function>` +
 		`<xsl:function name="p:chk" streamability="absorbing"><xsl:param name="n" as="node()"/>` +
 		`<in x="{$n!node-name()}" y="{$n!@k}"/><xsl:text>&#10;</xsl:text><xsl:sequence select="$n!*!p:chk(.)"/></xsl:function>`
+	// A grouping key reading the function's parameter, the group read by
+	// another inlined body, whose own parameter has the key's name
+	// (su-absorbing-301's and -202's shapes): the key sees its own frame.
+	decls += `<xsl:function name="p:chunk" streamability="absorbing"><xsl:param name="n" as="node()*"/><xsl:param name="c" as="xs:integer"/>` +
+		`<xsl:for-each-group select="$n" group-adjacent="(position() - 1) idiv $c"><xsl:sequence select="p:wrap(current-group())"/></xsl:for-each-group></xsl:function>` +
+		`<xsl:function name="p:chunk2" streamability="absorbing"><xsl:param name="n" as="node()*"/><xsl:param name="c" as="xs:integer"/>` +
+		`<xsl:for-each-group select="$n" group-adjacent="(position() - 1) idiv $c"><xsl:sequence select="p:wrapc(current-group(), 100)"/></xsl:for-each-group></xsl:function>` +
+		`<xsl:function name="p:wrapc" streamability="absorbing"><xsl:param name="n" as="node()*"/><xsl:param name="c" as="xs:integer"/>` +
+		`<w c="{$c}"><xsl:copy-of select="$n"/></w></xsl:function>`
 	bodies := []struct {
 		body   string
 		stream bool
@@ -67,6 +76,8 @@ func TestStreamInlinedCallsMatchTree(t *testing.T) {
 		{`<o><xsl:sequence select="p:one(doc/rec)"/></o>`, true},
 		{`<o><xsl:sequence select="p:chk(*)"/></o>`, true},
 		{`<o><xsl:copy-of select="doc ! p:chk(.)"/></o>`, true},
+		{`<o><xsl:sequence select="p:chunk(doc/rec, 2)"/></o>`, true},
+		{`<o><xsl:sequence select="p:chunk2(doc/rec, 1)"/></o>`, true},
 	}
 	n := 0
 	for name, doc := range coreDocs {
