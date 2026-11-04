@@ -50,6 +50,14 @@ var l7Rows = []struct {
 	{`<xsl:variable name="g" select="doc('doc.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(/doc/rec intersect $g)"/></out>`, false},
 	{`<xsl:variable name="g" select="doc('doc.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(/doc/rec union $g)"/></out>`, false},
 	{``, `<xsl:variable name="g" select="doc('doc.xml')//sub"/><out><xsl:copy-of select="//sub except $g"/></out>`, false},
+	// Lane MM1: only parsed expressions count (separator="|" is text), and
+	// an identity operator over a load's nodes alone cannot meet the stream
+	// (sf-deep-equal, sf-snapshot-0102); a function returning them to meet
+	// the stream still refuses.
+	{`<xsl:variable name="g" select="doc('doc.xml')/doc/rec"/>`, `<out><xsl:value-of select="count($g), count(//rec)" separator="|"/></out>`, true},
+	{`<xsl:variable name="g" select="doc('doc.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(//rec), count($g intersect $g[1]), $g[1] is $g[1]"/></out>`, true},
+	{`<xsl:function name="p:id"><xsl:param name="n"/><xsl:sequence select="$n"/></xsl:function><xsl:variable name="g" select="p:id(doc('doc.xml')/doc/rec)"/>`,
+		`<out><xsl:value-of select="count(/doc/rec intersect $g)"/></out>`, false},
 	// doc() of another URI: another tree in both modes, so it streams.
 	{`<xsl:variable name="g" select="doc('other.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(/doc/rec union $g)"/></out>`, true},
 	// A call given values only, its body instructions (j:escape's shape;
