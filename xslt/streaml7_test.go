@@ -35,6 +35,10 @@ var l7Rows = []struct {
 	{``, `<out><xsl:perform-sort select="copy-of(doc/rec)"><xsl:sort select="@k"/><xsl:sort select="@v" order="descending"/></xsl:perform-sort></out>`, true},
 	{``, `<out><xsl:perform-sort select="//rec/@k/string()"><xsl:sort select="."/></xsl:perform-sort></out>`, true},
 	{``, `<out><xsl:perform-sort select="doc/rec"><xsl:sort select="@k"/></xsl:perform-sort></out>`, false},
+	// xsl:apply-templates in an xsl:map in a sequence-typed variable
+	// (si-map-008; mapContent).
+	{`<xsl:mode name="mp" streamable="yes"/><xsl:template match="rec" mode="mp"><xsl:map><xsl:map-entry key="'k'" select="string(@k)"/></xsl:map></xsl:template>`,
+		`<out><xsl:for-each select="doc/rec"><xsl:variable name="m" as="map(*)"><xsl:map><xsl:apply-templates select="." mode="mp"/></xsl:map></xsl:variable><r k="{$m('k')}"/></xsl:for-each></out>`, true},
 }
 
 // l7Analysis are §19.8 verdicts lane L7 models (streamability_l7.go).
