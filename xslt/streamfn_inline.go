@@ -93,8 +93,14 @@ func (b *streamBuilder) inlineCallOp(el *xdm.Node, f vfocus) (done, ok bool) {
 	if done, ok := b.loopCallOp(el, e, x, fn, f); done { // streamfn_loop.go
 		return true, ok
 	}
-	why := b.inlineCheck(el, e, x, fn, f)
-	if why != "" {
+	if why := b.inlineCheck(el, e, x, fn, f); why != "" {
+		if b.sub == nil {
+			// Not inlined: the select is planned as before inlining
+			// existed (the split's burst route runs the call itself on
+			// values or grounded copies), refusing on its own what it
+			// cannot take.
+			return false, false
+		}
 		return true, b.refuse("call on " + x.Name.Local + "(): " + why)
 	}
 	params, body := splitFunction(fn)
