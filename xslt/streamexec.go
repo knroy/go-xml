@@ -762,7 +762,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 		if name.URI != "" {
 			continue
 		}
-		if !streamAttrsOK[name.Local] && !resultValidation(el, name) && !b.useSets(el, a, f) {
+		if !streamAttrsOK[name.Local] && !resultValidation(el, name) && !b.useSets(el, a, f) && !copyAccumsNo(el, name) {
 			return b.refuse("attribute " + name.Local + " of " + elName(el))
 		}
 		switch name.Local {

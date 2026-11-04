@@ -309,3 +309,11 @@ func nodeCannotFail(ch *xdm.Node) bool {
 	}
 	return false
 }
+
+// copyAccumsNo reports whether name is copy-accumulators="no" on el, an
+// xsl:copy-of or xsl:copy (lane L4): the default, which the plan takes when
+// the attribute is absent (accumulator-049s).
+func copyAccumsNo(el *xdm.Node, name xdm.QName) bool {
+	return name.URI == "" && name.Local == "copy-accumulators" && (isXSL(el, "copy-of") || isXSL(el, "copy")) &&
+		!yesAttr(el, "copy-accumulators")
+}

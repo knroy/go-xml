@@ -177,3 +177,34 @@ func TestAccumDynamicCallStreamedInput(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamCopyAccumulatorsNo: copy-accumulators="no" is the default the
+// plan already takes (accumulator-049s): it is no reason to refuse, and the
+// output is the tree's.
+func TestStreamCopyAccumulatorsNo(t *testing.T) {
+	var why string
+	traceMain = func(m, w string) {
+		if m == "" {
+			why = w
+		}
+	}
+	defer func() { traceMain = nil }()
+	for _, v := range []string{"no", "yes"} {
+		sheet := mainSheet(`<xsl:accumulator name="n" as="xs:integer" initial-value="0" streamable="yes">
+		    <xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>
+		  <xsl:mode streamable="yes" use-accumulators="#all" on-no-match="shallow-skip"/>
+		  <xsl:template match="rec"><r n="{accumulator-before('n')}"/></xsl:template>
+		  <xsl:template match="/"><out><xsl:variable name="c" as="element()*"><xsl:copy-of select="doc/rec" copy-accumulators="` + v + `"/></xsl:variable>
+		    <xsl:apply-templates select="$c"/></out></xsl:template>`)
+		why = ""
+		so, _ := mainRun(sheet, mainDocs["flat"], true, TransformOptions{})
+		w := why
+		to, _ := mainRun(sheet, mainDocs["flat"], false, TransformOptions{})
+		if so != to {
+			t.Errorf("copy-accumulators=%s:\nstreamed %s\ntree     %s", v, so, to)
+		}
+		if refused := strings.Contains(w, "copy-accumulators"); refused != (v == "yes") {
+			t.Errorf("copy-accumulators=%s: refusal %q", v, w)
+		}
+	}
+}
