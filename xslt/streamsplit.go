@@ -1348,6 +1348,9 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		// A map or array variable's "$m('k')" was made map:get or array:get
 		// as it parsed (parseAt, mapCalls); in an accumulator rule,
 		// $value(k) where its type says it is a map or an array.
+		if accumValueCallOK(vc, x, f) { // streamaccum_mm5.go
+			return true
+		}
 		if !(vc.accum && vc.lookup && isVarRef(x.Target, xdm.QName{Local: "value"})) {
 			return false
 		}

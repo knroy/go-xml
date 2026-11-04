@@ -38,7 +38,8 @@ package xslt
 // start tag decides (no positional predicate, nothing below or beside the
 // node, its ancestors read as views), an initial value and rule values read
 // of the node only what it has, in the top-level package, and values that
-// hold no node of the parse (an atomic as type, or values made of values).
+// hold no node of the parse (an atomic as type, maps or arrays of atomics,
+// or values made of values).
 // Rules reading accumulators are refused.
 
 import (
@@ -72,7 +73,8 @@ func accumStreamWhy(def *accumulatorDef) (string, []string) {
 	if e == nil || !(viewCheck{noIdent: true}).safe(e, vNone, false) || !accumValueSafe(e) {
 		return name + ": initial-value " + def.el.AttrValue("initial-value"), nil
 	}
-	atomic := atomicSequenceType(def.el.AttrValue("as"))
+	atomic := atomicSequenceType(def.el.AttrValue("as")) ||
+		def.asType != nil && accumTypeHoldsNoNode(&def.asType.stype)
 	// A map or array $value is a lookup's target: what it is applied to is
 	// atomized, and what it returns is a value it holds.
 	as := strings.TrimSpace(def.el.AttrValue("as"))
@@ -178,7 +180,7 @@ func accumPatternClasses(p *Pattern) (can [numClasses]bool, why string) {
 					if i == len(a.steps)-1 {
 						pf = f
 					}
-					if needsPosition(pr) || pf == vNone ||
+					if accumNeedsPosition(pr) || pf == vNone || // streamaccum_mm5.go
 						!(viewCheck{noIdent: true, up: true, curOK: true, cur: f}).safe(pr, pf, true) {
 						return can, "pattern " + p.src + ": predicate " + pr.String() + " not decided at the start tag"
 					}

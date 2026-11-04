@@ -41,6 +41,9 @@ type mergeInstr struct {
 	// data-type, an attribute value template, must resolve to "text".
 	streams  bool
 	textKeys []int
+	// nodeKeys are the {source, key} positions of collected sources whose
+	// key is a path, taken for strings once their values are (streammerge_mm5.go).
+	nodeKeys [][2]int
 	// groupsFirst says the action may ask for last(): the streamed merge
 	// forms every group before the first action runs (streammerge_l4.go).
 	groupsFirst bool

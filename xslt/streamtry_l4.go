@@ -182,7 +182,7 @@ func nodeCannotFail(ch *xdm.Node) bool {
 		for c := range ch.Children() {
 			if c.Kind() == xdm.KindElement && isXSL(c, "catch") {
 				for a := range c.Attrs() {
-					if a.Name().URI == "" && a.Name().Local != "errors" {
+					if a.Name().URI == "" && a.Name().Local != "errors" && a.Name().Local != "exclude-result-prefixes" {
 						return false
 					}
 				}

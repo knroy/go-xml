@@ -355,7 +355,8 @@ func prunedInstrOK(n *xdm.Node, top bool, up int) bool {
 			return
 		case xsl && (local == "apply-templates" || local == "next-match" || local == "apply-imports"):
 			rules = true
-		case xsl && local == "sequence" && n.Attr("", "select") != nil && !leafAtomic(n) && !inElement(n):
+		case xsl && local == "sequence" && n.Attr("", "select") != nil && !leafAtomic(n) && !inElement(n) &&
+			!mapOfAtomics(n): // streamgroup_mm5.go
 			ok = false // it could hand a member on as the node itself
 			return
 		}

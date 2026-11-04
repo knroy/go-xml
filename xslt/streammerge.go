@@ -100,12 +100,16 @@ func mergeStreams(i *mergeInstr, action *xdm.Node) (bool, []int) {
 // read), which compares every value as a string.
 func mergeKeysOneType(i *mergeInstr) ([]int, bool) {
 	var text []int
+	i.nodeKeys = nil
 	for k := range i.sources[0].keyElems {
 		class := ""
-		for _, src := range i.sources {
+		for s, src := range i.sources {
 			// A validated document's nodes are typed: a path's values are
 			// not told by how it is written (streamvalidin.go).
 			c := mergeKeyClass(src.keyElems[k], src.streamed && src.sourceURIs != nil && src.validation.isDefault())
+			if c == "" {
+				c = i.collectedNodeKey(s, k) // streammerge_mm5.go
+			}
 			if c == "avt" && class == "text" || c == "text" && class == "avt" {
 				// The template must resolve to "text" (runStream checks it),
 				// as the other is written: one type.
@@ -388,6 +392,9 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 				got, err := src.collect(rt, s, resolved[s], colls[s])
 				if err != nil {
 					return mergePreRead{err} // nothing read: the tree's first error
+				}
+				if !i.nodeKeysUntyped(s, got) { // streammerge_mm5.go
+					return errMergeTree
 				}
 				for len(got) > 0 {
 					n := 1
