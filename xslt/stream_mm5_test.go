@@ -1,6 +1,8 @@
 package xslt
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -95,4 +97,49 @@ func TestStreamTryCatchPrefixes(t *testing.T) {
 		    <xsl:catch errors="err:XTDE0555" xmlns:err="http://www.w3.org/2005/xqt-errors" exclude-result-prefixes="err"><c/></xsl:catch>
 		  </xsl:try></xsl:copy></xsl:template>`},
 	})
+}
+
+// TestStreamMergeCollectedPathKeys: a collected merge source keyed by a
+// path, a streamed one by a string (merge-081). The merge streams when the
+// collected keys are untyped; typed ones (an xs:integer attribute here,
+// which a string comparison orders differently) send it to the tree
+// before anything is read.
+func TestStreamMergeCollectedPathKeys(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.xml"), []byte(`<log><e t="1" v="a1"/><e t="10" v="a10"/><e t="9" v="a9"/></log>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "n.xml"), []byte(`<log><e t="2" v="n2"/><e t="9" v="n9"/><e t="11" v="n11"/></log>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name, vals, attr, key, doc string
+		stream                     bool
+	}{
+		{"untyped", "'1', '10', '9'", `<xsl:attribute name="t" select="."/>`, "string(@t)", "a.xml", true},
+		{"untyped, a path", "'1', '10', '9'", `<xsl:attribute name="t" select="."/>`, "@t", "a.xml", true},
+		// Typed keys go to the tree: against xs:string, XTTE2230; against
+		// an untyped path, the tree orders them as numbers, a merge of heads
+		// taking them for strings would not (its groups differ).
+		{"typed", "'1', '9', '10'", `<xsl:attribute name="t" type="xs:integer" select="."/>`, "string(@t)", "a.xml", false},
+		{"typed, a path", "'1', '9', '10'", `<xsl:attribute name="t" type="xs:integer" select="."/>`, "@t", "a.xml", false},
+		{"typed, a path, in order", "'1', '9', '10'", `<xsl:attribute name="t" type="xs:integer" select="."/>`, "@t", "n.xml", false},
+	} {
+		sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+ xmlns:xs="http://www.w3.org/2001/XMLSchema" exclude-result-prefixes="xs">
+<xsl:template name="main"><xsl:variable name="v"><xsl:for-each select="(` + c.vals + `)"><xsl:element name="e" validation="preserve">` + c.attr + `</xsl:element></xsl:for-each></xsl:variable>
+<out><xsl:merge>
+ <xsl:merge-source name="B" select="$v/e"><xsl:merge-key select="@t"/></xsl:merge-source>
+ <xsl:merge-source name="A" for-each-source="'` + c.doc + `'" select="log/e"><xsl:merge-key select="` + c.key + `"/></xsl:merge-source>
+ <xsl:merge-action><g k="{current-merge-key()}" n="{count(current-merge-group())}" ty="{current-merge-group('B')/@t ! (data(.) instance of xs:integer)}"/></xsl:merge-action>
+</xsl:merge></out></xsl:template></xsl:stylesheet>`
+		so, se, st := coreRun(sheet, dir, true, TransformOptions{})
+		to, te, _ := coreRun(sheet, dir, false, TransformOptions{})
+		if so != to || se != te {
+			t.Errorf("%s:\nstream %q %q\ntree   %q %q", c.name, so, se, to, te)
+		}
+		if ran := st.Runs[streamtrace.Merge] > 0 && st.Reruns == 0; ran != c.stream {
+			t.Errorf("%s: streamed %v, want %v", c.name, ran, c.stream)
+		}
+	}
 }
