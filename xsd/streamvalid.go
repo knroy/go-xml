@@ -38,7 +38,9 @@ import (
 // a valid document, and exact about whether a document is valid.
 //
 // What it cannot do as the tree does is refused for the whole schema
-// (streamRefusal): identity constraints.
+// (streamRefusal): a content model whose count readings may outgrow the
+// budget on a stream but not on the tree. Identity constraints are
+// streamvalid_ic.go's.
 
 func init() {
 	xsdstream.Open = func(schema any, m xsdstream.Mode) xsdstream.Validator {
@@ -102,6 +104,11 @@ type svFrame struct {
 	tok *xdm.Node
 	// oc is openContentFor the element's type, or nil.
 	oc *OpenContent
+	// skipped says the element is in content a skip wildcard matched
+	// (inSkippedContent); ic is its part in identity constraints, or nil
+	// (streamvalid_ic.go).
+	skipped bool
+	ic      *svICFrame
 }
 
 // streamV is a validation run on a stream.
@@ -111,8 +118,11 @@ type streamV struct {
 	frames []svFrame
 	err    error
 	done   bool
-	// toks holds the ID owners' tokens (idToken).
-	toks *xdm.Node
+	// toks holds the ID owners' tokens (idToken), icToks the identity
+	// constraints' targets'; needs counts the open elements reading a
+	// constraint's tables (streamvalid_ic.go).
+	toks, icToks *xdm.Node
+	needs        map[*IdentityConstraint]int
 }
 
 func openStream(s *Schema, m xsdstream.Mode) *streamV {
@@ -183,6 +193,9 @@ func (s *streamV) Stripped(el *xdm.Node) {
 	if f := &s.frames[len(s.frames)-1]; f.el == el {
 		f.child, f.stripped = true, true
 		s.text(f, " ", nil) // whitespace: only that there was some matters
+		if s.v.icScopes > 0 {
+			s.icText(len(s.frames)-1, "", true)
+		}
 	}
 }
 
@@ -204,6 +217,9 @@ func (s *streamV) Observe(n *xdm.Node, depth int, end bool) {
 		switch n.Kind() {
 		case xdm.KindText:
 			s.text(f, n.Value(), n)
+			if s.v.icScopes > 0 {
+				s.icText(depth-2, n.Value(), false)
+			}
 		default: // a comment or processing instruction: no content to assess
 		}
 	}
@@ -223,6 +239,7 @@ func (s *streamV) start(el *xdm.Node, depth int) {
 		s.startChild(depth-2, f, el)
 	}
 	s.hold(f, depth)
+	s.icStart(f, depth-1)
 }
 
 // startRoot assesses the document element as the mode's entry point does.
@@ -336,6 +353,7 @@ func (s *streamV) startChild(pi int, f *svFrame, el *xdm.Node) {
 	if w, ok := p.term.(*Wildcard); ok {
 		switch w.ProcessContents {
 		case ProcessSkip:
+			f.skipped = true
 			return
 		case ProcessLax:
 			if d, ok := v.schema.Elements[name]; ok {
@@ -387,6 +405,7 @@ func (s *streamV) startElement(f *svFrame, el *xdm.Node, decl *ElementDecl) {
 		v.stopped = true
 		return
 	}
+	s.icEnter(f, decl)
 	v.path = append(v.path, el.Name().Local)
 	f.path, f.decl = true, decl
 	if decl.unresolved != "" {
@@ -657,6 +676,7 @@ func (s *streamV) end(depth int) {
 	if f.typ != nil && f.kind != svNil {
 		s.checkFixed(f)
 	}
+	s.icEnd(f, depth-1)
 	if f.path {
 		v.path = v.path[:len(v.path)-1]
 	}
@@ -1021,10 +1041,6 @@ func (s *Schema) streamRefusal() string {
 			return ""
 		}
 		seenD[d] = true
-		switch {
-		case len(d.IdentityConstraints) > 0:
-			return fmt.Sprintf("element %s has identity constraints", showName(d.Name))
-		}
 		for _, alt := range d.Alternatives {
 			if w := typ(alt.Type); w != "" {
 				return w

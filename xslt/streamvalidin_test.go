@@ -202,8 +202,9 @@ func TestStreamMergeValidation(t *testing.T) {
 // the field over the parsed document -- outputs and errors alike -- and, for
 // a valid document, what Parse, xsd ValidateCopy and Transform give: ignorable
 // whitespace dropped, xsl:strip-space after the validation (sparing simple
-// content), typed values, defaults. A schema the stream cannot validate (keys)
-// takes the tree path; strict with no schema is XTSE1660.
+// content), typed values, defaults. A schema the stream cannot validate (a
+// content model whose count readings may outgrow the budget) takes the tree
+// path; strict with no schema is XTSE1660.
 func TestStreamMainValidation(t *testing.T) {
 	// More count readings than the budget on a stream (a bounded maximum
 	// above the child count is unbounded only to the tree): the tree's.
@@ -311,9 +312,9 @@ func TestStreamMainValidation(t *testing.T) {
 		{"", inDocs["ok"], SourceStrict, "XTSE1660", false},
 		{"", inDocs["ok"], SourceLax, "", true},
 		{bounded, boundedDoc, SourceStrict, "", false},
-		{keyed, inDocs["ok"], SourceStrict, "", false},
-		{keyed, strings.Replace(inDocs["ok"], `<item ref="a"`, `<item id="b" ref="a"`, 1), SourceStrict, "", false},
-		{keyed, strings.Replace(inDocs["ok"], `<item n="3">`, `<item n="3" id="z">`, -1), SourceStrict, "XTTE1510", false},
+		{keyed, inDocs["ok"], SourceStrict, "", true},
+		{keyed, strings.Replace(inDocs["ok"], `<item ref="a"`, `<item id="b" ref="a"`, 1), SourceStrict, "", true},
+		{keyed, strings.Replace(inDocs["ok"], `<item n="3">`, `<item n="3" id="z">`, -1), SourceStrict, "XTTE1510", true},
 	} {
 		src := sheet(r.schema, "", rules[1])
 		got, tr := run(src, r.doc, "reader", r.v)
@@ -352,6 +353,23 @@ func TestStreamMainValidation(t *testing.T) {
 				`<xsl:template match="/"><o><xsl:value-of select="count(r/*)"/></o></xsl:template>`},
 			map[string]string{"ok": `<r xmlns:o="urn:o"><o:x>a</o:x><i>1</i>` + "\n" + `<o:y/><i>2</i></r>`,
 				"bad-name": `<r><i>1</i><x/></r>`, "bad-count": `<r xmlns:o="urn:o"><i>1</i><o:x/><i>2</i><i>3</i><i>4</i></r>`}},
+		{"keys", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+ <xs:element name="r"><xs:complexType><xs:sequence>
+   <xs:element name="i" maxOccurs="unbounded"><xs:complexType><xs:simpleContent><xs:extension base="xs:string">
+     <xs:attribute name="id" type="xs:decimal"/></xs:extension></xs:simpleContent></xs:complexType></xs:element>
+   <xs:element name="g" minOccurs="0" maxOccurs="unbounded"><xs:complexType><xs:sequence>
+     <xs:element name="j" minOccurs="0" maxOccurs="unbounded" type="xs:int"/></xs:sequence></xs:complexType>
+     <xs:unique name="J"><xs:selector xpath="j"/><xs:field xpath="."/></xs:unique></xs:element>
+   <xs:element name="ref" minOccurs="0" maxOccurs="unbounded" type="xs:decimal"/>
+ </xs:sequence></xs:complexType>
+ <xs:key name="K"><xs:selector xpath="i"/><xs:field xpath="@id"/></xs:key>
+ <xs:keyref name="R" refer="K"><xs:selector xpath="ref"/><xs:field xpath="."/></xs:keyref>
+ </xs:element></xs:schema>`,
+			[]string{`<xsl:template match="i"><v d="{data(@id) * 2}" s="{.}"/></xsl:template>`,
+				`<xsl:template match="/"><o><xsl:value-of select="sum(r/ref)"/></o></xsl:template>`},
+			map[string]string{"ok": `<r><i id="1">a</i><i id="2.0">b</i><g><j>1</j><j>2</j></g><g><j>1</j></g><ref>1.0</ref><ref>2</ref></r>`,
+				"bad-dup": `<r><i id="1">a</i><i id="1.0">b</i></r>`, "bad-ref": `<r><i id="1">a</i><ref>3</ref></r>`,
+				"bad-unique": `<r><i id="1">a</i><g><j>1</j><j>01</j></g></r>`, "bad-missing": `<r><i>a</i></r>`}},
 		{"ns defaults", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:a="urn:a" targetNamespace="urn:a"
    elementFormDefault="qualified" attributeFormDefault="qualified">
  <xs:element name="r"><xs:complexType><xs:sequence><xs:element name="e" maxOccurs="unbounded"><xs:complexType><xs:sequence>

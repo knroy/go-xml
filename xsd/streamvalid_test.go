@@ -169,6 +169,57 @@ const svNSDefaults = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xml
 
 const svNSDefaultsDoc = `<r xmlns="urn:a"><e><c/></e><e xmlns:p="urn:a"><c/></e><e xmlns:ns0="urn:other"/><x:e xmlns:x="urn:a" x:foo="y"/></r>`
 
+// svKeys: identity constraints. A key on the document element with a
+// keyref to it (values compared as values: decimals, QNames, a defaulted
+// attribute), a unique scoped on a recursive element (the outer scope sees
+// the inner's targets), a keyref whose key is declared only below it (the
+// children's tables, merged: a value two siblings define is ambiguous), an
+// element field, ".//" and "|" paths, a field under skipped content.
+const svKeys = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:k="urn:k" targetNamespace="urn:k" elementFormDefault="qualified">
+ <xs:element name="r"><xs:complexType><xs:sequence>
+   <xs:element name="item" minOccurs="0" maxOccurs="unbounded"><xs:complexType><xs:sequence>
+     <xs:element name="code" type="xs:decimal" minOccurs="0" maxOccurs="2"/></xs:sequence>
+     <xs:attribute name="id" type="xs:decimal"/><xs:attribute name="q" type="xs:QName"/>
+     <xs:attribute name="cat" type="xs:string" default="none"/></xs:complexType></xs:element>
+   <xs:element name="ref" minOccurs="0" maxOccurs="unbounded"><xs:complexType>
+     <xs:attribute name="to" type="xs:decimal"/><xs:attribute name="q" type="xs:QName"/></xs:complexType></xs:element>
+   <xs:element ref="k:node" minOccurs="0" maxOccurs="unbounded"/>
+   <xs:element name="grp" minOccurs="0" maxOccurs="unbounded"><xs:complexType><xs:sequence>
+     <xs:element name="sub" minOccurs="0" maxOccurs="unbounded"><xs:complexType><xs:sequence>
+       <xs:element name="x" minOccurs="0"><xs:complexType/></xs:element>
+       <xs:element name="def" minOccurs="0" maxOccurs="unbounded"><xs:complexType><xs:attribute name="v" type="xs:int"/></xs:complexType></xs:element>
+     </xs:sequence></xs:complexType>
+       <xs:key name="D"><xs:selector xpath="k:def"/><xs:field xpath="@v"/></xs:key></xs:element>
+     <xs:element name="use" minOccurs="0" maxOccurs="unbounded"><xs:complexType><xs:attribute name="v" type="xs:int"/></xs:complexType></xs:element>
+     <xs:any namespace="urn:skip" processContents="skip" minOccurs="0"/>
+   </xs:sequence></xs:complexType>
+     <xs:keyref name="U" refer="k:D"><xs:selector xpath=".//k:use"/><xs:field xpath="@v"/></xs:keyref>
+     <xs:unique name="S"><xs:selector xpath="k:sub"/><xs:field xpath="k:x"/></xs:unique></xs:element>
+ </xs:sequence></xs:complexType>
+  <xs:key name="K"><xs:selector xpath="k:item"/><xs:field xpath="@id"/></xs:key>
+  <xs:unique name="Q"><xs:selector xpath="k:item"/><xs:field xpath="@q"/></xs:unique>
+  <xs:unique name="C"><xs:selector xpath="k:item"/><xs:field xpath="k:code"/><xs:field xpath="@cat"/></xs:unique>
+  <xs:keyref name="R" refer="k:K"><xs:selector xpath="k:ref"/><xs:field xpath="@to"/></xs:keyref>
+  <xs:keyref name="RQ" refer="k:Q"><xs:selector xpath="k:ref"/><xs:field xpath="@q"/></xs:keyref>
+ </xs:element>
+ <xs:element name="node"><xs:complexType><xs:sequence>
+   <xs:element ref="k:node" minOccurs="0" maxOccurs="unbounded"/>
+   <xs:element name="leaf" minOccurs="0" maxOccurs="unbounded" type="xs:token"/>
+   <xs:any namespace="urn:w" processContents="lax" minOccurs="0"/></xs:sequence>
+   <xs:attribute name="n" type="xs:token"/></xs:complexType>
+  <xs:unique name="N"><xs:selector xpath=".//k:leaf | k:node/k:leaf"/><xs:field xpath="."/></xs:unique>
+  <xs:unique name="NN"><xs:selector xpath="k:node"/><xs:field xpath="@n"/></xs:unique>
+ </xs:element>
+<xs:complexType name="wrapT"><xs:sequence><xs:element ref="k:node"/></xs:sequence></xs:complexType>
+</xs:schema>`
+
+const svKeysDoc = `<r xmlns="urn:k" xmlns:p="urn:p" xmlns:q="urn:p">
+ <item id="1" q="p:a"><code>1.0</code></item><item id="2.50" q="p:b"><code>2</code></item><item id="3" cat="x"><code>1</code></item>
+ <ref to="1.00"/><ref to="2.5" q="q:a"/><ref/>
+ <node><node n="x"><node n="y"/><leaf> b </leaf></node><leaf>a</leaf><leaf>c</leaf></node>
+ <grp><sub><def v="1"/><def v="2"/></sub><sub><def v="2"/><def v="3"/></sub><use v="1"/><use v="3"/><s:x xmlns:s="urn:skip"><use v="9"/></s:x></grp>
+</r>`
+
 // svRun streams doc and returns the grounded document element, the
 // validator's verdict, and whether it ran.
 func svRun(t *testing.T, s *Schema, doc string, m xsdstream.Mode, ground bool) (*xdm.Node, error) {
@@ -280,7 +331,7 @@ func svLoad(t *testing.T, src string) *Schema {
 
 func TestStreamValidationMatchesTree(t *testing.T) {
 	books, misc, values, open := svLoad(t, svBooks), svLoad(t, svMisc), svLoad(t, svValues), svLoad(t, svOpenSchema)
-	nsd := svLoad(t, svNSDefaults)
+	nsd, keys := svLoad(t, svNSDefaults), svLoad(t, svKeys)
 	nsTree, err := xdm.ParseString(svNSDefaults, xdm.ParseOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -310,6 +361,33 @@ func TestStreamValidationMatchesTree(t *testing.T) {
 		{"misc root xsi:type", misc, `<r xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:m="urn:m" xsi:type="m:base"><v xmlns="urn:m">3</v></r>`, strict, false},
 		{"values strict", values, svValuesDoc, strict, false},
 		{"values doc", values, svValuesDoc, doc, false},
+		{"keys", keys, svKeysDoc, strict, false},
+		{"keys doc", keys, svKeysDoc, doc, false},
+		{"keys: duplicate key", keys, strings.Replace(svKeysDoc, `id="3"`, `id="1.000"`, 1), strict, true},
+		{"keys: key field missing", keys, strings.Replace(svKeysDoc, ` id="3"`, ``, 1), strict, true},
+		{"keys: dangling keyref", keys, strings.Replace(svKeysDoc, `<ref to="1.00"/>`, `<ref to="4"/>`, 1), strict, true},
+		{"keys: dangling QName keyref", keys, strings.Replace(svKeysDoc, `q="q:a"`, `q="p:c"`, 1), strict, true},
+		{"keys: duplicate QName", keys, strings.Replace(svKeysDoc, `q="p:b"`, `q="q:a"`, 1), strict, true},
+		{"keys: two fields equal", keys, strings.Replace(svKeysDoc, `<item id="3" cat="x"><code>1</code>`, `<item id="3"><code>1.0</code>`, 1), strict, true},
+		// The typed copy keys a defaulted attribute by its lexical form and a
+		// written one by its value (keyString without, and with, keyValues).
+		{"keys: defaulted field and a written one", keys, strings.Replace(strings.Replace(svKeysDoc, `<item id="3" cat="x"><code>1</code>`, `<item id="3"><code>1</code>`, 1), `<item id="1" q="p:a">`, `<item id="1" q="p:a" cat="none">`, 1), strict, false},
+		{"keys: recursive unique", keys, strings.Replace(svKeysDoc, `<leaf>c</leaf>`, `<leaf>a</leaf>`, 1), strict, true},
+		{"keys: recursive unique inner", keys, strings.Replace(svKeysDoc, `<node n="y"/>`, `<node n="y"><leaf>b</leaf></node>`, 1), strict, true},
+		{"keys: recursive unique, two scopes", keys, strings.Replace(svKeysDoc, `<node n="y"/>`, `<node n="y"><leaf>c</leaf></node>`, 1), strict, true},
+		{"keys: keyref to an ambiguous key", keys, strings.Replace(svKeysDoc, `<use v="1"/>`, `<use v="2"/>`, 1), strict, true},
+		{"keys: keyref under skip", keys, strings.Replace(svKeysDoc, `<use v="3"/>`, ``, 1), strict, false},
+		{"keys: keyref with no key in scope", keys, strings.Replace(svKeysDoc, `<grp><sub><def v="1"/><def v="2"/></sub><sub><def v="2"/><def v="3"/></sub>`, `<grp>`, 1), strict, true},
+		{"keys: key duplicate in a sub", keys, strings.Replace(svKeysDoc, `<def v="2"/><def v="3"/>`, `<def v="3"/><def v="3"/>`, 1), strict, true},
+		{"keys: element field compared as a value", keys, strings.Replace(svKeysDoc, `<item id="3" cat="x"><code>1</code>`, `<item id="3"><code>1</code>`, 1), strict, true},
+		// A nested scope reached through an element assessed by xsi:type
+		// alone: its table does not come up (validateAgainstType's tables
+		// are dropped), and the outer scope's walk does not go into it.
+		{"keys: a nested scope's table lost", keys, strings.Replace(svKeysDoc, `<leaf>c</leaf></node>`,
+			`<leaf>c</leaf><w:wrap xmlns:w="urn:w" xmlns:k="urn:k" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="k:wrapT"><node><leaf>a</leaf></node></w:wrap></node>`, 1), strict, false},
+		{"keys: field selects two", keys, strings.Replace(svKeysDoc, `<code>1.0</code>`, `<code>1.0</code><code>2</code>`, 1), strict, true},
+		{"keys: field selects a complex type", keys, strings.Replace(svKeysDoc, `<sub><def v="1"/>`, `<sub><x/><def v="1"/>`, 1), strict, true},
+		{"keys: unique attribute", keys, strings.Replace(svKeysDoc, `<node n="y"/>`, `<node n="y"/><node n="y"/>`, 1), strict, true},
 		{"ns defaults", nsd, svNSDefaultsDoc, strict, false},
 		{"ns defaults doc", nsd, svNSDefaultsDoc, doc, false},
 		{"ns defaults 1.0", nsd10, svNSDefaultsDoc, strict, false},
@@ -377,11 +455,11 @@ func TestStreamValidationMatchesTree(t *testing.T) {
 
 func TestStreamValidationRefusals(t *testing.T) {
 	for _, r := range []struct{ name, schema, want string }{
-		{"key", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType><xs:sequence>
+		{"key streams", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType><xs:sequence>
 			<xs:element name="k" maxOccurs="unbounded"><xs:complexType><xs:attribute name="id"/></xs:complexType></xs:element></xs:sequence></xs:complexType>
 			<xs:key name="K"><xs:selector xpath="k"/><xs:field xpath="@id"/></xs:key>
 			<xs:keyref name="R" refer="K"><xs:selector xpath="k"/><xs:field xpath="@id"/></xs:keyref></xs:element></xs:schema>`,
-			"element r has identity constraints"},
+			""},
 		{"element default", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r" type="xs:int" default="1"/></xs:schema>`, ""},
 		{"open content", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType>
 			<xs:openContent><xs:any/></xs:openContent><xs:sequence/></xs:complexType></xs:element></xs:schema>`, ""},
