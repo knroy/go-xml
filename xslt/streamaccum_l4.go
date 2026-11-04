@@ -21,13 +21,11 @@ package xslt
 // such a pair hand each other partial tables, whose answers depend on which
 // walk started first; that order is not the stream's.
 //
-// Errors. B's walk failing anywhere fails every walk that has read B by
-// then, with B's error, at the point of that read. The observer meets B's
-// error only where it arises, so it records when each accumulator first
-// read each other one, and when each failed of itself (accumRuleReads.seq),
-// and effErr resolves an accumulator's error as the tree's: its earliest
-// read of an accumulator whose resolved error is set, or its own error if
-// that came first.
+// Errors (§18.2.5): a read fails when the value it reads depends on a
+// failed computation. The observer records at which step each accumulator
+// failed (accumRuleReads.errAt) and at which step each kept value was
+// computed; a value computed before the failure stands, any later one is
+// the error. The tree's walk answers the same (accumulatorValues.err).
 
 import (
 	"errors"
@@ -44,27 +42,32 @@ var errAccumCircular = errors.New("accumulator read circularly")
 // accumRuleReads is the state of one streamed run's step: the node the
 // rules are applied to, the phase, and who reads whom.
 type accumRuleReads struct {
-	n      *xdm.Node      // the node of the step in progress, nil between steps
-	post   bool           // its end rules
-	before []xdm.Sequence // an element's values before its start rules ended (end phase)
-	leaf   []xdm.Sequence // a leaf's values before its end rules (end phase, before nil)
-	phase  uint64         // counts the steps
-	done   []uint64       // done[i] == phase: accumulator i was stepped in this step
-	busy   []bool         // i's rules are being applied
-	at     int            // the accumulator whose rules are being applied, -1 none
-	prev   []int          // the ones whose rules read it, innermost last
-	seq    int            // counts reads and failures, for their order
-	errAt  []int          // when i failed of itself (0: it has not)
-	dep    [][]int        // dep[i][j]: when i first read j (0: never)
+	n        *xdm.Node      // the node of the step in progress, nil between steps
+	post     bool           // its end rules
+	before   []xdm.Sequence // an element's values before its start rules ended (end phase)
+	beforeAt uint64         // the step they were recorded at
+	leaf     []xdm.Sequence // a leaf's values before its end rules (end phase, before nil)
+	phase    uint64         // counts the steps: the step in progress, or the last one
+	done     []uint64       // done[i] == phase: accumulator i was stepped in this step
+	busy     []bool         // i's rules are being applied
+	at       int            // the accumulator whose rules are being applied, -1 none
+	prev     []int          // the ones whose rules read it, innermost last
+	// errAt is the step at which i failed (0: its initial value), -1 none:
+	// a value recorded at an earlier step stands (§18.2.5), any other is
+	// i's error (valid).
+	errAt []int64
 }
 
 func (rd *accumRuleReads) init(n int) {
-	rd.done, rd.busy, rd.errAt, rd.leaf = make([]uint64, n), make([]bool, n), make([]int, n), make([]xdm.Sequence, n)
-	rd.dep, rd.at = make([][]int, n), -1
+	rd.done, rd.busy, rd.errAt, rd.leaf = make([]uint64, n), make([]bool, n), make([]int64, n), make([]xdm.Sequence, n)
+	for i := range rd.errAt {
+		rd.errAt[i] = -1
+	}
+	rd.at = -1
 }
 
-func (rd *accumRuleReads) begin(n *xdm.Node, post bool, before []xdm.Sequence) {
-	rd.n, rd.post, rd.before = n, post, before
+func (rd *accumRuleReads) begin(n *xdm.Node, post bool, before []xdm.Sequence, beforeAt uint64) {
+	rd.n, rd.post, rd.before, rd.beforeAt = n, post, before, beforeAt
 	rd.phase++
 }
 
@@ -90,14 +93,20 @@ func (rd *accumRuleReads) leave(i int) {
 	rd.prev = rd.prev[:len(rd.prev)-1]
 }
 
-// failed records that i has failed of itself, now.
-func (rd *accumRuleReads) failed(i int) {
-	rd.seq++
-	rd.errAt[i] = rd.seq
+// failed records that i has failed, at the step in progress (0 before any:
+// its initial value).
+func (rd *accumRuleReads) failed(i int) { rd.errAt[i] = int64(rd.phase) }
+
+// valid reports whether i's value recorded at step at stands: it was
+// computed before i failed, if i did.
+func (rd *accumRuleReads) valid(i int, at uint64) bool {
+	return rd.errAt[i] < 0 || int64(at) < rd.errAt[i]
 }
 
 // stepValue is fn:accumulator-before (or -after: post) of accumulator j at
-// node, read by a rule of the step in progress.
+// node, read by a rule of the step in progress. A value that depends on a
+// failed computation is the accumulator's error (§18.2.5), as the tree's
+// walk of j answers the read.
 func (sa *streamAccums) stepValue(j int, node *xdm.Node, post bool) (xdm.Sequence, error) {
 	rd := &sa.rd
 	i := rd.at
@@ -108,65 +117,38 @@ func (sa *streamAccums) stepValue(j int, node *xdm.Node, post bool) (xdm.Sequenc
 		if post || !rd.post {
 			return nil, errAccumCircular
 		}
-		return sa.beforeOf(j), nil
+		return sa.beforeOf(j)
 	}
 	if rd.busy[j] || post && !rd.post {
 		return nil, errAccumOffStream // a cycle, or -after at a start: refused when compiled
 	}
-	if rd.dep[i] == nil {
-		rd.dep[i] = make([]int, len(sa.defs))
-	}
-	if rd.dep[i][j] == 0 {
-		rd.seq++
-		rd.dep[i][j] = rd.seq
-	}
 	if !post && rd.post {
-		if err := sa.effErr(j); err != nil {
-			return nil, err
-		}
-		return sa.beforeOf(j), nil
+		return sa.beforeOf(j)
 	}
 	sa.stepOne(j)
-	if err := sa.effErr(j); err != nil {
-		return nil, err
+	if sa.errs[j] != nil {
+		return nil, sa.errs[j]
 	}
 	return sa.cur[j], nil
 }
 
 // beforeOf is j's value at the step's node once its start rules have been
 // applied, in an end-phase step: an element's frame has it; a leaf's is
-// the value j had when this step entered it, or has now if it has not.
-func (sa *streamAccums) beforeOf(j int) xdm.Sequence {
+// the value j had when this step entered it, or has now if it has not
+// (recorded at the leaf's start step, the one before).
+func (sa *streamAccums) beforeOf(j int) (xdm.Sequence, error) {
 	rd := &sa.rd
+	v, at := sa.cur[j], rd.phase-1
 	switch {
 	case rd.before != nil:
-		return rd.before[j]
+		v, at = rd.before[j], rd.beforeAt
 	case rd.done[j] == rd.phase:
-		return rd.leaf[j]
+		v = rd.leaf[j]
 	}
-	return sa.cur[j]
-}
-
-// effErr is the error the tree's walk of accumulator i fails with, as far
-// as the document has been read: its own, or that of the earliest
-// accumulator it read whose walk fails, whichever came first.
-func (sa *streamAccums) effErr(i int) error {
-	return sa.effErrN(i, len(sa.defs))
-}
-
-func (sa *streamAccums) effErrN(i, depth int) error {
-	rd := &sa.rd
-	best, err := rd.errAt[i], sa.errs[i]
-	if depth > 0 && rd.dep[i] != nil {
-		for j, at := range rd.dep[i] {
-			if at > 0 && (best == 0 || at < best) {
-				if e := sa.effErrN(j, depth-1); e != nil {
-					best, err = at, e
-				}
-			}
-		}
+	if !rd.valid(j, at) {
+		return nil, sa.errs[j]
 	}
-	return err
+	return v, nil
 }
 
 // --- Compiling --------------------------------------------------------------

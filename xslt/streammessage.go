@@ -27,11 +27,8 @@ import (
 // content read only the view), or consuming (its select is split, or its
 // content holds the one consumer).
 func (b *streamBuilder) messageOp(el *xdm.Node, f vfocus, consuming bool) bool {
-	// The tree raises an accumulator's error at its first read, the stream
-	// when it reaches the node (streamaccum.go): a swallowed read differs.
-	if subtreeMentions(el, "accumulator-") {
-		return b.refuse("xsl:message reading an accumulator")
-	}
+	// An accumulator read raises its error in both modes exactly when the
+	// value depends on a failed computation (§18.2.5; streamaccum_l4.go).
 	for a := range el.Attrs() {
 		n := a.Name()
 		if n.URI != "" {

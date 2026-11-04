@@ -108,9 +108,6 @@ func (b *streamBuilder) tryParts(el *xdm.Node, f vfocus) ([]*xdm.Node, bool) {
 	if v := strings.TrimSpace(el.AttrValue("rollback-output")); v != "" && v != "yes" && v != "true" && v != "1" {
 		return nil, b.refuse("xsl:try rollback-output=" + v)
 	}
-	if tryReadsFallible(el) { // streamtry_l4.go
-		return nil, b.refuse("xsl:try reading an accumulator")
-	}
 	var body []*xdm.Node
 	for ch := range el.Children() {
 		switch {
@@ -128,29 +125,6 @@ func (b *streamBuilder) tryParts(el *xdm.Node, f vfocus) ([]*xdm.Node, bool) {
 		}
 	}
 	return body, true
-}
-
-// readsAccumulator says whether el or what it holds names
-// accumulator-before or -after. The tree raises an accumulator's error at its
-// first read, inside the try; the stream knows it only when it reaches the
-// failing node, and may raise it after the try has ended (streamaccum.go).
-func readsAccumulator(el *xdm.Node) bool {
-	for n := range el.Descendants() {
-		for a := range n.Attrs() {
-			if strings.Contains(a.Value(), "accumulator-") {
-				return true
-			}
-		}
-		if n.Kind() == xdm.KindText && strings.Contains(n.Value(), "accumulator-") {
-			return true
-		}
-	}
-	for a := range el.Attrs() {
-		if strings.Contains(a.Value(), "accumulator-") {
-			return true
-		}
-	}
-	return false
 }
 
 // catchOK checks an xsl:catch: motionless at focus f (a view, or the

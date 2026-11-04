@@ -116,10 +116,10 @@ func TestStreamAccumReadsMatchTree(t *testing.T) {
 	}
 }
 
-// TestStreamTryAccumFailsAtStart: an xsl:try reading an accumulator that
-// can fail only in its initial value streams through TransformReader and
-// catches what the tree catches (accumulator-056s); one whose rules may
-// fail later is left to the tree.
+// TestStreamTryAccumFailsAtStart: an xsl:try reading an accumulator
+// streams through TransformReader and catches what the tree catches: a read
+// fails, in both, exactly when the value depends on a failed step
+// (§18.2.5; accumulator-056s, -057s).
 func TestStreamTryAccumFailsAtStart(t *testing.T) {
 	cases := []struct {
 		initial, rule string
@@ -128,8 +128,8 @@ func TestStreamTryAccumFailsAtStart(t *testing.T) {
 		{"0", "$value + 1", true},
 		{"100 div 0", "$value + 1", true},
 		{"0", "($value - 2) + 1", true},
-		{"0", "$value idiv (xs:integer(@v) - 2)", false},
-		{"0", "string-length(@k)", false},
+		{"0", "$value idiv (xs:integer(@v) - 2)", true},
+		{"0", "string-length(@k)", true},
 	}
 	for name, doc := range mainDocs {
 		for ci, c := range cases {

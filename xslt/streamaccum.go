@@ -24,15 +24,12 @@ package xslt
 // container re-runs on the tree. -after of the context, not read yet, reads
 // it to its end first (§19.8.9.1: consuming), as the one reader of it.
 //
-// Errors. The tree computes an accumulator over the whole document at the
-// first call on it, and that call raises the first error of the walk, from
-// wherever in the document it comes, and of the first accumulator read whose
-// walk fails. The stream finds an error where it arises: it is kept, raised
-// by any later read of that accumulator, and once the document has been
-// read, the run fails with the error of the earliest-read accumulator that
-// has one -- before any other error the run met after that read (a parse
-// error still comes first, as xdm.Parse reports one before the transform
-// starts). Tree mode words these errors the same whatever the call site.
+// Errors (§18.2.5). A read fails when the value it reads depends on a
+// failed computation: the tree's walk keeps the values it set before it
+// failed (accumulatorValues.err), the observer records at which step each
+// accumulator failed and at which step each kept value was computed
+// (accumRuleReads.valid). A read of a value computed earlier stands, in
+// both. Tree mode words these errors the same whatever the call site.
 //
 // What is computed must be provably what the tree computes, so the
 // stylesheet is checked when it compiles (accumStreamWhy), and the container
@@ -333,6 +330,9 @@ type accumFrame struct {
 	ord           uint64
 	before, after []xdm.Sequence
 	closed        bool
+	// beforeAt and afterAt are the steps the values were computed at
+	// (accumRuleReads.valid).
+	beforeAt, afterAt uint64
 }
 
 // observeAccums starts computing, for run, the accumulators applicable to
@@ -390,7 +390,8 @@ func (run *streamRun) observeAccumsOf(rt *runtime, set *modeAccumulators, stream
 		}
 	}
 	rt.streamAccums = append(rt.streamAccums, sa)
-	sa.step(sa.root, false, f.before, nil)
+	sa.step(sa.root, false, f.before, nil, 0)
+	f.beforeAt = sa.rd.phase
 	run.c.Observe(sa.observe)
 	return sa
 }
@@ -419,28 +420,30 @@ func (sa *streamAccums) frame(d int) *accumFrame {
 func (sa *streamAccums) observe(n *xdm.Node, d int, end bool, ord uint64) {
 	switch {
 	case n == nil:
-		sa.step(sa.root, true, sa.frames[0].after, sa.frames[0].before)
-		sa.frames[0].closed, sa.ended = true, true
+		f := &sa.frames[0]
+		sa.step(sa.root, true, f.after, f.before, f.beforeAt)
+		f.closed, f.afterAt, sa.ended = true, sa.rd.phase, true
 	case n.Kind() != xdm.KindElement:
-		sa.step(n, false, nil, nil)
+		sa.step(n, false, nil, nil, 0)
 		if sa.onStep != nil {
 			sa.onStep(n, d, false, ord, sa.cur)
 		}
-		sa.step(n, true, nil, nil)
+		sa.step(n, true, nil, nil, 0)
 		if sa.onStep != nil {
 			sa.onStep(n, d, true, ord, sa.cur)
 		}
 	case !end:
 		f := sa.frame(d)
 		f.ord, f.closed = ord, false
-		sa.step(n, false, f.before, nil)
+		sa.step(n, false, f.before, nil, 0)
+		f.beforeAt = sa.rd.phase
 		if sa.onStep != nil {
 			sa.onStep(n, d, false, ord, sa.cur)
 		}
 	default:
 		f := sa.frame(d)
-		sa.step(n, true, f.after, f.before)
-		f.closed = true
+		sa.step(n, true, f.after, f.before, f.beforeAt)
+		f.closed, f.afterAt = true, sa.rd.phase
 		if sa.onStep != nil {
 			sa.onStep(n, d, true, ord, sa.cur)
 		}
@@ -453,8 +456,8 @@ func (sa *streamAccums) observe(n *xdm.Node, d int, end bool, ord uint64) {
 // values before its start rules, at an element's end (nil at a leaf's end:
 // streamaccum_l4.go keeps them). A rule reading another accumulator of n
 // has that one stepped first (stepOne).
-func (sa *streamAccums) step(n *xdm.Node, post bool, into, before []xdm.Sequence) {
-	sa.rd.begin(n, post, before)
+func (sa *streamAccums) step(n *xdm.Node, post bool, into, before []xdm.Sequence, beforeAt uint64) {
+	sa.rd.begin(n, post, before, beforeAt)
 	for i := range sa.defs {
 		sa.stepOne(i)
 	}
@@ -519,9 +522,6 @@ func (sa *streamAccums) value(def *accumulatorDef, node *xdm.Node, post bool) (x
 		sa.reads++
 		sa.read[i] = sa.reads
 	}
-	if err := sa.effErr(i); err != nil {
-		return nil, err
-	}
 	d, ord := 0, uint64(0)
 	if node != sa.root {
 		ord, _ = sa.run.c.Ordinal(node)
@@ -532,18 +532,22 @@ func (sa *streamAccums) value(def *accumulatorDef, node *xdm.Node, post bool) (x
 	if d >= len(sa.frames) || sa.frames[d].ord != ord {
 		return nil, errAccumOffStream
 	}
+	f := &sa.frames[d]
 	if !post {
-		return sa.frames[d].before[i], nil
+		if !sa.rd.valid(i, f.beforeAt) { // §18.2.5: it depends on a failed step
+			return nil, sa.errs[i]
+		}
+		return f.before[i], nil
 	}
-	if !sa.frames[d].closed {
+	if !f.closed {
 		if err := sa.consume(d); err != nil {
 			return nil, err
 		}
-		if err := sa.effErr(i); err != nil {
-			return nil, err
-		}
 	}
-	return sa.frames[d].after[i], nil
+	if !sa.rd.valid(i, f.afterAt) {
+		return nil, sa.errs[i]
+	}
+	return f.after[i], nil
 }
 
 // consume reads the context of the instruction running, the element at
@@ -582,16 +586,10 @@ func (sa *streamAccums) pending() error {
 	if sa == nil {
 		return nil
 	}
-	best := -1
-	for i, r := range sa.read {
-		if r > 0 && sa.effErr(i) != nil && (best < 0 || r < sa.read[best]) {
-			best = i
-		}
-	}
-	if best < 0 {
-		return nil
-	}
-	return sa.effErr(best)
+	// §18.2.5: a read fails only when the value it reads depends on a
+	// failed computation, which the read itself raised; a value read
+	// before the walk failed stands, as in the tree (accumulatorValues.err).
+	return nil
 }
 
 // finish ends a source-document run whose body succeeded: when an
