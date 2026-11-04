@@ -113,6 +113,9 @@ func (b *streamBuilder) attrApply(el *xdm.Node, f vfocus) bool {
 	}
 	src := el.AttrValue("select")
 	e := parseAt(el, src)
+	if foreignApply(el, e, f) { // streamsplit_l6.go
+		return b.applyAttrs(el, f) && b.withParams(el, f) && b.addApply(el, f, applyForeign)
+	}
 	if f != vElem || e == nil || !endsInAttribute(e) || !(viewCheck{noIdent: b.noIdent}).safe(e, f, true) {
 		return b.refuse("motionless xsl:apply-templates select " + src)
 	}
@@ -217,6 +220,10 @@ func (c *compiler) noteStreamApply(n *xdm.Node, instr Instruction, sel *xpath.Co
 			continue
 		}
 		op.instr, op.sel = instr, sel
+		if a, ok := instr.(*applyTemplatesInstr); op.apply == applyForeign && (!ok || !a.atomicOK || sel == nil) { // streamsplit_l6.go
+			op.dead = "apply-templates over items not of the stream: not an XSLT 3.0 xsl:apply-templates"
+			continue
+		}
 		if op.apply == applySplit {
 			if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" && !c.applyCopies(op, ns) {
 				continue
@@ -611,7 +618,7 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 			why = "a select at the document node may fall back to its tree"
 		}
 		x.eachApply(func(op *streamOp) {
-			if groundApplyOp(op) { // streamsplit_l6.go: copies go to the tree's rules
+			if treeApplyOp(op) { // streamsplit_l6.go: copies and foreign items go to the tree's rules
 				if w := s.copiesLinkWhy(); w != "" && why == "" {
 					why = w
 				}
@@ -736,6 +743,9 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 
 // executeStream runs i, an apply op of the plan running, on the cursor.
 func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run *streamRun, op *streamOp) error {
+	if op.apply == applyForeign {
+		return i.executeForeign(rt, out, run) // streamsplit_l6.go
+	}
 	if op.pop != nil && !op.pop.windowsOnly() {
 		return i.executePop(rt, out, run, op) // streamapply_pop.go
 	}

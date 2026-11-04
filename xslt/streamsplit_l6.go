@@ -183,11 +183,11 @@ func (s *Stylesheet) copiesLinkWhy() string {
 	return ""
 }
 
-// onlyCopies reports whether every apply op of x is one over copies, which
-// reaches no streamed rule.
+// onlyCopies reports whether every apply op of x hands its items to the
+// tree's rules (treeApplyOp), which reaches no streamed rule.
 func (x *streamExec) onlyCopies() bool {
 	ok := true
-	x.eachApply(func(op *streamOp) { ok = ok && groundApplyOp(op) })
+	x.eachApply(func(op *streamOp) { ok = ok && treeApplyOp(op) })
 	return ok
 }
 
@@ -401,12 +401,19 @@ func viewKeyOK(vc viewCheck, x *xpath.FuncCall, f vfocus) bool {
 }
 
 // globalVar reports whether $q, read in an expression written on el, is a
-// global variable or parameter of el's module: no xsl:variable or xsl:param
-// of that name binds it before el in a construct holding it, and the module
-// declares one at the top level. A prefixed name is not resolved: false.
+// global variable or parameter of el's module (bindingOf).
 func globalVar(el *xdm.Node, q xdm.QName) bool {
+	b, global := bindingOf(el, q)
+	return b != nil && global
+}
+
+// bindingOf finds the xsl:variable or xsl:param that binds $q where el is:
+// the nearest one of that name before el in a construct holding it, or, at
+// the top level, the module's declaration (global). A prefixed name is not
+// resolved: nil.
+func bindingOf(el *xdm.Node, q xdm.QName) (*xdm.Node, bool) {
 	if q.URI != "" {
-		return false
+		return nil, false
 	}
 	binds := func(n *xdm.Node) bool {
 		return n.Kind() == xdm.KindElement && (isXSL(n, "variable") || isXSL(n, "param")) && n.AttrValue("name") == q.Local
@@ -414,20 +421,20 @@ func globalVar(el *xdm.Node, q xdm.QName) bool {
 	for n := el; ; n = n.Parent() {
 		p := n.Parent()
 		if p == nil || p.Kind() != xdm.KindElement {
-			return false
+			return nil, false
 		}
 		if gp := p.Parent(); gp == nil || gp.Kind() != xdm.KindElement {
 			// n is a top-level declaration of p, the stylesheet.
 			for ch := range p.Children() {
 				if binds(ch) {
-					return true
+					return ch, true
 				}
 			}
-			return false
+			return nil, false
 		}
 		for s := n.PrevSibling(); s != nil; s = s.PrevSibling() {
 			if binds(s) {
-				return false
+				return s, false
 			}
 		}
 	}
@@ -462,4 +469,192 @@ func leafAttrSetOp(x *xpath.BinaryOp) bool {
 		return ok && st.Axis == xpath.AxisAttribute && len(st.Predicates) == 0
 	}
 	return attr(x.Left) && attr(x.Right)
+}
+
+// --- A motionless xsl:apply-templates over items not of the stream ----------
+//
+// An xsl:apply-templates the analysis calls motionless whose select hands
+// the rules no node of the stream -- values read off the view
+// (map { 'lat' : xs:decimal(@lat) }), copies of the view's attributes
+// (copy-of(@*)), or a variable's fresh items ($m?*, the map holding copies)
+// -- runs as the tree runs it: the select evaluated, then the tree's
+// dispatch (applySelected), with the run off the cursor, so that no rule
+// reached reads the stream (applyForeign). The rules are the tree's code
+// over new trees and values, in any mode: the link does not ask for a
+// streamable one.
+
+// applyForeign is the apply kind of such an instruction (after applyNext,
+// the last of streamapply.go's).
+const applyForeign = applyNext + 1
+
+// foreignApply reports whether e, the select of a motionless
+// xsl:apply-templates written on el at focus f, hands only such items.
+func foreignApply(el *xdm.Node, e xpath.Expr, f vfocus) bool {
+	if e == nil || f == vLeaf {
+		return false
+	}
+	if x, ok := e.(*xpath.FuncCall); ok && isFn(x, "copy-of", 1) && endsInAttribute(x.Args[0]) {
+		return (viewCheck{}).safe(x.Args[0], f, true)
+	}
+	if noNodes(e) && (viewCheck{}).safe(e, f, false) {
+		return true
+	}
+	return freeOfFocus(e) && !readsDocs(e) && fresh(el, e)
+}
+
+// freeOfFocus is focusFree (streamexprs.go), which also reads a lookup in
+// and the constructors of maps and arrays ($m?*, map{1: $a}).
+func freeOfFocus(e xpath.Expr) bool {
+	switch x := e.(type) {
+	case *xpath.LookupExpr:
+		return x.Base != nil && freeOfFocus(x.Base) && (x.Expr == nil || freeOfFocus(x.Expr))
+	case *xpath.MapConstructor:
+		for i := range x.Keys {
+			if !freeOfFocus(x.Keys[i]) || !freeOfFocus(x.Values[i]) {
+				return false
+			}
+		}
+		return true
+	case *xpath.ArrayConstructor:
+		for _, m := range x.Members {
+			if !freeOfFocus(m) {
+				return false
+			}
+		}
+		return true
+	}
+	return focusFree(e)
+}
+
+// readsDocs reports whether e may read a document by URI, which could be
+// the one streaming (foreign's list, streamsplit_union.go).
+func readsDocs(e xpath.Expr) bool {
+	s := e.String()
+	for _, f := range []string{"doc(", "document(", "collection(", "uri-collection(", "unparsed-text", "json-doc(", "parse-xml"} {
+		if strings.Contains(s, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// noNodes reports whether e makes only values: atomic, or maps and arrays
+// of such.
+func noNodes(e xpath.Expr) bool {
+	switch x := e.(type) {
+	case *xpath.MapConstructor:
+		for i := range x.Keys {
+			if !atomicValued(x.Keys[i]) || !noNodes(x.Values[i]) {
+				return false
+			}
+		}
+		return true
+	case *xpath.ArrayConstructor:
+		for _, m := range x.Members {
+			if !noNodes(m) {
+				return false
+			}
+		}
+		return true
+	case *xpath.SequenceExpr:
+		for _, it := range x.Items {
+			if !noNodes(it) {
+				return false
+			}
+		}
+		return true
+	}
+	return atomicValued(e)
+}
+
+// fresh reports whether every node e, a focus-free expression written on
+// el, can give is in a tree made after the stream was read -- a copy, a
+// temporary tree, a global's -- never a view or grounded node of the
+// stream (a local variable bound to a consuming select holds those).
+func fresh(el *xdm.Node, e xpath.Expr) bool {
+	switch x := e.(type) {
+	case *xpath.Literal:
+		return true
+	case *xpath.VarRef:
+		b, global := bindingOf(el, x.Name)
+		switch {
+		case b == nil:
+			return false
+		case global:
+			return true // a global cannot reach a streamed node (MP refuses one that reads the context item)
+		case isXSL(b, "param"):
+			return false // its value comes from the caller
+		case b.Attr("", "select") == nil:
+			return b.Attr("", "as") == nil // content: a temporary tree
+		}
+		v := parseAt(b, b.AttrValue("select"))
+		return v != nil && fresh(b, v)
+	case *xpath.FuncCall:
+		if x.Name.URI == fnNS {
+			switch x.Name.Local {
+			case "copy-of", "snapshot":
+				return true // new trees, whatever they copy
+			case "current-group", "current-merge-group":
+				return false
+			}
+		}
+		for _, a := range x.Args {
+			if !fresh(el, a) {
+				return false
+			}
+		}
+		return true
+	case *xpath.PathExpr:
+		return !x.Root && len(x.Steps) > 0 && fresh(el, x.Steps[0])
+	case *xpath.FilterExpr:
+		return fresh(el, x.Base)
+	case *xpath.LookupExpr:
+		return x.Base != nil && fresh(el, x.Base)
+	case *xpath.SequenceExpr:
+		for _, it := range x.Items {
+			if !fresh(el, it) {
+				return false
+			}
+		}
+		return true
+	case *xpath.IfExpr:
+		return fresh(el, x.Then) && fresh(el, x.Else)
+	case *xpath.BinaryOp:
+		return fresh(el, x.Left) && fresh(el, x.Right)
+	case *xpath.MapConstructor:
+		for _, v := range x.Values {
+			if !fresh(el, v) {
+				return false
+			}
+		}
+		return true
+	case *xpath.ArrayConstructor:
+		for _, m := range x.Members {
+			if !fresh(el, m) {
+				return false
+			}
+		}
+		return true
+	}
+	return atomicValued(e)
+}
+
+// executeForeign runs i, an applyForeign op: its select, then the tree's
+// dispatch, off the cursor.
+func (i *applyTemplatesInstr) executeForeign(rt *runtime, out *outputBuilder, run *streamRun) error {
+	seq, err := i.sel.Eval(rt.ctx)
+	if err != nil {
+		return err
+	}
+	off := run.off
+	run.off = true
+	err = i.applySelected(rt, out, seq)
+	run.off = off
+	return err
+}
+
+// treeApplyOp reports whether op hands its items to the tree's rules: an
+// apply over copies (groundApplyOp) or over items not of the stream.
+func treeApplyOp(op *streamOp) bool {
+	return op.apply == applyForeign || groundApplyOp(op)
 }
