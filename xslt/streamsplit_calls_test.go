@@ -43,7 +43,9 @@ func TestStreamSheetCallsMatchTree(t *testing.T) {
 		`<xsl:sequence select="$n/*[position() mod 2 = 1]"/></xsl:function>` +
 		`<xsl:function name="p:first" as="node()*"><xsl:param name="n" as="element()"/>` +
 		`<xsl:variable name="e" as="element()"><xxx/></xsl:variable>` +
-		`<xsl:sequence select="if (has-children($n)) then $n else p:first($e)"/></xsl:function>`
+		`<xsl:sequence select="if (has-children($n)) then $n else p:first($e)"/></xsl:function>` +
+		`<xsl:function name="p:odd" as="node()*"><xsl:param name="n" as="element()"/><xsl:param name="l" as="xs:integer"/>` +
+		`<xsl:sequence select="if ($l = 0) then $n/*[position() mod 2 = 1] else $n/* ! p:odd(., $l - 1)"/></xsl:function>`
 	bodies := []struct {
 		body   string
 		stream bool
@@ -94,6 +96,9 @@ func TestStreamSheetCallsMatchTree(t *testing.T) {
 		// The document element returned by the call and copied: its copy is
 		// the result, its identity unseen (su-shallow-descent-004's shape).
 		{`<o><xsl:copy-of select="p:first(doc)"/></o>`, true},
+		// Recursion inside the body's one expression, on the copy
+		// (su-shallow-descent-002's shape).
+		{`<o><xsl:copy-of select="p:odd(doc, 1)"/></o>`, true},
 	}
 	n := 0
 	for name, doc := range coreDocs {
