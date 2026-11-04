@@ -1390,6 +1390,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 			lit, ok := x.Args[0].(*xpath.Literal)
 			return ok && lit.Val != nil && (f == vElem || f == vNone)
 		}
+		if viewIdentOK(vc, x, f) { // streamview_k2.go
+			return true
+		}
 		if (n == "copy-of" || n == "snapshot") && len(x.Args) == 1 && focusFree(x.Args[0]) {
 			// A copy of a variable's value: nothing of the focus; but a
 			// copy of climbed views would copy their content.
