@@ -50,6 +50,9 @@ type sheetCall struct {
 	// judged with climbing allowed and recurses, which an inlined body,
 	// its inner calls unmarked, would not let the split read.
 	keep bool
+	// atomicArg says, per parameter, that its type is atomic: the call
+	// atomizes that argument (streamfn_inline.go).
+	atomicArg []bool
 }
 
 var sheetCalls sync.Map // weak.Pointer[xpath.FuncCall] -> sheetCall
@@ -99,7 +102,7 @@ func judgeSheetCall(x *xpath.FuncCall, fns map[funcKey]*streamFunc) (sheetCall, 
 	if !sheetClosure(f, fns, bodies) {
 		return sheetCall{}, false
 	}
-	sc := sheetCall{values: atomicParams(f.body), atomic: atomicAs(f.body, f.asType)}
+	sc := sheetCall{values: atomicParams(f.body), atomic: atomicAs(f.body, f.asType), atomicArg: paramAtomics(f.body)}
 	if !sc.values {
 		sc.burst = true
 		for g, body := range bodies {
@@ -299,6 +302,10 @@ func (w *splitter) sheetCall(x *xpath.FuncCall) (done, ok bool) {
 	}
 	for k := range x.Args {
 		orig, before := x.Args[k], w.pe
+		use := use
+		if k < len(sc.atomicArg) && sc.atomicArg[k] {
+			use = useAtomize // §10.3.3: the parameter's type atomizes it
+		}
 		var inner xpath.Expr
 		if c, ok := orig.(*xpath.FuncCall); ok && c.Name.URI == fnNS && len(c.Args) == 1 &&
 			(c.Name.Local == "copy-of" || c.Name.Local == "snapshot") {
@@ -306,6 +313,9 @@ func (w *splitter) sheetCall(x *xpath.FuncCall) (done, ok bool) {
 		}
 		if !w.slot(x.Args[k], func(y xpath.Expr) { x.Args[k] = y }, use) {
 			return true, false
+		}
+		if use == useAtomize && !sc.values {
+			continue // values reach the body: nothing of a node
 		}
 		if sc.climb && !sc.values && before == nil && w.pe != nil {
 			// The outer would call it once on every match's copy: their

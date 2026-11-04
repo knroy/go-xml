@@ -39,6 +39,8 @@ func TestStreamInlinedCallsMatchTree(t *testing.T) {
 		{`<o><xsl:copy-of select="p:app(doc/rec)"/></o>`, true},
 		{`<o><xsl:sequence select="p:grp(doc/rec, 'y')"/></o>`, true},
 		{`<xsl:for-each select="doc/rec"><o><xsl:sequence select="p:self(.)"/></o></xsl:for-each>`, true},
+		// A call given only a variable's copies reads nothing of the stream.
+		{`<xsl:variable name="c" select="copy-of(doc/rec)"/><o><xsl:sequence select="p:wrap($c)"/></o>`, true},
 		{`<o><xsl:copy-of select="p:focus(doc/rec)"/></o>`, false},
 		{`<o><xsl:copy-of select="p:inner(doc/rec)"/></o>`, false},
 	}

@@ -765,3 +765,14 @@ func foreignArgs(x *xpath.FuncCall) bool {
 	}
 	return true
 }
+
+// paramAtomics is, per xsl:param of fn, whether its type is atomic.
+func paramAtomics(fn *xdm.Node) []bool {
+	var out []bool
+	for _, p := range fn.ChildElements() {
+		if isXSL(p, "param") {
+			out = append(out, atomicAs(p, p.AttrValue("as")))
+		}
+	}
+	return out
+}
