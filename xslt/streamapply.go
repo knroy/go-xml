@@ -86,6 +86,9 @@ func (b *streamBuilder) strict() *streamBuilder {
 
 // applyOp plans an xsl:apply-templates that reads its context, focus f.
 func (b *streamBuilder) applyOp(el *xdm.Node, f vfocus) bool {
+	if done, ok := b.treeApplyOp(el, f); done { // streamcopy_l3apply.go
+		return ok
+	}
 	if f == vLeaf {
 		return b.refuse("xsl:apply-templates on a node with no content")
 	}
@@ -223,6 +226,10 @@ func (c *compiler) noteStreamApply(n *xdm.Node, instr Instruction, sel *xpath.Co
 	ns xpath.NamespaceResolver) {
 
 	for _, op := range c.streamOps(n) {
+		if op.treeApply {
+			c.noteTreeApply(op, instr, sel, ns) // streamcopy_l3apply.go
+			continue
+		}
 		if op.apply == applyNone {
 			continue
 		}

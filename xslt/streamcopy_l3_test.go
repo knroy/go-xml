@@ -173,3 +173,162 @@ func TestStreamApplyLeafMatches(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamDocCopyIDs: a copy of the document or of the document element
+// made off the cursor keeps what the tree's copy keeps of the DTD's typing
+// -- is-id under validation="strip", all of it otherwise -- so id() over the
+// copy finds what the tree's finds (streamcopy_l3.go, copiedTyping).
+func TestStreamDocCopyIDs(t *testing.T) {
+	dir := t.TempDir()
+	doc := `<!DOCTYPE doc [<!ATTLIST rec id ID #IMPLIED ref IDREFS #IMPLIED>]>` +
+		`<doc><rec id="x1" ref="x2"/><rec id="x2"><sub/></rec></doc>`
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	probe := `<o><xsl:value-of select="count(id('x1 x2', $c)), count(idref('x2', $c)), name(id('x2', $c))"/></o>`
+	for _, body := range []string{
+		`<xsl:variable name="c"><e><xsl:copy-of select="."/></e></xsl:variable>` + probe,
+		`<xsl:variable name="c"><e><xsl:sequence select="."/></e></xsl:variable>` + probe,
+		`<xsl:variable name="c"><e><xsl:copy-of select="*"/></e></xsl:variable>` + probe,
+		`<xsl:variable name="c"><e><xsl:copy-of select="." validation="preserve"/></e></xsl:variable>` + probe,
+		`<xsl:variable name="c" select="copy-of(.)"/>` + probe,
+		`<xsl:variable name="c" as="node()"><xsl:copy-of select="."/></xsl:variable>` + probe,
+	} {
+		coreCheck(t, coreSheet(body), dir, body, true, TransformOptions{})
+	}
+}
+
+// TestStreamDocEntities: unparsed-entity-uri and unparsed-entity-public-id
+// of the document node, after an unconditional consumer or with nothing
+// consuming, read the DOCTYPE the stand-in is given (streamcopy_l3doc.go,
+// docEntities).
+func TestStreamDocEntities(t *testing.T) {
+	dir := t.TempDir()
+	docs := map[string]string{
+		"dtd": `<!DOCTYPE doc [<!NOTATION gif SYSTEM "g.txt"><!ENTITY pic PUBLIC "-//P//EN" "pic.gif" NDATA gif>]>` +
+			`<doc><rec k="a"/></doc>`,
+		"flat": coreDocs["flat"],
+		"bad":  coreDocs["bad"],
+	}
+	ent := `<xsl:value-of select="ends-with(unparsed-entity-uri('pic'), 'pic.gif'), unparsed-entity-public-id('pic')"/>`
+	for name, doc := range docs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, body := range []string{
+			`<o><xsl:comment select="head(//rec/@k)"/>` + ent + `</o>`,
+			`<o>` + ent + `</o>`,
+			`<o><xsl:where-populated><xsl:text>1:</xsl:text><xsl:comment select="head(//rec/@k)"/><xsl:text>2:</xsl:text><xsl:comment select="unparsed-entity-uri('pic')"/></xsl:where-populated></o>`,
+		} {
+			coreCheck(t, coreSheet(body), dir, name+": "+body, true, TransformOptions{})
+		}
+	}
+}
+
+// TestStreamCommentSelectValues: xsl:comment and xsl:processing-instruction
+// make simple content of their select, so a select of elements is read as
+// their values, not collected as grounded copies, also below a loop whose
+// match may be the document element (streamexec.go noteStreamSelect,
+// streamcopy_l3leaf.go).
+func TestStreamCommentSelectValues(t *testing.T) {
+	dir := t.TempDir()
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, body := range []string{
+			`<o><xsl:for-each select="outermost(//rec)"><in><xsl:where-populated><xsl:comment select="sub[parent::rec]"/></xsl:where-populated>` +
+				`<xsl:where-populated><xsl:comment select="count(ancestor::node())"/></xsl:where-populated></in></xsl:for-each></o>`,
+			`<o><xsl:for-each select="outermost(//rec)"><in><xsl:sequence select="()"/><xsl:on-empty><xsl:comment select="sub[parent::rec]"/>` +
+				`<xsl:comment select="count(ancestor::node())"/></xsl:on-empty></in></xsl:for-each></o>`,
+			`<o><xsl:for-each select="outermost(//rec)"><in><xsl:processing-instruction name="p" select="sub"/></in></xsl:for-each></o>`,
+			`<o><xsl:comment select="doc/rec"/></o>`,
+		} {
+			coreCheck(t, coreSheet(body), dir, name+": "+body, true, TransformOptions{})
+		}
+	}
+}
+
+// TestStreamValueOfTextBeside: value-of of text nodes beside a consuming
+// path of elements reads the path as values and keeps the text nodes'
+// merging: two text nodes with no match between them are one string, as in
+// the tree (streamcopy_l3text.go).
+func TestStreamValueOfTextBeside(t *testing.T) {
+	dir := t.TempDir()
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, rule := range []string{
+			`<r><xsl:value-of select="$t, sub, $t"/></r>`,
+			`<r><xsl:value-of select="$t, sub[@x = '9'], $t" separator=":"/></r>`,
+			`<r><xsl:value-of select="$t, $e, sub, $t, $t"/></r>`,
+			`<r a="{$t, sub, $t}"/>`,
+		} {
+			sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:variable name="t" as="text()"><xsl:text>##</xsl:text></xsl:variable>
+<xsl:variable name="e" as="text()"><xsl:value-of select="''"/></xsl:variable>
+<xsl:mode name="s" streamable="yes"/>
+<xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml"><xsl:apply-templates select="." mode="s"/></xsl:source-document></top></xsl:template>
+<xsl:template match="rec" mode="s">` + rule + `</xsl:template>
+<xsl:template match="text()" mode="s"/>
+</xsl:stylesheet>`
+			coreCheck(t, sheet, dir, name+": "+rule, true, TransformOptions{})
+		}
+	}
+}
+
+// TestStreamApplyFreshCopies: apply-templates over copies -- copy-of() of a
+// rule's context element, text() ! snapshot(.) -- in a mode that need not be
+// streamable reads the copies off the cursor and applies the templates to
+// them as the tree does (streamcopy_l3apply.go).
+func TestStreamApplyFreshCopies(t *testing.T) {
+	dir := t.TempDir()
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, rule := range []string{
+			`<xsl:template match="rec"><xsl:apply-templates select="copy-of()" mode="change"/></xsl:template>`,
+			`<xsl:template match="rec"><xsl:apply-templates select="copy-of(.)" mode="change"/></xsl:template>`,
+			`<xsl:template match="rec"><xsl:apply-templates select="sub/text() ! snapshot(.)" mode="change"/></xsl:template>`,
+		} {
+			sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:mode streamable="yes" on-no-match="shallow-copy"/>
+<xsl:mode name="change" on-no-match="shallow-copy"/>
+<xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml"><xsl:apply-templates select="."/></xsl:source-document></top></xsl:template>
+` + rule + `
+<xsl:template match="rec[@k = 'a']/sub" mode="change"><s n="{count(ancestor::*)}" b="{ends-with(base-uri(), 'doc.xml')}"><xsl:value-of select="@x"/></s></xsl:template>
+<xsl:template match="text()" mode="change"><t a="{string-join(ancestor::*/name(), '/')}"><xsl:value-of select="."/></t></xsl:template>
+</xsl:stylesheet>`
+			coreCheck(t, sheet, dir, name+": "+rule, true, TransformOptions{})
+		}
+	}
+}
+
+// TestStreamGroupByEventCopies: group-by over the children of a rule's
+// context that may be the document element, its body reading only what a
+// copy of each member has, holds the members as one fragment of copies made
+// off the cursor (streamcopy_l3group.go).
+func TestStreamGroupByEventCopies(t *testing.T) {
+	dir := t.TempDir()
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, body := range []string{
+			`<g p="{position()}" k="{current-grouping-key()}" n="{count(current-group())}"><xsl:value-of select="sum(current-group()/@v[. castable as xs:double])"/></g>`,
+			`<xsl:variable name="m" select="map { 'x' : current-group()/sub/@x/string() }"/><g><xsl:value-of select="$m?x" separator=","/><xsl:copy-of select="current-group()/sub"/></g>`,
+		} {
+			for _, by := range []string{`group-by="@k"`, `group-by="@k, @v" composite="yes"`} {
+				sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+<xsl:mode name="s" streamable="yes"/>
+<xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml"><xsl:apply-templates select="." mode="s"/></xsl:source-document></top></xsl:template>
+<xsl:template match="doc | rec" mode="s"><o><xsl:fork><xsl:for-each-group select="rec" ` + by + `>` + body + `</xsl:for-each-group></xsl:fork></o></xsl:template>
+<xsl:template match="text()" mode="s"/>
+</xsl:stylesheet>`
+				coreCheck(t, sheet, dir, name+": "+by+body, true, TransformOptions{})
+			}
+		}
+	}
+}

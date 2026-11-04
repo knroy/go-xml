@@ -57,6 +57,9 @@ type burstFeed struct {
 	// readOut, when set, is read for an instruction that writes what it
 	// copies to out (xsl:copy-of, xsl:sequence; streamcopy_l3.go).
 	readOut func(out *outputBuilder, each func(xdm.Item) error) error
+	// treeApply drives an xsl:apply-templates over fresh copies: eval
+	// reads them, the tree applies (streamcopy_l3apply.go).
+	treeApply bool
 }
 
 // burstResolver is a document resolver that can stream a document.

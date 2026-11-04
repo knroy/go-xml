@@ -186,6 +186,12 @@ type streamSplit struct {
 	// climbSet, for P whose branches climb each its own way
 	// (streamsplit_climbset.go): their tails and the operator.
 	climbSet *climbSetPlan
+	// laxAtom says a typed match is atomized as xdm.Atomize does, without
+	// AtomizeChecked's errors (streamcopy_l3leaf.go).
+	laxAtom bool
+	// keepEmpty says a typed match whose typed value is empty is kept as
+	// the node, its outer simple content (streamcopy_l3text.go).
+	keepEmpty bool
 	// docCopy says the expression is a copy of the document, built off the
 	// cursor; docText that it is the document's string value, read off it
 	// (streamcopy_l3.go).
@@ -1213,6 +1219,9 @@ type viewCheck struct {
 	// key() over a global variable's document is admitted (viewKeyOK,
 	// streamsplit_l6.go).
 	globals *xdm.Node
+	// ents admits unparsed-entity-uri(x) and unparsed-entity-public-id(x)
+	// of the document node's stand-in (streamcopy_l3doc.go, docEntities).
+	ents bool
 }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
@@ -1451,11 +1460,17 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		if accumDocURIOK(vc, x) { // streamaccum_l4.go
 			return true
 		}
+		if vc.ents && f == vNone && len(x.Args) == 1 && (n == "unparsed-entity-uri" || n == "unparsed-entity-public-id") {
+			return vc.safe(x.Args[0], f, false) // streamcopy_l3doc.go
+		}
 		if viewLeafCopyOK(x, f) { // streamview_l7.go
 			return true
 		}
 		if viewKeyOK(vc, x, f) { // streamsplit_l6.go
 			return true
+		}
+		if (n == "copy-of" || n == "snapshot") && f == vLeaf && (len(x.Args) == 0 || len(x.Args) == 1 && isContextItem(x.Args[0])) {
+			return true // a new copy of the leaf's complete copy and its ancestors' views (streamcopy_l3apply.go)
 		}
 		if (n == "copy-of" || n == "snapshot") && len(x.Args) == 1 && focusFree(x.Args[0]) {
 			// A copy of a variable's value: nothing of the focus; but a
@@ -1891,7 +1906,7 @@ func (r *splitRun) run(v *xdm.Node, d int) error {
 			return r.jsonContext(v, d) // streamfn_json.go
 		}
 		if s.atomize && v != nil && typedValue(s, v) { // streamvalidin.go
-			items, err := groundAtomized(c)
+			items, err := s.groundAtomized(c)
 			if err != nil {
 				return err
 			}
@@ -2088,7 +2103,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					break
 				}
 				if typedValue(s, ev.Node) { // streamvalidin.go
-					items, err := groundAtomized(c)
+					items, err := s.groundAtomized(c)
 					if err != nil {
 						return err
 					}
@@ -2428,7 +2443,7 @@ func (r *splitRun) take(items xdm.Sequence) error {
 	}
 	switch s.red {
 	case "":
-		if s.atomize {
+		if s.atomize && !s.keepEmpty { // streamcopy_l3text.go
 			items = xdm.Atomize(items)
 		}
 		if s.counted {

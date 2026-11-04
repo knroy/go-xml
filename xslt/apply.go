@@ -39,10 +39,12 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if f := rt.burstsFor(i); f != nil && f.apply != nil {
 		// Streamed (streamapply.go): dispatched as the cursor reads.
 		return i.executeStream(rt, out, f.run, f.apply)
+	} else if f != nil && f.treeApply {
+		return i.executeTreeApply(rt, out, f) // streamcopy_l3apply.go
 	}
 	var seq xdm.Sequence
 	if i.sel != nil {
-		v, err := i.sel.Eval(rt.ctx)
+		v, err := rt.evalSelect(i, i.sel) // streamcopy_l3apply.go: the copies read off the cursor
 		if err != nil {
 			return err
 		}

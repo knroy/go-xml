@@ -173,6 +173,13 @@ type streamOp struct {
 	// pop, for a loop whose select is not a bare path, is its population
 	// (streampop.go); split is then its stream part's.
 	pop *streamPop
+	// treeApply says it is an xsl:apply-templates over fresh copies, its
+	// select read as a select op's, its rules run on the tree
+	// (streamcopy_l3apply.go).
+	treeApply bool
+	// eventPop says a held grouping population is copied off the cursor as
+	// events, into one fragment (streamcopy_l3group.go).
+	eventPop bool
 	// tee, for a variable's map constructor whose entries each consume, is
 	// its plan in place of a split (streamtee_map.go).
 	tee *streamTee
@@ -199,6 +206,9 @@ type streamBuilder struct {
 	// after says accumulator-after of the focus may be read: a consumer
 	// before it in its sequence constructor has read the focus (streamaccum.go).
 	after bool
+	// docRead says a consumer before it in its sequence constructor, an op
+	// itself (run unconditionally), has read the document (streamcopy_l3doc.go).
+	docRead bool
 }
 
 func (b *streamBuilder) refuse(why string) bool {
@@ -239,8 +249,8 @@ func elName(el *xdm.Node) string {
 func (b *streamBuilder) seq(el *xdm.Node, f vfocus) bool {
 	b.kinds[streamtrace.KindSeq]++
 	consumers := 0
-	defer func(after bool) { b.after = after }(b.after)
-	b.after = false
+	defer func(after, read bool) { b.after, b.docRead = after, read }(b.after, b.docRead)
+	b.after, b.docRead = false, false
 	for ch := range el.Children() {
 		switch ch.Kind() {
 		case xdm.KindText:
@@ -289,9 +299,11 @@ func (b *streamBuilder) seq(el *xdm.Node, f vfocus) bool {
 		if consumers++; consumers > 1 {
 			return b.refuse("two consuming instructions in one sequence constructor")
 		}
+		n0 := len(*b.ops)
 		if !b.consumer(ch, f) {
 			return false
 		}
+		b.docRead = f == vNone && len(*b.ops) > n0 && (*b.ops)[n0].el == ch // streamcopy_l3doc.go
 	}
 	return true
 }
@@ -826,7 +838,8 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 // what f has, and returns nodes of it only where nodeOK.
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := parseAt(el, src)
-	if e == nil || !(viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f}).safe(e, f, nodeOK) {
+	vc := viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f}
+	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) { // streamcopy_l3doc.go
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
 	}
 	return true
@@ -870,9 +883,15 @@ func (c *compiler) noteStreamSelect(n *xdm.Node, instr Instruction, sel *xpath.C
 				continue
 			}
 		}
-		simple := isXSL(n, "value-of") || isXSL(n, "attribute")
+		// §5.7.2 for all four; comment and PI atomize as constructedText,
+		// unchecked (streamcopy_l3leaf.go, laxAtomize).
+		leafText := isXSL(n, "comment") || isXSL(n, "processing-instruction")
+		simple := isXSL(n, "value-of") || isXSL(n, "attribute") || leafText
 		if op.split, op.dead = c.splitForDoc(sel, ns, op.doc, simple, op.inGroup, op.key); op.dead != "" { // streamcopy_l3.go
 			continue
+		}
+		if leafText {
+			op.split.laxAtomize()
 		}
 		op.x.byInstr[instr] = op
 	}
@@ -937,7 +956,9 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 		return nil, "select does not parse again"
 	}
 	e, checks := foreignSets(c.inlineCalls(e)) // streamsplit_union.go
-	if _, ctx := e.(*xpath.ContextItem); simple && (ctx || noTextNodes(e)) {
+	_, ctx := e.(*xpath.ContextItem)
+	wrapped := simple && (ctx || noTextNodes(e))
+	if wrapped {
 		// Simple content (§5.7.2) drops zero-length text nodes, merges
 		// adjacent ones, then atomizes: with no text node in the value the
 		// first two do nothing, so it is data() of it, which the split
@@ -952,9 +973,19 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 			e = liftData(data(e))
 		}
 	}
-	s, why := splitStreamIn(e, sel, doc, group, key)
-	if s == nil && simple {
-		s = groundContextSplit(e, sel, doc, group) // streamsplit_l6.go
+	var s *streamSplit
+	if simple && !wrapped {
+		// A fresh parse: the split takes the expression apart.
+		if s, checks = c.splitDataItems(sel, ns, doc, group, key, checks); s != nil { // streamcopy_l3text.go
+			e = nil
+		}
+	}
+	why := ""
+	if s == nil {
+		s, why = splitStreamIn(e, sel, doc, group, key)
+		if s == nil && simple {
+			s = groundContextSplit(e, sel, doc, group) // streamsplit_l6.go
+		}
 	}
 	if s == nil {
 		return nil, "split: " + why
@@ -1127,6 +1158,9 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 	}
 	s := op.split
 	copies := isXSL(op.el, "copy-of") || isXSL(op.el, "sequence") && inElement(op.el)
+	if eventPopulation(op) { // streamcopy_l3group.go
+		return ""
+	}
 	if copies && s.cond != nil && copiesChoice(s, minD) { // streamcopy_l3choice.go
 		op.copies = true
 		return ""
@@ -1284,6 +1318,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 		return &burstFeed{instr: instr, read: func(func(xdm.Item) error) error { return errStreamPlan },
 			eval: func(*runtime) (xdm.Sequence, error) { return nil, errStreamPlan }}
 	}
+	if op.treeApply {
+		return run.treeApplyFeed(instr, op) // streamcopy_l3apply.go
+	}
 	if op.split != nil && op.split.docCopy {
 		return run.docCopyFeed(instr, rt, op) // streamcopy_l3.go
 	}
@@ -1356,6 +1393,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 func (run *streamRun) evalOp(rt *runtime, op *streamOp) (xdm.Sequence, error) {
 	if run.pre != nil {
 		return run.preEval(rt, op)
+	}
+	if op.eventPop {
+		return run.eventPopEval(rt, op) // streamcopy_l3group.go
 	}
 	if op.split != nil && op.split.docCopy {
 		return run.docCopyEval(rt, op) // streamcopy_l3.go
