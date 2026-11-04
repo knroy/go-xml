@@ -58,3 +58,20 @@ func asRefusesNodes(n *xdm.Node) bool {
 	st, err := compileSequenceType(n.AttrValue("as"), newNSResolver(n, ""))
 	return err == nil && st != nil && (st.stype.IsMapTest || st.stype.IsArrayTest)
 }
+
+// accumNeedsPosition is needsPosition for a predicate of an accumulator
+// rule's pattern, which also takes a quantified expression (some or every):
+// it is a boolean, and reads the position only where its bindings or test
+// do (accumulator-034s: fig[every $n in data(@*) satisfies $n = '83']).
+func accumNeedsPosition(e xpath.Expr) bool {
+	q, ok := e.(*xpath.QuantifiedExpr)
+	if !ok {
+		return needsPosition(e)
+	}
+	for _, b := range q.Bindings {
+		if readsPosition(b.Seq) {
+			return true
+		}
+	}
+	return readsPosition(q.Test)
+}

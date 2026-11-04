@@ -56,6 +56,19 @@ func TestStreamAccumMapTyped(t *testing.T) {
 	})
 }
 
+// TestStreamAccumQuantifiedPattern: an accumulator rule whose pattern's
+// predicate is some/every over the attributes is decided at the start tag
+// (accumulator-034s).
+func TestStreamAccumQuantifiedPattern(t *testing.T) {
+	const accs = `<xsl:mode streamable="yes" use-accumulators="#all"/>
+	<xsl:accumulator name="q" as="xs:integer" initial-value="0" streamable="yes">
+	  <xsl:accumulator-rule match="rec[every $a in data(@*) satisfies $a != '2']" select="$value + 1"/>
+	  <xsl:accumulator-rule match="rec[some $a in data(@*) satisfies $a = 'c']" select="$value + 10"/></xsl:accumulator>`
+	mm5Rows(t, mm5Doc, []struct{ name, decls string }{
+		{"every and some", accs + `<xsl:template match="rec"><r q="{accumulator-before('q')}"/></xsl:template>`},
+	})
+}
+
 // TestStreamApplyInMapTypedVariable: xsl:apply-templates in a variable
 // typed a sequence of maps (si-fork-812): what rules make is kept, and a
 // built-in rule's node is the type error in both modes.

@@ -180,7 +180,7 @@ func accumPatternClasses(p *Pattern) (can [numClasses]bool, why string) {
 					if i == len(a.steps)-1 {
 						pf = f
 					}
-					if needsPosition(pr) || pf == vNone ||
+					if accumNeedsPosition(pr) || pf == vNone || // streamaccum_mm5.go
 						!(viewCheck{noIdent: true, up: true, curOK: true, cur: f}).safe(pr, pf, true) {
 						return can, "pattern " + p.src + ": predicate " + pr.String() + " not decided at the start tag"
 					}
