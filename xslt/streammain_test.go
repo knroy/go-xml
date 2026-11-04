@@ -221,6 +221,11 @@ var mainCases = []struct {
 		`<xsl:sequence select="$value + string-length(.)"/></xsl:accumulator-rule></xsl:accumulator>` +
 		`<xsl:mode streamable="yes" use-accumulators="t"/><xsl:template match="doc"><o><n><xsl:value-of select="count(.//sub)"/></n>` +
 		`<t><xsl:value-of select="accumulator-after('t')"/></t></o></xsl:template>`, true},
+	// A call at the document node on an absorbing function of the module
+	// whose body is an instruction, inlined (streampkgframe_l7.go
+	// pkgDocParam; function-5002).
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:abs" streamability="absorbing"><xsl:param name="n" as="node()"/>` +
+		`<xsl:copy-of select="$n/*/rec[1]/sub"/></xsl:function><xsl:template match="/"><o><xsl:copy-of select="p:abs(.)"/></o></xsl:template>`, true},
 	// unparsed-entity-uri#1 and -public-id#1 at an element's view: its
 	// tree's DTD is the document's (sf-unparsed-entity-02).
 	{`<xsl:mode streamable="yes"/><xsl:template match="doc"><o><xsl:value-of select="unparsed-entity-uri('pic'), unparsed-entity-public-id('pic')"/></o></xsl:template>`, true},
