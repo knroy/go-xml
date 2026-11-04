@@ -28,6 +28,10 @@ var l6Bodies = []struct {
 	// A grounded loop body reading last() stays on the tree (groundLastWhy).
 	{`<out><xsl:for-each select="copy-of(doc/rec)"><r n="{position()}" of="{last()}"/></xsl:for-each></out>`, false},
 	{`<out><xsl:for-each select="doc/rec/copy-of(.)"><r of="{last()}" n="{count(.//sub)}"/></xsl:for-each></out>`, false},
+	// Simple content over the context's subtree, from its grounded copy (groundContextSplit).
+	{`<out><xsl:for-each select="doc/rec"><e><xsl:value-of select="descendant-or-self::*" separator="~"/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="doc/rec"><e><xsl:value-of select="(sub/@x, .//sub)" separator="|"/></e></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="doc/rec"><e><xsl:attribute name="a" select="descendant-or-self::*/name()"/></e></xsl:for-each></out>`, true},
 	// A motionless loop over the view's attributes (motionlessLoop, leafBody).
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:for-each select="@*"><n><xsl:value-of select="name(.)"/></n><v><xsl:value-of select="."/></v></xsl:for-each></e></xsl:for-each></out>`, true},
 }
@@ -41,6 +45,10 @@ var l6DeclBodies = []struct {
 	{`<xsl:mode name="m" streamable="yes" on-no-match="shallow-skip"/>
 <xsl:template match="rec" mode="m"><r><xsl:for-each select="@*"><n><xsl:value-of select="name(.)"/></n><v><xsl:value-of select="."/></v></xsl:for-each><xsl:for-each select="ancestor::*"><a n="{name(.)}"><xsl:for-each select="@*"><xsl:value-of select="."/></xsl:for-each></a></xsl:for-each></r></xsl:template>`,
 		`<out><xsl:apply-templates mode="m"/></out>`, true},
+	// streamable-032's rule: descendant-or-self::* in xsl:value-of.
+	{`<xsl:mode name="g" streamable="yes" on-no-match="shallow-skip"/>
+<xsl:template match="rec" mode="g"><v><xsl:value-of select="descendant-or-self::*" separator=" ~ "/></v></xsl:template>`,
+		`<out><xsl:apply-templates mode="g"/></out>`, true},
 	// xsl:apply-templates over copies of the matches, to the tree's rules of a mode
 	// that is not streamable (executeCopies): positions and last() are the tree's.
 	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, true},

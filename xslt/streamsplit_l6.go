@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -280,4 +281,29 @@ func namedTemplate(el *xdm.Node) *xdm.Node {
 		}
 	}
 	return nil
+}
+
+// groundContextSplit splits e, the select of an xsl:value-of or
+// xsl:attribute (simple content: what e returns is atomized) that the split
+// refused, by grounding the context element whole and evaluating e on its
+// copy: `$splitItems ! e`. e must read nothing a grounded copy lacks
+// (burstSafe; no fn:position, which the map would answer with 1), so it
+// reads the context's subtree and its ancestors' names and attributes, as
+// on the tree: descendant-or-self::* (streamable-032), nested matches, two
+// paths of the context. The copy is let go once its values are made
+// (ctxOut: class "output"); it costs at most the context's subtree, which
+// the tree holds too. Not at the document node (the copy would be the
+// document) nor in a group.
+func groundContextSplit(e xpath.Expr, base *xpath.Compiled, doc, group bool) *streamSplit {
+	// current() would be the instruction's own item, not the copy: refused.
+	if doc || group || focusFree(e) || !burstSafe(e, true) || strings.Contains(e.String(), "current(") {
+		return nil
+	}
+	s, _ := splitStreamIn(&xpath.ContextItem{}, base, false, false, false)
+	if s == nil || !s.ctxItem || s.atomize || s.cond != nil {
+		return nil
+	}
+	s.outer = xpathleaf.WithExpr(base, &xpath.SimpleMap{Left: &xpath.VarRef{Name: splitItems}, Right: e}).(*xpath.Compiled)
+	s.ctxOut = true
+	return s
 }

@@ -106,6 +106,9 @@ type streamSplit struct {
 	// ctxItem, the context itself (string(.), copy-of(.)), or nothing.
 	steps   []splitStep
 	ctxItem bool
+	// ctxOut says the context is grounded for an outer whose values are
+	// atomized (groundContextSplit, streamsplit_l6.go).
+	ctxOut bool
 	// group says P starts at the current group (streamgroup.go): its first
 	// step's candidates are the group's members, which a memberSource hands
 	// over, not the children of the context.
@@ -491,6 +494,8 @@ func (s *streamSplit) class() string {
 			return a
 		}
 		return b
+	case s.ctxOut:
+		return "output" // streamsplit_l6.go
 	case s.ctxItem && !s.atomize:
 		return "subtree"
 	case s.red != "":
