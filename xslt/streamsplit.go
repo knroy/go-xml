@@ -453,9 +453,10 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		s.mode = matchView
 	case (viewCheck{}).safe(tail, vElem, splitCounts[s.red]):
 		s.mode = matchView
-	case (pathTail(p.tail) || burstSafe(tail, true)) && (!s.nests || tailValue(tail) || ownAttributes(p.tail)):
+	case (pathTail(p.tail) || burstSafe(tail, true)) && (!s.nests || s.outermost || tailValue(tail) || ownAttributes(p.tail)):
 		// Nested matches' copies overlap: a tail reaching below the match
-		// would give a node once per match holding it, the tree once.
+		// would give a node once per match holding it, the tree once. The
+		// matches of outermost(P) do not nest (streamsplit_l6.go: sf-outermost-102).
 		s.mode = matchGround
 	default:
 		return "tail " + tail.String() + ": not within the match"
@@ -1222,6 +1223,10 @@ type viewCheck struct {
 	// ents admits unparsed-entity-uri(x) and unparsed-entity-public-id(x)
 	// of the document node's stand-in (streamcopy_l3doc.go, docEntities).
 	ents bool
+	// peek admits has-children(.) of an element's view, which the stream
+	// answers by a Peek at its start tag (streamkids_l6.go); set only where
+	// every such call is of the focus itself (topKids).
+	peek bool
 }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
@@ -1434,6 +1439,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 	switch x.Name.URI {
 	case fnNS:
 		n := x.Name.Local
+		if n == "has-children" && vc.peek && f == vElem && (len(x.Args) == 0 || len(x.Args) == 1 && isContextItem(x.Args[0])) {
+			return true // streamkids_l6.go
+		}
 		if n == "has-children" && vc.kids && f != vLeaf {
 			if len(x.Args) == 0 || len(x.Args) == 1 && isContextItem(x.Args[0]) {
 				// has-children(.): the cursor's Peek answers it (DESIGN section 1.4).

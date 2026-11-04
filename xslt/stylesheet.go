@@ -144,6 +144,9 @@ type Stylesheet struct {
 	// without giving @on-no-match records nothing and the default still
 	// stands.
 	modeNoMatch map[string]string
+	// kidsModes are the streamed modes whose rules read has-children of the
+	// element dispatched, which the stream answers by a Peek (streamkids_l6.go).
+	kidsModes map[string]bool
 	// modeNoMatchPrec records the import precedence of the declaration that
 	// set each modeNoMatch entry, so a later-compiled module of lower
 	// precedence cannot overwrite a higher one.

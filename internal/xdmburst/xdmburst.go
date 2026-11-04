@@ -96,6 +96,15 @@ var Steps func(r io.Reader, opts any, c Client) (step func(act Action) error, do
 // original's). Set by xdm's init.
 var FromStream func(n any) bool
 
+// ShallowKids reports, for n, a *xdm.Node, a view whose has-children the
+// stream has answered (SetShallowKids), that answer and true; otherwise
+// false, false. SetShallowKids records it: the cursor's Peek at the view's
+// start tag, before anything reads its content. Set by xdm's init.
+var (
+	ShallowKids    func(n any) (has, known bool)
+	SetShallowKids func(n any, has bool)
+)
+
 // Viewing is a Client that builds views: Drive hands it, before the first
 // event, the function that returns the view of the element Start is asking
 // about (a *xdm.Node), valid only during Start: a node in a small tree of

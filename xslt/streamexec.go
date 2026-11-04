@@ -117,6 +117,9 @@ type streamExec struct {
 	// inlines are the calls planned as their functions' bodies, by the
 	// caller's instruction (streamfn_inline.go).
 	inlines map[*xdm.Node]*inlinedCall
+	// kids says a motionless part of a rule's body reads has-children of
+	// its element, answered by a Peek (streamkids_l6.go).
+	kids bool
 }
 
 func newStreamExec() *streamExec {
@@ -415,6 +418,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		return b.nextOp(el, f)
 	case "next-iteration":
 		return b.nextIteration(el, f)
+	case "call-template":
+		return b.callTemplateOp(el, f) // streamsplit_l6.go
 	}
 	return b.refuse("consuming xsl:" + local)
 }
@@ -838,9 +843,13 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 // what f has, and returns nodes of it only where nodeOK.
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := parseAt(el, src)
-	vc := viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f}
+	peek := b.kidsAt(el, e, f) // streamkids_l6.go
+	vc := viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek}
 	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) { // streamcopy_l3doc.go
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
+	}
+	if peek {
+		b.x.kids = true
 	}
 	return true
 }
@@ -983,6 +992,13 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 	why := ""
 	if s == nil {
 		s, why = splitStreamIn(e, sel, doc, group, key)
+		if s == nil {
+			if w := windowMap(e); w != e { // streamsplit_l6.go
+				if ws, _ := splitStreamIn(w, sel, doc, group, key); ws != nil {
+					s = ws
+				}
+			}
+		}
 		if s == nil && simple {
 			s = groundContextSplit(e, sel, doc, group) // streamsplit_l6.go
 		}
@@ -1130,11 +1146,17 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 			// of one match at a time: a match that is the document element
 			// is copied whole, which costs what its tree costs.
 			s.mode = matchGround
+			if why := op.readyAlt(op.ctxDepth(minD), k); why != "" { // streampop_l6.go
+				return why
+			}
 			kinds[streamtrace.KindGround]++
 			kinds[streamtrace.KindForEach]++
 			continue
 		default:
 			return "loop body: neither streamed nor grounded (a match may be the document node)"
+		}
+		if why := op.readyAlt(op.ctxDepth(minD), k); why != "" { // streampop_l6.go
+			return why
 		}
 		kinds[streamtrace.KindForEach]++
 		for i := range kinds {
@@ -1294,6 +1316,9 @@ type streamRun struct {
 	// (streamlive.go).
 	applyFeeds map[*streamOp]*burstFeed
 	kidFilters []*xdmstream.Filter
+	// popSplit is the split of the branch a population's choice took, when
+	// it has its own (streampop_l6.go).
+	popSplit *streamSplit
 	// teed says a fork's tee has taken the cursor over (streamtee_try.go).
 	teed bool
 	// typed says the document is validated as it is read (streamcopy_l3.go).

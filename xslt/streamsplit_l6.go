@@ -139,33 +139,49 @@ func groundApply(p *streamPop) bool {
 	return p.cond == nil && p.ground && p.fn != nil && !p.values
 }
 
-// groundApplyOp reports whether op is an apply op over such a population.
+// groundApplyOp reports whether op is an apply op over such a population,
+// or over values the stream's select makes (a values population: if (P)
+// then 0 else 1, sx-if-218), which are collected and dispatched alike.
 func groundApplyOp(op *streamOp) bool {
-	return op.pop != nil && groundApply(op.pop)
+	return op.apply != applyNone && op.pop != nil && (groundApply(op.pop) || op.pop.values)
 }
 
 // applyCopies takes, for an apply or loop op whose select the split refused
 // (a nested P in P/copy-of(.): "not within the match"), the population of
 // copies instead; it reports whether it did.
+//
+// Any population the builder takes is taken so (its stream part split on
+// its own): copies, a choice, a union with a fresh operand, parts around the
+// stream part ([$v, P/copy-of()]?* read as ($v, P/copy-of())); an apply op's
+// only when applyPop dispatches it. The values fallback of popFor, which
+// reads the whole select's split, is not open here: there is none.
 func (c *compiler) applyCopies(op *streamOp, ns xpath.NamespaceResolver) bool {
 	e := reparse(op.sel, ns)
 	if e == nil {
 		return false
 	}
-	if _, ok := copyOfTail(e); !ok {
+	pb := &popBuilder{c: c, sel: op.sel, ns: ns, doc: op.doc, group: op.inGroup, key: op.key, focus: vElem, el: op.el}
+	if op.doc {
+		pb.focus = vNone
+	}
+	pop := pb.pop(withChecks(foreignSets(c.inlineCalls(e))))
+	if pop == nil || pb.split == nil || op.apply != applyNone && !applyPop(pop, op.instr) {
 		return false
 	}
-	pop, s, why := c.popFor(op, ns)
-	if why != "" || pop == nil || !groundApply(pop) || op.apply != applyNone && !applyPop(pop, op.instr) {
-		return false
-	}
-	op.pop, op.split, op.dead = pop, s, ""
+	op.pop, op.split, op.dead = pop, pb.split, ""
 	return true
 }
 
 // readyCopies readies an apply op over copies: each match is grounded
 // (none is the document node).
 func (op *streamOp) readyCopies() string {
+	if op.pop.values {
+		// Read as a select's: held to the memory rule at the document node.
+		if why := op.split.memory(0); why != "" {
+			return "apply-templates " + why
+		}
+		return ""
+	}
 	if op.split.minDepth() < 1 {
 		return "apply-templates over copies: a match may be the document node"
 	}
@@ -176,10 +192,10 @@ func (op *streamOp) readyCopies() string {
 // copiesLinkWhy is why an apply op over copies cannot run: the rules would
 // read accumulator values of the copies, which the grounded matches' copies
 // (copy-accumulators) do not hold once the stream has moved on.
+//
+// Since streamaccum_l6.go the observer keeps those values while the copies
+// are read: nothing is refused. Kept as the one place to refuse again.
 func (s *Stylesheet) copiesLinkWhy() string {
-	if len(s.accumulators) != 0 {
-		return "apply-templates over copies with accumulators declared"
-	}
 	return ""
 }
 
@@ -187,8 +203,34 @@ func (s *Stylesheet) copiesLinkWhy() string {
 // tree's rules (treeApplyOp), which reaches no streamed rule.
 func (x *streamExec) onlyCopies() bool {
 	ok := true
-	x.eachApply(func(op *streamOp) { ok = ok && treeApplyOp(op) })
+	offs := x.offApplies()
+	x.eachApply(func(op *streamOp) { ok = ok && (treeApplyOp(op) || offs[op]) })
 	return ok
+}
+
+// offApplies are the apply ops of x in the body of a loop that runs off the
+// cursor -- on grounded copies (matchGround), on a population's items off
+// it (pop.off), or a body that was not planned (grounded): there the
+// instruction finds no feed (run.off) and runs the tree's dispatch on the
+// copy (si-iterate-139: apply-templates select="." over snapshot(//a) into
+// a mode that is not streamable). Read once the plan is readied.
+func (x *streamExec) offApplies() map[*streamOp]bool {
+	var offs map[*streamOp]bool
+	var walk func(ops []*streamOp, off bool)
+	walk = func(ops []*streamOp, off bool) {
+		for _, op := range ops {
+			if off && op.apply != applyNone {
+				if offs == nil {
+					offs = map[*streamOp]bool{}
+				}
+				offs[op] = true
+			}
+			in := off || op.loop && (!op.planned || op.split != nil && op.split.mode == matchGround || op.pop != nil && op.pop.off)
+			walk(op.inner, in)
+		}
+	}
+	walk(x.top, false)
+	return offs
 }
 
 // executeCopies runs i, an apply op over copies: the population is read
@@ -197,16 +239,26 @@ func (i *applyTemplatesInstr) executeCopies(rt *runtime, out *outputBuilder, run
 	if run.used {
 		return errStreamPlan
 	}
+	if sa := rt.runAccums(run); sa != nil {
+		// The copies' originals' values, for the rules (streamaccum_l6.go).
+		sa.keep++
+		defer func() { sa.keep-- }()
+	}
 	var seq xdm.Sequence
 	err := op.pop.read(run, rt, op, func(it xdm.Item) error {
 		seq = append(seq, it)
 		return nil
 	}, func(item func(xdm.Item) error, _ func() (bool, error)) error {
 		run.used = true
-		return op.split.loopAt(rt.ctx, run.c, run.d, run.groupAt(op), item, nil)
+		return run.splitOf(op).loopAt(rt.ctx, run.c, run.d, run.groupAt(op), item, nil)
 	})
 	if err != nil {
 		return err
+	}
+	if op.pop.post != nil { // streampop_l6.go
+		if seq, err = op.pop.post.Eval(rt.ctx.WithVar(splitItems, seq)); err != nil {
+			return err
+		}
 	}
 	off := run.off
 	run.off = true
@@ -499,7 +551,29 @@ func foreignApply(el *xdm.Node, e xpath.Expr, f vfocus) bool {
 	if noNodes(e) && (viewCheck{}).safe(e, f, false) {
 		return true
 	}
-	return freeOfFocus(e) && !readsDocs(e) && fresh(el, e)
+	return freeOfFocus(e) && (!readsDocs(e) || docLiteral(e)) && fresh(el, e)
+}
+
+// docLiteral reports whether e is doc(L) or document(L), L a string
+// literal, perhaps under a path (doc('sections.xml')/x): a document the
+// resolver loads as a tree, which in tree mode could be the streamed one
+// (the resolver caches the trees source-document reads too); executeForeign
+// checks, as it runs, that it is not (streamable-065).
+func docLiteral(e xpath.Expr) bool {
+	if pe, ok := e.(*xpath.PathExpr); ok && !pe.Root && len(pe.Steps) > 0 {
+		for _, s := range pe.Steps[1:] {
+			if readsDocs(s) {
+				return false
+			}
+		}
+		e = pe.Steps[0]
+	}
+	f, ok := e.(*xpath.FuncCall)
+	if !ok || !isFn(f, "doc", 1) && !isFn(f, "document", 1) {
+		return false
+	}
+	l, ok := f.Args[0].(*xpath.Literal)
+	return ok && l.Val != nil && l.Val.Type == xdm.TypeString
 }
 
 // freeOfFocus is focusFree (streamexprs.go), which also reads a lookup in
@@ -594,6 +668,8 @@ func fresh(el *xdm.Node, e xpath.Expr) bool {
 			switch x.Name.Local {
 			case "copy-of", "snapshot":
 				return true // new trees, whatever they copy
+			case "doc", "document":
+				return docLiteral(x) // a tree of its own (executeForeign checks it is not the stream's)
 			case "current-group", "current-merge-group":
 				return false
 			}
@@ -646,6 +722,15 @@ func (i *applyTemplatesInstr) executeForeign(rt *runtime, out *outputBuilder, ru
 	if err != nil {
 		return err
 	}
+	if u := run.root.DocumentURI(); u != "" {
+		for _, it := range seq {
+			if n, ok := it.(*xdm.Node); ok && n.Root().DocumentURI() == u {
+				// doc() of the document streaming: the tree's would be the
+				// same nodes as the stream's (one cached tree), these are not.
+				return errStreamPlan
+			}
+		}
+	}
 	off := run.off
 	run.off = true
 	err = i.applySelected(rt, out, seq)
@@ -657,4 +742,170 @@ func (i *applyTemplatesInstr) executeForeign(rt *runtime, out *outputBuilder, ru
 // apply over copies (groundApplyOp) or over items not of the stream.
 func treeApplyOp(op *streamOp) bool {
 	return op.apply == applyForeign || groundApplyOp(op)
+}
+
+// callTemplateOp plans an xsl:call-template whose one consuming parameter is
+// read off the cursor, as nextIteration plans xsl:next-iteration's
+// (si-call-template-002: with-param select="PRICE" at each ITEM): an
+// expression op on the parameter's select (noteStreamParam; the tree's
+// evalParams reads it through evalStreamExpr), the other parameters
+// motionless. The template called, of this module, reads nothing of the
+// focus a view lacks: xsl:context-item use="absent", or every instruction
+// motionless at f (on a plan of its own). Its value, grounded (§19.8.4.41),
+// stands in for the tree's node only where it is atomized: the with-param
+// or the template's xsl:param of that name has an atomic @as.
+func (b *streamBuilder) callTemplateOp(el *xdm.Node, f vfocus) bool {
+	t := namedTemplate(el)
+	if t == nil || !b.calleeMotionless(t, f) {
+		return b.refuse("consuming xsl:call-template")
+	}
+	var op *streamOp
+	for ch := range el.Children() {
+		switch {
+		case ch.Kind() == xdm.KindText && strings.TrimSpace(ch.Value()) == "",
+			ch.Kind() == xdm.KindComment, ch.Kind() == xdm.KindPI:
+			continue
+		case !isXSL(ch, "with-param"):
+			return b.refuse(elName(ch) + " in xsl:call-template")
+		}
+		if sb := b.strict(); sb.motionless(ch, f) {
+			continue
+		}
+		if op != nil || ch.Attr("", "select") == nil {
+			return b.refuse("consuming xsl:with-param of xsl:call-template")
+		}
+		for a := range ch.Attrs() {
+			if n := a.Name(); n.URI == "" && !streamAttrsOK[n.Local] {
+				return b.refuse("attribute " + n.Local + " of xsl:with-param")
+			}
+		}
+		if !atomicAs(ch, ch.AttrValue("as")) && !calleeAtomic(t, ch) {
+			return b.refuse("consuming xsl:with-param of xsl:call-template: not atomized")
+		}
+		op = &streamOp{x: b.x, el: ch, doc: f == vNone, inGroup: b.grp, key: b.key}
+	}
+	if op != nil {
+		*b.ops = append(*b.ops, op)
+		b.x.exprOps = append(b.x.exprOps, op)
+		b.kinds[streamtrace.KindSelect]++
+	}
+	b.kinds[streamtrace.KindElement]++
+	return true
+}
+
+// calleeMotionless reports whether t, a named template, reads of the focus
+// it is called with (f) only what a view has.
+func (b *streamBuilder) calleeMotionless(t *xdm.Node, f vfocus) bool {
+	for ch := range t.Children() {
+		if ch.Kind() == xdm.KindElement && isXSL(ch, "context-item") && ch.AttrValue("use") == "absent" {
+			return true
+		}
+	}
+	var ops []*streamOp
+	var kinds [streamtrace.NumKinds]int64
+	sb := &streamBuilder{pl: &streamPlan{recs: map[any]*planRec{}}, x: newStreamExec(),
+		ops: &ops, kinds: &kinds, key: b.key, noIdent: b.noIdent, up: b.up}
+	for ch := range t.Children() {
+		switch {
+		case ch.Kind() == xdm.KindText && strings.ContainsAny(ch.Value(), "{}"):
+			return false
+		case ch.Kind() != xdm.KindElement, isXSL(ch, "context-item"):
+		case isXSL(ch, "param"):
+			if !sb.attrs(ch, f) || !sb.content(ch, f) {
+				return false
+			}
+		default:
+			if !sb.motionless(ch, f) {
+				return false
+			}
+		}
+	}
+	return len(ops) == 0 && len(sb.x.ops) == 0 && len(sb.x.exprOps) == 0
+}
+
+// calleeAtomic reports whether t declares the parameter wp passes with an
+// atomic @as (the value is atomized there).
+func calleeAtomic(t, wp *xdm.Node) bool {
+	name, tunnel := wp.AttrValue("name"), isYes(wp.AttrValue("tunnel"))
+	for _, ch := range t.ChildElements() {
+		if isXSL(ch, "param") && ch.AttrValue("name") == name && isYes(ch.AttrValue("tunnel")) == tunnel {
+			return atomicAs(ch, ch.AttrValue("as"))
+		}
+	}
+	return false
+}
+
+// addForeignApply registers el as an applyForeign op. addApply's refusal in
+// a sequence-typed variable (a built-in rule's copy of a streamed node kept
+// where the tree keeps the node) does not arise: the items are not the
+// stream's, the rules the tree's code over them (streamable-065's
+// <xsl:variable as="element()*"> around apply-templates of doc(...)).
+func (b *streamBuilder) addForeignApply(el *xdm.Node, f vfocus) bool {
+	op := &streamOp{x: b.x, el: el, doc: f == vNone, apply: applyForeign, inGroup: b.grp, key: b.key}
+	b.x.ops[el] = op
+	*b.ops = append(*b.ops, op)
+	b.kinds[streamtrace.KindApply]++
+	return true
+}
+
+// windowMap reads W(P, ...) ! R as W(P ! R, ...) for W one of subsequence,
+// head, tail, remove, when R makes exactly one value of each node and
+// cannot fail (oneValue): then the window picks the same positions of
+// either sequence, and R's extra evaluations, on the matches the window
+// drops, have no effect (sx-bang-009: subsequence(account/transaction, 1, 4)
+// ! name(ancestor::*[1])). The split takes P ! R as a mapped path and the
+// window as its outer.
+func windowMap(e xpath.Expr) xpath.Expr {
+	m, ok := e.(*xpath.SimpleMap)
+	if !ok {
+		return e
+	}
+	w, ok := m.Left.(*xpath.FuncCall)
+	if !ok || w.Name.URI != fnNS || len(w.Args) == 0 || !oneValue(m.Right) {
+		return e
+	}
+	switch w.Name.Local {
+	case "subsequence", "head", "tail", "remove":
+	default:
+		return e
+	}
+	args := append([]xpath.Expr{&xpath.SimpleMap{Left: w.Args[0], Right: m.Right}}, w.Args[1:]...)
+	return &xpath.FuncCall{Name: w.Name, Args: args}
+}
+
+// oneValue reports whether r, evaluated on a node, gives exactly one value
+// and raises no error: a name function of the node itself, of its parent,
+// of an attribute by name, or of a step filtered by [1].
+func oneValue(r xpath.Expr) bool {
+	f, ok := r.(*xpath.FuncCall)
+	if !ok || f.Name.URI != fnNS || len(f.Args) > 1 {
+		return false
+	}
+	switch f.Name.Local {
+	case "name", "local-name", "namespace-uri":
+	default:
+		return false
+	}
+	if len(f.Args) == 0 {
+		return true
+	}
+	a := oneStep(f.Args[0])
+	if isContextItem(a) {
+		return true
+	}
+	st, ok := a.(*xpath.Step)
+	if !ok {
+		return false
+	}
+	switch {
+	case st.Axis == xpath.AxisParent && len(st.Predicates) == 0:
+		return true
+	case st.Axis == xpath.AxisAttribute && len(st.Predicates) == 0:
+		nt, ok := st.Test.(*xpath.NameTest)
+		return ok && !nt.AnyLocal && !nt.AnyURI
+	case len(st.Predicates) == 1:
+		l, ok := st.Predicates[0].(*xpath.Literal)
+		return ok && l.Val != nil && l.Val.Type == xdm.TypeInteger && l.Val.FitsInt64() && l.Val.Int64() == 1
+	}
+	return false
 }

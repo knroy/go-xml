@@ -324,6 +324,10 @@ type streamAccums struct {
 	onStep func(n *xdm.Node, d int, post bool, ord uint64, cur []xdm.Sequence)
 	// rd is the state of the rules reading accumulators (streamaccum_l4.go).
 	rd accumRuleReads
+	// kept, while keep > 0, holds each node's values by ordinal, for the
+	// copies of grounded matches dispatched once read (streamaccum_l6.go).
+	kept map[uint64]*keptAccums
+	keep int
 }
 
 type accumFrame struct {
@@ -426,11 +430,12 @@ func (sa *streamAccums) observe(n *xdm.Node, d int, end bool, ord uint64) {
 		sa.step(sa.root, true, f.after, f.before, f.beforeAt)
 		f.closed, f.afterAt, sa.ended = true, sa.rd.phase, true
 	case n.Kind() != xdm.KindElement:
-		sa.step(n, false, nil, nil, 0)
+		kb, ka := sa.keptLeaf(ord) // streamaccum_l6.go: nil unless kept
+		sa.step(n, false, kb, nil, 0)
 		if sa.onStep != nil {
 			sa.onStep(n, d, false, ord, sa.cur)
 		}
-		sa.step(n, true, nil, nil, 0)
+		sa.step(n, true, ka, nil, 0)
 		if sa.onStep != nil {
 			sa.onStep(n, d, true, ord, sa.cur)
 		}
@@ -450,6 +455,7 @@ func (sa *streamAccums) observe(n *xdm.Node, d int, end bool, ord uint64) {
 			sa.onStep(n, d, true, ord, sa.cur)
 		}
 	}
+	sa.keepObserved(n, d, end, ord) // streamaccum_l6.go
 }
 
 // step applies the start (or end: post) rules of each accumulator to n, and
@@ -523,6 +529,13 @@ func (sa *streamAccums) value(def *accumulatorDef, node *xdm.Node, post bool) (x
 	if sa.read[i] == 0 {
 		sa.reads++
 		sa.read[i] = sa.reads
+	}
+	// Kept values stand only while the accumulator has not failed; after a
+	// failure the frames decide (§18.2.5, streamaccum_l4.go).
+	if sa.errs[i] == nil {
+		if v, ok := sa.keptValue(i, node, post); ok { // streamaccum_l6.go
+			return v, nil
+		}
 	}
 	d, ord := 0, uint64(0)
 	if node != sa.root {

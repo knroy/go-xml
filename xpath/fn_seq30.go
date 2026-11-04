@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -61,6 +62,12 @@ func registerSeq30Funcs(l *Library) {
 				return nil, xdm.ErrType("fn:has-children: argument is not a node")
 			}
 			n = node
+		}
+		if xdmburst.ShallowKids != nil {
+			// A view whose start tag the stream peeked past (xdm/streamkids.go).
+			if has, ok := xdmburst.ShallowKids(n); ok {
+				return boolSeq(has), nil
+			}
 		}
 		return boolSeq(n.FirstChild() != nil), nil
 	})

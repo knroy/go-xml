@@ -36,6 +36,12 @@ var l6Bodies = []struct {
 	// motionless for-each over a variable's items with xsl:sort (foreignSort).
 	{`<out><xsl:for-each select="doc/rec/sub"><xsl:iterate select="ancestor::*"><a n="{name()}"><xsl:copy-of select="@*"/></a></xsl:iterate></xsl:for-each></out>`, true},
 	{`<xsl:variable name="ks" select="('b', 'a', 'c')"/><out><xsl:for-each select="doc/rec"><e><xsl:for-each select="$ks"><xsl:sort select="." order="descending"/><k><xsl:value-of select="."/></k></xsl:for-each></e></xsl:for-each></out>`, true},
+	// outermost(P)/T with P nesting: the outermost matches do not (sf-outermost-102).
+	{`<out><xsl:value-of select="outermost(//rec)/sub/@x" separator="|"/><xsl:text>;</xsl:text></out>`, true},
+	{`<out><xsl:copy-of select="outermost(//rec)/sub"/></out>`, true},
+	// W(P) ! R read as W(P ! R), R one value per node (windowMap; sx-bang-009).
+	{`<out><xsl:sequence select="subsequence(//rec, 1, 2) ! name(ancestor::*[1])"/></out>`, true},
+	{`<out><xsl:value-of select="head(//sub) ! name(..)"/></out>`, true},
 	// A motionless loop over the view's attributes (motionlessLoop, leafBody).
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:for-each select="@*"><n><xsl:value-of select="name(.)"/></n><v><xsl:value-of select="."/></v></xsl:for-each></e></xsl:for-each></out>`, true},
 }
@@ -84,15 +90,64 @@ var l6DeclBodies = []struct {
 	{l6ForeignRules, `<out><xsl:for-each select="doc/rec"><xsl:variable name="m" select="map{1: copy-of(sub)}"/><e><xsl:apply-templates select="$m?*" mode="a"/></e></xsl:for-each></out>`, true},
 	// A variable holding the stream's own (grounded) nodes is not fresh: refused.
 	{l6ForeignRules, `<out><xsl:for-each select="doc/rec"><xsl:variable name="v" select="sub"/><e><xsl:apply-templates select="$v" mode="a"/></e></xsl:for-each></out>`, false},
+	// has-children of the element dispatched, answered by a Peek (streamkids_l6.go):
+	// in a motionless xsl:attribute before the consumer (sf-has-children-001), in
+	// patterns (streamable-135), and refused where a rule reads its element whole.
+	{`<xsl:mode name="h" streamable="yes"/>
+<xsl:template match="*" mode="h"><xsl:copy><xsl:copy-of select="@*"/><xsl:attribute name="hc" select="has-children(.)"/><xsl:apply-templates mode="h"/></xsl:copy></xsl:template>`,
+		`<out><xsl:apply-templates mode="h"/></out>`, true},
+	{`<xsl:mode name="h1" streamable="yes"/>
+<xsl:template match="*[has-children()]" mode="h1"><xsl:copy><xsl:copy-of select="@*"/><xsl:apply-templates mode="h1"/></xsl:copy></xsl:template>
+<xsl:template match="*[not(has-children())]" mode="h1"><xsl:copy><xsl:copy-of select="@*"/><xsl:attribute name="empty" select="true()"/></xsl:copy></xsl:template>`,
+		`<out><xsl:apply-templates mode="h1"/></out>`, true},
+	{`<xsl:mode name="h2" streamable="yes"/>
+<xsl:template match="rec[has-children()]" mode="h2"><xsl:copy-of select="."/></xsl:template>`,
+		`<out><xsl:apply-templates mode="h2"/></out>`, false},
+	// A choice of two streamed populations (choiceOfStreams), and F union P with F
+	// fresh (unionPop), in loops and applies (sx-if-115/118, sx-union-115/118).
+	{l6UnionDecls, `<xsl:variable name="c" select="true()"/><out><xsl:for-each select="if ($c) then doc/rec else doc/rec/sub"><e n="{name()}"><xsl:value-of select="string(.)"/></e></xsl:for-each></out>`, true},
+	{l6UnionDecls, `<xsl:variable name="c" select="false()"/><out><xsl:for-each select="if ($c) then doc/rec else doc/rec/sub"><e n="{name()}"><xsl:value-of select="string(.)"/></e></xsl:for-each></out>`, true},
+	{l6UnionDecls, `<out><xsl:for-each select="($ins union doc/rec/sub)"><e n="{name()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	{l6UnionDecls, `<xsl:variable name="c" select="false()"/><out><xsl:apply-templates select="if ($c) then doc/rec[1]/* else doc/rec[2]/*" mode="u"/></out>`, true},
+	{l6UnionDecls, `<out><xsl:apply-templates select="($ins union doc/rec[1]/*)" mode="u"/></out>`, true},
+	// apply-templates over values read off the stream (sx-if-218): collected, dispatched.
+	{`<xsl:mode name="v" streamable="yes"/><xsl:template match=".[. instance of xs:integer]" mode="v"><i p="{position()}" of="{last()}"><xsl:value-of select="."/></i></xsl:template>`,
+		`<out><xsl:apply-templates select="if (doc/rec/sub) then 0 else 1" mode="v"/></out>`, true},
+	// [A, B]?* read as (A, B) (flatArray), the select's split refused (sx-square-array-*).
+	{l6UnionDecls, `<out><xsl:for-each select="[$ins, doc/rec/sub/copy-of()]?*"><e n="{name()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	{l6UnionDecls, `<out><xsl:apply-templates select="[doc/rec[1]/*/snapshot(), $ins]?*" mode="u"/></out>`, true},
+	// apply-templates in the body of a loop over snapshots, to a mode that is not
+	// streamable (offApplies; si-iterate-139).
+	{`<xsl:template match="rec" mode="t9"><r k="{@k}" up="{name(..)}"/></xsl:template>`,
+		`<out><xsl:iterate select="snapshot(//rec)"><xsl:param name="n" select="1"/><o c="{$n}"/><xsl:apply-templates select="." mode="t9"/><xsl:next-iteration><xsl:with-param name="n" select="$n + 1"/></xsl:next-iteration></xsl:iterate></out>`, true},
+	// xsl:call-template whose one consuming parameter is atomized by the callee
+	// (callTemplateOp; si-call-template-002).
+	{`<xsl:template name="ct"><xsl:context-item use="absent"/><xsl:param name="x" as="xs:integer?"/><c v="{$x * 2}"/></xsl:template>`,
+		`<out><xsl:for-each select="doc/rec"><xsl:call-template name="ct"><xsl:with-param name="x" select="sub[1]/@x"/></xsl:call-template></xsl:for-each></out>`, true},
+	// apply-templates of doc(L), another document, inside a sequence-typed variable
+	// (docLiteral, addForeignApply; streamable-065).
+	{`<xsl:template match="t" mode="nd"><xsl:copy-of select="."/></xsl:template><xsl:template match="text()" mode="nd"/>
+<xsl:mode name="ds" streamable="yes"/>
+<xsl:template match="/" mode="ds"><xsl:variable name="v" as="element()*"><xsl:apply-templates select="doc('other.xml')" mode="nd"/></xsl:variable><r n="{count($v)}"><xsl:copy-of select="$v"/><xsl:apply-templates mode="ds"/></r></xsl:template>
+<xsl:template match="rec" mode="ds"><x k="{@k}"/></xsl:template>`,
+		`<out><xsl:apply-templates select="." mode="ds"/></out>`, true},
 	// xsl:apply-templates over copies of the matches, to the tree's rules of a mode
 	// that is not streamable (executeCopies): positions and last() are the tree's.
 	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, true},
 	{l6CopyRules, `<out><xsl:apply-templates select="copy-of(doc/rec)" mode="t"/></out>`, true},
 	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of()" mode="t"><xsl:with-param name="p" select="'w'"/></xsl:apply-templates></out>`, true},
 	{l6CopyRules, `<out><xsl:apply-templates select=".//rec/copy-of(.)" mode="t"><xsl:with-param name="p" select="7"/></xsl:apply-templates></out>`, true},
-	// Accumulators declared: the copies' values are not held (copiesLinkWhy).
-	{l6CopyRules + `<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>`,
-		`<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, false},
+	// A filter over the copies (filteredCopies; si-copy-of-801), a tunnel parameter.
+	{l6CopyRules, `<out><xsl:apply-templates select="copy-of(outermost(//rec))[.//sub[@x = '1']]" mode="t"><xsl:with-param name="p" select="'f'"/></xsl:apply-templates></out>`, true},
+	// Accumulators declared and read on the copies: the observer keeps the
+	// grounded matches' values (streamaccum_l6.go; accumulator-046s/047s).
+	{l6CopyRules + `<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec|sub" select="$value + 1"/></xsl:accumulator>
+<xsl:template match="rec" mode="ta"><r a="{accumulator-before('a')}" b="{accumulator-after('a')}"><xsl:apply-templates select="sub" mode="ta"/></r></xsl:template>
+<xsl:template match="sub" mode="ta"><s a="{accumulator-before('a')}"/></xsl:template>`,
+		`<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="ta"/></out>`, true},
+	{l6CopyRules + `<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec|sub" select="$value + 1"/></xsl:accumulator>
+<xsl:template match="rec" mode="ta"><r a="{accumulator-before('a')}"/></xsl:template>`,
+		`<out><xsl:apply-templates select="snapshot(doc/rec)" mode="ta"/></out>`, true},
 }
 
 // l6ForeignRules are the rules of a mode that is not streamable, for items not
@@ -101,12 +156,21 @@ const l6ForeignRules = `<xsl:template match="@*" mode="a"><a n="{name()}" v="{.}
 <xsl:template match=".[. instance of map(*)]" mode="a"><m k="{.?k}"/></xsl:template>
 <xsl:template match="sub" mode="a"><s x="{@x}" up="{name(..)}"/></xsl:template>`
 
+// l6UnionDecls are a fresh global and a streamable mode for populations.
+const l6UnionDecls = `<xsl:variable name="ins" as="element()*"><a>A</a><b>B</b></xsl:variable>
+<xsl:mode name="u" streamable="yes" on-no-match="deep-skip"/>
+<xsl:template match="rec/*" mode="u"><u p="{position()}"><xsl:value-of select="."/></u></xsl:template>`
+
 // l6CopyRules are the rules of a mode that is not streamable, for copies.
 const l6CopyRules = `<xsl:template match="rec" mode="t"><xsl:param name="p" select="'-'"/><r k="{@k}" p="{$p}" n="{position()}" of="{last()}"><xsl:value-of select="count(.//sub)"/></r></xsl:template>`
 
 func TestStreamL6MatchesTree(t *testing.T) {
 	dir := t.TempDir()
 	streamed := 0
+	// other.xml: a second document for doc() (streamable-065's shape).
+	if err := os.WriteFile(filepath.Join(dir, "other.xml"), []byte(`<o><t>one</t><t>two</t></o>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for name, doc := range coreDocs {
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
 			t.Fatal(err)

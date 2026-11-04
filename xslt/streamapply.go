@@ -117,7 +117,7 @@ func (b *streamBuilder) attrApply(el *xdm.Node, f vfocus) bool {
 	src := el.AttrValue("select")
 	e := parseAt(el, src)
 	if foreignApply(el, e, f) { // streamsplit_l6.go
-		return b.applyAttrs(el, f) && b.withParams(el, f) && b.addApply(el, f, applyForeign)
+		return b.applyAttrs(el, f) && b.withParams(el, f) && b.addForeignApply(el, f)
 	}
 	if f != vElem || e == nil || !endsInAttribute(e) || !(viewCheck{noIdent: b.noIdent}).safe(e, f, true) {
 		return b.refuse("motionless xsl:apply-templates select " + src)
@@ -270,6 +270,7 @@ func (op *streamOp) readyApply() string {
 			return why // a population's own walk dispatches elements only
 		}
 		s.mode = matchBody
+		return op.readyAltApply() // streampop_l6.go
 	}
 	return ""
 }
@@ -301,6 +302,9 @@ type rulePlan struct {
 	why [numClasses]string
 	// keeps is resultKeeps of the body (streammain.go).
 	keeps string
+	// kids says the pattern or the element's body reads has-children of
+	// the element (streamkids_l6.go).
+	kids bool
 }
 
 // rulesPlan is the record of the trusting walk over the rules of every
@@ -360,6 +364,7 @@ func (c *compiler) planRule(el *xdm.Node, p *Pattern, from int) *rulePlan {
 	}
 	r := &rulePlan{}
 	r.can, r.pattern = patternClassesAt(p, el)
+	r.kids = r.pattern == "" && patternKids(p) // streamkids_l6.go
 	r.keeps = resultKeeps(el)
 	kids := el.ChildElements()
 	for cl := range numClasses {
@@ -390,6 +395,7 @@ func (c *compiler) planRule(el *xdm.Node, p *Pattern, from int) *rulePlan {
 			r.x[cl] = x
 			c.ruleExecs = append(c.ruleExecs, x)
 		}
+		r.kids = r.kids || cl == classElem && x.kids // streamkids_l6.go
 	}
 	return r
 }
@@ -510,7 +516,8 @@ func patternClassesAt(p *Pattern, el *xdm.Node) (can [numClasses]bool, why strin
 				ok := true
 				if i < len(a.steps)-1 || c[classElem] {
 					ok = (viewCheck{acc: patternAccOK(i, len(a.steps), c[classElem], c[classLeaf], c[classAttr]), // streamview_k2.go
-						globals: el, curOK: el != nil && c[classElem] && !c[classLeaf] && !c[classAttr] && !c[classDoc], cur: vElem}).safe(pr, vElem, true) // streamsplit_l6.go
+						globals: el, curOK: el != nil && c[classElem] && !c[classLeaf] && !c[classAttr] && !c[classDoc], cur: vElem, // streamsplit_l6.go
+						peek: el != nil && i == len(a.steps)-1 && c[classElem] && !c[classLeaf] && !c[classAttr] && !c[classDoc] && topKids(pr)}).safe(pr, vElem, true) // streamkids_l6.go
 				}
 				if i == len(a.steps)-1 && (c[classLeaf] || c[classAttr]) {
 					ok = ok && (viewCheck{noIdent: c[classLeaf], up: c[classLeaf]}).safe(pr, vLeaf, true)
@@ -641,7 +648,11 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 		if streamed && x.class == classDoc && x.mayGiveUp() && why == "" {
 			why = "a select at the document node may fall back to its tree"
 		}
+		offs := x.offApplies() // streamsplit_l6.go
 		x.eachApply(func(op *streamOp) {
+			if offs[op] {
+				return // in a loop body run off the cursor: the tree's dispatch
+			}
 			if treeApplyOp(op) { // streamsplit_l6.go: copies and foreign items go to the tree's rules
 				if w := s.copiesLinkWhy(); w != "" && why == "" {
 					why = w
@@ -757,6 +768,9 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 			}
 			if x := r.x[k.class]; x != nil {
 				visit(x, k.top)
+			}
+			if r.kids && why == "" { // streamkids_l6.go
+				why = s.kidsLinkWhy(k.mode)
 			}
 		}
 	}
