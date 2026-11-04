@@ -840,6 +840,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 	}
 	switch x := e.(type) {
 	case *xpath.FuncCall:
+		if done, ok := w.outerOfClimbed(x); done { // streamsplit_foreign.go
+			return ok
+		}
 		switch x.Name.URI {
 		case fnNS:
 			if !burstConsumers[x.Name.Local] && !splitWholeFns[x.Name.Local] {
@@ -959,6 +962,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 	case *xpath.ContextItem:
 		return w.refuse("the context item")
 	case *xpath.PathExpr, *xpath.Step:
+		if done, ok := w.pathOverClimbed(e); done { // streamsplit_foreign.go
+			return ok
+		}
 		return w.refuse("path " + e.String())
 	}
 	return w.refuse("expression " + e.String())
@@ -1035,6 +1041,9 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 			return pp, false
 		}
 		if !ok || inner.oi != "" || inner.ctxItem || len(inner.tail) > 0 {
+			if ok && climbedOuter(inner) { // streamsplit_foreign.go
+				return pp, false
+			}
 			if ok {
 				w.refuse(x.Name.Local + "() of a path with a tail")
 			}

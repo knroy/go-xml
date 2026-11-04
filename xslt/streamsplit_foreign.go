@@ -59,3 +59,46 @@ func sharedTail(op string, l, r splitPathParts) ([]xpath.Expr, splitPathParts, s
 	l.tail, r.tail = nil, nil
 	return tail, l, r
 }
+
+// climbedOuter reports whether p, the argument of outermost() or
+// innermost(), is a path whose tail climbs (P/ancestor::*): the function is
+// then not P's (pathOf's oi) but the outer's, over the climbed nodes, which
+// the split takes once each off the matches' views; their identities are
+// the originals' (xdm Identity), what fn:outermost compares.
+func climbedOuter(p splitPathParts) bool {
+	if p.oi != "" || p.ctxItem || p.mapR != nil || p.skip != 0 || len(p.tail) == 0 {
+		return false
+	}
+	var t xpath.Expr = &xpath.PathExpr{Steps: p.tail}
+	if len(p.tail) == 1 {
+		t = p.tail[0]
+	}
+	return climbs(t)
+}
+
+// outerOfClimbed takes x, outermost(P/T) or innermost(P/T) with T climbing,
+// as the holder of P/T; done says x is one.
+func (w *splitter) outerOfClimbed(x *xpath.FuncCall) (done, ok bool) {
+	if !outerInner(x) || w.pe != nil {
+		return false, false
+	}
+	if inner, ok := w.pathOf(x.Args[0]); !ok || !climbedOuter(inner) {
+		return false, false
+	}
+	return true, w.slot(x.Args[0], func(y xpath.Expr) { x.Args[0] = y }, useKeep)
+}
+
+// pathOverClimbed takes e, outermost(P/T)/R (what P ! R of it is read as):
+// its first step holds P/T as outerOfClimbed takes it, and R runs in the outer on the nodes, which
+// are views: the split's climbing check keeps it to what a view has.
+func (w *splitter) pathOverClimbed(e xpath.Expr) (done, ok bool) {
+	pe, isPath := e.(*xpath.PathExpr)
+	if !isPath || pe.Root || len(pe.Steps) < 2 {
+		return false, false
+	}
+	f, isCall := pe.Steps[0].(*xpath.FuncCall)
+	if !isCall {
+		return false, false
+	}
+	return w.outerOfClimbed(f)
+}

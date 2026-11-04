@@ -93,6 +93,14 @@ var climbBodies = []struct {
 	{`<out><xsl:copy-of select="(if (//sub/ancestor::rec) then 0 else 1) ! string()"/></out>`, true},
 	{`<out><xsl:copy-of select="//sub/ancestor::*"/></out>`, false},
 	{`<out><xsl:value-of select="//sub/ancestor::rec ! string()"/></out>`, false},
+	// outermost() and innermost() of climbed nodes: the outer's, over the
+	// nodes taken once each (J1, streamsplit_foreign.go).
+	{`<out><xsl:value-of select="outermost(/doc/rec[1]/sub/ancestor::*) ! name()"/></out>`, true},
+	{`<out><xsl:copy-of select="outermost(//sub/ancestor::*) ! name()"/></out>`, true},
+	{`<out><xsl:copy-of select="innermost(//sub/ancestor::*) ! name()"/></out>`, false}, // free-ranging (analysis)
+	{`<out><xsl:value-of select="outermost(//sub/ancestor-or-self::*/@x)" separator="|"/></out>`, true},
+	{`<out><xsl:value-of select="outermost(//sub/ancestor::*)/@k" separator=","/></out>`, true},
+	{`<out><xsl:value-of select="innermost(//sub/ancestor::*) ! string()" separator="|"/></out>`, false},
 }
 
 // TestStreamClimbMatchesTree: every climbing body over every document gives
