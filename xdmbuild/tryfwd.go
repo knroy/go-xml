@@ -23,9 +23,8 @@ package xdmbuild
 // still meets XTDE0410, and the text merge sees what it saw. Settling is not
 // done, and the try's output is held to its end as before, when out's newest
 // child is text (the first item handed on could merge with it), when out is
-// not open and cannot be opened by the first item, when the sink cannot
-// start yet (the result so far does not decide the output method) or never
-// will, and when the first item is an attribute, a
+// not open and cannot be opened by the first item, when the sink never
+// will start, and when the first item is an attribute, a
 // namespace or a function item (appended at the end in tree mode, where it
 // joins out's element or fails).
 //
@@ -36,6 +35,11 @@ package xdmbuild
 // checkpoint's anchor then stays in out's tree across the tries that follow
 // (everything appended after it was under a checkpoint): the sink keeps a
 // set of them, one a frame at most.
+//
+// A sink that cannot start yet (the output method waits for the result's
+// first element) is marked before it begins, when the try writes at the
+// top of the result: its Begin, and the method it chooses from what the try
+// hands on, are provisional too, and a rollback leaves it undecided.
 //
 // A buffer whose out is another try's buffer hands its items to that one,
 // and its checkpoint nests: it covers the outer buffer's state as well.
@@ -79,6 +83,7 @@ type tryFwd struct {
 // tryMark is a checkpoint: the state rollback puts back.
 type tryMark struct {
 	s       *sink
+	started bool // the sink had begun: a mark taken before can un-begin it
 	frames  int
 	stamp   int64
 	items   int
@@ -268,15 +273,26 @@ func settle(t *Builder, m *tryMark) bool {
 	}
 	// A sink that has not started begins now if the result so far decides
 	// it, as the next append would: that decision does not change.
+	// One that cannot decide yet (the output method waits for the first
+	// element) is marked before it begins, when t is the top of the result:
+	// whatever the try hands on then decides it provisionally, and a
+	// rollback leaves it undecided again for what comes next.
 	s := t.sink
-	if s == nil || s.off || !s.started && !s.begin() {
+	if s == nil || s.off {
 		return false
 	}
 	cw, ok := s.w.(xdmsink.Checkpointer)
-	if !ok || !s.settle(t) {
+	if !ok {
 		return false
 	}
-	*m = tryMark{s: s, frames: len(s.frames), stamp: s.stamp, items: s.items, opened: s.opened,
+	if !s.started && !s.begin() {
+		if s.off || t != s.root {
+			return false
+		}
+	} else if !s.settle(t) {
+		return false
+	}
+	*m = tryMark{s: s, started: s.started, frames: len(s.frames), stamp: s.stamp, items: s.items, opened: s.opened,
 		faults: len(s.faults), pending: s.pending, fwds: m.fwds,
 		base: levelMark{t, len(t.items), t.lastAtomic, *t.refused}}
 	m.w = cw.Mark()
@@ -388,6 +404,7 @@ func (m *tryMark) rollback() int64 {
 		fm.restore()
 	}
 	s.stamp, s.items, s.pending = m.stamp, m.items, m.pending
+	s.started, s.off = m.started, false // off: decided by a Begin since (settle needs !off)
 	clear(s.faults[m.faults:])
 	s.faults = s.faults[:m.faults]
 	xdmsink.Opened.Add(m.opened - s.opened)

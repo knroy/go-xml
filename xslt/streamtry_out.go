@@ -66,6 +66,7 @@ func (i *tryInstr) catchesAll() bool {
 
 // outMark is a checkpoint of a streamOut.
 type outMark struct {
+	begun                 bool // Begin had run (s is its serializer's state)
 	s                     serializer
 	frames                []outFrame
 	rootAtomic, docAtomic bool
@@ -109,13 +110,18 @@ func (o *streamOut) dst() stringWriter {
 
 // Mark makes what is written from now on provisional (xdmsink.Checkpointer).
 func (o *streamOut) Mark() any {
-	if o.cps == 0 && o.s.w == o.w {
-		o.s.w = &o.pv
+	m := &outMark{begun: o.s != nil}
+	if m.begun {
+		if o.cps == 0 && o.s.w == o.w {
+			o.s.w = &o.pv
+		}
+		m.s = *o.s
 	}
 	o.cps++
-	return &outMark{s: *o.s, frames: append([]outFrame(nil), o.frames...),
+	*m = outMark{begun: m.begun, s: m.s, frames: append([]outFrame(nil), o.frames...),
 		rootAtomic: o.rootAtomic, docAtomic: o.docAtomic, inDoc: o.inDoc,
 		rec: o.rec, recBuf: o.rec.buf.mark(), recAt: o.recAt, pv: o.pv.mark(), pvOwed: o.pvOwed}
+	return m
 }
 
 // Commit keeps what was written since mark; the outermost writes it out.
@@ -124,14 +130,15 @@ func (o *streamOut) Commit(mark any) {
 	if o.cps > 0 {
 		return
 	}
-	s := o.s
-	w := s.w
-	if w == &o.pv {
-		w = o.w
+	if s := o.s; s != nil { // nil: not begun, nothing written
+		w := s.w
+		if w == &o.pv {
+			w = o.w
+		}
+		s.w = o.w
+		o.pv.writeRange(s, 0, o.pv.n)
+		s.w = w
 	}
-	s.w = o.w
-	o.pv.writeRange(s, 0, o.pv.n)
-	s.w = w
 	o.pv.reset()
 	if o.pvOwed > 0 {
 		xpathleaf.Refund(o.rt.ctx, o.pvOwed, 0)
@@ -144,7 +151,11 @@ func (o *streamOut) Commit(mark any) {
 // dropped buffer leaves them.
 func (o *streamOut) Rollback(mark any) {
 	m := mark.(*outMark)
-	*o.s = m.s
+	if m.begun {
+		*o.s = m.s
+	} else {
+		o.s, o.text = nil, false // Begin ran since: the output method is undecided again
+	}
 	o.frames = append(o.frames[:0], m.frames...)
 	o.rootAtomic, o.docAtomic, o.inDoc = m.rootAtomic, m.docAtomic, m.inDoc
 	o.rec = m.rec
@@ -153,7 +164,7 @@ func (o *streamOut) Rollback(mark any) {
 	o.pv.truncate(m.pv)
 	o.pvOwed = m.pvOwed
 	o.cps--
-	if o.cps == 0 && o.s.w == &o.pv {
+	if o.cps == 0 && o.s != nil && o.s.w == &o.pv {
 		o.s.w = o.w
 	}
 }

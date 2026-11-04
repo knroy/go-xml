@@ -207,7 +207,7 @@ func (o *streamOut) Begin(seq xdm.Sequence) (ok, never bool) {
 	if checkOutputSettings(opts, nil) != nil {
 		return false, true // End raises it, as the tree's serialization does
 	}
-	o.s = newSerializer(o.w, opts, o.charMap)
+	o.s = newSerializer(o.dst(), opts, o.charMap) // pv when begun under an xsl:try's checkpoint
 	if method == "text" {
 		o.text = true
 		if opts.ByteOrderMark {

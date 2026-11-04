@@ -25,7 +25,17 @@ var tryOutSheets = []struct {
 	{"after-child", ``, `<xsl:template match="/"><out><first/><xsl:try><xsl:for-each select="//rec"><r><xsl:value-of select="xs:integer(@v)"/></r></xsl:for-each><xsl:catch><bad/></xsl:catch></xsl:try><xsl:attribute name="late">1</xsl:attribute></out></xsl:template>`, true, "XTDE0410"},
 	{"after-text", ``, `<xsl:template match="/"><out>text<xsl:try><xsl:for-each select="//rec[position() lt 3]"><r/></xsl:for-each>more<xsl:catch/></xsl:try></out></xsl:template>`, false, ""},
 	{"text-first", ``, `<xsl:template match="/"><out><a/><xsl:try>t1<xsl:value-of select="1, 2"/><xsl:sequence select="3, 4"/><b/>t2<xsl:catch/></xsl:try>t3<xsl:sequence select="5"/></out></xsl:template>`, true, ""},
-	{"top", ``, `<xsl:template match="/"><xsl:try><a/><xsl:sequence select="1, 2"/><b/><xsl:catch/></xsl:try><c/></xsl:template>`, false, ""}, // the output method is not decided yet
+	// The output method is not decided yet: the try decides it provisionally
+	// (xdmbuild/tryfwd.go settle), a rollback leaves it to the catch.
+	{"top", ``, `<xsl:template match="/"><xsl:try><a/><xsl:sequence select="1, 2"/><b/><xsl:catch/></xsl:try><c/></xsl:template>`, true, ""},
+	{"top-html-fails", ``, `<xsl:template match="/"><xsl:try><html><body><p>a<br/></p></body></html><xsl:sequence select="error()"/><xsl:catch><doc><br/></doc></xsl:catch></xsl:try></xsl:template>`, true, ""},
+	{"top-xml-fails-html-catch", ``, `<xsl:template match="/"><xsl:try><doc><br/></doc><xsl:sequence select="error()"/><xsl:catch><html><body><br/></body></html></xsl:catch></xsl:try></xsl:template>`, true, ""},
+	{"top-html-ok", ``, `<xsl:template match="/"><xsl:try><html><head><title>t</title></head><body><xsl:for-each select="//rec"><p><xsl:value-of select="n"/><br/></p></xsl:for-each></body></html><xsl:catch><doc/></xsl:catch></xsl:try></xsl:template>`, true, ""},
+	{"top-text-first", ``, `<xsl:template match="/"><xsl:try><xsl:text>  </xsl:text><x/><y/><xsl:sequence select="error()"/><xsl:catch>text <html/></xsl:catch></xsl:try></xsl:template>`, true, ""},
+	{"top-nested", ``, `<xsl:template match="/"><xsl:try><xsl:try><html><body/></html><xsl:sequence select="error()"/><xsl:catch errors="err:XPTY0004"/></xsl:try><xsl:catch><xsl:try><doc/><e/><xsl:catch/></xsl:try></xsl:catch></xsl:try><f/></xsl:template>`, true, ""},
+	{"top-two-tries", ``, `<xsl:template match="/"><xsl:try><html/><x/><xsl:sequence select="error()"/><xsl:catch/></xsl:try><xsl:try><doc/><y/><xsl:catch/></xsl:try></xsl:template>`, true, ""},
+	{"top-catch-undecided", ``, `<xsl:template match="/"><xsl:try><html/><x/><xsl:sequence select="error()"/><xsl:catch>only text</xsl:catch></xsl:try></xsl:template>`, true, ""},
+	{"top-atomic", ``, `<xsl:template match="/"><xsl:try><xsl:sequence select="1, 2"/><html/><xsl:sequence select="error()"/><xsl:catch><html/><z/></xsl:catch></xsl:try></xsl:template>`, true, ""},
 	{"top-started", ``, `<xsl:template match="/"><z/><y/><xsl:try><a/><xsl:sequence select="1, 2"/><b/><xsl:catch/></xsl:try><c/></xsl:template>`, true, ""},
 	{"top-fail", ``, `<xsl:template match="/"><z/><y/><xsl:try><a/><xsl:sequence select="1, 2"/><b/><xsl:sequence select="error()"/><xsl:catch><caught/></xsl:catch></xsl:try><c/></xsl:template>`, true, ""},
 	{"first-attr", ``, `<xsl:template match="/"><out><xsl:try><xsl:attribute name="a">1</xsl:attribute><x/><y/><xsl:catch/></xsl:try></out></xsl:template>`, false, ""},
