@@ -1478,7 +1478,7 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		}
 	}()
 	stream := br.streamDoc
-	if vin != nil {
+	if vin != nil && !vin.asRead {
 		stream = func(ctx *xpath.Context, uri, base string, fn func(*xdmstream.Cursor) error) error {
 			return br.(*FileResolver).streamDocAs(ctx, uri, base, false, fn) // the copy's: no document URI
 		}

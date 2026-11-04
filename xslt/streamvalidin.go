@@ -99,6 +99,9 @@ type streamValidation struct {
 	// no DTD: its DOCTYPE and unparsed entities go before the validator
 	// meets the document element (xdmburst.DropDTD).
 	dropDTD bool
+	// asRead says the document is the harness's typed tree read as it is
+	// (asRead): it keeps its document URI.
+	asRead bool
 }
 
 // streamedValidation says how spec's validation of the document at href is
@@ -109,7 +112,7 @@ type streamValidation struct {
 // the stylesheet asks (xsl:source-document does; the tree's merge does not).
 func (spec validationSpec) streamedValidation(rt *runtime, br burstResolver, href, base string, strips bool) (sv *streamValidation, ok bool) {
 	if spec.isDefault() {
-		return nil, true
+		return asRead(rt, br, href, base, strips) // streamvalidin_asread.go
 	}
 	fr, isFile := br.(*FileResolver)
 	if !isFile {
@@ -558,7 +561,7 @@ func drainTo(c *xdmstream.Cursor) error {
 // stream reads d on a cursor fn reads: as the tree's validated copy of it
 // is, with no document URI, when it is validated.
 func (d *mergeDoc) stream(ctx *xpath.Context, fn func(*xdmstream.Cursor) error) error {
-	if d.vin == nil {
+	if d.vin == nil || d.vin.asRead {
 		return d.br.streamDoc(ctx, d.href, d.base, fn)
 	}
 	return d.br.(*FileResolver).streamDocAs(ctx, d.href, d.base, false, fn)
