@@ -121,11 +121,13 @@ var mainCases = []struct {
 	// M4 (streamaccum.go).
 	{globalItemRow + `<xsl:mode streamable="yes"/><xsl:variable name="g" select="count(//rec)"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, true},
 	{globalItemRow + `<xsl:mode streamable="yes"/><xsl:variable name="g"><xsl:value-of select="name(/*)"/></xsl:variable><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, true},
-	// An xsl:global-context-item with no type reads nothing of it
-	// (accumulator-034s..036s); a type is checked against the tree's.
-	{`<xsl:mode streamable="yes"/><xsl:global-context-item use="required"/><xsl:template match="rec"><r/></xsl:template>`, true},
+	// An xsl:global-context-item: the item is absent for a streamed
+	// principal input (§2.3.2, 6cc2247f), so use="required" is XTDE3086
+	// (§3.5.6, glob-cxt-item-012) before any run, and a type is checked
+	// against nothing, in both legs; use="absent" streams.
+	{globalItemRow + `<xsl:mode streamable="yes"/><xsl:global-context-item use="required"/><xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:global-context-item use="absent"/><xsl:template match="rec"><r/></xsl:template>`, true},
-	{`<xsl:mode streamable="yes"/><xsl:global-context-item as="document-node(element(doc))"/><xsl:template match="rec"><r/></xsl:template>`, false},
+	{globalItemRow + `<xsl:mode streamable="yes"/><xsl:global-context-item as="document-node(element(doc))"/><xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:accumulator name="a" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>`, true},
 	// At the top of the principal result the tree keeps the source's own
 	// nodes: the built-ins' copies of leaves, a deep-copy, an attribute rule.
@@ -183,8 +185,10 @@ var mainCases = []struct {
 	// streamcopy_l3group.go's one fragment (si-fork-809).
 	{`<xsl:mode streamable="yes"/><xsl:output method="text"/><xsl:template match="/"><o><xsl:fork><xsl:for-each-group select="doc/rec" composite="yes" group-by="@k, name()">` +
 		`<xsl:value-of select="current-grouping-key(), sum(current-group()/@v)" separator=", "/><br/></xsl:for-each-group></xsl:fork></o></xsl:template>`, true},
-	// ... refused when the body counts siblings, which the copy prunes.
-	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:for-each-group select="rec/@k" group-adjacent="."><g n="{generate-id(current-group()[1]/..)}"/></xsl:for-each-group></o></xsl:template>`, false},
+	// ... refused when the body counts siblings, which the copy prunes. The
+	// part of the id after the tree's number ("N<tree>x<order>"): the two
+	// legs parse different trees.
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:for-each-group select="rec/@k" group-adjacent="."><g n="{substring-after(generate-id(current-group()[1]/..), 'x')}"/></xsl:for-each-group></o></xsl:template>`, false},
 	// unparsed-entity-uri and -public-id beside the consumer of a rule's
 	// element: the rule on a grounded copy, given the view's DTD
 	// (streamtee_ground.go; sf-unparsed-entity-01).

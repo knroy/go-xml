@@ -213,25 +213,13 @@ func pkgTarget(e xpath.Expr, root *xdm.Node) (*xpath.FuncCall, *xdm.Node) {
 		return found, f0.body
 	}
 	g, args := pkgWrapperCall(f0, st0, found)
-	if g == nil || !replaceCallWith(e, found, args) {
+	if g == nil {
 		return nil, nil
 	}
-	return args, g.body
-}
-
-// replaceCallWith puts y in e where x is (in place).
-func replaceCallWith(e xpath.Expr, x *xpath.FuncCall, y *xpath.FuncCall) bool {
-	done := false
-	exprWalk(reflect.ValueOf(&e).Elem(), func(v reflect.Value) {
-		if done || v.Kind() != reflect.Interface || !v.CanSet() {
-			return
-		}
-		if c, ok := v.Interface().(*xpath.FuncCall); ok && c == x {
-			v.Set(reflect.ValueOf(xpath.Expr(y)))
-			done = true
-		}
-	})
-	return done
+	// The call node itself becomes the call it makes: e may be the call,
+	// which no walk of e can replace in the caller's hands.
+	found.Name, found.Args = args.Name, args.Args
+	return found, g.body
 }
 
 // pkgWrapper is the accepted frame function f's body calls, when f is a

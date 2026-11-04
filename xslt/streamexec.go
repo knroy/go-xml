@@ -110,6 +110,9 @@ type streamExec struct {
 	// groundRule says it is a rule's body that runs on a grounded copy of
 	// its element (streamtee_ground.go).
 	groundRule bool
+	// groundTop says that body may return a node of the copy as it is, an
+	// item of the rule's result (groundTopKeeps).
+	groundTop bool
 	// docProps says an xsl:copy of the document node reads the document's
 	// properties of the stand-in, and docMotionless that one reads nothing
 	// of the document (streamcopy_l3.go).

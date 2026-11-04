@@ -241,7 +241,11 @@ func (s *Stylesheet) accumRefusal(set *modeAccumulators, main bool) string {
 	reads := map[*accumulatorDef][]string{}
 	for _, k := range slices.Sorted(maps.Keys(s.accumulators)) {
 		def := s.accumulators[k]
-		if !accumApplies(set, def) {
+		if !accumApplies(set, def) || def.pkg != 0 {
+			// A used package's accumulator is its own (§3.5.5): what a
+			// streamed run reaches of the package reads none
+			// (selfContainedFn, pkgFrameBanned), and the observer computes
+			// the top-level package's only (observeAccums).
 			continue
 		}
 		if !def.streamable {

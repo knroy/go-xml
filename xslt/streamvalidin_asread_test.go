@@ -17,7 +17,13 @@ import (
 // default validation, streams (it declined as "already parsed"), and the
 // stream sees the harness's typing, as the tree does.
 func TestStreamAsReadMarked(t *testing.T) {
-	dir := t.TempDir()
+	// The resolver keys its cache by the directory with symbolic links
+	// resolved (macOS's /var is /private/var): the harness's tree carries
+	// that path's URI, as a parse through the resolver gives it.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dir, "doc.xml")
 	if err := os.WriteFile(path, []byte(`<doc><v>3</v><v>10</v></doc>`), 0o600); err != nil {
 		t.Fatal(err)
@@ -37,7 +43,16 @@ func TestStreamAsReadMarked(t *testing.T) {
 		`<xsl:template name="main"><xsl:source-document streamable="yes" href="doc.xml"><out>` +
 		`<xsl:for-each select="doc/v"><t><xsl:value-of select="data(.) instance of xs:integer"/></t></xsl:for-each>` +
 		`</out></xsl:source-document></xsl:template></xsl:stylesheet>`
-	sheet := compileString(t, src)
+	// The stylesheet sits in dir, so that href="doc.xml" is the preloaded
+	// document on every OS (not one beside the test's working directory).
+	st2, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet, err := Compile(st2.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	run := func(bursts bool) string {
 		docs, err := NewFileResolver(dir)
 		if err != nil {
@@ -63,7 +78,7 @@ func TestStreamAsReadMarked(t *testing.T) {
 		return res.String()
 	}
 	tree, streamed := run(false), run(true)
-	if want := `<out><t>true</t><t>true</t></out>`; !strings.Contains(tree, want) {
+	if want := `<t>true</t><t>true</t></out>`; !strings.Contains(tree, want) { // <out> carries xmlns:xs
 		t.Fatalf("tree: %s, want %s", tree, want)
 	}
 	if streamed != tree {

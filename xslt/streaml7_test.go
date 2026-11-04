@@ -145,7 +145,7 @@ func TestStreamL7UsePackageTrust(t *testing.T) {
 	over := `<xsl:override><xsl:function name="f:pick" as="node()?" streamability="filter" visibility="public">` +
 		`<xsl:param name="n" as="node()"/><xsl:sequence select="$n[not(@k = $cat)]"/></xsl:function></xsl:override>`
 	for i, c := range []struct{ use, body string }{
-		{``, `<b n="{count(//*)}" acc="{accumulator-after('ac')}"/>`},
+		{``, `<b><c n="{count(//*)}"/><a v="{accumulator-after('ac')}"/></b>`},
 		{over, `<b><xsl:value-of select="doc/rec ! f:pick(.) / sub/@x"/></b>`},
 		// su-filter-101: the used package's own f:pick, run as itself
 		// (streampkgfn_l7.go), its $cat the package's.

@@ -97,7 +97,7 @@ func (b *streamBuilder) applyOp(el *xdm.Node, f vfocus) bool {
 	}
 	kind := applyKids
 	if a := el.Attr("", "select"); a != nil {
-		switch e := parseAt(el, a.Value()); {
+		switch e := b.selectOf(el); { // streamfn_frame.go: an inlined body's parameter read as its argument
 		case e == nil:
 			return b.refuse("xsl:apply-templates select does not parse")
 		case isContextItem(e):
@@ -660,7 +660,7 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 			return
 		}
 		visited[visitKey{x, top}] = true
-		if streamed && x.groundRule && top != notTop && why == "" {
+		if streamed && x.groundRule && x.groundTop && top != notTop && why == "" {
 			// The copy's nodes would be the principal result's (streamtee_ground.go).
 			why = "a rule on a grounded copy at the top of the result"
 		}
