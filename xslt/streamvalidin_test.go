@@ -112,15 +112,70 @@ func TestStreamInputValidation(t *testing.T) {
 				"strip "+name+": "+body, true, TransformOptions{})
 		}
 	}
-	// A DOCTYPE: the tree's copy has no DTD (an xs:ENTITY value is then
-	// invalid), so such a document is the tree's, decided before anything
-	// is read.
+	// A DOCTYPE: the tree validates a copy without the DTD (what the parse
+	// applied of it, defaults and entities, the copy has; its unparsed
+	// entities it has not, so an xs:ENTITY value is unchecked), and so does
+	// the stream, which drops the DTD before validating. Rejected (the
+	// resolver's AllowDOCTYPE off), it is the same error either way.
 	dtd := "<!DOCTYPE list [<!ENTITY e \"4.5\">]>\n" + inDocs["ok"]
 	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(dtd), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	coreCheck(t, inSheet(`validation="strict"`, bodies[0]), dir, "DOCTYPE: "+bodies[0], false, TransformOptions{})
+	coreCheck(t, inSheet(`validation="strict"`, bodies[0]), dir, "DOCTYPE: "+bodies[0], true, TransformOptions{})
 	coreCheck(t, coreSheet(bodies[0]), dir, "DOCTYPE, not validated: "+bodies[0], true, TransformOptions{})
+	dtdSchema := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+ <xs:element name="r"><xs:complexType><xs:sequence><xs:element name="i" maxOccurs="unbounded"><xs:complexType>
+  <xs:attribute name="rate" type="xs:decimal"/><xs:attribute name="pic" type="xs:ENTITY"/>
+  <xs:anyAttribute processContents="skip"/></xs:complexType></xs:element></xs:sequence></xs:complexType></xs:element></xs:schema>`
+	dtdSheet := func(body string) string {
+		return `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:import-schema>` + dtdSchema + `</xsl:import-schema><xsl:mode name="m" streamable="yes"/>
+<xsl:template match="i" mode="m"><v><xsl:copy-of select="."/></v></xsl:template>
+<xsl:template name="main"><top><xsl:source-document streamable="yes" validation="strict" href="doc.xml">` +
+			body + `</xsl:source-document></top></xsl:template></xsl:stylesheet>`
+	}
+	dtdRun := func(sheet string, core bool) (string, streamtrace.Counts) {
+		before := streamtrace.Snapshot()
+		defer func() { noBursts = false }()
+		tree, err := xdm.ParseString(sheet, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Compile(tree.Root, CompileOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		docs, _ := NewFileResolver(dir)
+		docs.AllowDOCTYPE = true
+		noBursts = !core
+		res, err := s.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: docs})
+		if err != nil {
+			return "error: " + err.Error(), streamtrace.Snapshot().Sub(before)
+		}
+		return res.String(), streamtrace.Snapshot().Sub(before)
+	}
+	for name, doc := range map[string]string{
+		"attribute default": `<!DOCTYPE r [<!ATTLIST i rate CDATA "9">]><r><i/><i rate="2"/></r>`,
+		"entity":            `<!DOCTYPE r [<!ENTITY t "5">]><r><i rate="&t;"/></r>`,
+		"ENTITY undeclared": `<!DOCTYPE r [<!NOTATION gif SYSTEM "gif"><!ENTITY e SYSTEM "e.gif" NDATA gif>]><r><i pic="other"/></r>`,
+		"ENTITY declared":   `<!DOCTYPE r [<!NOTATION gif SYSTEM "gif"><!ENTITY e SYSTEM "e.gif" NDATA gif>]><r><i pic="e"/></r>`,
+		"DTD ID":            `<!DOCTYPE r [<!ATTLIST i x ID #IMPLIED>]><r><i x="a"/><i x="b"/></r>`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, body := range []string{`<xsl:for-each select="r/i"><v r="{data(@rate)}" n="{count(@*)}"/></xsl:for-each>`,
+			`<xsl:apply-templates select="r/i" mode="m"/>`} {
+			got, tr := dtdRun(dtdSheet(body), true)
+			want, _ := dtdRun(dtdSheet(body), false)
+			if got != want || strings.HasPrefix(want, "error") {
+				t.Errorf("DOCTYPE %s %s:\ncore %q\ntree %q", name, body, got, want)
+			}
+			if tr.Runs[streamtrace.Core] == 0 {
+				t.Errorf("DOCTYPE %s %s: not on the core", name, body)
+			}
+		}
+	}
 	// No schema needed: the copy as read, untyped, without its document URI.
 	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(inDocs["ok"]), 0o600); err != nil {
 		t.Fatal(err)

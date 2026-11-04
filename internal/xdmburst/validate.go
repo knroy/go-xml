@@ -17,6 +17,13 @@ var AppendAttr func(el any, prefix, uri, local, value string) any
 // document's own names resolve as written. Package xdm sets it.
 var AddNamespace func(el any, prefix, uri string) bool
 
+// DropDTD makes the document el (a *xdm.Node, its element at its start tag)
+// is in forget its DTD, which the parse has applied: its DOCTYPE text and
+// external subset, and so its unparsed entities. It is how a validated
+// stream reads as the copy xsl:source-document validates (no DTD), before
+// the validator meets an xs:ENTITY value. Package xdm sets it.
+var DropDTD func(el any)
+
 // RemoveAttr takes a, an attribute of el, off el's start tag while the start
 // tag is being told to an observer, as AppendAttr adds one, and reports
 // whether it did. It is how input-type-annotations="strip" drops xsi:nil from

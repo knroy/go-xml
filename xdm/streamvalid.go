@@ -32,6 +32,13 @@ func init() {
 		s.nsAdded[n.self]++
 		return true
 	}
+	xdmburst.DropDTD = func(el any) {
+		t := el.(*Node).tree
+		t.DocType = ""
+		if t.source != nil {
+			t.source.externalSubset = ""
+		}
+	}
 	xdmburst.RemoveAttr = func(el, a any) bool {
 		n, x := el.(*Node), a.(*Node)
 		t := n.tree
