@@ -53,6 +53,15 @@ var l6DeclBodies = []struct {
 	{`<xsl:mode name="g" streamable="yes" on-no-match="shallow-skip"/>
 <xsl:template match="rec" mode="g"><v><xsl:value-of select="descendant-or-self::*" separator=" ~ "/></v></xsl:template>`,
 		`<out><xsl:apply-templates mode="g"/></out>`, true},
+	// key() over a global variable's document in a pattern and a rule body (viewKeyOK).
+	{`<xsl:variable name="kd"><ch id="a">K</ch><ch id="c">C</ch></xsl:variable><xsl:key name="kk" match="ch" use="@id"/>
+<xsl:mode name="k" streamable="yes" on-no-match="shallow-skip"/>
+<xsl:template match="rec[key('kk', @k, $kd)]" mode="k"><hit k="{@k}"><xsl:value-of select="key('kk', @k, $kd)"/></hit></xsl:template>`,
+		`<out><xsl:apply-templates mode="k"/></out>`, true},
+	// current() in a rule's pattern is the candidate (sf-current-100).
+	{`<xsl:mode name="c" streamable="yes" on-no-match="shallow-copy"/>
+<xsl:template match="*[ancestor::*[node-name(.) = node-name(current())]]" mode="c"><nested n="{name()}"/></xsl:template>`,
+		`<out><xsl:apply-templates mode="c"/></out>`, true},
 	// xsl:apply-templates over copies of the matches, to the tree's rules of a mode
 	// that is not streamable (executeCopies): positions and last() are the tree's.
 	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, true},

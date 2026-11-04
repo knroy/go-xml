@@ -336,7 +336,7 @@ func (c *compiler) planRule(el *xdm.Node, p *Pattern, from int) *rulePlan {
 		return nil
 	}
 	r := &rulePlan{}
-	r.can, r.pattern = patternClasses(p)
+	r.can, r.pattern = patternClassesAt(p, el)
 	r.keeps = resultKeeps(el)
 	kids := el.ChildElements()
 	for cl := range numClasses {
@@ -413,6 +413,13 @@ func (c *compiler) readyRule(r *rulePlan) {
 // node is matched live, its ancestors open, and so may be named through
 // them as well.
 func patternClasses(p *Pattern) (can [numClasses]bool, why string) {
+	return patternClassesAt(p, nil)
+}
+
+// patternClassesAt is patternClasses for the pattern of el, a template rule
+// (nil: another construct's pattern): there only global variables are in
+// scope, and current() is the node being matched (streamsplit_l6.go).
+func patternClassesAt(p *Pattern, el *xdm.Node) (can [numClasses]bool, why string) {
 	if matchesNoNode(p) { // streampattern_g5.go
 		return can, ""
 	}
@@ -475,7 +482,8 @@ func patternClasses(p *Pattern) (can [numClasses]bool, why string) {
 				}
 				ok := true
 				if i < len(a.steps)-1 || c[classElem] {
-					ok = (viewCheck{acc: patternAccOK(i, len(a.steps), c[classElem], c[classLeaf], c[classAttr])}).safe(pr, vElem, true) // streamview_k2.go
+					ok = (viewCheck{acc: patternAccOK(i, len(a.steps), c[classElem], c[classLeaf], c[classAttr]), // streamview_k2.go
+						globals: el, curOK: el != nil && c[classElem] && !c[classLeaf] && !c[classAttr] && !c[classDoc], cur: vElem}).safe(pr, vElem, true) // streamsplit_l6.go
 				}
 				if i == len(a.steps)-1 && (c[classLeaf] || c[classAttr]) {
 					ok = ok && (viewCheck{noIdent: c[classLeaf], up: c[classLeaf]}).safe(pr, vLeaf, true)

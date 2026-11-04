@@ -381,3 +381,54 @@ func (b *streamBuilder) foreignSort(el, ch *xdm.Node, f vfocus) bool {
 	}
 	return true
 }
+
+// viewKeyOK admits key(name, value, $top) where $top is a global variable
+// (globalVar): the index is of $top's document, never the stream's (a global
+// cannot reach a streamed container's nodes; one reading the principal
+// input's context item is refused before planning: MP). Its name and value
+// are atomized, read off the focus as any operand. key() with two arguments,
+// which searches the stream's document, stays refused (burstFnBanned).
+// vc.globals is the element the expression is written on (nil: off).
+func viewKeyOK(vc viewCheck, x *xpath.FuncCall, f vfocus) bool {
+	if vc.globals == nil || !isFn(x, "key", 3) {
+		return false
+	}
+	v, ok := x.Args[2].(*xpath.VarRef)
+	if !ok || !globalVar(vc.globals, v.Name) {
+		return false
+	}
+	return vc.safe(x.Args[0], f, false) && vc.safe(x.Args[1], f, false)
+}
+
+// globalVar reports whether $q, read in an expression written on el, is a
+// global variable or parameter of el's module: no xsl:variable or xsl:param
+// of that name binds it before el in a construct holding it, and the module
+// declares one at the top level. A prefixed name is not resolved: false.
+func globalVar(el *xdm.Node, q xdm.QName) bool {
+	if q.URI != "" {
+		return false
+	}
+	binds := func(n *xdm.Node) bool {
+		return n.Kind() == xdm.KindElement && (isXSL(n, "variable") || isXSL(n, "param")) && n.AttrValue("name") == q.Local
+	}
+	for n := el; ; n = n.Parent() {
+		p := n.Parent()
+		if p == nil || p.Kind() != xdm.KindElement {
+			return false
+		}
+		if gp := p.Parent(); gp == nil || gp.Kind() != xdm.KindElement {
+			// n is a top-level declaration of p, the stylesheet.
+			for ch := range p.Children() {
+				if binds(ch) {
+					return true
+				}
+			}
+			return false
+		}
+		for s := n.PrevSibling(); s != nil; s = s.PrevSibling() {
+			if binds(s) {
+				return false
+			}
+		}
+	}
+}

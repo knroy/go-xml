@@ -1179,6 +1179,10 @@ type viewCheck struct {
 	// items says the split's $items (or its nth, $value) are views of
 	// elements, read as a focus of kind vElem is (streamleaf.go).
 	items bool
+	// globals, when set, is the element the expression is written on:
+	// key() over a global variable's document is admitted (viewKeyOK,
+	// streamsplit_l6.go).
+	globals *xdm.Node
 }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
@@ -1402,6 +1406,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 			return ok && lit.Val != nil && (f == vElem || f == vNone)
 		}
 		if viewIdentOK(vc, x, f) { // streamview_k2.go
+			return true
+		}
+		if viewKeyOK(vc, x, f) { // streamsplit_l6.go
 			return true
 		}
 		if (n == "copy-of" || n == "snapshot") && len(x.Args) == 1 && focusFree(x.Args[0]) {
