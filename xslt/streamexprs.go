@@ -71,6 +71,9 @@ func (a *analyzer) unionExpr(left, right xpath.Expr) props {
 	// that "author | author/name" yields nodes with nested subtrees, so two
 	// striding operands do not in general compose to a striding result.
 	if streamedDescent(l.posture) && streamedDescent(r.posture) {
+		if l.posture == postureStriding && r.posture == postureStriding && a.disjointDepthPaths(left, right) { // streamexprs_l7.go
+			return props{postureStriding, wider(l.sweep, r.sweep)}
+		}
 		return props{postureCrawling, wider(l.sweep, r.sweep)}
 	}
 

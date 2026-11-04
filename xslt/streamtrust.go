@@ -78,7 +78,7 @@ func newDeclTrust(root *xdm.Node, shared bool) *declTrust {
 func reachesOtherModules(root *xdm.Node) bool {
 	found := false
 	walkElements(root, func(el *xdm.Node) bool {
-		if isXSL(el, "import") || isXSL(el, "include") || isXSL(el, "use-package") {
+		if isXSL(el, "import") || isXSL(el, "include") || isXSL(el, "use-package") && usePackageOverrides(el) { // streamtrust_pkg_l7.go
 			found = true
 		}
 		return !found
@@ -186,8 +186,11 @@ func (t *declTrust) accumulatorVerified(at *xdm.Node, nameArg xpath.Expr) bool {
 		}
 		return acc == nil
 	})
-	if acc == nil || !isYes(acc.AttrValue("streamable")) {
+	if acc == nil {
 		return false
+	}
+	if !isYes(acc.AttrValue("streamable")) {
+		return t.nonStreamableAccumulator()
 	}
 	return t.verified(acc, func() bool { return t.accumulatorOK(acc) })
 }

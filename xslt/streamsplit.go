@@ -1427,6 +1427,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		if docURIOK(vc, x, f) { // streamtee_docnode.go
 			return true
 		}
+		if viewLeafCopyOK(x, f) { // streamview_l7.go
+			return true
+		}
 		if (n == "copy-of" || n == "snapshot") && len(x.Args) == 1 && focusFree(x.Args[0]) {
 			// A copy of a variable's value: nothing of the focus; but a
 			// copy of climbed views would copy their content.

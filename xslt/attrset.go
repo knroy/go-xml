@@ -414,7 +414,7 @@ type performSortInstr struct {
 func (i *performSortInstr) Execute(rt *runtime, out *outputBuilder) error {
 	var seq xdm.Sequence
 	if i.sel != nil {
-		v, err := i.sel.Eval(rt.ctx)
+		v, err := rt.evalSelect(i, i.sel) // streamexec.go: a consuming select
 		if err != nil {
 			return err
 		}
@@ -444,6 +444,7 @@ func (c *compiler) compilePerformSort(n *xdm.Node, ns xpath.NamespaceResolver) (
 		if instr.sel, err = compileExpr(sel, ns); err != nil {
 			return nil, err
 		}
+		c.noteStreamSelect(n, instr, instr.sel, ns) // streamsort_l7.go
 	}
 	_, sorts, err := c.compileParamsAndSorts(n, ns)
 	if err != nil {

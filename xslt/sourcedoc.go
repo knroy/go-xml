@@ -78,6 +78,12 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 		if core, why = planStream(n, shared); core == nil && traceCore != nil && why != "verdict not trusted" {
 			traceCore(n, why)
 		}
+		if core != nil && c.streamMayAlias() { // streamalias_l7.go
+			core = nil
+			if traceCore != nil {
+				traceCore(n, "a node of the stream may meet the tree's own node for it")
+			}
+		}
 	}
 	outer := c.stream
 	c.stream = core

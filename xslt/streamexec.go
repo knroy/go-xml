@@ -328,6 +328,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 			return b.selectOp(el, f) // streamonempty.go
 		case "comment", "processing-instruction":
 			return b.selectOp(el, f) // their text constructed from the values, as xsl:sequence's
+		case "perform-sort":
+			return b.performSortOp(el, f) // streamsort_l7.go
 		case "for-each", "iterate":
 			return b.loopOp(el, f)
 		case "copy":

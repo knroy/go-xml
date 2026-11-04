@@ -1076,7 +1076,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return nil
 
 	case xdm.KindAttribute:
-		typed, err := i.validation.assess(rt, node)
+		typed, err := i.validation.assess(rt, streamAssessedAttr(node, i.validation.typeName != nil)) // streamvalid_l7.go
 		if err != nil {
 			return err
 		}

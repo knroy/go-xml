@@ -165,7 +165,7 @@ func (b *streamBuilder) addApply(el *xdm.Node, f vfocus, kind applyKind) bool {
 	// they are, and the tree keeps the source's own: see executeStream.
 	for n := el.Parent(); n != nil && n.Kind() == xdm.KindElement; n = n.Parent() {
 		if n.Name().URI != xdm.NSXSL || isXSL(n, "element") || isXSL(n, "copy") ||
-			isXSL(n, "template") || isXSL(n, "source-document") {
+			isXSL(n, "template") || isXSL(n, "source-document") || mapContent(n) { // streamapply_l7.go
 			break
 		}
 		if (isXSL(n, "variable") || isXSL(n, "param") || isXSL(n, "with-param")) && n.Attr("", "as") != nil {
@@ -296,7 +296,7 @@ func (c *compiler) rulesPlanFor(el *xdm.Node) *rulesPlan {
 		return rp
 	}
 	var rp *rulesPlan
-	if modes := streamableModeNames(root); len(modes) > 0 && el.Root() == c.sheet.source {
+	if modes := streamableModeNames(root); len(modes) > 0 && el.Root() == c.sheet.source && !c.streamMayAlias() { // streamalias_l7.go
 		t := newDeclTrust(root, false)
 		if !t.shared {
 			t.plan = &streamPlan{recs: map[any]*planRec{}, sites: map[planSite][]planRoot{}}
