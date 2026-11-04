@@ -36,10 +36,12 @@ var accumReadDecls = []struct {
 	 <xsl:accumulator name="b" as="xs:integer" initial-value="0" streamable="yes">
 	   <xsl:accumulator-rule match="*" select="$value + 1"/></xsl:accumulator>`, true},
 	// Its own after in an end rule: XTDE3400 in both (accumulator-080s).
+	// Not streamed: the tree raises it at every read of a, those before
+	// the first rec's end too, which a stream has answered (error-3410a).
 	{`<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes">
 	   <xsl:accumulator-rule match="rec" phase="end" select="accumulator-after('a') + 1"/></xsl:accumulator>
 	 <xsl:accumulator name="b" as="xs:integer" initial-value="0" streamable="yes">
-	   <xsl:accumulator-rule match="rec" phase="end" select="accumulator-after('a')"/></xsl:accumulator>`, true},
+	   <xsl:accumulator-rule match="rec" phase="end" select="accumulator-after('a')"/></xsl:accumulator>`, false},
 	// A read of an accumulator that fails later in the document: a's
 	// reads before b's failure stand, after it a fails with b's error
 	// (§18.2.5).

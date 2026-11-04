@@ -39,6 +39,12 @@ import (
 // computing; fnAccumulator words it as the tree does (XTDE3400).
 var errAccumCircular = errors.New("accumulator read circularly")
 
+// accumCircularError is the tree walk's XTDE3400, which is errAccumCircular.
+type accumCircularError struct{ msg string }
+
+func (e accumCircularError) Error() string { return e.msg }
+func (e accumCircularError) Unwrap() error { return errAccumCircular }
+
 // accumRuleReads is the state of one streamed run's step: the node the
 // rules are applied to, the phase, and who reads whom.
 type accumRuleReads struct {
@@ -285,7 +291,11 @@ func accumReadsOK(e xpath.Expr, post bool, names *[]string) bool {
 			if !ok || lit.Val == nil {
 				return false
 			}
-			*names = append(*names, strings.TrimSpace(lit.Val.String()))
+			n := strings.TrimSpace(lit.Val.String())
+			if x.Name.Local == "accumulator-before" != post {
+				n = "!" + n // the value its rule computes, were it this accumulator (accumReadsWhy)
+			}
+			*names = append(*names, n)
 			return true
 		}
 		return all(x.Args...)
@@ -331,11 +341,17 @@ func (s *Stylesheet) accumReadsWhy(reads map[*accumulatorDef][]string) string {
 	edges := map[*accumulatorDef][]*accumulatorDef{}
 	for def, names := range reads {
 		for _, lex := range names {
+			self := strings.HasPrefix(lex, "!")
+			lex = strings.TrimPrefix(lex, "!")
 			clark, ok := s.accumClark(lex)
 			if !ok {
 				return "accumulator " + def.name.Lexical() + ": a rule reads accumulator " + lex
 			}
 			to, ok := s.accumulatorFor(0, clark)
+			if ok && to == def && self {
+				// XTDE3400, which the tree raises at every read (accumulator.go).
+				return "accumulator " + def.name.Lexical() + ": a rule reads the value it is computing"
+			}
 			if ok && to != def {
 				edges[def] = append(edges[def], to)
 			}

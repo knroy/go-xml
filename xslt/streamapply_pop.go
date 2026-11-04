@@ -23,10 +23,13 @@ package xslt
 import "github.com/knroy/go-xml/v2/xdm"
 
 // applyPop reports whether p, the population of the apply op compiled as
-// instr, may be dispatched by executePop.
+// instr, may be dispatched by executePop. A values population takes no
+// xsl:with-param: the tree's code evaluates it off the cursor, after the
+// population, where one reading the stream (copy-of(current-group()) beside
+// select="$t/*", si-group-040) finds the posture guard.
 func applyPop(p *streamPop, instr Instruction) bool {
 	a, ok := instr.(*applyTemplatesInstr)
-	return ok && a.atomicOK && (groundApply(p) || p.values || len(a.sorts) == 0 && len(a.params) == 0 && dispatchable(p)) // streamsplit_l6.go
+	return ok && a.atomicOK && (groundApply(p) || p.values && len(a.params) == 0 || len(a.sorts) == 0 && len(a.params) == 0 && dispatchable(p)) // streamsplit_l6.go
 }
 
 // dispatchable reports whether p hands the matches themselves, in every
