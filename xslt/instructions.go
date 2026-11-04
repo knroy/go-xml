@@ -1562,7 +1562,7 @@ type commentInstr struct {
 func (i *commentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	var text string
 	if i.sel != nil {
-		seq, err := i.sel.Eval(rt.ctx)
+		seq, err := rt.evalSelect(i, i.sel) // streamexec.go: a consuming select
 		if err != nil {
 			return err
 		}
@@ -1624,7 +1624,7 @@ func (i *piInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	var text string
 	if i.sel != nil {
-		seq, err := i.sel.Eval(rt.ctx)
+		seq, err := rt.evalSelect(i, i.sel) // streamexec.go: a consuming select
 		if err != nil {
 			return err
 		}

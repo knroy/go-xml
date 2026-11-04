@@ -451,6 +451,7 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			if instr.sel, err = compileExpr(sel, ns); err != nil {
 				return nil, err
 			}
+			c.noteStreamSelect(n, instr, instr.sel, ns)
 			return instr, nil
 		}
 		body, err := c.compileSequence(n, n)
@@ -1112,6 +1113,7 @@ func (c *compiler) compilePI(n *xdm.Node, ns xpath.NamespaceResolver) (Instructi
 		if instr.sel, err = compileExpr(sel, ns); err != nil {
 			return nil, err
 		}
+		c.noteStreamSelect(n, instr, instr.sel, ns)
 		return instr, nil
 	}
 	if instr.body, err = c.compileSequence(n, n); err != nil {
