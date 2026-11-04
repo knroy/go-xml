@@ -177,6 +177,10 @@ type treeSource struct {
 	// orig is where the records of a tree copied out of a stream come from
 	// (streamview.go), or nil.
 	orig *treeOrigin
+	// nsAdded counts, per open element's record, the namespace
+	// declarations a validator on the stream added to its start tag
+	// (xdmburst.AddNamespace), which the parse did not bind.
+	nsAdded map[uint32]int
 }
 
 // ownSource returns t's source part, made on first use.

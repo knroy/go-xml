@@ -515,7 +515,7 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 				// DTD-derived rule outranks the stylesheet-declared one, so it
 				// must not be gated on a strip-space declaration existing.
 				tree.closeLast()
-				ps.ns.pop(len(ps.cur.frame()))
+				ps.ns.pop(len(ps.cur.frame()) - tree.takeAddedNS(ps.cur))
 				closed := ps.cur
 				ps.cur = ps.cur.Parent()
 				ps.depth--

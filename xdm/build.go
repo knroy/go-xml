@@ -274,6 +274,7 @@ func (t *Tree) truncate(i uint32) {
 				s.offsets[k][off] = 0
 			}
 			delete(s.foreignPos, j)
+			delete(s.nsAdded, j)
 		}
 	}
 	t.sideTruncate(i) // locks: the sweep cleanup writes t.side

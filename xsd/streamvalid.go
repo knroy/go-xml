@@ -3,6 +3,7 @@ package xsd
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/internal/xsdstream"
@@ -37,8 +38,9 @@ import (
 // a valid document, and exact about whether a document is valid.
 //
 // What it cannot do as the tree does is refused for the whole schema
-// (streamRefusal): identity constraints, element value constraints, open
-// content, and a defaulted attribute in a namespace.
+// (streamRefusal): a content model whose count readings may outgrow the
+// budget on a stream but not on the tree. Identity constraints are
+// streamvalid_ic.go's.
 
 func init() {
 	xsdstream.Open = func(schema any, m xsdstream.Mode) xsdstream.Validator {
@@ -58,6 +60,7 @@ const (
 	svEmptyElems               // element-only content whose model admits only the empty sequence
 	svElems                    // element-only content
 	svMixed                    // mixed content
+	svOpen                     // empty content its open content opens (matchOpenOnly)
 )
 
 // svFrame is one open element.
@@ -81,9 +84,15 @@ type svFrame struct {
 	seq       *svSeq
 	all       *svAll
 	kids      int    // child elements
-	text      []byte // svSimple: the value
+	text      []byte // svSimple: the value; svMixed with a fixed value: its text
 	hasText   bool   // any text at all
 	nonSpace  string // the first text that is not all XML whitespace
+	// child says the element has a child node of any kind (FirstChild),
+	// which decides whether its value constraint is its value
+	// (effectiveValue) and whether a fixed one applies to its content
+	// (checkFixedValueConstraint); stripped says some of its text was
+	// whitespace the stream stripped before Observe could see it.
+	child, stripped bool
 	// held is the element's copy in the tree an enclosing (or its own)
 	// assertion reads (fillScopeCopy's shape); pre is the element's typing
 	// before it was annotated, which is what that copy's root carries.
@@ -93,6 +102,16 @@ type svFrame struct {
 	// taken out at its end; tok is the element's ID owner (idToken).
 	edt bool
 	tok *xdm.Node
+	// oc is openContentFor the element's type, or nil.
+	oc *OpenContent
+	// skipped says the element is in content a skip wildcard matched
+	// (inSkippedContent); ic is its part in identity constraints, or nil
+	// (streamvalid_ic.go).
+	skipped bool
+	ic      *svICFrame
+	// preserve says the element has xml:space="preserve", which keeps
+	// its ignorable whitespace (stripIgnorableWhitespace).
+	preserve bool
 }
 
 // streamV is a validation run on a stream.
@@ -102,8 +121,11 @@ type streamV struct {
 	frames []svFrame
 	err    error
 	done   bool
-	// toks holds the ID owners' tokens (idToken).
-	toks *xdm.Node
+	// toks holds the ID owners' tokens (idToken), icToks the identity
+	// constraints' targets'; needs counts the open elements reading a
+	// constraint's tables (streamvalid_ic.go).
+	toks, icToks *xdm.Node
+	needs        map[*IdentityConstraint]int
 }
 
 func openStream(s *Schema, m xsdstream.Mode) *streamV {
@@ -164,7 +186,7 @@ func (s *streamV) Drops(el *xdm.Node) bool {
 	f := &s.frames[len(s.frames)-1]
 	// stripIgnorableWhitespace: element-only content the model walks (not
 	// the empty-only branch, which reads all its text).
-	return f.el == el && f.kind == svElems
+	return f.el == el && f.kind == svElems && !f.preserve
 }
 
 func (s *streamV) Stripped(el *xdm.Node) {
@@ -172,7 +194,11 @@ func (s *streamV) Stripped(el *xdm.Node) {
 		return
 	}
 	if f := &s.frames[len(s.frames)-1]; f.el == el {
+		f.child, f.stripped = true, true
 		s.text(f, " ", nil) // whitespace: only that there was some matters
+		if s.v.icScopes > 0 {
+			s.icText(len(s.frames)-1, "", true)
+		}
 	}
 }
 
@@ -190,9 +216,13 @@ func (s *streamV) Observe(n *xdm.Node, depth int, end bool) {
 		s.end(depth)
 	case depth >= 2 && depth-2 < len(s.frames):
 		f := &s.frames[depth-2]
+		f.child = true
 		switch n.Kind() {
 		case xdm.KindText:
 			s.text(f, n.Value(), n)
+			if s.v.icScopes > 0 {
+				s.icText(depth-2, n.Value(), false)
+			}
 		default: // a comment or processing instruction: no content to assess
 		}
 	}
@@ -209,9 +239,10 @@ func (s *streamV) start(el *xdm.Node, depth int) {
 	if depth == 1 {
 		s.startRoot(f, el)
 	} else {
-		s.startChild(&s.frames[depth-2], f, el)
+		s.startChild(depth-2, f, el)
 	}
 	s.hold(f, depth)
+	s.icStart(f, depth-1)
 }
 
 // startRoot assesses the document element as the mode's entry point does.
@@ -259,12 +290,14 @@ func (s *streamV) startRoot(f *svFrame, el *xdm.Node) {
 
 // startChild is validateChild for el, a child of parent's element: the
 // content model's step, then the assessment of the position it took.
-func (s *streamV) startChild(parent, f *svFrame, el *xdm.Node) {
+func (s *streamV) startChild(pi int, f *svFrame, el *xdm.Node) {
 	v := s.v
+	parent := &s.frames[pi]
 	if parent.held != nil {
 		f.held = parent.held.AppendShallowCopy(el)
 	}
 	parent.kids++
+	parent.child = true
 	switch parent.kind {
 	case svSkip:
 		return // f stays svSkip
@@ -287,16 +320,34 @@ func (s *streamV) startChild(parent, f *svFrame, el *xdm.Node) {
 	}
 	name := xdm.QName{URI: el.Name().URI, Local: el.Name().Local}
 	var p *position
-	if parent.all != nil {
-		p = s.allStep(parent.all, parent.el, el, name)
-	} else {
-		p = s.seqStep(parent.seq, parent.el, el, name)
+	walk := parent.ct
+	switch {
+	case parent.kind == svOpen:
+		// matchOpenOnly: no content model is walked, so the type the
+		// dynamic EDC check reads is the enclosing walk's.
+		if !parent.oc.Wildcard.AllowsName(name, v.elementDefined) {
+			v.fail(el, "cvc-complex-type.2.4.a",
+				"element {%s}%s is not permitted by the open content wildcard", name.URI, name.Local)
+			return
+		}
+		p = &position{term: parent.oc.Wildcard}
+		walk = nil
+		for i := pi - 1; i >= 0; i-- {
+			if k := s.frames[i].kind; k == svElems || k == svEmptyElems || k == svMixed {
+				walk = s.frames[i].ct
+				break
+			}
+		}
+	case parent.all != nil:
+		p = s.allStep(parent.all, parent.oc, parent.el, el, name)
+	default:
+		p = s.seqStep(parent.seq, parent.oc, parent.el, el, name)
 	}
 	if p == nil {
 		return
 	}
 	saved := v.currentType
-	v.currentType = parent.ct
+	v.currentType = walk
 	if v.schema.Version == Version11 {
 		parent.edt = true
 	}
@@ -305,6 +356,7 @@ func (s *streamV) startChild(parent, f *svFrame, el *xdm.Node) {
 	if w, ok := p.term.(*Wildcard); ok {
 		switch w.ProcessContents {
 		case ProcessSkip:
+			f.skipped = true
 			return
 		case ProcessLax:
 			if d, ok := v.schema.Elements[name]; ok {
@@ -356,6 +408,7 @@ func (s *streamV) startElement(f *svFrame, el *xdm.Node, decl *ElementDecl) {
 		v.stopped = true
 		return
 	}
+	s.icEnter(f, decl)
 	v.path = append(v.path, el.Name().Local)
 	f.path, f.decl = true, decl
 	if decl.unresolved != "" {
@@ -449,15 +502,22 @@ func (s *streamV) startAgainstType(f *svFrame, el *xdm.Node, typ Type, decl *Ele
 		}
 		v.validateAttributes(el, t)
 		s.applyDefaults(el)
+		f.oc = v.openContentFor(t)
 		switch t.Content {
 		case ContentEmpty:
 			f.kind = svEmpty
+			if f.oc != nil {
+				f.kind = svOpen
+			}
 		case ContentSimple:
 			f.kind, f.st = svSimple, t.SimpleContent
 		case ContentElementOnly:
-			f.emptiable = particleAcceptsEmpty(t.Particle, map[*Particle]bool{})
+			if a := el.Attr(xdm.NSXML, "space"); a != nil && a.Value() == "preserve" {
+				f.preserve = true
+			}
+			f.emptiable = f.oc != nil || particleAcceptsEmpty(t.Particle, map[*Particle]bool{})
 			f.kind = svElems
-			if isEmptyContent(t) {
+			if isEmptyContent(t) && f.oc == nil {
 				f.kind = svEmptyElems
 			}
 			s.startModel(f, el, t)
@@ -507,6 +567,16 @@ func (s *streamV) applyDefaults(el *xdm.Node) {
 	if len(as) == 0 {
 		return
 	}
+	// XSD 1.1 namespace fixup (declareFixupPrefix): the binding a default
+	// in a namespace needed goes on the start tag, after the element's own,
+	// where the typed copy declares it; lookupPrefix then finds it there.
+	for _, ns := range v.fixups[el] {
+		if !xdmburst.AddNamespace(el, ns.prefix, ns.uri) {
+			v.fail(el, "", "streaming: a namespace cannot be declared here")
+			return
+		}
+	}
+	delete(v.fixups, el)
 	for _, a := range as {
 		q := a.Name()
 		live, _ := xdmburst.AppendAttr(el, q.Prefix, q.URI, q.Local, a.Value()).(*xdm.Node)
@@ -540,6 +610,10 @@ func (s *streamV) text(f *svFrame, value string, n *xdm.Node) {
 		v.fail(f.el, "cvc-elt.3.2.1", "an element with xsi:nil=\"true\" must be empty")
 	case svSimple:
 		f.text = append(f.text, value...)
+	case svMixed:
+		if f.decl != nil && f.decl.Constraint != nil && f.decl.Constraint.Fixed {
+			f.text = append(f.text, value...)
+		}
 	case svEmpty, svEmptyElems:
 		if f.nonSpace != "" {
 			v.fail(f.el, "cvc-complex-type.2.1",
@@ -565,7 +639,7 @@ func (s *streamV) end(depth int) {
 	switch f.kind {
 	case svSimple:
 		if f.st != nil {
-			v.validateSimpleContent(el, string(f.text), f.st, f.decl)
+			v.validateSimpleContent(el, s.value(f), f.st, f.decl)
 		}
 	case svElems:
 		if !f.emptiable && f.kids == 0 {
@@ -588,7 +662,7 @@ func (s *streamV) end(depth int) {
 		if f.assert && len(v.errs) == 0 {
 			f.held.ApplyTyping(f.pre)
 			if f.kind == svSimple && f.st != nil {
-				_, _ = validateSimpleValueIn(string(f.text), f.st, v.schema.Version, &instance{f.held, v})
+				_, _ = validateSimpleValueIn(s.value(f), f.st, v.schema.Version, &instance{f.held, v})
 			}
 			v.checkAssertions(f.held, f.ct)
 		}
@@ -605,6 +679,10 @@ func (s *streamV) end(depth int) {
 	if f.held != nil {
 		f.held.ApplyTyping(xdm.TypingOf(el))
 	}
+	if f.typ != nil && f.kind != svNil {
+		s.checkFixed(f)
+	}
+	s.icEnd(f, depth-1)
 	if f.path {
 		v.path = v.path[:len(v.path)-1]
 	}
@@ -619,6 +697,44 @@ func (s *streamV) end(depth int) {
 		}
 	}
 	s.frames = s.frames[:depth-1]
+}
+
+// value is effectiveValue for f's element, svSimple: its text, or its
+// declaration's value constraint when it has no child at all. The typed copy
+// adds no text for a defaulted value (an empty element stays empty, and
+// atomizes as its annotation reads ""), so neither does the stream.
+func (s *streamV) value(f *svFrame) string {
+	if !f.child && f.decl != nil && f.decl.Constraint != nil {
+		return f.decl.Constraint.Lexical
+	}
+	return string(f.text)
+}
+
+// checkFixed is checkFixedValueConstraint for f's element at its end.
+func (s *streamV) checkFixed(f *svFrame) {
+	v, decl := s.v, f.decl
+	if decl == nil || decl.Constraint == nil || !decl.Constraint.Fixed || !f.child {
+		return
+	}
+	if f.kids > 0 {
+		v.fail(f.el, "cvc-elt.5.2.2.1",
+			"an element with a fixed value constraint may not have element children")
+		return
+	}
+	if f.kind != svMixed {
+		return
+	}
+	got, want := string(f.text), decl.Constraint.Lexical
+	if f.stripped && strings.ContainsAny(want, " \t\r\n") {
+		// The whitespace the stream stripped is part of the value, and
+		// the stream saw only that there was some.
+		v.fail(f.el, "", "streaming: whitespace stripped before validation decides a fixed value")
+		return
+	}
+	if f.stripped || got != want {
+		v.fail(f.el, "cvc-elt.5.2.2.2.1",
+			"value %q does not equal the fixed value %q", truncate(got), truncate(want))
+	}
 }
 
 func (s *streamV) endModel(f *svFrame) {
@@ -682,10 +798,12 @@ type svSeq struct {
 
 // seqStep is matchSequence's loop body for the child kid of el: the
 // position it takes, or nil when kid is refused (v.fail has said why).
-func (s *streamV) seqStep(w *svSeq, el, kid *xdm.Node, name xdm.QName) *position {
+func (s *streamV) seqStep(w *svSeq, oc *OpenContent, el, kid *xdm.Node, name xdm.QName) *position {
 	v, m := s.v, w.m
 	if len(m.positions) == 0 {
-		// Open content is refused for streaming (streamRefusal).
+		if oc != nil && oc.Wildcard.AllowsName(kid.Name(), v.elementDefined) {
+			return &position{term: oc.Wildcard}
+		}
 		v.fail(kid, "cvc-complex-type.2.4.d",
 			"element {%s}%s is not permitted here: the content model is empty",
 			kid.Name().URI, kid.Name().Local)
@@ -751,6 +869,16 @@ func (s *streamV) seqStep(w *svSeq, el, kid *xdm.Node, name xdm.QName) *position
 		}
 	}
 	if next < 0 {
+		// XSD 1.1 open content: interleaved anywhere, a suffix once the
+		// model is satisfied.
+		satisfied := w.prevIdx < 0 && m.nullable || w.prevIdx >= 0 && contains(m.last, w.prevIdx)
+		if oc != nil && oc.Wildcard.AllowsName(name, v.elementDefined) &&
+			(oc.Mode == OpenInterleave || satisfied) {
+			if oc.Mode == OpenSuffix {
+				w.inSuffix = true
+			}
+			return &position{term: oc.Wildcard}
+		}
 		if boundRefused && incomplete {
 			v.fail(kid, "cvc-complex-type.2.4.b",
 				"element content is incomplete: {%s}%s cannot follow until an earlier particle has met its minimum",
@@ -786,12 +914,16 @@ type svAll struct {
 	t         *ComplexType
 	particles []*Particle
 	counts    []int
+	inSuffix  bool
 }
 
-func (s *streamV) allStep(w *svAll, el, kid *xdm.Node, name xdm.QName) *position {
+func (s *streamV) allStep(w *svAll, oc *OpenContent, el, kid *xdm.Node, name xdm.QName) *position {
 	v := s.v
 	exhausted := -1
 	for i, p := range w.particles {
+		if w.inSuffix {
+			break
+		}
 		pos := &position{term: p.Term, particle: p}
 		if !pos.matches(name, v.elementDefined) {
 			continue
@@ -810,6 +942,12 @@ func (s *streamV) allStep(w *svAll, el, kid *xdm.Node, name xdm.QName) *position
 		v.fail(kid, "cvc-complex-type.2.4.j", "element {%s}%s appears more than %d times in an all group",
 			name.URI, name.Local, p.MaxOccurs)
 		return nil
+	}
+	if oc != nil && oc.Wildcard.AllowsName(name, v.elementDefined) {
+		if oc.Mode == OpenSuffix {
+			w.inSuffix = true
+		}
+		return &position{term: oc.Wildcard}
 	}
 	v.fail(kid, "cvc-complex-type.2.4.a", "element {%s}%s is not permitted in this all group",
 		name.URI, name.Local)
@@ -859,6 +997,36 @@ func (s *streamV) allEnd(w *svAll, el *xdm.Node) {
 	}
 }
 
+// streamReadingsBounded reports whether matchSequence over m cannot reach
+// DefaultMaxMatchStates readings on a stream unless it reaches them on the
+// tree too. A tree walk knows its child count and takes a bounded maximum
+// above it as unbounded (reachableInto), which merges the counts past the
+// minimum; a stream cannot, and keeps them apart. The readings at a position
+// differ only in the counters of its chain (the scopes left are reset), so
+// the number of them is at most the product of what each counter can take:
+// 0..max, or 0..min+1 once merged. A chain with no bounded counter walks
+// the same on both; one with a bounded counter is bounded when even the
+// larger of the two products is within the budget, and then neither walk
+// gives up.
+func streamReadingsBounded(m *contentModel) bool {
+	for _, p := range m.positions {
+		bounded, n := false, 1
+		for _, i := range p.counters {
+			c := m.counters[i]
+			r := c.min + 2
+			if c.max != Unbounded {
+				bounded, r = true, max(r, c.max+1)
+			}
+			// Both at most the budget + 1 before the product: no overflow.
+			n = min(n*min(r, DefaultMaxMatchStates+1), DefaultMaxMatchStates+1)
+		}
+		if bounded && n > DefaultMaxMatchStates {
+			return false
+		}
+	}
+	return true
+}
+
 // streamRefusal says why s cannot be validated on a stream as a tree is,
 // or "". It looks at every element declaration and complex type the schema
 // has, global and local.
@@ -867,6 +1035,7 @@ func (s *streamV) allEnd(w *svAll, el *xdm.Node) {
 // per schema if a profile shows it (a schema may still be extended after
 // compiling, as the conformance harness's mergeInto does).
 func (s *Schema) streamRefusal() string {
+	mv := s.newValidator(nil, ValidateOptions{})
 	seenT := map[Type]bool{}
 	seenP := map[*Particle]bool{}
 	seenD := map[*ElementDecl]bool{}
@@ -878,12 +1047,6 @@ func (s *Schema) streamRefusal() string {
 			return ""
 		}
 		seenD[d] = true
-		switch {
-		case len(d.IdentityConstraints) > 0:
-			return fmt.Sprintf("element %s has identity constraints", showName(d.Name))
-		case d.Constraint != nil:
-			return fmt.Sprintf("element %s has a value constraint", showName(d.Name))
-		}
 		for _, alt := range d.Alternatives {
 			if w := typ(alt.Type); w != "" {
 				return w
@@ -902,15 +1065,10 @@ func (s *Schema) streamRefusal() string {
 			return ""
 		}
 		seenT[t] = true
-		if s.Version == Version11 && ct.OpenContent != nil && ct.OpenContent.Wildcard != nil {
-			return fmt.Sprintf("type %s has open content", showName(ct.Name))
-		}
-		for _, u := range ct.AttributeUses {
-			if u.Decl == nil || u.Prohibited || u.Decl.Name.URI == "" {
-				continue
-			}
-			if c := effectiveValueConstraint(u); c != nil && c.Lexical != "" {
-				return fmt.Sprintf("attribute %s in a namespace has a default", showName(u.Decl.Name))
+		if !isAllGroup(ct.Particle) {
+			if m, err := mv.modelFor(ct); err == nil && !streamReadingsBounded(m) {
+				return fmt.Sprintf("the content model of type %s may hold more than %d count readings on a stream",
+					showName(ct.Name), DefaultMaxMatchStates)
 			}
 		}
 		if w := part(ct.Particle); w != "" {

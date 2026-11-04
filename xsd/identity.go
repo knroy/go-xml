@@ -310,6 +310,14 @@ func mergeTables(children []icTables) icTables {
 // buildNodeTable evaluates a key or unique constraint over an element's
 // subtree.
 func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *nodeTable) *nodeTable {
+	return v.fillNodeTable(ic, below, v.selectNodesPruned(el, ic), v.keySequence)
+}
+
+// fillNodeTable is buildNodeTable with the targets the scope's own walk
+// selected, and how a target's key sequence is had: a validation on a
+// stream (streamvalid_ic.go) selects them and keys them as it reads.
+func (v *validator) fillNodeTable(ic *IdentityConstraint, below *nodeTable, selected []*xdm.Node,
+	keySequence func(*xdm.Node, *IdentityConstraint) ([]string, bool, bool)) *nodeTable {
 	tbl := &nodeTable{}
 
 	// A per-element check in validateElement does not reach this loop: one
@@ -411,7 +419,7 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *
 		}
 	}
 
-	for _, target := range v.selectNodesPruned(el, ic) {
+	for _, target := range selected {
 		if v.checkCancelled() {
 			return tbl
 		}
@@ -429,7 +437,7 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *
 			}
 			continue
 		}
-		seq, complete, ok := v.keySequence(target, ic)
+		seq, complete, ok := keySequence(target, ic)
 		if !ok {
 			// A field selected more than one node, which clause 3
 			// makes a hard failure whatever the category.
@@ -485,6 +493,14 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *
 // walk at any element that declares the same keyref leaves each node visited a
 // bounded number of times, and leaves the per-scope lookups untouched.
 func (v *validator) checkKeyref(el *xdm.Node, ic *IdentityConstraint, tables icTables) *nodeTable {
+	return v.fillKeyref(ic, tables, v.selectNodesPruned(el, ic), v.cachedKeySequence)
+}
+
+// fillKeyref is checkKeyref with the targets the scope's own walk selected,
+// and how a target's joined key sequence is had, as fillNodeTable is
+// buildNodeTable's.
+func (v *validator) fillKeyref(ic *IdentityConstraint, tables icTables, selected []*xdm.Node,
+	cachedKeySequence func(*xdm.Node, *IdentityConstraint) (string, bool, bool)) *nodeTable {
 	// The table an inner scope of this same keyref already built is ADOPTED
 	// and extended, not copied into a fresh one. Copying was the other half
 	// of the quadratic: every level rebuilt a map and a slice holding every
@@ -511,7 +527,7 @@ func (v *validator) checkKeyref(el *xdm.Node, ic *IdentityConstraint, tables icT
 		refer = tables[ic.Refer]
 	}
 
-	for _, node := range v.selectNodesPruned(el, ic) {
+	for _, node := range selected {
 		if v.checkCancelled() {
 			return tbl
 		}
@@ -524,7 +540,7 @@ func (v *validator) checkKeyref(el *xdm.Node, ic *IdentityConstraint, tables icT
 		if v.icStats != nil {
 			v.icStats.Targets++
 		}
-		joined, complete, ok := v.cachedKeySequence(node, ic)
+		joined, complete, ok := cachedKeySequence(node, ic)
 		if !ok || !complete {
 			// A keyref whose fields are absent simply does not
 			// participate; only a key requires every field. It is
@@ -804,7 +820,12 @@ func (v *validator) walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Nod
 	if alt.Attribute == nil {
 		return current
 	}
+	return v.selectAttrs(current, alt)
+}
 
+// selectAttrs is the attributes alt's final attribute step selects on the
+// elements current.
+func (v *validator) selectAttrs(current []*xdm.Node, alt ICPathAlternative) []*xdm.Node {
 	var attrs []*xdm.Node
 	for _, n := range current {
 		// An attribute the type supplied by default is part of the

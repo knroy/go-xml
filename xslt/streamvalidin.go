@@ -18,9 +18,11 @@ package xslt
 // whether a document is valid; the error text is the tree's.
 //
 // What the tree's copy is besides typed is the stream's too: no document
-// URI (streamDocAs), no DTD (a document whose prolog may hold a DOCTYPE is
-// left to the tree, decided before anything runs: ENTITY validation reads
-// the DTD the copy does not have), and ignorable whitespace kept for an
+// URI (streamDocAs), no DTD (dropped at the document element's start tag,
+// before the validator meets an xs:ENTITY value; what the parse applied of
+// it, attribute defaults and entities, the copy has too; a harness-marked
+// document whose prolog may hold a DOCTYPE is left to the tree, its first
+// validation having read the DTD), and ignorable whitespace kept for an
 // element-rooted validation and dropped for a document-rooted one.
 
 import (
@@ -93,6 +95,10 @@ type streamValidation struct {
 	// main is the principal input's validation (pre the stylesheet's
 	// schema): its mode, and its error (sourceError).
 	main SourceValidation
+	// dropDTD says the document is read as assessSource's copy, which has
+	// no DTD: its DOCTYPE and unparsed entities go before the validator
+	// meets the document element (xdmburst.DropDTD).
+	dropDTD bool
 }
 
 // streamedValidation says how spec's validation of the document at href is
@@ -106,11 +112,16 @@ func (spec validationSpec) streamedValidation(rt *runtime, br burstResolver, hre
 		return nil, true
 	}
 	fr, isFile := br.(*FileResolver)
-	if !isFile || fr.prologMayHaveDTD(href, base) {
+	if !isFile {
 		return nil, false
 	}
-	sv = &streamValidation{pre: fr.preValidation(href, base), strips: strips && rt.sheet.stripTypeAnnotations}
+	sv = &streamValidation{pre: fr.preValidation(href, base), strips: strips && rt.sheet.stripTypeAnnotations, dropDTD: true}
 	sv.marked = sv.pre != nil
+	if sv.marked && fr.prologMayHaveDTD(href, base) {
+		// The harness's validation read the DTD (its typed copy of the
+		// document keeps it), which the copy validated here has not.
+		return nil, false
+	}
 	schema := any(nil)
 	if rt.sheet.schema != nil {
 		schema = rt.sheet.schema
@@ -171,6 +182,9 @@ func (sv *streamValidation) attach(c *xdmstream.Cursor, strip func(*xdm.Node) bo
 	}
 	stripped := error(nil)
 	c.Observe(func(n *xdm.Node, d int, end bool, ord uint64) {
+		if sv.dropDTD && d == 1 && !end && n != nil && n.Kind() == xdm.KindElement {
+			xdmburst.DropDTD(n)
+		}
 		for _, v := range vs {
 			v.Observe(n, d, end)
 		}
