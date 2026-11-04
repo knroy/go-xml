@@ -281,7 +281,7 @@ func (vc viewCheck) sheetCall(x *xpath.FuncCall, f vfocus) bool {
 	}
 	sc, ok := sheetCallOf(x)
 	if !ok || !sc.values {
-		return false
+		return vc.leafInlinedSafe(x, f) // streamview_leafcall.go
 	}
 	for _, a := range x.Args {
 		if !vc.safe(a, f, false) {

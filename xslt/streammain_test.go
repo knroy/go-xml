@@ -231,6 +231,11 @@ var mainCases = []struct {
 	// in both legs.
 	{`<xsl:function name="p:f" as="node()" streamability="filter"><xsl:param name="n" as="node()"/><xsl:sequence select="$n[self::rec]"/></xsl:function>` +
 		`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:copy-of select="doc/p:f(rec[1])/sub"/></o></xsl:template>`, true},
+	// A rule for a leaf returning a stylesheet function of it, declared
+	// atomic: its body, inlined, reads the copy's value only
+	// (streamview_leafcall.go, streamcopy_l3leaf.go; su-absorbing-016).
+	{`<xsl:function name="p:len" as="xs:integer" streamability="absorbing"><xsl:param name="n" as="node()"/><xsl:sequence select="string-length($n)"/></xsl:function>` +
+		`<xsl:mode streamable="yes"/><xsl:template match="sub/text()"><xsl:sequence select="p:len(.)"/></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

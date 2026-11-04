@@ -1247,6 +1247,8 @@ type viewCheck struct {
 	// answers by a Peek at its start tag (streamkids_l6.go); set only where
 	// every such call is of the focus itself (topKids).
 	peek bool
+	// inlined says the expression is a call's inlined body (streamview_leafcall.go).
+	inlined bool
 }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the

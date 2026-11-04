@@ -33,7 +33,13 @@ func leafAtomic(el *xdm.Node) bool {
 		}
 	}
 	e := parseAt(el, src)
-	return e != nil && atomicValued(e)
+	if e == nil {
+		return false
+	}
+	// A fresh parse: its calls on the module's functions are marked here,
+	// for atomicValued to read their declared types (su-absorbing-016).
+	markSheetCalls(e, collectStreamFuncs(documentElementOf(el))) // streamsplit_calls.go
+	return atomicValued(e)
 }
 
 // laxAtomize marks s, and every branch of a choice, as the split of an
