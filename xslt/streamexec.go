@@ -479,7 +479,7 @@ func (c *compiler) noteStreamParam(n *xdm.Node, sel *xpath.Compiled, ns xpath.Na
 		for _, op := range x.exprOps {
 			if op.el == n && op.avt == "" && op.instr == nil {
 				op.instr, op.sel = exprInstr{}, sel
-				if op.split, op.dead = c.splitForDoc(sel, ns, op.doc, false, op.inGroup, op.key); op.dead == "" { // streamcopy_l3.go
+				if op.split, op.dead = c.splitForDoc(sel, ns, op.doc, atomicAs(n, n.AttrValue("as")), op.inGroup, op.key); op.dead == "" { // streamcopy_l3.go: an atomic as= atomizes (§9.3)
 					x.byExpr[sel] = op
 				}
 			}

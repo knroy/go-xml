@@ -119,3 +119,30 @@ func TestStreamLeafAtomicSequence(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamAtomicTypedVariable: a variable declared with an atomic type
+// atomizes its value, so its select is read as values off the cursor, also
+// of a rule's context that may be the document element (streamcopy_l3.go,
+// noteStreamParam).
+func TestStreamAtomicTypedVariable(t *testing.T) {
+	dir := t.TempDir()
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, rule := range []string{
+			`<xsl:variable name="n" as="xs:string" select="."/><r><xsl:value-of select="string-length($n)"/></r>`,
+			`<xsl:variable name="n" as="xs:string*" select="sub"/><r><xsl:value-of select="$n" separator="|"/></r>`,
+		} {
+			sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+<xsl:mode name="s" streamable="yes"/>
+<xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml"><xsl:apply-templates select="." mode="s"/></xsl:source-document></top></xsl:template>
+<xsl:template match="rec" mode="s">` + rule + `</xsl:template>
+<xsl:template match="text()" mode="s"/>
+</xsl:stylesheet>`
+			coreCheck(t, sheet, dir, name+": "+rule, true, TransformOptions{})
+		}
+		body := `<xsl:variable name="n" as="xs:string" select="."/><o><xsl:value-of select="string-length($n)"/></o>`
+		coreCheck(t, coreSheet(body), dir, name+": "+body, true, TransformOptions{})
+	}
+}
