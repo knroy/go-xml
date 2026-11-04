@@ -78,7 +78,7 @@ func TestStreamL7MatchesTree(t *testing.T) {
 	// streamable-116: a streamed principal input in a streamable mode has an
 	// absent global context item (§2.3.2): XPDY0002 from TransformReader,
 	// streamed or not; Transform of a tree keeps the source as the item.
-	g := mainSheet(`<xsl:mode streamable="yes"/><xsl:variable name="g" select="count(//rec)"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`)
+	g := mainSheet(globalItemRow + `<xsl:mode streamable="yes"/><xsl:variable name="g" select="count(//rec)"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`)
 	for _, streamed := range []bool{true, false} {
 		if out, _ := mainRun(g, coreDocs["flat"], streamed, TransformOptions{}); !strings.Contains(out, "XPDY0002") {
 			t.Errorf("TransformReader (streamed %v): %q, want XPDY0002", streamed, out)
@@ -141,6 +141,9 @@ func TestStreamL7UsePackageTrust(t *testing.T) {
 	for i, c := range []struct{ use, body string }{
 		{``, `<b n="{count(//*)}" acc="{accumulator-after('ac')}"/>`},
 		{over, `<b><xsl:value-of select="doc/rec ! f:pick(.) / sub/@x"/></b>`},
+		// su-filter-101: the used package's own f:pick, run as itself
+		// (streampkgfn_l7.go), its $cat the package's.
+		{``, `<b><xsl:value-of select="doc/rec ! f:pick(.) / sub/@x"/></b>`},
 	} {
 		src := strings.Replace(strings.Replace(top, "USE", c.use, 1), "BODY", c.body, 1)
 		dir := t.TempDir()

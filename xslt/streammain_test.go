@@ -34,13 +34,19 @@ func mainRun(sheet, doc string, streamed bool, opts TransformOptions) (out strin
 	var res *Result
 	if streamed {
 		res, err = s.TransformReader(context.Background(), readOnly{strings.NewReader(doc)}, opts)
-	} else {
-		// The tree leg is TransformReader's own fallback (Parse + Transform
-		// with the global context item it gives: absent for a streamable
-		// initial mode, streamglobal_l7.go).
+	} else if strings.Contains(sheet, globalItemRow) {
+		// A row that reads the global context item (§2.3.2): the oracle is
+		// TransformReader's own fallback, Parse + Transform with the item
+		// absent for a streamable initial mode (streamglobal_l7.go).
 		noBursts = true
 		res, err = s.TransformReader(context.Background(), readOnly{strings.NewReader(doc)}, opts)
 		noBursts = false
+	} else {
+		// Every other row: the plain tree path.
+		var src *xdm.Tree
+		if src, err = xdm.Parse(strings.NewReader(doc), opts.SourceParseOptions); err == nil {
+			res, err = s.Transform(context.Background(), src.Root, opts)
+		}
 	}
 	if err != nil {
 		return "error: " + err.Error(), tr
@@ -77,6 +83,11 @@ func nodesShape(nodes xdm.Sequence) string {
 	return b.String()
 }
 
+// globalItemRow marks a stylesheet whose globals read the global context
+// item: mainRun's tree leg for it is TransformReader's fallback, not Parse +
+// Transform (§2.3.2, streamglobal_l7.go).
+const globalItemRow = "<!--2.3.2-->"
+
 // mainSheet is a stylesheet of declarations decls.
 func mainSheet(decls string) string {
 	return `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
@@ -108,8 +119,8 @@ var mainCases = []struct {
 	// absent for a streamed principal input (§2.3.2; streamglobal_l7.go), so
 	// XPDY0002 in both legs (streamable-116). An accumulator streams since
 	// M4 (streamaccum.go).
-	{`<xsl:mode streamable="yes"/><xsl:variable name="g" select="count(//rec)"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, true},
-	{`<xsl:mode streamable="yes"/><xsl:variable name="g"><xsl:value-of select="name(/*)"/></xsl:variable><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, true},
+	{globalItemRow + `<xsl:mode streamable="yes"/><xsl:variable name="g" select="count(//rec)"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, true},
+	{globalItemRow + `<xsl:mode streamable="yes"/><xsl:variable name="g"><xsl:value-of select="name(/*)"/></xsl:variable><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, true},
 	// An xsl:global-context-item with no type reads nothing of it
 	// (accumulator-034s..036s); a type is checked against the tree's.
 	{`<xsl:mode streamable="yes"/><xsl:global-context-item use="required"/><xsl:template match="rec"><r/></xsl:template>`, true},

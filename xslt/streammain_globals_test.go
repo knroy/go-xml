@@ -18,10 +18,10 @@ func TestStreamMainLiteralGlobals(t *testing.T) {
 	}{
 		{`<xsl:variable name="q">"</xsl:variable><xsl:param name="t"><root><list a="1"/></root></xsl:param>`, true},
 		{`<xsl:variable name="q"><xsl:text>x</xsl:text></xsl:variable><xsl:variable name="t"/>`, true},
-		{`<xsl:variable name="q"><xsl:value-of select="count(//rec)"/></xsl:variable><xsl:variable name="t"/>`, true},
-		{`<xsl:variable name="q">q</xsl:variable><xsl:variable name="t"><a n="{name(/*)}"/></xsl:variable>`, true},
-		{`<xsl:variable name="q" expand-text="yes">{count(//rec)}</xsl:variable><xsl:variable name="t"/>`, true},
-		{`<xsl:variable name="q" select="count(//rec)"/><xsl:variable name="t"/>`, true},
+		{globalItemRow + `<xsl:variable name="q"><xsl:value-of select="count(//rec)"/></xsl:variable><xsl:variable name="t"/>`, true},
+		{globalItemRow + `<xsl:variable name="q">q</xsl:variable><xsl:variable name="t"><a n="{name(/*)}"/></xsl:variable>`, true},
+		{globalItemRow + `<xsl:variable name="q" expand-text="yes">{count(//rec)}</xsl:variable><xsl:variable name="t"/>`, true},
+		{globalItemRow + `<xsl:variable name="q" select="count(//rec)"/><xsl:variable name="t"/>`, true},
 	}
 	for i, c := range cases {
 		sheet := mainSheet(c.globals + mode)
