@@ -142,8 +142,8 @@ func inlineTarget(e xpath.Expr, root *xdm.Node) (*xpath.FuncCall, *xdm.Node) {
 			return
 		}
 		g := moduleFunction(root, c.Name, len(c.Args))
-		if g == nil || sheetBody(g) != nil {
-			return
+		if g == nil || sheetBody(g) != nil || len(c.Args) > 0 && atomicParams(g) && pureBody(g) {
+			return // a values call (streamvaluefn_l7.go), which the split reads as itself
 		}
 		n++
 		found, fn = c, g

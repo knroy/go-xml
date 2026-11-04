@@ -954,9 +954,14 @@ func allFocusFree(es []xpath.Expr) bool {
 
 // focusDependentCall reports whether a call is on a focus-dependent function,
 // for the arity written, by the focusDependent table (streamfocus.go). Only
-// the fn namespace is classified here; a call on anything else -- an
-// xsl:function, an extension, a constructor -- is treated as focus-dependent,
-// because nothing here records that it is not.
+// the fn namespace is classified here, besides map: and array:, none of whose
+// functions reads the focus (map:get is how mapCalls spells a variable's
+// $m('k')); a call on anything else -- an xsl:function, an extension, a
+// constructor -- is treated as focus-dependent, because nothing here records
+// that it is not.
 func focusDependentCall(x *xpath.FuncCall) bool {
+	if x.Name.URI == xdm.NSMap || x.Name.URI == xdm.NSArray {
+		return false
+	}
 	return x.Name.URI != fnNS || focusDependent[keyOf(x.Name, len(x.Args))]
 }

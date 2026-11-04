@@ -97,7 +97,7 @@ func (b *streamBuilder) applyOp(el *xdm.Node, f vfocus) bool {
 	}
 	kind := applyKids
 	if a := el.Attr("", "select"); a != nil {
-		switch e := parseAt(el, a.Value()); {
+		switch e := b.selectOf(el); { // streamfn_frame.go: an inlined body's parameter read as its argument
 		case e == nil:
 			return b.refuse("xsl:apply-templates select does not parse")
 		case isContextItem(e):
