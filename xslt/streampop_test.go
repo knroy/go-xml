@@ -129,6 +129,14 @@ var popBodies = []struct {
 	{`<out><xsl:for-each select="insert-before(doc/rec, 1e30, $extra)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="remove(doc/rec, 1.0)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="insert-before(doc/rec, (), $extra)"><e p="{position()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	// snapshot(P): each item handed with its ancestors, snapshotted (J1,
+	// streampop_snapshot.go).
+	{`<out><xsl:for-each select="snapshot(doc/rec)"><e k="{@k}" d="{../@id}" r="{name(/*)}" n="{count(sub)}" s="{string(.)}"/></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="doc/rec/snapshot(.)"><e k="{@k}" d="{name(..)}" n="{count(../*)}"/></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="subsequence(snapshot(doc/rec/@k), 1, 2)"><e v="{.}" p="{../@v}" d="{name(../..)}"/></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="snapshot(subsequence(doc/rec/@k, 2))"><e v="{.}" p="{../@v}" n="{count(../../*)}"/></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="remove(snapshot(doc/rec), 2)"><e p="{position()}" v="{@v}"/></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="snapshot(doc/rec/sub/text())"><e v="{.}" p="{../@x}" a="{name(../..)}"/></xsl:for-each></out>`, true},
 	// Populations of kept leaves (G4): each a complete copy, its body off the
 	// cursor (fuzz seed 31: 9679, 16992, 23798, 30006, 75161).
 	{`<out><xsl:for-each select="tail(doc/rec/node())"><e p="{position()}"><xsl:value-of select=". || '|'"/></e></xsl:for-each></out>`, true},
