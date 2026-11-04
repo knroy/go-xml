@@ -177,7 +177,8 @@ func (b *streamBuilder) addApply(el *xdm.Node, f vfocus, kind applyKind) bool {
 			isXSL(n, "template") || isXSL(n, "source-document") || mapContent(n) { // streamapply_l7.go
 			break
 		}
-		if (isXSL(n, "variable") || isXSL(n, "param") || isXSL(n, "with-param")) && n.Attr("", "as") != nil {
+		if (isXSL(n, "variable") || isXSL(n, "param") || isXSL(n, "with-param")) && n.Attr("", "as") != nil &&
+			!asRefusesNodes(n) { // streamaccum_mm5.go
 			return b.refuse(elName(el) + " in a sequence-typed " + elName(n))
 		}
 	}

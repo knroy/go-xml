@@ -35,6 +35,20 @@ func mm5Rows(t *testing.T, doc string, rows []struct{ name, decls string }) {
 
 const mm5Doc = `<d><rec k="a" v="1">t1</rec><rec k="b" v="1"/><rec k="a" v="2"><v>x</v></rec><x/><rec k="c" v="3"><v>y<s/></v></rec></d>`
 
+// TestStreamApplyInMapTypedVariable: xsl:apply-templates in a variable
+// typed a sequence of maps (si-fork-812): what rules make is kept, and a
+// built-in rule's node is the type error in both modes.
+func TestStreamApplyInMapTypedVariable(t *testing.T) {
+	const body = `<xsl:template match="/"><xsl:variable name="v" as="map(xs:string, item()*)*"><xsl:apply-templates/></xsl:variable>
+	  <o><xsl:for-each select="$v"><m k="{?k}" n="{?n}"/></xsl:for-each></o></xsl:template>`
+	mm5Rows(t, mm5Doc, []struct{ name, decls string }{
+		{"maps", `<xsl:mode streamable="yes"/>` + body + `<xsl:template match="d"><xsl:apply-templates select="rec"/></xsl:template>
+		  <xsl:template match="rec"><xsl:map><xsl:map-entry key="'k'" select="string(@k)"/><xsl:map-entry key="'n'" select="xs:integer(@v)"/></xsl:map></xsl:template>`},
+		{"a built-in rule's text node", `<xsl:mode streamable="yes"/>` + body + `<xsl:template match="rec[@k = 'b']"/>
+		  <xsl:template match="rec"><xsl:map><xsl:map-entry key="'k'" select="string(@k)"/></xsl:map><xsl:apply-templates/></xsl:template>`},
+	})
+}
+
 // TestStreamTryCatchPrefixes: a catch with exclude-result-prefixes around
 // an xsl:apply-templates that fails at a node with no rule (mode-1426).
 func TestStreamTryCatchPrefixes(t *testing.T) {
