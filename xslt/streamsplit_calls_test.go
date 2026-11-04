@@ -36,7 +36,9 @@ func TestStreamSheetCallsMatchTree(t *testing.T) {
 		`<xsl:function name="p:par" streamability="filter" as="node()?"><xsl:param name="n" as="node()"/>` +
 		`<xsl:sequence select="$n[parent::rec]"/></xsl:function>` +
 		`<xsl:function name="p:big" as="xs:boolean"><xsl:param name="a" as="item()"/>` +
-		`<xsl:sequence select="number($a) gt 1"/></xsl:function>`
+		`<xsl:sequence select="number($a) gt 1"/></xsl:function>` +
+		`<xsl:function name="p:two" as="xs:integer"><xsl:param name="one" as="node()?"/><xsl:param name="two" as="xs:string*"/>` +
+		`<xsl:sequence select="count($two) + count($one)"/></xsl:function>`
 	bodies := []struct {
 		body   string
 		stream bool
@@ -75,6 +77,9 @@ func TestStreamSheetCallsMatchTree(t *testing.T) {
 		{`<o><xsl:copy-of select="outermost(copy-of(doc/rec/sub))"/></o>`, true},
 		{`<o><xsl:copy-of select="innermost(copy-of(doc/rec))"/></o>`, true},
 		{`<v><xsl:value-of select="count(outermost(copy-of(//rec)))"/></v>`, false},
+		// Lane L2: an atomic parameter's argument read as values, whatever
+		// the other parameters are (su-shallow-descent-101's shape).
+		{`<v><xsl:value-of select="p:two((), outermost(//rec))"/></v>`, true},
 	}
 	n := 0
 	for name, doc := range coreDocs {

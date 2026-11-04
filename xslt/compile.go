@@ -12,6 +12,10 @@ import (
 
 // compiler holds state while compiling a stylesheet and its included modules.
 type compiler struct {
+	// inline is the substitution of a streamed call's first argument for
+	// its function's first parameter while the inlined body compiles
+	// (streamfn_inline.go).
+	inline *inlineSubst
 	// stream is the core plan of the streamable xsl:source-document being
 	// compiled (streamexec.go), which records the compiled form of its
 	// consuming instructions.

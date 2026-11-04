@@ -480,6 +480,9 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			validation:       spec,
 			baseURI:          n.BaseURI(),
 		}
+		if inl := c.inlineInstrFor(n, instr, sel, ns); inl != nil { // streamfn_inline.go
+			return inl, nil
+		}
 		c.noteStreamSelect(n, instr, sel, ns)
 		return instr, nil
 	case "evaluate":
@@ -529,6 +532,9 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			}
 		}
 		instr := &sequenceInstr{sel: sel}
+		if inl := c.inlineInstrFor(n, instr, sel, ns); inl != nil { // streamfn_inline.go
+			return inl, nil
+		}
 		c.noteStreamSelect(n, instr, sel, ns)
 		return instr, nil
 	case "message":
