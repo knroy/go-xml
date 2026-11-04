@@ -9,7 +9,11 @@ package xslt
 // known before the body starts; it is not the rule's (the size of the
 // apply-templates population, which the stream does not know).
 
-import "github.com/knroy/go-xml/v2/xdm"
+import (
+	"strings"
+
+	"github.com/knroy/go-xml/v2/xdm"
+)
 
 // loopContent checks the body of el, a motionless xsl:for-each, at an
 // element's view, with fn:last() of the focus admitted.
@@ -37,4 +41,25 @@ func (b *streamBuilder) leafNext(el *xdm.Node, f vfocus) (done, ok bool) {
 		return true, b.refuse(elName(el) + " at the top of a leaf rule's result")
 	}
 	return true, b.applyAttrs(el, f) && b.withParams(el, f)
+}
+
+// copiesOnly reports whether the content of b, an xsl:variable with @as
+// and no @select, is xsl:copy-of instructions alone: its nodes are the
+// copies they make, new trees, never a node of the stream.
+func copiesOnly(b *xdm.Node) bool {
+	n := 0
+	for ch := range b.Children() {
+		switch ch.Kind() {
+		case xdm.KindText:
+			if strings.TrimSpace(ch.Value()) != "" {
+				return false
+			}
+		case xdm.KindElement:
+			if !isXSL(ch, "copy-of") {
+				return false
+			}
+			n++
+		}
+	}
+	return n > 0
 }

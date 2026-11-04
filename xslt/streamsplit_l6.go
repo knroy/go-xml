@@ -659,7 +659,7 @@ func fresh(el *xdm.Node, e xpath.Expr) bool {
 		case isXSL(b, "param"):
 			return false // its value comes from the caller
 		case b.Attr("", "select") == nil:
-			return b.Attr("", "as") == nil // content: a temporary tree
+			return b.Attr("", "as") == nil || copiesOnly(b) // content: a temporary tree; streamlast_mm2.go
 		}
 		v := parseAt(b, b.AttrValue("select"))
 		return v != nil && fresh(b, v)

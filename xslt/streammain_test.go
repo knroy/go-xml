@@ -210,6 +210,11 @@ var mainCases = []struct {
 		`<xsl:template match="text()"><xsl:value-of select="concat(name(..), ':', .)"/></xsl:template>`, true},
 	{`<xsl:mode streamable="yes"/><xsl:template match="text()"><t><xsl:next-match/></t></xsl:template>`, true},
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="text()"><xsl:next-match/></xsl:template>`, false},
+	// apply-templates, in the streamable mode, over a variable whose content is
+	// copies: tree rules on new trees, accumulators copied or recomputed
+	// (copiesOnly, streamlast_mm2.go; accumulator-048s/049s).
+	{mm2CopyVar("yes"), true},
+	{mm2CopyVar("no"), true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
@@ -373,4 +378,14 @@ func TestStreamMainMemory(t *testing.T) {
 				float64(streamed)/1e6, float64(tree)/1e6, 100*c.frac)
 		}
 	}
+}
+
+// mm2CopyVar is a rule "/" applying templates, in its own streamable mode,
+// to copies of the stream held by a variable (accumulator-048s).
+func mm2CopyVar(copyAcc string) string {
+	return `<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="sub|rec" select="$value + 1"/></xsl:accumulator>` +
+		`<xsl:mode streamable="yes" on-no-match="shallow-skip" use-accumulators="a"/>` +
+		`<xsl:template match="sub"><s n="{accumulator-before('a')}"/></xsl:template>` +
+		`<xsl:template match="/"><o><xsl:variable name="v" as="element()*"><xsl:copy-of select="doc/rec[2]" copy-accumulators="` + copyAcc + `"/></xsl:variable>` +
+		`<xsl:apply-templates select="$v"/></o></xsl:template>`
 }
