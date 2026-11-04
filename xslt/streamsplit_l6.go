@@ -842,3 +842,65 @@ func (b *streamBuilder) addForeignApply(el *xdm.Node, f vfocus) bool {
 	b.kinds[streamtrace.KindApply]++
 	return true
 }
+
+// windowMap reads W(P, ...) ! R as W(P ! R, ...) for W one of subsequence,
+// head, tail, remove, when R makes exactly one value of each node and
+// cannot fail (oneValue): then the window picks the same positions of
+// either sequence, and R's extra evaluations, on the matches the window
+// drops, have no effect (sx-bang-009: subsequence(account/transaction, 1, 4)
+// ! name(ancestor::*[1])). The split takes P ! R as a mapped path and the
+// window as its outer.
+func windowMap(e xpath.Expr) xpath.Expr {
+	m, ok := e.(*xpath.SimpleMap)
+	if !ok {
+		return e
+	}
+	w, ok := m.Left.(*xpath.FuncCall)
+	if !ok || w.Name.URI != fnNS || len(w.Args) == 0 || !oneValue(m.Right) {
+		return e
+	}
+	switch w.Name.Local {
+	case "subsequence", "head", "tail", "remove":
+	default:
+		return e
+	}
+	args := append([]xpath.Expr{&xpath.SimpleMap{Left: w.Args[0], Right: m.Right}}, w.Args[1:]...)
+	return &xpath.FuncCall{Name: w.Name, Args: args}
+}
+
+// oneValue reports whether r, evaluated on a node, gives exactly one value
+// and raises no error: a name function of the node itself, of its parent,
+// of an attribute by name, or of a step filtered by [1].
+func oneValue(r xpath.Expr) bool {
+	f, ok := r.(*xpath.FuncCall)
+	if !ok || f.Name.URI != fnNS || len(f.Args) > 1 {
+		return false
+	}
+	switch f.Name.Local {
+	case "name", "local-name", "namespace-uri":
+	default:
+		return false
+	}
+	if len(f.Args) == 0 {
+		return true
+	}
+	a := oneStep(f.Args[0])
+	if isContextItem(a) {
+		return true
+	}
+	st, ok := a.(*xpath.Step)
+	if !ok {
+		return false
+	}
+	switch {
+	case st.Axis == xpath.AxisParent && len(st.Predicates) == 0:
+		return true
+	case st.Axis == xpath.AxisAttribute && len(st.Predicates) == 0:
+		nt, ok := st.Test.(*xpath.NameTest)
+		return ok && !nt.AnyLocal && !nt.AnyURI
+	case len(st.Predicates) == 1:
+		l, ok := st.Predicates[0].(*xpath.Literal)
+		return ok && l.Val != nil && l.Val.Type == xdm.TypeInteger && l.Val.FitsInt64() && l.Val.Int64() == 1
+	}
+	return false
+}

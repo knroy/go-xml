@@ -39,6 +39,9 @@ var l6Bodies = []struct {
 	// outermost(P)/T with P nesting: the outermost matches do not (sf-outermost-102).
 	{`<out><xsl:value-of select="outermost(//rec)/sub/@x" separator="|"/><xsl:text>;</xsl:text></out>`, true},
 	{`<out><xsl:copy-of select="outermost(//rec)/sub"/></out>`, true},
+	// W(P) ! R read as W(P ! R), R one value per node (windowMap; sx-bang-009).
+	{`<out><xsl:sequence select="subsequence(//rec, 1, 2) ! name(ancestor::*[1])"/></out>`, true},
+	{`<out><xsl:value-of select="head(//sub) ! name(..)"/></out>`, true},
 	// A motionless loop over the view's attributes (motionlessLoop, leafBody).
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:for-each select="@*"><n><xsl:value-of select="name(.)"/></n><v><xsl:value-of select="."/></v></xsl:for-each></e></xsl:for-each></out>`, true},
 }

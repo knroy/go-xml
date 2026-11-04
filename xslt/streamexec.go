@@ -956,6 +956,13 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 		}
 	}
 	s, why := splitStreamIn(e, sel, doc, group, key)
+	if s == nil {
+		if w := windowMap(e); w != e { // streamsplit_l6.go
+			if ws, _ := splitStreamIn(w, sel, doc, group, key); ws != nil {
+				s = ws
+			}
+		}
+	}
 	if s == nil && simple {
 		s = groundContextSplit(e, sel, doc, group) // streamsplit_l6.go
 	}
