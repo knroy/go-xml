@@ -26,7 +26,7 @@ func (s *streamSplit) itemsOnlyCopied() bool {
 	if s.cond != nil || s.outer == nil {
 		return false
 	}
-	return itemsInCopy(s.outer.Expr(), false)
+	return itemsInCopy(s.outer.Expr(), s.copiedOut)
 }
 
 // itemsInCopy reports whether every $items in e is inside a copy-of or

@@ -139,6 +139,9 @@ type streamSplit struct {
 	// json says each match, or the context, is written as JSON text off
 	// the cursor, which is the item it gives (streamfn_json.go).
 	json *jsonSplit
+	// copiedOut says the instruction holding the split copies what the
+	// outer gives (streamfn_copies.go).
+	copiedOut bool
 	// predFail and tailFail say a predicate of P, or the tail, may raise an
 	// error: the tree evaluates them all, so the split may not stop early.
 	predFail, tailFail bool

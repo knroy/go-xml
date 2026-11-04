@@ -1226,6 +1226,7 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 		op.copies = true
 		return ""
 	}
+	s.copiedOut = copies // streamfn_copies.go: what the instruction outputs is copied
 	if why := s.memory(minD); why != "" {
 		return elName(op.el) + " " + why + ": " + op.sel.Source()
 	}
