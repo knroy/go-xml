@@ -52,6 +52,12 @@ var l7Rows = []struct {
 	{``, `<xsl:variable name="g" select="doc('doc.xml')//sub"/><out><xsl:copy-of select="//sub except $g"/></out>`, false},
 	// doc() of another URI: another tree in both modes, so it streams.
 	{`<xsl:variable name="g" select="doc('other.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(/doc/rec union $g)"/></out>`, true},
+	// A call given values only, its body instructions (j:escape's shape;
+	// streamvaluefn_l7.go): run as itself.
+	{`<xsl:function name="p:esc" as="xs:string"><xsl:param name="s" as="xs:string"/><xsl:value-of><xsl:for-each select="string-to-codepoints($s)"><xsl:choose><xsl:when test=". = 97">\a</xsl:when><xsl:otherwise><xsl:value-of select="codepoints-to-string(.)"/></xsl:otherwise></xsl:choose></xsl:for-each></xsl:value-of></xsl:function>`,
+		`<out><xsl:for-each select="doc/rec"><r e="{p:esc(@k)}"/></xsl:for-each></out>`, true},
+	{`<xsl:function name="p:esc" as="xs:string"><xsl:param name="s" as="xs:string"/><xsl:value-of><xsl:for-each select="string-to-codepoints($s)"><xsl:value-of select=". + 1"/></xsl:for-each></xsl:value-of></xsl:function>`,
+		`<out><xsl:value-of select="p:esc(string-join(//rec/@k))"/></out>`, true},
 }
 
 // l7Analysis are §19.8 verdicts lane L7 models (streamability_l7.go).

@@ -52,7 +52,7 @@ func notePkgFuncs(root *xdm.Node, roots []*xdm.Node) {
 	for _, r := range roots {
 		for k, f := range collectStreamFuncs(r) {
 			seen[k]++
-			if _, mine := local[k]; !mine && selfContainedFn(f) {
+			if _, mine := local[k]; !mine && (selfContainedFn(f) || sheetBody(f.body) == nil && valuesFnOK(f)) {
 				out[k] = f
 			}
 		}
@@ -121,6 +121,14 @@ func selfContainedFn(f *streamFunc) bool {
 			ok = !stylesheetFn(x.Name)
 		}
 	})
+	return ok
+}
+
+// valuesFnOK: an instruction body given values only (streamvaluefn_l7.go),
+// which runs as itself in its package: its names (j:hex4, $indent-spaces)
+// bind there whatever the caller's scope.
+func valuesFnOK(f *streamFunc) bool {
+	_, ok := valuesOnlyCall(f)
 	return ok
 }
 
