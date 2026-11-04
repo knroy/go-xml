@@ -885,6 +885,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 		}
 		return true
 	case *xpath.BinaryOp:
+		if done, ok := w.foreignUnion(x); done { // streamsplit_foreign.go
+			return ok
+		}
 		if !burstOps[x.Op] {
 			return w.refuse("operator " + x.Op)
 		}

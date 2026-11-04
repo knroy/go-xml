@@ -470,9 +470,9 @@ func foreignSets(e xpath.Expr) (xpath.Expr, []xpath.Expr) {
 		// P must give nodes only: the operator type-checks it too
 		// (XPTY0004 for P/number(), which no rewrite would raise).
 		switch {
-		case foreign(x.Right) && !foreign(x.Left) && nodeValued(x.Left):
+		case foreign(x.Right) && !foreign(x.Left) && unionNodes(x.Left):
 			return x.Left, x.Right, true
-		case foreign(x.Left) && !foreign(x.Right) && nodeValued(x.Right):
+		case foreign(x.Left) && !foreign(x.Right) && unionNodes(x.Right):
 			return x.Right, x.Left, false
 		}
 		return nil, nil, false
