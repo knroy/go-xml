@@ -52,6 +52,9 @@ import (
 // streamFuncs returns the stylesheet's functions, as the analysis indexes
 // them, once per compile.
 func (c *compiler) streamFuncs() map[funcKey]*streamFunc {
+	if c.l7PkgCur != nil {
+		return c.l7PkgCur.fns // streampkgframe_l7.go: a frame package's own code
+	}
 	if c.streamFns == nil {
 		c.streamFns = collectStreamFuncs(c.sheet.source)
 	}

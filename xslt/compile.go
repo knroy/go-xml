@@ -195,6 +195,10 @@ type compiler struct {
 	// l7Cross is the rules walk over every module, made once (streamtrust_xmod_l7.go).
 	l7Cross     *rulesPlan
 	l7CrossDone bool
+	// l7PkgFrames are the frame packages' states, by package root, and
+	// l7PkgCur the one compiling now (streampkgframe_l7.go).
+	l7PkgFrames map[*xdm.Node]*pkgFrameState
+	l7PkgCur    *pkgFrameState
 	// mergedText records, for each text node mergeAcrossComments built out
 	// of pieces separated by comments, the element the pieces were in.
 	mergedText map[*xdm.Node]*xdm.Node

@@ -241,3 +241,89 @@ func TestStreamL7ImportTrust(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamL7PackageFrame: a call at the document node on a used
+// package's absorbing function whose body applies templates in the
+// package's own streamable mode, through a one-call wrapper -- the shape of
+// use-package-150's j:xml-to-json -- runs as a cross-package call frame on
+// the core with the tree's output (streampkgframe_l7.go). An xsl:override
+// in the xsl:use-package keeps it on the tree.
+func TestStreamL7PackageFrame(t *testing.T) {
+	const pkg = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		xmlns:fn="http://www.w3.org/2005/xpath-functions" xmlns:j="urn:j" name="urn:j" package-version="1.0" version="3.0"
+		exclude-result-prefixes="xs fn j">
+		<xsl:variable name="quot" visibility="public">"</xsl:variable>
+		<xsl:mode name="no-indent" streamable="yes" visibility="public"/>
+		<xsl:function name="j:conv" as="xs:string" visibility="public" streamability="absorbing">
+			<xsl:param name="input" as="node()"/>
+			<xsl:sequence select="j:conv($input, map{})"/>
+		</xsl:function>
+		<xsl:function name="j:conv" as="xs:string" visibility="public" streamability="absorbing">
+			<xsl:param name="input" as="node()"/>
+			<xsl:param name="options" as="map(*)"/>
+			<xsl:choose>
+				<xsl:when test="$options('indent') eq true()"><xsl:apply-templates select="$input" mode="no-indent"/></xsl:when>
+				<xsl:otherwise><xsl:apply-templates select="$input" mode="no-indent"/></xsl:otherwise>
+			</xsl:choose>
+		</xsl:function>
+		<xsl:template match="/" mode="no-indent"><xsl:apply-templates mode="#current"/></xsl:template>
+		<xsl:template match="fn:map" mode="no-indent">
+			<xsl:value-of><xsl:text>{</xsl:text><xsl:for-each select="*"><xsl:if test="position() gt 1"><xsl:text>,</xsl:text></xsl:if>
+			<xsl:value-of select="concat($quot, j:esc(string(@key)), $quot)"/><xsl:text>:</xsl:text><xsl:apply-templates select="." mode="#current"/></xsl:for-each><xsl:text>}</xsl:text></xsl:value-of>
+		</xsl:template>
+		<xsl:template match="fn:string" mode="no-indent"><xsl:sequence select="concat($quot, j:esc(.), $quot)"/></xsl:template>
+		<xsl:template match="fn:number" mode="no-indent"><xsl:value-of select="xs:string(xs:double(.))"/></xsl:template>
+		<xsl:template match="text()[not(normalize-space())]" mode="no-indent"/>
+		<xsl:function name="j:esc" as="xs:string" visibility="final">
+			<xsl:param name="in" as="xs:string"/>
+			<xsl:value-of><xsl:for-each select="string-to-codepoints($in)"><xsl:choose>
+				<xsl:when test=". = 34">\"</xsl:when><xsl:otherwise><xsl:value-of select="codepoints-to-string(.)"/></xsl:otherwise>
+			</xsl:choose></xsl:for-each></xsl:value-of>
+		</xsl:function>
+	</xsl:package>`
+	const doc = `<map xmlns="http://www.w3.org/2005/xpath-functions"><string key="a">x"y</string> <number key="n">1</number><map key="m"><string key="s">t</string></map></map>`
+	for i, c := range []struct {
+		use    string
+		stream bool
+	}{
+		{``, true},
+		{`<xsl:override><xsl:variable name="quot" visibility="public">"</xsl:variable></xsl:override>`, false},
+	} {
+		top := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:j="urn:j" version="3.0" exclude-result-prefixes="j">
+			<xsl:use-package name="urn:j" package-version="1.0">` + c.use + `</xsl:use-package>
+			<xsl:mode name="t" streamable="yes"/>
+			<xsl:template name="main"><xsl:source-document streamable="yes" href="doc.xml"><out><xsl:sequence select="j:conv(.)"/></out></xsl:source-document></xsl:template>
+		</xsl:stylesheet>`
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		run := func(core bool) (string, streamtrace.Counts) {
+			before := streamtrace.Snapshot()
+			defer func() { noBursts = false }()
+			tree, err := xdm.ParseString(top, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := Compile(tree.Root, CompileOptions{PackageResolver: fixedPackages{"urn:j": pkg}})
+			if err != nil {
+				return "COMPILE " + err.Error(), streamtrace.Snapshot().Sub(before)
+			}
+			docs, _ := NewFileResolver(dir)
+			noBursts = !core
+			res, err := s.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: docs})
+			if err != nil {
+				return "ERR " + err.Error(), streamtrace.Snapshot().Sub(before)
+			}
+			return res.String(), streamtrace.Snapshot().Sub(before)
+		}
+		so, st := run(true)
+		to, _ := run(false)
+		if so != to {
+			t.Errorf("case %d: core %q\ntree %q", i, so, to)
+		}
+		if got := st.Runs[streamtrace.Core] > 0 && st.Reruns == 0; got != c.stream {
+			t.Errorf("case %d: on the core without a re-run %v, want %v", i, got, c.stream)
+		}
+	}
+}

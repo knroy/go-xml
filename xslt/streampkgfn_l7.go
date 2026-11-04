@@ -52,7 +52,7 @@ func notePkgFuncs(root *xdm.Node, roots []*xdm.Node) {
 	for _, r := range roots {
 		for k, f := range collectStreamFuncs(r) {
 			seen[k]++
-			if _, mine := local[k]; !mine && (selfContainedFn(f) || sheetBody(f.body) == nil && valuesFnOK(f)) {
+			if _, mine := local[k]; !mine && (selfContainedFn(f) || sheetBody(f.body) == nil && valuesFnOK(f) || pkgFrameFn(f)) {
 				out[k] = f
 			}
 		}

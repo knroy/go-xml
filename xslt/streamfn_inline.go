@@ -148,6 +148,9 @@ func inlineTarget(e xpath.Expr, root *xdm.Node) (*xpath.FuncCall, *xdm.Node) {
 		n++
 		found, fn = c, g
 	})
+	if n == 0 {
+		return pkgTarget(e, root) // streampkgframe_l7.go: a used package's function
+	}
 	if n != 1 {
 		return nil, nil
 	}
@@ -253,7 +256,8 @@ func (b *streamBuilder) inlineCheck(el *xdm.Node, e xpath.Expr, x *xpath.FuncCal
 	if post == nil || !vc.safe(post, f, true) {
 		return "what surrounds the call is not motionless"
 	}
-	if !streamParamTakes(params[0], p, b.grp, f) && !(rec && groupOfS(el, fn, s) && ofCurrentGroup(p)) {
+	if !streamParamTakes(params[0], p, b.grp, f) && !(rec && groupOfS(el, fn, s) && ofCurrentGroup(p)) &&
+		!pkgDocParam(fn, params[0], p, f) { // streampkgframe_l7.go
 		return "the first parameter's type converts " + p.String()
 	}
 	if why := inlineBody(fn, s, !b.grp, substAllowed); why != "" {
@@ -676,6 +680,7 @@ func (c *compiler) inlineInstrFor(n *xdm.Node, orig Instruction, sel *xpath.Comp
 		return fail("the call is not found again")
 	}
 	in.post = part(post)
+	defer c.pkgScope(ic.fn)() // streampkgframe_l7.go: a used package's body in its own compile state
 	params, _ := splitFunction(ic.fn)
 	for _, p := range params {
 		v, err := c.compileVariable(p)
