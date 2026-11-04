@@ -10,10 +10,12 @@ package xslt
 // apply-templates population, which the stream does not know).
 
 import (
+	"reflect"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // loopContent checks the body of el, a motionless xsl:for-each, at an
@@ -100,6 +102,41 @@ func (b *streamBuilder) foreignParams(el *xdm.Node, f vfocus) bool {
 		*b.ops = append(*b.ops, op)
 		b.x.exprOps = append(b.x.exprOps, op)
 		b.kinds[streamtrace.KindSelect]++
+	}
+	return true
+}
+
+// currentFilter reports whether x, a filter of items not of the stream
+// whose predicates call fn:current(), reads only what the focus f has: the
+// predicates read their items as they like (burstSafe), and each call of
+// current() starts a path that vc admits at f, the instruction's focus
+// (si-iterate-036: $highest[@salary ge current()/@salary]).
+func currentFilter(vc viewCheck, x *xpath.FilterExpr, f vfocus) bool {
+	if !constructorFocusFree(x.Base) || !burstSafe(x.Base, false) || refsSplitItems(x.Base) { // streamsplit_fns.go
+		return false
+	}
+	vc.curOK, vc.cur = true, f
+	for _, p := range x.Predicates {
+		if !burstSafe(p, false) {
+			return false
+		}
+		calls, ok := 0, true
+		exprWalk(reflect.ValueOf(&p).Elem(), func(v reflect.Value) { // streamfork.go
+			switch y := v.Interface().(type) {
+			case *xpath.FuncCall:
+				if isCurrentCall(y) {
+					calls--
+				}
+			case *xpath.PathExpr:
+				if c, isCall := y.Steps[0].(*xpath.FuncCall); isCall && isCurrentCall(c) && !y.Root {
+					calls++
+					ok = ok && vc.safe(y, f, false)
+				}
+			}
+		})
+		if !ok || calls != 0 {
+			return false
+		}
 	}
 	return true
 }

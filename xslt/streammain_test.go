@@ -228,6 +228,11 @@ var mainCases = []struct {
 	// A parameter that is the stream's node stays on the tree.
 	{mm2ForeignParam("copy-of(.)"), true},
 	{mm2ForeignParam("."), false},
+	// xsl:iterate carrying copies, filtered by current()'s attribute: the
+	// filter reads its items as it likes and current() on the view
+	// (currentFilter, streamlast_mm2.go); copy-of() is copy-of(.)
+	// (si-iterate-036).
+	{mm2IterateMax("@v ge current()/@v"), true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
@@ -409,4 +414,12 @@ func mm2ForeignParam(sel string) string {
 	return `<xsl:mode streamable="yes"/><xsl:param name="t"><x/></xsl:param>` +
 		`<xsl:template match="/"><o><xsl:for-each select="doc/rec"><xsl:apply-templates select="$t/*"><xsl:with-param name="c" select="` + sel + `" tunnel="yes"/></xsl:apply-templates></xsl:for-each></o></xsl:template>` +
 		`<xsl:template match="x"><xsl:param name="c" tunnel="yes"/><y><xsl:copy-of select="$c"/></y></xsl:template>`
+}
+
+// mm2IterateMax is a rule "/" iterating over doc/rec, keeping a copy of the
+// last rec for which no kept one matches pred (si-iterate-036).
+func mm2IterateMax(pred string) string {
+	return `<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:iterate select="doc/rec"><xsl:param name="h" as="element(rec)*"/>` +
+		`<xsl:on-completion><xsl:copy-of select="$h"/></xsl:on-completion><xsl:variable name="this" select="copy-of()"/>` +
+		`<xsl:next-iteration><xsl:with-param name="h" select="if (empty($h[` + pred + `])) then $this else $h"/></xsl:next-iteration></xsl:iterate></o></xsl:template>`
 }

@@ -918,8 +918,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 			}
 			return w.refuse("function " + x.Name.Local + "()")
 		}
-		if len(x.Args) == 0 && !w.doc && splitFocusAtomizers[x.Name.Local] && x.Name.URI == fnNS {
-			// string() is string(.): the context's own content.
+		if len(x.Args) == 0 && !w.doc && (splitFocusAtomizers[x.Name.Local] || x.Name.Local == "copy-of" || x.Name.Local == "snapshot") && x.Name.URI == fnNS {
+			// string() is string(.): the context's own content; copy-of()
+			// is copy-of(.) (si-iterate-036).
 			x.Args = []xpath.Expr{&xpath.ContextItem{}}
 		}
 		if focusDependent[keyOf(x.Name, len(x.Args))] && !splitViewFns[w.focus][x.Name.Local] {
@@ -1279,7 +1280,7 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		}
 		return vc.path(x.Steps, f, nodeOK)
 	case *xpath.FilterExpr:
-		if freeFilter(x) { // streamsplit_fns.go
+		if freeFilter(x) || f != vNone && callsCurrent(x) && currentFilter(vc, x, f) { // streamsplit_fns.go, streamlast_mm2.go
 			return true
 		}
 		for _, p := range x.Predicates {
