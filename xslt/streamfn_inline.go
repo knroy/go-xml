@@ -239,7 +239,7 @@ func (b *streamBuilder) inlineCheck(el *xdm.Node, e xpath.Expr, x *xpath.FuncCal
 	}
 	p := x.Args[0]
 	vc := viewCheck{key: b.key}
-	if vc.safe(p, f, true) {
+	if _, ctx := p.(*xpath.ContextItem); !(ctx && f == vElem) && vc.safe(p, f, true) {
 		return "the first argument does not consume"
 	}
 	vars := false
