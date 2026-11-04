@@ -127,6 +127,11 @@ func distributedPath(e xpath.Expr) xpath.Expr {
 	switch x := pe.Steps[0].(type) {
 	case *xpath.SequenceExpr:
 		items = x.Items
+	case *xpath.LookupExpr:
+		// [A, B, ...]?* is (A, B, ...): the members, each a sequence, in order.
+		if a, ok := x.Base.(*xpath.ArrayConstructor); ok && !a.Curly && x.Wildcard {
+			items = a.Members
+		}
 	case *xpath.FuncCall:
 		if !isFn(x, "insert-before", 3) {
 			return nil

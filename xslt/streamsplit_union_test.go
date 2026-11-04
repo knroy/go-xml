@@ -87,6 +87,9 @@ var unionBodies = []struct {
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="insert-before(/doc/rec, 2, $ins)/sub"/></out>`, true},
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="insert-before($ins, 1, /doc/rec)/*"/></out>`, true},
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="(1, /doc/rec)/sub"/></out>`, true},
+	// [A, B]?*/T is (A, B)/T.
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:copy-of select="[$ins, /doc/rec]?*/sub"/></out>`, true},
+	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:value-of select="[/doc/rec, $ins]?*/@v" separator=","/></out>`, true},
 	// A loop over it is a population (streampop.go): still the tree.
 	{`<xsl:variable name="ins" as="element()*"><a>A</a><b v="9">7</b></xsl:variable><out><xsl:for-each select="/doc/rec union $ins"><e n="{name()}"/></xsl:for-each></out>`, false},
 }

@@ -55,8 +55,10 @@ func mapTail(tail, r xpath.Expr) xpath.Expr {
 }
 
 // mapPath finishes path for P ! R: tail is what each match gives (R over
-// P's own tail), last P's last axis.
-func (s *streamSplit) mapPath(w *splitter, tail, r xpath.Expr, leaf bool, last xpath.Axis,
+// P's own tail), last P's last axis. Over text, comment or PI matches alone
+// it runs on each one's kept copy, as path's tail does (lane K1), where it
+// reads only what that copy has.
+func (s *streamSplit) mapPath(w *splitter, tail, r xpath.Expr, leaf, elem bool, last xpath.Axis,
 	part func(xpath.Expr) *xpath.Compiled) string {
 	if s.red == "boolean" || s.red == "not" {
 		// R's items may be values: their EBV is not their existence.
@@ -64,8 +66,13 @@ func (s *streamSplit) mapPath(w *splitter, tail, r xpath.Expr, leaf bool, last x
 	}
 	s.atomize, s.fresh = w.use == useAtomize || splitFolds[s.red], mapFresh(r)
 	switch {
-	case leaf:
+	case leaf && (elem || !(viewCheck{}).safe(tail, vLeaf, splitCounts[s.red])):
 		return "a map over text, comment or PI matches"
+	case leaf:
+		s.mode, s.keepLeaves, s.leafOnly = matchView, true, true
+		if why := s.branchChecks(); s.hasBranches() && why != "" {
+			return why
+		}
 	case (viewCheck{}).safe(tail, vElem, splitCounts[s.red]):
 		s.mode = matchView
 	case !s.nests || s.fresh:
@@ -99,7 +106,7 @@ func mapSafe(r xpath.Expr) bool {
 	if f, ok := r.(*xpath.FuncCall); ok && stylesheetFn(f.Name) {
 		for _, a := range f.Args {
 			if !mapAtomic(a) || !burstSafe(a, true) {
-				return false
+				return burstSafe(r, true) // a marked call (streamsplit_calls.go)
 			}
 		}
 		return true
@@ -130,7 +137,7 @@ func mapFresh(r xpath.Expr) bool {
 	switch x := r.(type) {
 	case *xpath.FuncCall:
 		if stylesheetFn(x.Name) {
-			return true // mapSafe gave it atomic values only
+			return sheetCallFresh(x) // streamsplit_calls.go
 		}
 		if x.Name.URI == fnNS && (x.Name.Local == "parse-xml" || x.Name.Local == "parse-xml-fragment") {
 			return true

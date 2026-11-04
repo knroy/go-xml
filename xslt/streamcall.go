@@ -61,6 +61,7 @@ func (c *compiler) streamFuncs() map[funcKey]*streamFunc {
 // inlineCalls rewrites, in e, the calls on stylesheet functions that are
 // their bodies exactly, and the simple maps that are paths.
 func (c *compiler) inlineCalls(e xpath.Expr) xpath.Expr {
+	markSheetCalls(e, c.streamFuncs()) // streamsplit_calls.go
 	return rewriteCalls(e, c.streamFuncs())
 }
 

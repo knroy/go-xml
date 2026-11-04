@@ -376,7 +376,7 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		tail = &xpath.PathExpr{Steps: p.tail}
 	}
 	if p.mapR != nil {
-		return s.mapPath(w, mapTail(tail, p.mapR), p.mapR, leaf, last.Axis, part)
+		return s.mapPath(w, mapTail(tail, p.mapR), p.mapR, leaf, elem, last.Axis, part)
 	}
 	nodes := tail == nil || endsInAttribute(tail)
 	if !nodes && (s.red == "boolean" || s.red == "not") {
@@ -854,6 +854,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 			}
 		case xdm.NSXS, xdm.NSMath:
 		default:
+			if done, ok := w.sheetCall(x); done { // streamsplit_calls.go
+				return ok
+			}
 			return w.refuse("function " + x.Name.Local + "()")
 		}
 		if len(x.Args) == 0 && !w.doc && splitFocusAtomizers[x.Name.Local] && x.Name.URI == fnNS {
@@ -1422,7 +1425,7 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		}
 		return true
 	}
-	return false
+	return vc.sheetCall(x, f) // streamsplit_calls.go
 }
 
 // identFns read a node's identity, or reach the document or other nodes

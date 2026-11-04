@@ -99,7 +99,7 @@ var (
 		"matches": true, "compare": true, "upper-case": true, "lower-case": true,
 		"substring": true, "substring-before": true, "substring-after": true,
 		"translate": true, "tokenize": true, "round": true, "floor": true,
-		"ceiling": true, "abs": true, "round-half-to-even": true,
+		"ceiling": true, "abs": true, "round-half-to-even": true, "replace": true,
 		"format-number": true, "subsequence": true, "insert-before": true,
 		"remove": true, "index-of": true, "unordered": true, "name": true, "local-name": true,
 		"namespace-uri": true, "node-name": true,
@@ -115,7 +115,7 @@ var (
 		"matches": true, "compare": true, "upper-case": true, "lower-case": true,
 		"substring": true, "substring-before": true, "substring-after": true,
 		"translate": true, "tokenize": true, "round": true, "floor": true,
-		"ceiling": true, "abs": true, "round-half-to-even": true,
+		"ceiling": true, "abs": true, "round-half-to-even": true, "replace": true,
 		"format-number": true, "index-of": true,
 	}
 	burstOps = map[string]bool{
@@ -444,7 +444,7 @@ func atomicValued(e xpath.Expr) bool {
 			return true
 		}
 		if x.Name.URI != fnNS {
-			return false
+			return sheetCallAtomic(x) // streamsplit_calls.go
 		}
 		switch x.Name.Local {
 		case "count", "sum", "avg", "min", "max", "string", "number", "concat",
@@ -560,7 +560,7 @@ func callSafe(x *xpath.FuncCall, noPos bool) bool {
 		}
 	case xdm.NSXS, xdm.NSMath, xdm.NSMap, xdm.NSArray:
 	default:
-		return false
+		return sheetCallSafe(x, noPos) // streamsplit_calls.go
 	}
 	return allBurstSafe(x.Args, noPos)
 }
