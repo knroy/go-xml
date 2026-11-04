@@ -324,7 +324,8 @@ is worth re-deriving before it is believed.
   instance in the suite.
 - `accumulator-061` — §10.3.6 focus capture is implemented; what is missing is
   that nothing marks the principal input as streamed, and supplying that puts
-  the 2,020 cases in `tests/strm/` at risk to win one.
+  the 2,020 cases in `tests/strm/` at risk to win one. Round L supplied the mark
+  (be09e991, untested): expected to pass, pending the full run.
 - `particlesZ033_g` (XSD 1.1) — enforcing the 1.0 wildcard reading costs
   seventeen valid schemas for the one case.
 - `id017.n01.xml` (XSD 1.1) — a defaulted `xs:ENTITY` in a document with no
@@ -354,7 +355,10 @@ do here.**
 item while the initial mode streams. §3.6.6 offers two options to the API, one
 of which is "building the corresponding tree in memory and supplying the global
 context item as an unstreamed node" — which is what this engine does — and the
-catalog's own keywords mark the case `_WRONG:wrong-error-code`.
+catalog's own keywords mark the case `_WRONG:wrong-error-code`. Round L
+(6cc2247f, untested) follows §2.3.2 instead, on the owner's decision: in a
+streamable initial mode `TransformReader` makes the global context item absent,
+so the case gets XPDY0002; expected to pass, pending the full run.
 
 `validation-0201` does assert Saxon's three-space indent byte-for-byte, and
 indentation is implementation-defined by §10 of the serialization spec — the

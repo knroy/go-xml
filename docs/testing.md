@@ -570,7 +570,12 @@ streamable-007/-022 (a principal input `TransformReader` streamed), the clock in
 evaluate-052, cvt-042, format-date-037 and error-3160a, and three cases whose
 wanted `XTSE3430` M8's analysis now raises where the base wrote output
 (si-fork-902, si-fork-952, su-absorbing-205), which fire only against a base
-before M8.
+before M8. Round L makes the off leg differ by design where `TransformReader`
+follows the spec and `Transform` of a parsed tree does not: an absent global
+context item in a streamable initial mode (§2.3.2, 6cc2247f: `streamable-116`)
+and an absent focus saved by an accumulator function item on a streamed input
+(§10.3.6, be09e991: `accumulator-061`). Each needs a rule citing its commit;
+none is written yet, as nothing of round L has run.
 
 With `GOXSLT_RECORD_DIR` set, tests/xslts writes
 `<dir>/streams/<suite>.tsv`, one line per case that streamed. The runner
@@ -630,8 +635,8 @@ come from a stream of their own (random declarations read in every way a run
 answers, `use-accumulators` lists, failing rules), and a fifth of the modes
 grammar's stylesheets get accumulators, so `TestStreamFuzzMain` has them;
 `GOXSLT_STREAM_FUZZ_ACCUMS=0` leaves them out. Fork and map cases (1–4
-prongs or entries, duplicate keys, a fork per record, under `xsl:try`, with
-limits) come from another, and the modes grammar's rule bodies get forks
+prongs or entries, duplicate keys, a fork per record, under `xsl:try` (which
+streams since L1's cca65c41), with limits) come from another, and the modes grammar's rule bodies get forks
 and maps too; `GOXSLT_STREAM_FUZZ_FORKS=0` leaves them out.
 `TestStreamFuzzMerge` generates 1–3 logs (sorted, ties, out of order,
 non-numeric keys, malformed) and 1–3 merge sources over them, with collected
@@ -751,7 +756,29 @@ by at most 1 MiB from 10% to 90% of the output; skipped under `-short` and
 `-race`); new rows in `TestStreamUnion`, `TestStreamShapes`,
 `TestStreamWholeFns`, `TestStreamPop` and the core tables, and in
 `TestStreamResultValidation` (ran) for `xsl:copy` with validation of items that
-are never attributes.
+are never attributes. For the completion round L (L1–L7), written and none yet run:
+`-run 'TestStreamXMLToJSONMatchesTree|TestStreamInlinedCallsMatchTree'`
+(`xml-to-json` from the events; function bodies with instructions planned in
+the caller's plan, call frames, one-node parameters); `-run
+'TestStreamDocCopyEvents|TestStreamCopyDocNode|TestStreamCopyChoice|TestStreamLeafAtomicSequence|TestStreamAtomicTypedVariable|TestStreamApplyLeafMatches|TestStreamDocCopyIDs|TestStreamDocEntities|TestStreamCommentSelectValues|TestStreamValueOfTextBeside|TestStreamApplyFreshCopies|TestStreamGroupByEventCopies'`
+(document-level copies, the DOCTYPE, leaf rules, copies applied and
+grouped); `-run
+'TestStreamAccumReadsMatchTree|TestStreamTryAccumFailsAtStart|TestStreamTryApplyMatchesTree|TestAccumDynamicCallStreamedInput|TestStreamMergeL4|TestStreamMergeAccums|TestStreamCopyAccumulatorsNo'`
+(accumulators reading accumulators, §18.2.5 errors in both modes, try over
+apply-templates, §10.3.6 on a streamed input, merges with `last()`, messages,
+accumulators and the two-pass collect, `copy-accumulators`); `-run
+TestStreamL6MatchesTree` (loop bodies at a leaf's focus, copies applied,
+`has-children`, choice and union populations); and `-run
+'TestStreamL7MatchesTree|TestStreamL7UsePackageTrust|TestStreamL7ImportTrust|TestStreamL7PackageFrame'`
+(analysis rows, the alias guard, §2.3.2, trust across packages and imports,
+the cross-package call frame). L1 and L5 added rows only: `TestStreamApply`,
+`TestStreamCore`, `TestStreamFork`, `TestStreamMain` (with a new `ndata`
+document), `TestStreamUnion`, `TestStreamGroup`, and `TestStreamSheetCalls`
+gained rows from L2. `mainRun`, the main-mode oracle, compares
+`TransformReader` with `xdm.Parse` + `Transform` except for rows marked
+`<!--2.3.2-->` (`globalItemRow`), whose globals read the context item; those
+compare with `TransformReader`'s own tree fallback, where the global context
+item is absent too (e3659459).
 
 
 ## The ratchet

@@ -211,7 +211,9 @@ error. Calls on stylesheet functions split as their bodies when the call is
 its body exactly (one `xsl:sequence`, focus free, the arguments `.`, a path or
 literals of the parameter types, a result type the body certainly has);
 a call it cannot inline, recursive bodies included, runs on values, or on
-each match's grounded copy when its body reads only what the copy has. `P ! R` of atomic values is the path
+each match's grounded copy when its body reads only what the copy has (since
+L2, also names, attributes and existence of its ancestors' copies: a body
+that climbs). `P ! R` of atomic values is the path
 `P/R`. Streamable attribute sets run on the view. Accumulators applicable
 to a streamed document are computed as it is read: each rule fires as the
 cursor passes its node's start or end (text, comment and processing-instruction
@@ -220,8 +222,11 @@ value of an element whose start tag the plan is at, or of the document node,
 and `accumulator-after` reads it once the element has been read, or reads the
 element to its end when nothing else does. `use-accumulators` on
 `xsl:source-document` and on the initial mode is honoured, XTDE3362 as the
-tree raises it, and an accumulator's error is the tree's: that of the
-earliest-read accumulator whose rules fail anywhere in the document.
+tree raises it, and an accumulator's error is the tree's: since L4
+(b90d54e8, untested) both modes follow §18.2.5, so a read fails only when the
+value it asks for depends on the computation that failed, and values set
+before the failure stand (the tree no longer fails every read of an
+accumulator whose walk failed anywhere).
 `xsl:fork` and `xsl:map` stream: with at most one prong (entry) reading the
 stream, as the sequence constructor they are; with several, at the document
 node of a container, each reading prong parses the document itself over one
@@ -236,7 +241,12 @@ function item cannot hang it. `xsl:merge` streams the documents of a
 `for-each-source` merge source each on a cursor, merged by key as the tree
 merges (an action may call a named template of its module, write
 `xsl:result-document`, or apply templates: no rule it reaches sees the
-action's focus, and a rule's messages are taken back on a re-run); any error re-runs the merge on the tree.
+action's focus, and a rule's messages are taken back on a re-run); any error re-runs the merge on the tree,
+except one met before anything is read, which is the tree's first and is
+returned at once (L4). Since L4 (df063a51, untested) both modes collect the
+sources not read on a cursor first, then the cursor ones: the order across
+the merge's trees is implementation-dependent (XPath 3.1 §2.4.1), and this
+one lets a collected source after a streamed one stream.
 
 Since the gap lanes (G1–G7) the core also takes:
 - **selects at the document node that need their matches** (`remove`,
@@ -250,7 +260,7 @@ Since the gap lanes (G1–G7) the core also takes:
   variable's nodes (`count(P union $v)`, `P except $v`, `$v intersect P`, and
   `P union $v` under any holder: `copy-of`, `sum`, a filter, a map)
   rewritten or unioned by the outer, since a variable never holds a streamed
-  node; `A/T union B/T` with one shared tail of axis steps, and `($v, P)/T`,
+  node (but for a `doc()` of the streamed URI: the alias guard below); `A/T union B/T` with one shared tail of axis steps, and `($v, P)/T`,
   `insert-before(P, n, $v)/T`, `[A, B]?*/T` or `($v | P)/T` as the union of
   the paths they make;
 - **path algebra**: `P ! Q` as `P/Q` where that is the map exactly (Q downward
@@ -306,6 +316,68 @@ Since the gap lanes (G1–G7) the core also takes:
   select; a consuming separator, name or namespace value template of
   `xsl:value-of`, `xsl:attribute` or `xsl:element`.
 
+Since the completion round L (L1–L7; written, not yet run, so every item is
+untested and the figures below predate it) the core also takes:
+- **several consumers of one context**: a rule body that reads its element
+  twice (two fork prongs, a copy beside a read) runs on a grounded copy of
+  the element, at most the tree's memory, the copy carrying the document's
+  DTD; a variable's map constructor at the document node whose entries each
+  read is a tee of its entries; an `xsl:fork` with several reading prongs in
+  an `xsl:try`; `base-uri()`, `document-uri()`, `. instance of
+  document-node()` and `unparsed-entity-uri()` at the document node (the
+  stand-in has the document's URIs and DOCTYPE);
+- **stylesheet functions**: bodies that climb, a body with instructions
+  planned inside the caller's plan, a recursive call on the current group
+  in a call frame of its own, a path given to a one-node parameter (a loop
+  with the tree's cardinality), a call whose value is copied on the document
+  element's grounded copy, a call given only values or a variable's copies
+  (motionless), `filter(P, f#1)`, `outermost(copy-of(P))`, `xml-to-json(.)`
+  written from the parse events, a used package's function verified in its
+  package and called as itself, and a used package's absorbing function as a
+  call frame compiled in the package's state, its modes planned per package;
+- **document-level copies**: `copy-of(.)`, `snapshot(.)` and `value-of` of
+  `.` at the document node, written from the events or built once (DTD
+  ID-ness and typing kept); `xsl:copy` of the document node with any body;
+  copies over a choice of paths; `xsl:sequence` of atomic values in a leaf
+  rule; a variable with an atomic `as` atomizing its select;
+  `xsl:apply-templates` over text, comment or PI matches, over fresh copies
+  (`copy-of()`, `P ! snapshot(.)`, `copy-of(P)`, `(copy-of(P))[pred]`, with
+  sort, parameters and `last()` as the tree), over `doc()` of a literal other
+  URI, and over values read off the stream;
+- **accumulators, try and merge**: rules reading an accumulator of their own
+  node (mutual reads stay refused) or `base-uri(/)`; a non-streamable
+  accumulator read in a container (XTDE3362 as the tree); values on copies of
+  grounded matches and with `copy-accumulators="yes"`; `xsl:try` and
+  `xsl:message` reading accumulators; `xsl:apply-templates` in a try when no
+  rule it reaches can fail but the built-ins; merges with `last()` in the
+  action, `xsl:message`, boolean or global-map keys, `use-accumulators`;
+- **set operators and grouping**: `intersect`/`except` of two climbing
+  paths; grouping populations that are a window, attributes, text, `node()`,
+  `outermost(P)` or a crawling `(//x)[...]` under a motionless body; group-by
+  over the root's children as copies made from the events; text value
+  templates in a group body;
+- **shapes and populations**: loops over attributes, leaves or values whose
+  body reads `.`; a motionless `xsl:iterate`; `current()` as the
+  instruction's item and in a rule pattern; `key()` over a global's document;
+  `has-children()` read by a peek at the dispatched element's start tag;
+  populations `if ($c) then P else Q`, `$v union P`, `[A, B]?*`;
+  `outermost(P)/T` when P nests; `W(P) ! name(..)`; `xsl:call-template` with
+  one consuming parameter the callee atomizes; `xsl:perform-sort` over copies
+  or values; `xsl:copy` of an attribute against a `type`; apply-templates in
+  an `xsl:map` held in a typed variable; a for-each over a union of two
+  same-depth child paths (the trusting walk reads it as striding);
+- **trust across modules**: a streamable mode whose rules sit in imported or
+  included modules (no package among them), verified by import precedence; a
+  module using a package without `xsl:override` of template rules.
+
+A stylesheet that may load the streamed document by URI (`doc()`, a
+non-streamable `xsl:source-document`, `xsl:evaluate`, a package) and writes
+a node-identity operator (`union`, `|`, `intersect`, `except`, `is`, `<<`,
+`>>`, `generate-id`) does not stream (L7, 60cf53ed/ddcaebf8, untested): in tree
+mode such a load returns the resolver's cached tree, whose nodes are the
+stream's own, so "a variable never holds a streamed node" does not hold. A
+literal URI other than every streamed one still streams.
+
 A path
 is child or descendant steps by name, wildcard or kind (`doc/rec`, `//rec`,
 `/*/*/rec`, `*:rec`, `p:*`, names resolved through `xpath-default-namespace`),
@@ -318,17 +390,30 @@ time; `xsl:strip-space` is applied as the cursor reads.
 when the transform starts by applying templates to it in a streamable mode
 (§6.6.4): the document node is dispatched on a cursor over the reader, and
 the rules run as above. It takes the tree path, `xdm.Parse` then `Transform`
-exactly, for an initial template, function or match selection; a mode that
+exactly (but for the absent global context item of a declared-streamable
+initial mode, below), for an initial template, function or match selection; a mode that
 is not streamable, not verified, or reaches a rule or built-in the core does
 not run; an `xsl:global-context-item` with a type, an applicable accumulator that is not
-streamable or that the observer cannot compute,
-`input-type-annotations="strip"`, or a global variable or parameter whose
-value may read the context item (§5.3.3: the global context item is
-grounded; one whose content is literal streams); a built-in rule that would copy a node of the document to the top
+streamable or that the observer cannot compute, or
+`input-type-annotations="strip"`; a built-in rule that would copy a node of the document to the top
 of the principal result (`Result.Nodes` would hold a copy where the tree
 holds the source's node); a deep-copy mode; a select at the document node
-that may give up (`min`/`max` over mixed types); a stylesheet of more than
-one module.
+that may give up (`min`/`max` over mixed types); a stylesheet whose other
+modules leave its rules unverified (since L7, untested: imported and included
+modules with no package among them are verified across modules by import
+precedence, and a plain `xsl:use-package` keeps the using module trusted).
+
+A global no longer keeps the input on the tree (L7, 6cc2247f, untested). In a
+streamable initial mode, with no initial template, function or match
+selection, the global context item of `TransformReader`'s input is absent, as
+XSLT 3.0 §2.3.2 requires ("cannot be nodes in a streamed document"), on the
+streamed path and on its tree fallback alike: a global reading the focus
+raises XPDY0002 either way (`streamable-116`). This is a deliberate change from
+`Transform` of a parsed tree, which still supplies the document node. In the
+same way (L4, be09e991, untested) an `accumulator-before#1` or
+`accumulator-after#1` item made at a node of a streamed input saves an absent
+focus (§10.3.6), so its call raises XTDE3350 on both of `TransformReader`'s
+paths (`accumulator-061`); a tree given to `Transform` keeps the focus.
 
 `TransformOptions.Output` serializes the principal result to a writer as it
 is built, for `Transform` and `TransformReader`: the builder writes each
@@ -487,46 +572,49 @@ CPU; that is a process-wide setting for the application to choose, which this
 library does not set.
 
 Refused, and run on the tree: a held select past the cap, or whose match is
-the document element; `xsl:apply-templates` over motionless parts or
+the document element (unless the outer only copies what it holds, L2); `xsl:apply-templates` over motionless parts or
 insertions with `xsl:with-param` or `xsl:sort`, a union with a variable's
-nodes, values or a select whose matches may be text, comment or PI
-nodes, or in a sequence-typed variable; a pattern a view cannot decide
-(positional, reading content, `id()`/`key()`); a for-each over climbed
+nodes that are not fresh, or in a sequence-typed variable outside an
+`xsl:map`'s content; a pattern a view cannot decide
+(positional, reading content, `id()`/`key()` of the streamed document); a for-each over climbed
 ancestors; a set operator with an operand that is not a downward path of the
 stream (a loop over a union with a variable's nodes, `intersect` or `except`
-of paths with a tail, which do not distribute, a climbing path) or whose
+of paths with a downward tail, which do not distribute; two climbing tails stream since L5) or whose
 predicates may fail; `last()`, `reverse`, `sort`; `group-by` or `xsl:sort`
 over a streamed population outside `xsl:fork` (§19.8.4.19 makes them
 free-ranging), and in a fork in a rule body under `TransformReader` (no tree to
-fall back to past the cap); a grouping population that is not child steps
-(`//`, `outermost()`, attributes, text, a window); a key or
+fall back to past the cap) unless its members are held as copies made from
+the events; a grouping population that is not child steps beyond the shapes
+round L takes (a window, attributes, text, `node()`, `outermost(P)`, a crawling
+`//` under a motionless body); a key or
 pattern a view cannot decide; an `xsl:try` where the stream could meet another
 error first than the tree (two parts of a select that may fail, a loop whose
-select may fail, `xsl:apply-templates` or grouping in its body), a consuming
+select may fail, `xsl:apply-templates` whose rules may fail, or grouping in its body), a consuming
 catch (no W3C case has one); a call on a stylesheet function that is not its
 body exactly and whose body reads more than values or a grounded copy has (a
-conversion that may fail, a recursion that climbs, `f($e/..)`, a body with
-instructions, a node-returning category, a global variable, a cache), or in an instruction the core checks on
+conversion that may fail, an ancestor's string value or children, `f($e/..)`, a body with
+instructions the caller's plan cannot take, a node-returning category, a global variable, a cache), or in an instruction the core checks on
 the view; an applicable streamable accumulator whose rules read more of a node
 than its start tag has, whose values may hold a node of the document, that
-reads another accumulator, or whose rule body is not one `xsl:sequence`;
-`copy-accumulators`; `accumulator-before` in a grouping's body or on a node
-copied out of the stream; an `xsl:fork` or `xsl:map` with several reading
-prongs at an element (a loop body, a rule body under `TransformReader`: no tee
-there); an `xsl:try` whose body holds a fork or map
-with several reading prongs, or whose body or catch reads an accumulator (the
-tree raises an accumulator's error at its first read inside the try, the
-stream may raise it later); a dynamic call `$v(...)` unless `$v` is provably a
-map or an array; two consumers in one sequence constructor (a consuming
-`xsl:variable` beside another consumer, several consuming map entries, two in
-a rule body); `copy-of(.)` of the document node (the copy is the tree);
-`xml-to-json(.)` of the document node (it grounds the whole document); an
-`xsl:merge` source with `use-accumulators` or `sort-before-merge`, a path merge
+reads an accumulator other than of its own node by a literal name, or that
+accumulators read each other, or whose rule body is more than `xsl:variable`
+instructions and one `xsl:sequence`;
+`copy-accumulators="yes"` on `xsl:copy`; `accumulator-before` in a grouping's body or on a node
+copied out of the stream by other than `copy-accumulators="yes"` or an
+apply-templates over copies; an `xsl:fork` or `xsl:map` with several reading
+prongs at an element outside a rule body (a loop body, a container's own
+group body: no tee there), or in a rule body whose grounded copy would be at
+the top of the principal result; a dynamic call `$v(...)` unless `$v` is provably a
+map, an array, or a global bound to `accumulator-before#1`/`-after#1`; two consumers in one sequence constructor outside a rule body (a consuming
+`xsl:variable` beside another consumer, several consuming map entries other
+than a variable's map constructor at the document node); an
+`xsl:merge` source with `sort-before-merge`, a path merge
 key on a validated source,
 a select that is not child steps, keys of different types at one position
-across sources, a collected source after a streamed one, or an action that
-mentions `last()` or `trace()`, holds `xsl:message`, `xsl:assert` or
-`xsl:evaluate`, or calls a named template its module does not declare once
+across sources, or an action that
+mentions `trace()`, holds `xsl:evaluate`, or holds `xsl:message` or
+`xsl:assert` where a key, select or `for-each-source` expression could tell
+messages of its own, or calls a named template its module does not declare once
 or whose module imports or includes another; an `xsl:global-context-item`.
 
 `<xsl:apply-templates select="@*|node()"/>` in a streamable mode is refused
@@ -535,19 +623,41 @@ and §19.8.4.5 makes a crawling select roaming and free-ranging. `sx-union-202`
 expects exactly that refusal and Saxon-EE gives it. The two-instruction form,
 `select="@*"` then `select="node()"` (or no select), is guaranteed-streamable
 and streams. `sx-union-315`, whose same-depth union the catalog expects to be
-accepted, runs on the tree.
+accepted, ran on the tree; since L7 (4f2cc85f, untested) the trusting walk
+reads a union of two child-step paths of one depth as striding, since their
+nodes cannot contain one another, so it may stream. The refusal walk keeps
+§19.8.8.4's crawling, so no `XTSE3430` moves.
 
 Of the 2,930 W3C cases that touch streaming, 2,281 stream; 262 are correctly
 refused with `XTSE3430`, decided statically, or ask for no streamed input; 387
-still run on the tree, for the refusals above: chiefly `xsl:apply-templates`
-over mixed populations (a variable's items beside the stream's would need the
-streamed dispatch to hand foreign items to tree rules), stylesheet functions
-beyond one-level inlining, several consumers in one sequence constructor,
-grouping populations that are not child steps, `intersect`/`except` with a
-shared tail, `copy-of(.)` of the document node, accumulators that read
-accumulators or values on copies, a fork at an element, merges the list
-names, documents a resolver has already parsed, and containers the analysis
-leaves unknown or unverified.
+still run on the tree. Those figures were measured before round L, whose
+untested fixes target most of the 387; they move only with the full run.
+What round L left on the tree, each case proved not streamable or with
+nothing to stream:
+- `si-apply-templates-008`, `-009`: the built-in shallow-copy puts the
+  source's own leaf node at the top of the principal result, and
+  `Result.Nodes` must hold the parsed tree's node (its parent, root,
+  identity), which only the tree has;
+- `si-group-055`: not guaranteed-streamable. The fork prong
+  `xsl:apply-templates select="current-group() except ."` has two striding
+  operands, which §19.8.8.4 makes crawling, and §19.8.4.5 makes an
+  apply-templates over a crawling select roaming and free-ranging, so the
+  mode fails §6.6.4 (the catalog expects output; the tree gives it);
+- `streamable-055`: `max()` below the document node over values that may
+  change type is exact only by fn:max's sequential algorithm, which needs the
+  values from the first type change on held; a list-typed node atomizes to
+  many of them, so memory at most the tree's cannot be shown, and below the
+  document node there is no tree to fall back to;
+- `merge-090`: its merge source is the principal input, already a tree;
+  re-reading it could see other bytes (one URI is one document in a
+  transformation), and streaming the held tree saves nothing;
+- a container-level `xsl:fork` with several consuming prongs in a group body
+  (outside a rule): the prongs read the group's members in another order
+  than the cursor, so the group must be held, and grounded copies of
+  members cost more than the tree's records; a rule's body takes the
+  element whose children are the group whole instead;
+- `stream-006`, `non-stream-006`: FODC0005 for `c:\my\doc\books.xml` before
+  any read, in both modes: there is no document to stream.
 
 In the W3C XSLT 3.0 run 2,281 cases stream (9 before the second burst shape,
 364 before `//` record paths, 450 before the core, 576 before streamable
@@ -700,7 +810,10 @@ passes them all):
 Not implemented: `fn:root` (§19.8.9.18 rewrites `root(X)` to `X` only when X
 is statically a document node, a type this analysis does not infer; rewriting
 otherwise would refuse `root()//x` at a document node), `fn:fold-right`
-(§19.8.9.9), `fn:function-lookup` (§19.8.9.12), and §19.8.8.9's empty-axis
+(§19.8.9.9), both modelled since L7 (ef9e55bf, untested) only for a grounded
+operand (`root(X)` with X grounded, `fold-right(S, Z, F)` with S grounded
+and consuming), where every modelled answer is grounded and no `XTSE3430` can
+follow; `fn:function-lookup` (§19.8.9.12), and §19.8.8.9's empty-axis
 rule (an axis that can never select is grounded and motionless), which needs
 a U-type of the context item. That rule is most of the analysis's
 disagreements with the optional posture-and-sweep assessments

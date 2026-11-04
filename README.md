@@ -188,7 +188,9 @@ true here:
    `xsl:apply-templates` into streamable modes, `xsl:for-each-group`
    (adjacent, starting-with, ending-with), `xsl:try`, streamable attribute
    sets, calls on stylesheet functions whose body is one `xsl:sequence`
-   (recursive ones too, over values or a match's grounded copy),
+   (recursive ones too, over values or a match's grounded copy) and, since
+   round L (untested), bodies with instructions planned in the caller's plan,
+   call frames for recursion, and a used package's functions,
    accumulators, `xsl:fork` and `xsl:map`, `xsl:merge` over streamable
    sources, set operators, climbing paths, kept text nodes, `xsl:message`,
    `xsl:comment`, `xsl:processing-instruction` and `xsl:result-document`, and
@@ -372,7 +374,9 @@ A large document can be streamed rather than built. `TransformReader` reads
 it once, as the transform runs, when the stylesheet starts in a mode declared
 `streamable="yes"` whose rules are guaranteed streamable; otherwise it is
 exactly `xdm.Parse` then `Transform`, so the result, errors and limits are the
-same either way:
+same either way. One difference from `Transform` of a parsed tree is the
+spec's: in a mode declared streamable the global context item is absent
+(XSLT 3.0 §2.3.2), on both paths (round L, untested):
 
 ```go
 f, err := os.Open("big.xml")
@@ -436,9 +440,11 @@ result, err := sheet.TransformReader(ctx, f, xslt.TransformOptions{
 })
 ```
 
-Nothing outside the rules may read the document for it to stream: no global
-variable reading `.`, no typed `xsl:global-context-item`, no applicable accumulator
-that is not streamable or that the stream cannot compute. In a streamable
+Nothing outside the rules may read the document for it to stream: no typed
+`xsl:global-context-item`, no applicable accumulator that is not streamable or
+that the stream cannot compute. A global variable reading `.` does not read
+the document: the global context item is absent for a streamed input, so it
+raises XPDY0002, streamed or not (round L, untested). In a streamable
 mode the identity template's `<xsl:apply-templates select="@*|node()"/>` is
 refused with `XTSE3430` (§19.8.8.4 makes the union crawling); write it as
 `<xsl:apply-templates select="@*"/><xsl:apply-templates select="node()"/>`,
