@@ -109,6 +109,9 @@ type svFrame struct {
 	// (streamvalid_ic.go).
 	skipped bool
 	ic      *svICFrame
+	// preserve says the element has xml:space="preserve", which keeps
+	// its ignorable whitespace (stripIgnorableWhitespace).
+	preserve bool
 }
 
 // streamV is a validation run on a stream.
@@ -183,7 +186,7 @@ func (s *streamV) Drops(el *xdm.Node) bool {
 	f := &s.frames[len(s.frames)-1]
 	// stripIgnorableWhitespace: element-only content the model walks (not
 	// the empty-only branch, which reads all its text).
-	return f.el == el && f.kind == svElems
+	return f.el == el && f.kind == svElems && !f.preserve
 }
 
 func (s *streamV) Stripped(el *xdm.Node) {
@@ -509,6 +512,9 @@ func (s *streamV) startAgainstType(f *svFrame, el *xdm.Node, typ Type, decl *Ele
 		case ContentSimple:
 			f.kind, f.st = svSimple, t.SimpleContent
 		case ContentElementOnly:
+			if a := el.Attr(xdm.NSXML, "space"); a != nil && a.Value() == "preserve" {
+				f.preserve = true
+			}
 			f.emptiable = f.oc != nil || particleAcceptsEmpty(t.Particle, map[*Particle]bool{})
 			f.kind = svElems
 			if isEmptyContent(t) && f.oc == nil {

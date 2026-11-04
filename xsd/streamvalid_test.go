@@ -357,6 +357,8 @@ func TestStreamValidationMatchesTree(t *testing.T) {
 		{"books lax undeclared", books, `<X><BOOKS/></X>`, lax, false},
 		{"misc strict", misc, svMiscDoc, strict, false},
 		{"misc doc", misc, svMiscDoc, doc, false},
+		{"xml:space keeps ignorable whitespace", misc, strings.Replace(strings.Replace(svMiscDoc, `<m:g>2002</m:g>`, ` <m:g>2002</m:g> `, 1),
+			`<w o:at="1"`, `<w xml:space="preserve" o:at="1"`, 1), doc, false},
 		{"empty with whitespace", misc, strings.Replace(svMiscDoc, `<e/>`, `<e> </e>`, 1), strict, false},
 		{"misc root xsi:type", misc, `<r xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:m="urn:m" xsi:type="m:base"><v xmlns="urn:m">3</v></r>`, strict, false},
 		{"values strict", values, svValuesDoc, strict, false},
