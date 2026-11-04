@@ -541,7 +541,29 @@ func foreignApply(el *xdm.Node, e xpath.Expr, f vfocus) bool {
 	if noNodes(e) && (viewCheck{}).safe(e, f, false) {
 		return true
 	}
-	return freeOfFocus(e) && !readsDocs(e) && fresh(el, e)
+	return freeOfFocus(e) && (!readsDocs(e) || docLiteral(e)) && fresh(el, e)
+}
+
+// docLiteral reports whether e is doc(L) or document(L), L a string
+// literal, perhaps under a path (doc('sections.xml')/x): a document the
+// resolver loads as a tree, which in tree mode could be the streamed one
+// (the resolver caches the trees source-document reads too); executeForeign
+// checks, as it runs, that it is not (streamable-065).
+func docLiteral(e xpath.Expr) bool {
+	if pe, ok := e.(*xpath.PathExpr); ok && !pe.Root && len(pe.Steps) > 0 {
+		for _, s := range pe.Steps[1:] {
+			if readsDocs(s) {
+				return false
+			}
+		}
+		e = pe.Steps[0]
+	}
+	f, ok := e.(*xpath.FuncCall)
+	if !ok || !isFn(f, "doc", 1) && !isFn(f, "document", 1) {
+		return false
+	}
+	l, ok := f.Args[0].(*xpath.Literal)
+	return ok && l.Val != nil && l.Val.Type == xdm.TypeString
 }
 
 // freeOfFocus is focusFree (streamexprs.go), which also reads a lookup in
@@ -636,6 +658,8 @@ func fresh(el *xdm.Node, e xpath.Expr) bool {
 			switch x.Name.Local {
 			case "copy-of", "snapshot":
 				return true // new trees, whatever they copy
+			case "doc", "document":
+				return docLiteral(x) // a tree of its own (executeForeign checks it is not the stream's)
 			case "current-group", "current-merge-group":
 				return false
 			}
@@ -687,6 +711,15 @@ func (i *applyTemplatesInstr) executeForeign(rt *runtime, out *outputBuilder, ru
 	seq, err := i.sel.Eval(rt.ctx)
 	if err != nil {
 		return err
+	}
+	if u := run.root.DocumentURI(); u != "" {
+		for _, it := range seq {
+			if n, ok := it.(*xdm.Node); ok && n.Root().DocumentURI() == u {
+				// doc() of the document streaming: the tree's would be the
+				// same nodes as the stream's (one cached tree), these are not.
+				return errStreamPlan
+			}
+		}
 	}
 	off := run.off
 	run.off = true
@@ -790,4 +823,17 @@ func calleeAtomic(t, wp *xdm.Node) bool {
 		}
 	}
 	return false
+}
+
+// addForeignApply registers el as an applyForeign op. addApply's refusal in
+// a sequence-typed variable (a built-in rule's copy of a streamed node kept
+// where the tree keeps the node) does not arise: the items are not the
+// stream's, the rules the tree's code over them (streamable-065's
+// <xsl:variable as="element()*"> around apply-templates of doc(...)).
+func (b *streamBuilder) addForeignApply(el *xdm.Node, f vfocus) bool {
+	op := &streamOp{x: b.x, el: el, doc: f == vNone, apply: applyForeign, inGroup: b.grp, key: b.key}
+	b.x.ops[el] = op
+	*b.ops = append(*b.ops, op)
+	b.kinds[streamtrace.KindApply]++
+	return true
 }

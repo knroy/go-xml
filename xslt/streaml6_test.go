@@ -121,6 +121,13 @@ var l6DeclBodies = []struct {
 	// (callTemplateOp; si-call-template-002).
 	{`<xsl:template name="ct"><xsl:context-item use="absent"/><xsl:param name="x" as="xs:integer?"/><c v="{$x * 2}"/></xsl:template>`,
 		`<out><xsl:for-each select="doc/rec"><xsl:call-template name="ct"><xsl:with-param name="x" select="sub[1]/@x"/></xsl:call-template></xsl:for-each></out>`, true},
+	// apply-templates of doc(L), another document, inside a sequence-typed variable
+	// (docLiteral, addForeignApply; streamable-065).
+	{`<xsl:template match="t" mode="nd"><xsl:copy-of select="."/></xsl:template><xsl:template match="text()" mode="nd"/>
+<xsl:mode name="ds" streamable="yes"/>
+<xsl:template match="/" mode="ds"><xsl:variable name="v" as="element()*"><xsl:apply-templates select="doc('other.xml')" mode="nd"/></xsl:variable><r n="{count($v)}"><xsl:copy-of select="$v"/><xsl:apply-templates mode="ds"/></r></xsl:template>
+<xsl:template match="rec" mode="ds"><x k="{@k}"/></xsl:template>`,
+		`<out><xsl:apply-templates select="." mode="ds"/></out>`, true},
 	// xsl:apply-templates over copies of the matches, to the tree's rules of a mode
 	// that is not streamable (executeCopies): positions and last() are the tree's.
 	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, true},
@@ -149,6 +156,10 @@ const l6CopyRules = `<xsl:template match="rec" mode="t"><xsl:param name="p" sele
 func TestStreamL6MatchesTree(t *testing.T) {
 	dir := t.TempDir()
 	streamed := 0
+	// other.xml: a second document for doc() (streamable-065's shape).
+	if err := os.WriteFile(filepath.Join(dir, "other.xml"), []byte(`<o><t>one</t><t>two</t></o>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for name, doc := range coreDocs {
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
 			t.Fatal(err)

@@ -114,7 +114,7 @@ func (b *streamBuilder) attrApply(el *xdm.Node, f vfocus) bool {
 	src := el.AttrValue("select")
 	e := parseAt(el, src)
 	if foreignApply(el, e, f) { // streamsplit_l6.go
-		return b.applyAttrs(el, f) && b.withParams(el, f) && b.addApply(el, f, applyForeign)
+		return b.applyAttrs(el, f) && b.withParams(el, f) && b.addForeignApply(el, f)
 	}
 	if f != vElem || e == nil || !endsInAttribute(e) || !(viewCheck{noIdent: b.noIdent}).safe(e, f, true) {
 		return b.refuse("motionless xsl:apply-templates select " + src)
