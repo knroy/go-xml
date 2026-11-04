@@ -84,19 +84,21 @@ func TestStreamMergeMatchesTree(t *testing.T) {
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'bad.xml'", "log/e", num, ""), group, true},
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'none.xml'", "log/e", num, ""), group, true},
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""), `<g v="{xs:integer(current-merge-group('B')/@t) div 0}"/>`, true},
-		// Refused: last(), sort-before-merge, keys of two types (the tree's
-		// sort is no consistent order across them).
+		// last(): every group formed first (streammerge_l4.go). Refused:
+		// sort-before-merge, keys of two types (the tree's sort is no
+		// consistent order across them).
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", "@t", ""), group, false},
-		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""), `<g n="{last()}"/>`, false},
+		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""), `<g n="{last()}"/>`, true},
 		{mergeSrc("A", "'uns.xml'", "log/e", num, `sort-before-merge="yes"`), group, false},
 		// data-type="{...}" on one source, "text" on the other: one type when
 		// the template says "text" (checked before anything is read).
 		{strings.Replace(mergeSrc("A", "'a.xml'", "log/e", "@t", ""), `"/>`, `" data-type="{'te' || 'xt'}"/>`, 1) +
 			strings.Replace(mergeSrc("B", "'c.xml'", "log/g/e", "string(@t)", ""), `"/>`, `" data-type="text"/>`, 1), group, true},
 		// A named template the action calls is walked: a value is no effect a
-		// re-run repeats, a message is.
+		// re-run repeats, a message is taken back (effectsMark), the keys
+		// telling none (streammerge_l4.go).
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""), `<g><xsl:call-template name="mergeValue"/></g>`, true},
-		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""), `<g><xsl:call-template name="mergeMessage"/></g>`, false},
+		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""), `<g><xsl:call-template name="mergeMessage"/></g>`, true},
 		// A secondary result is taken back with the failed run: the tree's
 		// error, not XTDE1490 on the re-run.
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""),

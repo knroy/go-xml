@@ -82,9 +82,14 @@ func mergeStreams(i *mergeInstr, action *xdm.Node) (bool, []int) {
 		any = true
 	}
 	text, ok := mergeKeysOneType(i)
-	if !any || !ok || !mergeActionOK(action) {
+	if !any || !ok {
 		return false, nil
 	}
+	act := mergeActionCheck(action) // streammerge_l4.go
+	if !act.ok || act.effects && !mergeKeysSilent(i) {
+		return false, nil
+	}
+	i.groupsFirst = act.last
 	return true, text
 }
 
@@ -146,6 +151,9 @@ func mergeKeyClass(el *xdm.Node, streamed bool) string {
 		return ""
 	}
 	e := parseAt(el, el.AttrValue("select"))
+	if c := mergeKeyClassL4(el, e); c != "" { // streammerge_l4.go
+		return c
+	}
 	switch x := e.(type) {
 	case *xpath.FuncCall:
 		switch {
@@ -185,14 +193,13 @@ func nodesOnly(e xpath.Expr) bool {
 	return false
 }
 
-// mergeActionOK checks the merge action: nothing in it asks for the context
-// size or has an effect a re-run would repeat. The check is on the source
-// text: a mention is enough.
-func mergeActionOK(action *xdm.Node) bool {
-	return mergeActionWalk(action, map[string]bool{})
-}
+// mergeActionOK checks the merge action: nothing in it has an effect a
+// re-run would repeat. The check is on the source text: a mention is
+// enough. What it finds is reported in a mergeActionFacts
+// (streammerge_l4.go): a mention of last() (the action then runs once every
+// group is formed) and xsl:message or xsl:assert (taken back on a re-run).
 
-// mergeActionWalk is mergeActionOK for el; a named template it calls is
+// mergeActionWalk checks el into f; a named template it calls is
 // walked too, when this module declares it (seen: those walked already).
 // xsl:result-document is no effect a re-run repeats: the re-run takes back
 // the secondary results the failed run made (streamresult.go).
@@ -206,26 +213,30 @@ func mergeActionOK(action *xdm.Node) bool {
 // snapshot, never the node a rule matched; xsl:evaluate has the rule's focus,
 // or none (§10.4.1). Their effects are taken back on a re-run: messages
 // and secondary results by effectsMark; fn:trace writes nothing here.
-func mergeActionWalk(el *xdm.Node, seen map[string]bool) bool {
+func mergeActionWalk(el *xdm.Node, seen map[string]bool, f *mergeActionFacts) bool {
 	ok := true
-	mentions := func(v string) bool {
-		return strings.Contains(v, "last(") || strings.Contains(v, "trace(")
-	}
-	walkElements(el, func(el *xdm.Node) bool {
-		if isXSL(el, "message") || isXSL(el, "assert") || isXSL(el, "evaluate") {
+	look := func(v string) {
+		f.last = f.last || strings.Contains(v, "last(")
+		if strings.Contains(v, "trace(") {
 			ok = false
 		}
+	}
+	walkElements(el, func(el *xdm.Node) bool {
+		if isXSL(el, "evaluate") {
+			ok = false
+		}
+		if isXSL(el, "message") || isXSL(el, "assert") {
+			f.effects = true
+		}
 		if isXSL(el, "call-template") {
-			ok = mergeCalledOK(el, seen)
+			ok = mergeCalledOK(el, seen, f)
 		}
 		for a := range el.Attrs() {
-			if mentions(a.Value()) {
-				ok = false
-			}
+			look(a.Value())
 		}
 		for ch := range el.Children() {
-			if ch.Kind() == xdm.KindText && mentions(ch.Value()) {
-				ok = false
+			if ch.Kind() == xdm.KindText {
+				look(ch.Value())
 			}
 		}
 		return ok
@@ -235,7 +246,7 @@ func mergeActionWalk(el *xdm.Node, seen map[string]bool) bool {
 
 // mergeCalledOK walks the template call names, which must be declared, once,
 // in call's own module (an import or include could override or supply it).
-func mergeCalledOK(call *xdm.Node, seen map[string]bool) bool {
+func mergeCalledOK(call *xdm.Node, seen map[string]bool, f *mergeActionFacts) bool {
 	name := strings.TrimSpace(call.AttrValue("name"))
 	if seen[name] {
 		return true
@@ -254,7 +265,7 @@ func mergeCalledOK(call *xdm.Node, seen map[string]bool) bool {
 			found = append(found, d)
 		}
 	}
-	return len(found) == 1 && mergeActionWalk(found[0], seen)
+	return len(found) == 1 && mergeActionWalk(found[0], seen, f)
 }
 
 // mergeInput is one input sequence of a streamed merge: a source's, for one
@@ -291,6 +302,10 @@ func (i *mergeInstr) executeStream(rt *runtime, out *outputBuilder) (bool, error
 	n0, b0 := xpathleaf.Charged(rt.ctx)
 	var unread []func()
 	err := i.runStream(rt, out, &unread)
+	if pr, ok := err.(mergePreRead); ok { // streammerge_l4.go
+		streamtrace.Run(streamtrace.Merge)
+		return true, pr.err
+	}
 	if err == errMergeTree {
 		for _, u := range unread {
 			u()
@@ -351,7 +366,7 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 	rt = rt.clearCurrentRule()
 	resolved, colls, err := i.resolveKeys(rt)
 	if err != nil {
-		return err
+		return mergePreRead{err} // streammerge_l4.go
 	}
 	for _, k := range i.textKeys {
 		for s := range resolved {
@@ -366,6 +381,9 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 		if !src.streamed || src.sourceURIs == nil {
 			got, err := src.collect(rt, s, resolved[s], colls[s])
 			if err != nil {
+				if len(docs) == 0 { // mergeStreams: no streamed source before it
+					return mergePreRead{err}
+				}
 				return err
 			}
 			for len(got) > 0 {
@@ -380,6 +398,9 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 		}
 		uris, err := src.sourceURIStrings(rt)
 		if err != nil {
+			if len(docs) == 0 && !i.sawStreamed(s) {
+				return mergePreRead{err} // the first streamed source's, as the tree's collect
+			}
 			return err
 		}
 		base := src.baseURI
@@ -604,6 +625,7 @@ func (i *mergeInstr) merge(rt *runtime, out *outputBuilder, inputs []*mergeInput
 			nameSeq = append(nameSeq, xdm.NewString(src.name))
 		}
 	}
+	var held []heldMergeGroup
 	for g := 0; ; g++ {
 		var m *mergeInput
 		for _, in := range inputs {
@@ -635,12 +657,16 @@ func (i *mergeInstr) merge(rt *runtime, out *outputBuilder, inputs []*mergeInput
 				}
 			}
 		}
-		all := binding.all()
-		sub := rt.withCurrent(all[0], g+1, 0)
-		sub = sub.withVar(currentMergeGroupVar, xdm.One(&xdm.Opaque{Value: binding}))
-		sub = sub.withVar(currentMergeKeyVar, mergeKeySequence(first.keys))
-		sub = sub.withVar(currentMergeSourcesVar, nameSeq)
-		if err := execSequence(i.action, sub, out); err != nil {
+		if i.groupsFirst { // streammerge_l4.go: last() is the number of groups
+			held = append(held, heldMergeGroup{binding, first.keys})
+			continue
+		}
+		if err := i.mergeAction(rt, out, binding, first.keys, nameSeq, g+1, 0); err != nil {
+			return err
+		}
+	}
+	for g, h := range held {
+		if err := i.mergeAction(rt, out, h.binding, h.keys, nameSeq, g+1, len(held)); err != nil {
 			return err
 		}
 	}
