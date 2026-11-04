@@ -208,6 +208,9 @@ var mainCases = []struct {
 		`<xsl:mode streamable="yes" on-no-match="shallow-skip" use-accumulators="n"/><xsl:template match="/"><o><xsl:apply-templates select="snapshot(/doc/rec[2])"/></o></xsl:template>` +
 		`<xsl:template match="rec"><r n="{accumulator-before('n')}"/></xsl:template>`, true},
 	{`<xsl:mode streamable="yes" on-no-match="shallow-skip"/><xsl:template match="/"><o><xsl:apply-templates select="copy-of(/doc/rec)"/></o></xsl:template>`, false},
+	// A filter over tokenize()'s strings: the predicates read those, never
+	// the stream (si-iterate-037).
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:value-of select="//text()!tokenize(., ' ')[matches(., 't')]"/></o></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

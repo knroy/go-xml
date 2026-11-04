@@ -1277,6 +1277,17 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		if freeFilter(x) { // streamsplit_fns.go
 			return true
 		}
+		if atomicValued(x.Base) {
+			// The predicates' focus is the base's atomic values, never a
+			// view: they read of the stream only what a leaf's value would
+			// (si-iterate-037: tokenize(., ' ')[matches(., 'x')]).
+			for _, p := range x.Predicates {
+				if !vc.safe(p, vLeaf, true) {
+					return false
+				}
+			}
+			return vc.safe(x.Base, f, nodeOK)
+		}
 		for _, p := range x.Predicates {
 			if !vc.safe(p, vElem, true) || !vc.safe(p, vLeaf, true) {
 				return false

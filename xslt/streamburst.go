@@ -467,7 +467,7 @@ func atomicValued(e xpath.Expr) bool {
 			"round", "floor", "ceiling", "abs", "name", "local-name",
 			"namespace-uri", "position", "true", "false", "contains",
 			"starts-with", "ends-with", "format-number", "distinct-values",
-			"string-to-codepoints", "codepoints-to-string":
+			"string-to-codepoints", "codepoints-to-string", "tokenize":
 			return true
 		}
 	}
