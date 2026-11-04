@@ -278,7 +278,7 @@ func (run *streamRun) forkFused(rt *runtime, op *streamOp, body []Instruction, c
 	}
 	for j, k := range cons {
 		pr := &streamRun{x: run.x, c: run.c, root: run.root, top: run.top, i: run.i, href: run.href,
-			unread: run.unread, pre: &vals[j]}
+			unread: run.unread, pre: &vals[j], typed: run.typed}
 		sub := *rt
 		sub.bursts = &burstFeed{run: pr}
 		err := body[k].Execute(&sub, outs[k])

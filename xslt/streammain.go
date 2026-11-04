@@ -203,6 +203,8 @@ type mainInput struct {
 	c    *xdmstream.Cursor
 	root *xdm.Node
 	acc  *streamAccums // its accumulators (streamaccum.go)
+	// typed says it is validated as it is read (streamcopy_l3.go).
+	typed bool
 }
 
 // transformStream is TransformReader streaming r.
@@ -216,6 +218,7 @@ func (s *Stylesheet) transformStream(ctx context.Context, r io.Reader, opts Tran
 		main.c.StripWhitespace(s.whitespaceStripper(0))
 	}
 	valid := s.validateMain(opts.SourceValidation, main.c) // streamvalidin.go
+	main.typed = opts.SourceValidation != 0 && s.schema != nil
 	res, err := s.transform(ctx, nil, opts, main)
 	if err == nil {
 		if err := valid(); err != nil {
@@ -282,7 +285,7 @@ func (m *mainInput) run(rt *runtime, mode string, params, tunnels paramValues, o
 	streamtrace.Node(streamtrace.KindApply, 1)
 	x := newStreamExec()
 	x.class = classDoc
-	run := &streamRun{x: x, c: m.c, root: m.root, held: out}
+	run := &streamRun{x: x, c: m.c, root: m.root, held: out, typed: m.typed}
 	noteInitialAccumulators(rt, mode, m.root)
 	m.acc = run.observeAccums(rt, rt.treeAccums[m.root], false)
 	defer m.acc.stop()

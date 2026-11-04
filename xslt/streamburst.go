@@ -54,6 +54,9 @@ type burstFeed struct {
 	// xsl:apply-imports from the cursor (streamapply.go); group an
 	// xsl:for-each-group (streamgroup.go).
 	apply, group *streamOp
+	// readOut, when set, is read for an instruction that writes what it
+	// copies to out (xsl:copy-of, xsl:sequence; streamcopy_l3.go).
+	readOut func(out *outputBuilder, each func(xdm.Item) error) error
 }
 
 // burstResolver is a document resolver that can stream a document.

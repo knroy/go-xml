@@ -110,6 +110,10 @@ type streamExec struct {
 	// groundRule says it is a rule's body that runs on a grounded copy of
 	// its element (streamtee_ground.go).
 	groundRule bool
+	// docProps says an xsl:copy of the document node reads the document's
+	// properties of the stand-in, and docMotionless that one reads nothing
+	// of the document (streamcopy_l3.go).
+	docProps, docMotionless bool
 }
 
 func newStreamExec() *streamExec {
@@ -485,7 +489,7 @@ func (c *compiler) noteStreamParam(n *xdm.Node, sel *xpath.Compiled, ns xpath.Na
 		for _, op := range x.exprOps {
 			if op.el == n && op.avt == "" && op.instr == nil {
 				op.instr, op.sel = exprInstr{}, sel
-				if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead == "" {
+				if op.split, op.dead = c.splitForDoc(sel, ns, op.doc, atomicAs(n, n.AttrValue("as")), op.inGroup, op.key); op.dead == "" { // streamcopy_l3.go: an atomic as= atomizes (§9.3)
 					x.byExpr[sel] = op
 				} else if op.tee = c.teeFor(op, sel, ns); op.tee != nil { // streamtee_map.go
 					op.dead = ""
@@ -702,7 +706,7 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "result-document" {
 			return b.resultDocAttrs(el, f) && b.content(el, f) // streamresult.go
 		}
-		if b.noIdent && (local == "sequence" || local == "variable") {
+		if b.noIdent && (local == "sequence" || local == "variable") && !leafAtomic(el) { // streamcopy_l3leaf.go
 			// They could hand the copy on as the node it stands for.
 			return b.refuse("xsl:" + local + " on a copied text, comment or PI node")
 		}
@@ -712,7 +716,11 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "for-each" {
 			return b.motionlessLoop(el, f) // streamvariable.go
 		}
-		if !streamMotionless[local] || local == "copy" && f == vNone {
+		if local == "copy" && f == vNone && !b.noIdent && streamMotionless[local] {
+			// Of the document node: it reads the document's properties of
+			// the stand-in once the rest has been read (streamcopy_l3.go).
+			b.x.docProps, b.x.docMotionless = true, true
+		} else if !streamMotionless[local] || local == "copy" && f == vNone {
 			return b.refuse("motionless xsl:" + local)
 		}
 		// A node an xsl:with-param carries on is a copy, valid however
@@ -845,8 +853,15 @@ func (c *compiler) noteStreamSelect(n *xdm.Node, instr Instruction, sel *xpath.C
 			continue
 		}
 		op.instr, op.sel = instr, sel
+		if self := isXSL(n, "copy-of") || isXSL(n, "sequence") && inElement(n); op.doc && !op.inGroup && self {
+			if s := docCopySplit(sel.Expr(), sel, true); s != nil { // streamcopy_l3.go
+				op.split, op.dead = s, ""
+				op.x.byInstr[instr] = op
+				continue
+			}
+		}
 		simple := isXSL(n, "value-of") || isXSL(n, "attribute")
-		if op.split, op.dead = c.splitFor(sel, ns, op.doc, simple, op.inGroup, op.key); op.dead != "" {
+		if op.split, op.dead = c.splitForDoc(sel, ns, op.doc, simple, op.inGroup, op.key); op.dead != "" { // streamcopy_l3.go
 			continue
 		}
 		op.x.byInstr[instr] = op
@@ -957,6 +972,9 @@ func noTextNodes(e xpath.Expr) bool {
 		if isCurrentGroup(x) {
 			return true // a streamed group's members are elements
 		}
+		if (x.Name.Local == "copy-of" || x.Name.Local == "snapshot") && x.Name.URI == fnNS && len(x.Args) == 1 {
+			return noTextNodes(x.Args[0]) // copies of what it selects (lane L3)
+		}
 	case *xpath.SimpleMap:
 		return noTextNodes(x.Right) // lane L2: what R gives
 	case *xpath.SequenceExpr:
@@ -993,6 +1011,9 @@ func (x *streamExec) ready() string {
 	minD := 0
 	if x.class == classElem {
 		minD = 1 // a rule's context element: the document element, or below
+	}
+	if why := x.readyDocCopy(); why != "" { // streamcopy_l3.go
+		return why
 	}
 	if why := x.readyOps(x.top, minD, &x.kinds); why != "" {
 		return why
@@ -1082,6 +1103,10 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 	}
 	s := op.split
 	copies := isXSL(op.el, "copy-of") || isXSL(op.el, "sequence") && inElement(op.el)
+	if copies && s.cond != nil && copiesChoice(s, minD) { // streamcopy_l3choice.go
+		op.copies = true
+		return ""
+	}
 	if c := s.class(); copies && (c == "nodes" || c == "subtree") &&
 		s.cond == nil && s.red == "" && (isVarRef(s.outer.Expr(), splitItems) || copiedItems(s.outer.Expr())) { // streamsplit_fns.go
 		switch {
@@ -1213,6 +1238,8 @@ type streamRun struct {
 	kidFilters []*xdmstream.Filter
 	// teed says a fork's tee has taken the cursor over (streamtee_try.go).
 	teed bool
+	// typed says the document is validated as it is read (streamcopy_l3.go).
+	typed bool
 }
 
 // feed returns the feed that drives instr from the cursor, or nil when instr
@@ -1233,13 +1260,19 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 		return &burstFeed{instr: instr, read: func(func(xdm.Item) error) error { return errStreamPlan },
 			eval: func(*runtime) (xdm.Sequence, error) { return nil, errStreamPlan }}
 	}
+	if op.split != nil && op.split.docCopy {
+		return run.docCopyFeed(instr, rt, op) // streamcopy_l3.go
+	}
 	if op.copies {
-		return &burstFeed{instr: instr, read: func(each func(xdm.Item) error) error {
+		f := &burstFeed{instr: instr, read: func(each func(xdm.Item) error) error {
 			if run.used {
 				return errStreamPlan
 			}
 			run.used = true
-			err := op.split.loopAt(rt.ctx, run.c, run.d, g, each, nil)
+			s, err := op.split.choose(rt.ctx, run.c, run.d) // streamcopy_l3choice.go
+			if err == nil {
+				err = s.loopAt(rt.ctx, run.c, run.d, g, each, nil)
+			}
 			if err == errSplitGiveUp && run.d == 0 && run.i != nil {
 				// The document element itself is copied: from the tree,
 				// nothing of it having been copied yet.
@@ -1256,6 +1289,8 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 			}
 			return err
 		}}
+		f.readOut = run.copiesReadOut(rt, op, g, f.read) // streamcopy_l3.go
+		return f
 	}
 	if !op.loop {
 		return &burstFeed{instr: instr, eval: func(rt *runtime) (xdm.Sequence, error) { return run.evalOp(rt, op) }}
@@ -1297,6 +1332,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 func (run *streamRun) evalOp(rt *runtime, op *streamOp) (xdm.Sequence, error) {
 	if run.pre != nil {
 		return run.preEval(rt, op)
+	}
+	if op.split != nil && op.split.docCopy {
+		return run.docCopyEval(rt, op) // streamcopy_l3.go
 	}
 	g := run.groupAt(op)
 	if run.used || op.inGroup && g == nil {
@@ -1528,6 +1566,12 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		c.Handoff(func() func() { return xpathleaf.LockYield(rt.evalLock) }) // streamfork.go
 		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread, root: streamStandIn(br, href, base, vin), held: held}
 		defer func() { *kept = run.kept }()
+		run.typed = vin != nil
+		if i.stream.docProps {
+			if err := run.watchDoc(); err != nil { // streamcopy_l3.go
+				return err
+			}
+		}
 		acc := run.observeAccums(rt, i.accums, true)
 		defer acc.stop()
 		// The body's focus is the document node, which the stream does not
