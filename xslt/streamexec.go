@@ -581,7 +581,8 @@ func (b *streamBuilder) loopOp(el *xdm.Node, f vfocus) bool {
 	}
 	// The body is planned in a builder of its own: a refusal there leaves
 	// the grounded strategy, whose rules are the burst path's.
-	op.planned = inner.members(el, body, vElem)
+	// A loop over leaves first (streamsplit_l6.go).
+	op.planned = inner.leafLoopBody(el, body) || inner.members(el, body, vElem)
 	op.grounded = burstBody(el) || !op.planned && b.groundedSelect(el) // streampop_snapshot.go
 	if !op.planned && !op.grounded {
 		return b.refuse(inner.why)
@@ -689,7 +690,7 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "result-document" {
 			return b.resultDocAttrs(el, f) && b.content(el, f) // streamresult.go
 		}
-		if b.noIdent && (local == "sequence" || local == "variable") {
+		if b.noIdent && (local == "sequence" || local == "variable") && !atomicSelect(el) { // streamsplit_l6.go
 			// They could hand the copy on as the node it stands for.
 			return b.refuse("xsl:" + local + " on a copied text, comment or PI node")
 		}
