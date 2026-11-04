@@ -99,7 +99,7 @@ var (
 		"matches": true, "compare": true, "upper-case": true, "lower-case": true,
 		"substring": true, "substring-before": true, "substring-after": true,
 		"translate": true, "tokenize": true, "round": true, "floor": true,
-		"ceiling": true, "abs": true, "round-half-to-even": true,
+		"ceiling": true, "abs": true, "round-half-to-even": true, "replace": true,
 		"format-number": true, "subsequence": true, "insert-before": true,
 		"remove": true, "index-of": true, "unordered": true, "name": true, "local-name": true,
 		"namespace-uri": true, "node-name": true,
@@ -115,7 +115,7 @@ var (
 		"matches": true, "compare": true, "upper-case": true, "lower-case": true,
 		"substring": true, "substring-before": true, "substring-after": true,
 		"translate": true, "tokenize": true, "round": true, "floor": true,
-		"ceiling": true, "abs": true, "round-half-to-even": true,
+		"ceiling": true, "abs": true, "round-half-to-even": true, "replace": true,
 		"format-number": true, "index-of": true,
 	}
 	burstOps = map[string]bool{

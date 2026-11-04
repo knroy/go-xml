@@ -44,6 +44,8 @@ func TestStreamWholeFnsMatchTree(t *testing.T) {
 		{`<out><xsl:sequence select="(1 to 20)[. ge 19]"/><xsl:sequence select="doc/rec/@v/data()"/><xsl:on-empty>none</xsl:on-empty></out>`, true},
 		// current-group() is focus-free and holds the stream's nodes: no guard.
 		{`<xsl:for-each-group select="doc/rec" group-adjacent="string(@k)"><g n="{count(current-group()[@v])}"/></xsl:for-each-group>`, false},
+		// replace() atomizes its input, as matches() does.
+		{`<v><xsl:value-of select="replace(string-join(doc/rec/@k, ','), 'a', 'A')"/></v>`, true},
 	}
 	n := 0
 	for name, doc := range coreDocs {
