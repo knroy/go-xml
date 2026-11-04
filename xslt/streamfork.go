@@ -343,6 +343,8 @@ func mapCalls(e xpath.Expr, el *xdm.Node) xpath.Expr {
 		if ns := mapVarKind(el, vr.Name); ns != "" {
 			v.Set(reflect.ValueOf(xpath.Expr(&xpath.FuncCall{Name: xdm.QName{URI: ns, Local: "get"},
 				Args: []xpath.Expr{dc.Target, dc.Args[0]}})))
+		} else if x := accumFnCall(dc, el, bound); x != nil { // streamtee_dyncall.go
+			v.Set(reflect.ValueOf(x))
 		}
 	})
 	return e

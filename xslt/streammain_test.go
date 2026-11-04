@@ -157,6 +157,13 @@ var mainCases = []struct {
 	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><xsl:result-document href="r.xml"><xsl:copy-of select="."/></xsl:result-document></xsl:template>`, true},
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/*"><xsl:result-document href="r.xml"><xsl:apply-templates/></xsl:result-document></xsl:template>`, true},
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/*"><xsl:result-document href="r.xml"><o><xsl:apply-templates/></o></xsl:result-document></xsl:template>`, true},
+	// A dynamic call of a global accumulator-after#1 beside the rule's
+	// consumer: the function item's focus is the global context item,
+	// absent here, so the call raises XTDE3350 in both runs
+	// (streamtee_dyncall.go; accumulator-061).
+	{globalItemRow + `<xsl:param name="aa" select="accumulator-after#1"/><xsl:accumulator name="n" as="xs:integer" initial-value="0" streamable="yes">` +
+		`<xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator><xsl:mode streamable="yes" use-accumulators="n"/>` +
+		`<xsl:template match="rec"><r b="{accumulator-before('n')}"><xsl:apply-templates/><e><xsl:value-of select="../$aa('n')"/></e></r></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

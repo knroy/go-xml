@@ -1516,7 +1516,8 @@ func (x *streamExec) count() {
 // executeStream runs i on its core plan when its resolver can stream the
 // document, and reports whether it did (DESIGN section 2.1, rule 4).
 func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, href string) (bool, error) {
-	if noBursts || streamtrace.Off() || validSourceDocumentURI(href) != nil || strings.ContainsRune(href, '#') {
+	if noBursts || streamtrace.Off() || validSourceDocumentURI(href) != nil || strings.ContainsRune(href, '#') ||
+		rt.sheet.dynParamSupplied(rt.opts) { // streamtee_dyncall.go
 		return false, nil
 	}
 	// The resolvers Transform wraps around the caller's are looked through
