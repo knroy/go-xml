@@ -120,6 +120,13 @@ type streamExec struct {
 	// kids says a motionless part of a rule's body reads has-children of
 	// its element, answered by a Peek (streamkids_l6.go).
 	kids bool
+	// The call frames of recursive inlined calls (streamfn_frame.go): on a
+	// root plan, frames by call site and planning the functions being
+	// inlined now; on a frame, frameRoot its root plan and code its body.
+	frames    map[*xdm.Node]*streamExec
+	frameRoot *streamExec
+	planning  map[*xdm.Node]bool
+	code      *frameCode
 }
 
 func newStreamExec() *streamExec {
@@ -183,6 +190,9 @@ type streamOp struct {
 	// eventPop says a held grouping population is copied off the cursor as
 	// events, into one fragment (streamcopy_l3group.go).
 	eventPop bool
+	// frame, for a loop that is a recursive call's (streamfn_loop.go), is
+	// the call frame its body is planned in.
+	frame *streamExec
 	// tee, for a variable's map constructor whose entries each consume, is
 	// its plan in place of a split (streamtee_map.go).
 	tee *streamTee
@@ -212,6 +222,9 @@ type streamBuilder struct {
 	// docRead says a consumer before it in its sequence constructor, an op
 	// itself (run unconditionally), has read the document (streamcopy_l3doc.go).
 	docRead bool
+	// sub is the inlined call whose body is being planned at this level
+	// (streamfn_inline.go): its first parameter reads as the call's argument.
+	sub *inlinedCall
 }
 
 func (b *streamBuilder) refuse(why string) bool {
@@ -1126,6 +1139,12 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 		}
 		s := op.split
 		k := op.ctxDepth(minD) + s.minDepth()
+		if op.frame != nil {
+			if why := x.readyFrameLoop(op, kinds); why != "" { // streamfn_loop.go
+				return why
+			}
+			continue
+		}
 		if why, ok := x.readyPop(op, op.ctxDepth(minD), k, kinds); ok {
 			if why != "" {
 				return why
@@ -1329,6 +1348,9 @@ type streamRun struct {
 // runs as usual; rt is the runtime the instruction runs in.
 func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 	op := run.x.byInstr[instr]
+	if op == nil {
+		op = run.x.frameOp(instr) // streamfn_frame.go: nil without frames
+	}
 	if op == nil || run.off {
 		return nil
 	}
