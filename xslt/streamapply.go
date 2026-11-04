@@ -224,7 +224,7 @@ func (c *compiler) noteStreamApply(n *xdm.Node, instr Instruction, sel *xpath.Co
 			if !op.split.bare() {
 				// A window over a bare path (streampop.go): head(), subsequence() ...
 				pop, s, _ := c.popFor(op, ns)
-				if pop == nil || !pop.windowsOnly() {
+				if pop == nil || !pop.windowsOnly() && !applyPop(pop, instr) { // streamapply_pop.go
 					op.dead = "apply-templates select is not a bare path"
 					continue
 				}
@@ -716,6 +716,9 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 
 // executeStream runs i, an apply op of the plan running, on the cursor.
 func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run *streamRun, op *streamOp) error {
+	if op.pop != nil && !op.pop.windowsOnly() {
+		return i.executePop(rt, out, run, op) // streamapply_pop.go
+	}
 	gate, done := func() (bool, error) { return true, nil }, func() error { return nil }
 	if op.pop != nil {
 		// The windows' arguments are the select's: before the parameters.

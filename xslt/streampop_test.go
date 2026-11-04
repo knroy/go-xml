@@ -172,7 +172,8 @@ var popBodies = []struct {
 	// A union under copy-of: the outer unions the matches with the
 	// variable's nodes, ordered as the tree orders them (streamsplit_foreign.go).
 	{`<out><xsl:copy-of select="doc/rec union $extra"/></out>`, true},
-	// apply-templates over windows of a bare path; an insertion or a motionless part refused.
+	// apply-templates over windows of a bare path; an insertion, a motionless part or a
+	// choice dispatches the items not the stream's as the tree does (streamapply_pop.go).
 	{`<out><xsl:apply-templates select="head(doc/rec)" mode="m"/></out>`, true},
 	{`<out><xsl:apply-templates select="tail(doc/rec)" mode="m"/></out>`, true},
 	{`<out><xsl:apply-templates select="subsequence(doc/rec, 2, 1)" mode="m"/></out>`, true},
@@ -180,8 +181,13 @@ var popBodies = []struct {
 	{`<out><xsl:apply-templates select="unordered(doc/rec)" mode="m"/></out>`, true},
 	{`<out><xsl:apply-templates select="one-or-more(doc/rec)" mode="m"/></out>`, true},
 	{`<out><xsl:apply-templates select="subsequence(doc/rec, $three - 2)" mode="m"/></out>`, true},
-	{`<out><xsl:apply-templates select="insert-before(doc/rec, 2, $extra)" mode="m"/></out>`, false},
-	{`<out><xsl:apply-templates select="($extra, doc/rec)" mode="m"/></out>`, false},
+	{`<out><xsl:apply-templates select="insert-before(doc/rec, 2, $extra)" mode="m"/></out>`, true},
+	{`<out><xsl:apply-templates select="($extra, doc/rec)" mode="m"/></out>`, true},
+	{`<out><xsl:apply-templates select="(doc/rec, $extra, 7)" mode="m"/></out>`, true},
+	{`<out><xsl:apply-templates select="if ($cond) then () else doc/rec" mode="m"/></out>`, true},
+	{`<out><xsl:apply-templates select="if (not($cond)) then $extra else doc/rec" mode="m"/></out>`, true},
+	// Refused: a parameter would be evaluated after the parts.
+	{`<out><xsl:apply-templates select="($extra, doc/rec)" mode="m"><xsl:with-param name="p" select="1"/></xsl:apply-templates></out>`, false},
 	// Refused: a window argument that reads the stream.
 	{`<out><xsl:for-each select="subsequence(doc/rec, count(doc/rec))"><e/></xsl:for-each></out>`, false},
 }

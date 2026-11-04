@@ -322,7 +322,7 @@ func burstElement(el, target *xdm.Node) bool {
 			if el == target {
 				continue // burstPath has checked it
 			}
-			e := parseAt(el, a.Value())
+			e := identityOperands(parseAt(el, a.Value())) // streamground_ident.go
 			if e == nil || !burstSafe(e, false) {
 				return false
 			}
@@ -350,7 +350,7 @@ func avtSafe(el *xdm.Node, src string) bool {
 		return false
 	}
 	for _, s := range exprs {
-		e := parseAt(el, s)
+		e := identityOperands(parseAt(el, s)) // streamground_ident.go
 		if e == nil || !burstSafe(e, false) {
 			return false
 		}
