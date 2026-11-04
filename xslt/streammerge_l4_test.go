@@ -35,9 +35,11 @@ func TestStreamMergeL4(t *testing.T) {
 		{mergeSrc("A", "'a.xml'", "log/e", "$m(string(@t))", ""), `<g k="{current-merge-key()}"/>`,
 			`<xsl:variable name="m" as="map(*)" select="map{'1': 1, '3': 3, '7': 7}"/>`, true, false},
 		// A collected source after a streamed one (merge-081/-082): document
-		// order across the two, as both modes make the trees.
+		// order across the two, as both modes make the trees, told by the
+		// path's sort (an identity operator such as << beside mergeSheet's
+		// xsl:evaluate keeps every merge on the tree: streamalias_l7.go).
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + `<xsl:merge-source name="B" select="doc('b.xml')/log/e"><xsl:merge-key select="xs:integer(@t)"/></xsl:merge-source>`,
-			`<g v="{current-merge-group()/@v}" o="{count(current-merge-group()) gt 1 and current-merge-group()[1] &lt;&lt; current-merge-group()[last()]}"/>`, "", true, false},
+			`<g v="{current-merge-group()/@v}"/>`, "", true, false},
 		// The first streamed source's for-each-source fails: the tree's error, no re-run.
 		{mergeSrc("A", "1 to 2", "log/e", num, ""), `<g/>`, "", true, false},
 		// A message, and a key calling a stylesheet function: refused.
