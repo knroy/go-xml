@@ -46,6 +46,7 @@ var groundReasons = []string{
 	"two consuming parts of a text value template",
 	"several prongs consume an element",
 	"current-group() outside the consuming path", // streamsplit.go: the group read beside its path
+	"a second consuming operand",                 // streamsplit.go: map { "a": string(A), "b": string(B) }
 }
 
 // groundRuleExec returns the plan of the rule el for an element when its

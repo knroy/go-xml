@@ -216,6 +216,9 @@ var mainCases = []struct {
 	// (streamtee_ground.go; sx-MapExpr-101, su-absorbing-201).
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="rec"><xsl:copy><xsl:for-each-group select="*" group-starting-with="sub">` +
 		`<xsl:variable name="m" select="map{1: copy-of(.), 2: copy-of(current-group()[position() gt 1])}"/><g n="{count($m?2)}"><xsl:copy-of select="$m?1"/></g></xsl:for-each-group></xsl:copy></xsl:template>`, true},
+	// A map of two consuming values: the rule runs on a grounded copy of
+	// its element (streamtee_ground.go; sx-MapExpr-008).
+	{`<xsl:mode streamable="yes"/><xsl:template match="rec"><xsl:variable name="m" select="map{'a': string(sub[1]), 'b': count(sub)}"/><r a="{$m?a}" b="{$m?b}"/></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
