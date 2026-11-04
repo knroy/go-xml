@@ -867,6 +867,16 @@ func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, par
 			}
 			continue
 		}
+		if run.top != nil {
+			read, ok, err := run.liveBuiltIn(focus, pos, ev.Node, d+1, mode, params, tunnels, out)
+			if err != nil {
+				return err
+			}
+			if ok {
+				skip = !read
+				continue
+			}
+		}
 		v, err := c.View()
 		if err != nil {
 			return err

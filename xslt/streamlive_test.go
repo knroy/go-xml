@@ -1,0 +1,62 @@
+package xslt
+
+import (
+	"context"
+	"fmt"
+	"io"
+	goruntime "runtime"
+	"strings"
+	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/xdm"
+)
+
+// liveOrders is a document of n records, four elements, four attributes and
+// four text nodes each, in a default namespace.
+func liveOrders(n int) string {
+	var b strings.Builder
+	b.WriteString(`<orders xmlns="urn:orders" source="gen">` + "\n")
+	for i := range n {
+		fmt.Fprintf(&b, `  <order id="o%d" v="%d"><customer>C %d</customer><item sku="s%d" qty="%d">W</item><note>L</note></order>`+"\n",
+			i, i%97, i%1000, i%50, i%7+1)
+	}
+	b.WriteString("</orders>\n")
+	return b.String()
+}
+
+// TestStreamLiveBuiltIn: the streamed identity transform (TransformReader,
+// on-no-match="shallow-copy", no rules) runs the built-in rule on the
+// parse's records, with no view per element, and writes the tree's output.
+// Measured at the change: 1,384 bytes allocated per record; with a view per
+// element, 1,942.
+func TestStreamLiveBuiltIn(t *testing.T) {
+	doc := liveOrders(3000)
+	sheet := mainSheet(`<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`)
+	st, tr := mainRun(sheet, doc, true, TransformOptions{})
+	if want, _ := mainRun(sheet, doc, false, TransformOptions{}); st != want || tr.Runs[streamtrace.Main] != 1 {
+		t.Fatalf("streamed (%v runs) differs from the tree", tr.Runs)
+	}
+	tree, err := xdm.ParseString(sheet, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Compile(tree.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	best := uint64(1 << 62)
+	for range 3 {
+		var m0, m1 goruntime.MemStats
+		goruntime.ReadMemStats(&m0)
+		if _, err := s.TransformReader(context.Background(), strings.NewReader(doc), TransformOptions{Output: io.Discard}); err != nil {
+			t.Fatal(err)
+		}
+		goruntime.ReadMemStats(&m1)
+		best = min(best, m1.TotalAlloc-m0.TotalAlloc)
+	}
+	t.Logf("%d bytes per record", best/3000)
+	if per := best / 3000; per > 1700 {
+		t.Errorf("%d bytes allocated per record, want at most 1,700 (a view per element: about 1,940)", per)
+	}
+}
