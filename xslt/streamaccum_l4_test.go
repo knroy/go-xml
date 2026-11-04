@@ -179,8 +179,9 @@ func TestAccumDynamicCallStreamedInput(t *testing.T) {
 }
 
 // TestStreamCopyAccumulatorsNo: copy-accumulators="no" is the default the
-// plan already takes (accumulator-049s): it is no reason to refuse, and the
-// output is the tree's.
+// plan already takes (accumulator-049s), and "yes" records the values of
+// the grounded matches for their copies (accumulator-048s): neither is a
+// reason to refuse, and the output is the tree's.
 func TestStreamCopyAccumulatorsNo(t *testing.T) {
 	var why string
 	traceMain = func(m, w string) {
@@ -203,7 +204,7 @@ func TestStreamCopyAccumulatorsNo(t *testing.T) {
 		if so != to {
 			t.Errorf("copy-accumulators=%s:\nstreamed %s\ntree     %s", v, so, to)
 		}
-		if refused := strings.Contains(w, "copy-accumulators"); refused != (v == "yes") {
+		if strings.Contains(w, "copy-accumulators") {
 			t.Errorf("copy-accumulators=%s: refusal %q", v, w)
 		}
 	}

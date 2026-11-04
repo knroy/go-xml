@@ -1025,6 +1025,9 @@ func (x *streamExec) ready() string {
 	if why := x.readyOps(x.top, minD, &x.kinds); why != "" {
 		return why
 	}
+	if why := readyCopyAccums(x.top); why != "" { // streamaccum_ground_l4.go
+		return why
+	}
 	return x.readyTries()
 }
 

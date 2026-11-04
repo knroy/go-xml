@@ -96,6 +96,9 @@ type splitPred struct {
 // streamSplit is an expression split for the cursor.
 type streamSplit struct {
 	doc bool // the context is the document node
+	// recAccums says each match is grounded with its accumulator values
+	// recorded, for xsl:copy-of copy-accumulators="yes" (streamaccum_ground_l4.go).
+	recAccums bool
 
 	// cond, when set, makes this a choice: then or els runs as cond, on the
 	// context's view, says. Nothing else is set.
@@ -1901,7 +1904,7 @@ func (r *splitRun) run(v *xdm.Node, d int) error {
 			}
 			return r.take(xdm.One(xdm.NewUntypedAtomic(t)))
 		}
-		g, err := c.Ground()
+		g, err := groundRecording(c, s) // streamaccum_ground_l4.go
 		if err != nil {
 			return err
 		}
@@ -2283,7 +2286,7 @@ func (r *splitRun) ground(f splitFrame) error {
 	if r.s.later {
 		return r.c.GroundLater(func(g *xdm.Node) error { return r.grounded(g, &f) })
 	}
-	g, err := r.c.Ground()
+	g, err := groundRecording(r.c, r.s) // streamaccum_ground_l4.go
 	if err != nil {
 		return err
 	}

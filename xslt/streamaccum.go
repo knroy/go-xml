@@ -390,6 +390,7 @@ func (run *streamRun) observeAccumsOf(rt *runtime, set *modeAccumulators, stream
 		}
 	}
 	rt.streamAccums = append(rt.streamAccums, sa)
+	cursorAccums.Store(run.c, sa) // streamaccum_ground_l4.go
 	sa.step(sa.root, false, f.before, nil, 0)
 	f.beforeAt = sa.rd.phase
 	run.c.Observe(sa.observe)
@@ -401,6 +402,7 @@ func (sa *streamAccums) stop() {
 	if sa == nil {
 		return
 	}
+	cursorAccums.CompareAndDelete(sa.run.c, sa)
 	l := sa.rt.streamAccums
 	if i := slices.Index(l, sa); i >= 0 {
 		sa.rt.streamAccums = slices.Delete(l, i, i+1)
