@@ -2195,8 +2195,11 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					return err
 				}
 			case matchGround:
-				decided = true
 				if s.noRoot && ev.Depth == 1 {
+					if r.skipOne() {
+						break // tail(*): the document element is left out, as take leaves it
+					}
+					decided = true
 					if r.rootCopy == nil {
 						return errSplitGiveUp
 					}
@@ -2205,6 +2208,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					}
 					break
 				}
+				decided = true
 				if err := r.ground(f); err != nil {
 					return err
 				}

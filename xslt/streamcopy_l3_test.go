@@ -32,6 +32,10 @@ func TestStreamDocCopyEvents(t *testing.T) {
 				`<o><xsl:copy-of select="node()"/></o>`,
 				`<xsl:variable name="d" select="copy-of(.)"/><o><xsl:value-of select="count($d//rec), name($d/*)"/></o>`,
 				`<xsl:variable name="d" as="node()"><xsl:copy-of select="."/></xsl:variable><o><xsl:copy-of select="$d/*"/></o>`,
+				// tail() leaves out the document element, which a copy
+				// writes as events (copiesReadOut): the tree's <o/>.
+				`<o><xsl:sequence select="tail(*)"/></o>`,
+				`<o><xsl:copy-of select="tail(/*)"/></o>`,
 			} {
 				coreCheck(t, coreSheetWith(decls, body), dir, name+": "+decls+body, true, TransformOptions{})
 			}
