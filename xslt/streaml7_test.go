@@ -39,6 +39,12 @@ var l7Rows = []struct {
 	// (si-map-008; mapContent).
 	{`<xsl:mode name="mp" streamable="yes"/><xsl:template match="rec" mode="mp"><xsl:map><xsl:map-entry key="'k'" select="string(@k)"/></xsl:map></xsl:template>`,
 		`<out><xsl:for-each select="doc/rec"><xsl:variable name="m" as="map(*)"><xsl:map><xsl:apply-templates select="." mode="mp"/></xsl:map></xsl:variable><r k="{$m('k')}"/></xsl:for-each></out>`, true},
+	// A variable holding doc() nodes of the document streamed: in tree mode
+	// they are the source-document's own (the resolver's cache), so the
+	// container stays on the tree (streamalias_l7.go; L5's finding).
+	{`<xsl:variable name="g" select="doc('doc.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(/doc/rec intersect $g)"/></out>`, false},
+	{`<xsl:variable name="g" select="doc('doc.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(/doc/rec union $g)"/></out>`, false},
+	{``, `<xsl:variable name="g" select="doc('doc.xml')//sub"/><out><xsl:copy-of select="//sub except $g"/></out>`, false},
 }
 
 // l7Analysis are §19.8 verdicts lane L7 models (streamability_l7.go).
