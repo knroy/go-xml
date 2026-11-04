@@ -29,6 +29,7 @@ package xslt
 import (
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -82,4 +83,69 @@ func streamStandIn(br burstResolver, href, base string, vin *streamValidation) *
 		}
 	}
 	return root
+}
+
+// --- Unparsed entities before the consumer of a document-node rule ------------
+//
+// sf-unparsed-entity-05: rule "/" reads unparsed-entity-uri(x) in the
+// instructions before its consumer. The stand-in is given the DOCTYPE as the
+// parse meets the document element (watchDoc, streamcopy_l3doc.go); a
+// container reads the document through first when nothing consumes, but a
+// rule's consumer comes after those instructions. So the rule's run first
+// moves the cursor to the document element's start tag (toRoot), which is
+// where watchDoc's observer is told of it: the DOCTYPE is parsed by then. On
+// the way it passes the comments and processing instructions before the
+// document element (XML 1.0 [22]: "Misc*" may come before and after the
+// doctypedecl, so the DOCTYPE is not known at the first of them). They are
+// read past, so the plan's consumers at the document node may not be ones
+// that would read them (earlyDocOK): a select whose matches are elements,
+// not the context's copy or string.
+
+// earlyDocOK says why x, a document-node rule's plan that reads the
+// document's unparsed entities before its consumer (docEarly), may not read
+// past the leaves before the document element ("" when it may).
+func (x *streamExec) earlyDocOK() string {
+	for _, op := range x.top {
+		s := op.split
+		if op.apply != applyNone || op.fork || op.group || op.tee != nil || op.pop != nil || s == nil ||
+			s.cond != nil || s.ctxItem || len(s.steps) == 0 {
+			return "unparsed entities before a consumer that may read the document node's leaves"
+		}
+		if leaf, _ := testKinds(s.steps[len(s.steps)-1].test); leaf {
+			return "unparsed entities before a consumer that may read the document node's leaves"
+		}
+	}
+	return ""
+}
+
+// toRoot moves the cursor of run, at the document node, past the comments
+// and processing instructions before the document element, to its start
+// tag, which is left to be read (peeked).
+func (run *streamRun) toRoot() error {
+	for {
+		ev, err := run.c.Peek()
+		if err != nil {
+			return err
+		}
+		if ev.Kind == xdmstream.StartElement || ev.Kind == xdmstream.EndDocument {
+			return nil
+		}
+		if _, err := run.c.Next(); err != nil {
+			return err
+		}
+	}
+}
+
+// rootEvents reports whether op, a copy-of at the document node whose split
+// gives up at the document element (noRoot), never does: the instruction
+// writes into an element (inElement), so the document element is copied as
+// events (copiesReadOut, streamcopy_l3.go), with no xml:base rebased on a
+// parentless copy and no node at the top; a principal input's plan may then
+// keep it (mayGiveUp).
+func rootEvents(op *streamOp) bool {
+	i, ok := op.instr.(*copyOfInstr)
+	s := op.split
+	return ok && op.copies && s != nil && s.cond == nil && s.noRoot && !s.hold && !s.nests && s.tail == nil &&
+		s.tailText == "" && !s.group && s.fold == nil && i.validation.mode == validateStrip && eventCopier(i, false) &&
+		inElement(op.el)
 }

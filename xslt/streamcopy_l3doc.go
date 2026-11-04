@@ -65,6 +65,11 @@ func (x *streamExec) readyDocCopy() string {
 	if !x.docProps {
 		return ""
 	}
+	if x.docEarly {
+		if why := x.earlyDocOK(); why != "" { // streamtee_docnode.go
+			return why
+		}
+	}
 	if x.docMotionless && len(x.top) > 0 {
 		return "a motionless xsl:copy of the document node beside a consuming instruction"
 	}
@@ -123,9 +128,12 @@ func (b *streamBuilder) docEntities(e xpath.Expr, vc viewCheck, f vfocus, nodeOK
 	}
 	if !b.docRead {
 		if b.x.rule {
-			return false // a rule's body is not read through first
+			// A rule's body is not read through first: its run moves to the
+			// document element first (streamtee_docnode.go).
+			b.x.docEarly = true
+		} else {
+			b.x.docMotionless = true
 		}
-		b.x.docMotionless = true
 	}
 	b.x.docProps = true
 	return true

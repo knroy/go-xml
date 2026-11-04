@@ -20,8 +20,9 @@ package xslt
 //
 // What a copy has not that the tree has: the document beside and above the
 // element (siblings, the root's content), and the document-level state --
-// accumulators (computed over the document, not the copy), keys and ids, the
-// DTD's unparsed entities, and fn:path, which counts siblings. The rule's
+// accumulators (computed over the document, not the copy), keys and ids,
+// and fn:path, which counts siblings. The DTD (unparsed entities) the copy is
+// given from the element's view. The rule's
 // mode is verified streamable (link), so the body, and the rules it reaches
 // through streamable modes, read no siblings and nothing below the root but
 // the element; the document-level state is ruled out by refusing any module
@@ -70,8 +71,8 @@ func groundReason(why string) bool {
 
 // groundUnsafe are the names of what a grounded copy answers otherwise than
 // the tree: document-level state, and positions among siblings.
-var groundUnsafe = []string{"accumulator-before", "accumulator-after", "unparsed-entity-uri",
-	"unparsed-entity-public-id", "key", "id", "idref", "element-with-id", "path", "root"}
+var groundUnsafe = []string{"accumulator-before", "accumulator-after",
+	"key", "id", "idref", "element-with-id", "path", "root"}
 
 // groundModuleOK reports whether root, the module of a rule, is the whole
 // stylesheet and names nothing of groundUnsafe as a function call.
@@ -145,6 +146,12 @@ func (run *streamRun) groundRule(rt *runtime, t *Template, params, tunnels param
 	g, err := run.c.Ground()
 	if err != nil {
 		return err
+	}
+	// A copy's tree has no DTD of its own (xdm deliver); the view's has the
+	// document's (xdm newViews), whose unparsed entities the tree's
+	// unparsed-entity-uri and -public-id read.
+	if v, ok := rt.ctx.Item.(*xdm.Node); ok {
+		g.Tree().CopyDTDFrom(v.Tree())
 	}
 	sub := rt
 	if rt.sel != nil {
