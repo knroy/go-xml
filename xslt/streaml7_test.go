@@ -120,48 +120,60 @@ func TestStreamL7MatchesTree(t *testing.T) {
 // accumulator on the core, with the tree's output (streamtrust_pkg_l7.go;
 // override-misc-007's principal container).
 func TestStreamL7UsePackageTrust(t *testing.T) {
-	const base = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform" name="urn:base" package-version="1.0.0" version="3.0">
+	const base = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:f="urn:f" name="urn:base" package-version="1.0.0" version="3.0">
 		<xsl:accumulator name="ac" initial-value="0" streamable="yes"><xsl:accumulator-rule match="*" select="$value + 1"/></xsl:accumulator>
+		<xsl:variable name="cat" select="'a'" visibility="public"/>
+		<xsl:function name="f:pick" as="node()?" streamability="filter" visibility="public">
+			<xsl:param name="n" as="node()"/><xsl:sequence select="$n[@k = $cat]"/>
+		</xsl:function>
 	</xsl:package>`
-	const top = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform" name="urn:top" package-version="1.0.0" version="3.0">
-		<xsl:use-package name="urn:base" package-version="1.0.0"/>
+	const top = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:f="urn:f" name="urn:top" package-version="1.0.0" version="3.0">
+		<xsl:use-package name="urn:base" package-version="1.0.0">USE</xsl:use-package>
 		<xsl:accumulator name="ac" initial-value="0" streamable="yes"><xsl:accumulator-rule match="*" select="$value - 1"/></xsl:accumulator>
 		<xsl:template name="main" visibility="public">
-			<xsl:source-document streamable="yes" href="doc.xml" use-accumulators="ac">
-				<b n="{count(//*)}" acc="{accumulator-after('ac')}"/>
-			</xsl:source-document>
+			<xsl:source-document streamable="yes" href="doc.xml" use-accumulators="ac">BODY</xsl:source-document>
 		</xsl:template>
 	</xsl:package>`
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["flat"]), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	run := func(core bool) (string, streamtrace.Counts) {
-		before := streamtrace.Snapshot()
-		defer func() { noBursts = false }()
-		tree, err := xdm.ParseString(top, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
-		if err != nil {
+	// override-misc-007: the module's own accumulator; su-filter-102: a
+	// function the module overrides, inlined in this package's scope.
+	over := `<xsl:override><xsl:function name="f:pick" as="node()?" streamability="filter" visibility="public">` +
+		`<xsl:param name="n" as="node()"/><xsl:sequence select="$n[not(@k = $cat)]"/></xsl:function></xsl:override>`
+	for i, c := range []struct{ use, body string }{
+		{``, `<b n="{count(//*)}" acc="{accumulator-after('ac')}"/>`},
+		{over, `<b><xsl:value-of select="doc/rec ! f:pick(.) / sub/@x"/></b>`},
+	} {
+		src := strings.Replace(strings.Replace(top, "USE", c.use, 1), "BODY", c.body, 1)
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["flat"]), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		s, err := Compile(tree.Root, CompileOptions{PackageResolver: fixedPackages{"urn:base": base}})
-		if err != nil {
-			t.Fatalf("compile: %v", err)
+		run := func(core bool) (string, streamtrace.Counts) {
+			before := streamtrace.Snapshot()
+			defer func() { noBursts = false }()
+			tree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := Compile(tree.Root, CompileOptions{PackageResolver: fixedPackages{"urn:base": base}})
+			if err != nil {
+				return "COMPILE " + err.Error(), streamtrace.Snapshot().Sub(before)
+			}
+			docs, _ := NewFileResolver(dir)
+			noBursts = !core
+			res, err := s.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: docs})
+			if err != nil {
+				return "ERR " + err.Error(), streamtrace.Snapshot().Sub(before)
+			}
+			return res.String(), streamtrace.Snapshot().Sub(before)
 		}
-		docs, _ := NewFileResolver(dir)
-		noBursts = !core
-		res, err := s.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: docs})
-		if err != nil {
-			return "ERR " + err.Error(), streamtrace.Snapshot().Sub(before)
+		so, st := run(true)
+		to, _ := run(false)
+		if so != to {
+			t.Errorf("case %d: core %q\ntree %q", i, so, to)
 		}
-		return res.String(), streamtrace.Snapshot().Sub(before)
-	}
-	so, st := run(true)
-	to, _ := run(false)
-	if so != to {
-		t.Errorf("core %q\ntree %q", so, to)
-	}
-	if st.Runs[streamtrace.Core] == 0 {
-		t.Error("not on the core")
+		if st.Runs[streamtrace.Core] == 0 {
+			t.Errorf("case %d: not on the core", i)
+		}
 	}
 }
 
