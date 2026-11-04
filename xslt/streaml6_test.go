@@ -62,6 +62,15 @@ var l6DeclBodies = []struct {
 	{`<xsl:mode name="c" streamable="yes" on-no-match="shallow-copy"/>
 <xsl:template match="*[ancestor::*[node-name(.) = node-name(current())]]" mode="c"><nested n="{name()}"/></xsl:template>`,
 		`<out><xsl:apply-templates mode="c"/></out>`, true},
+	// current() in an instruction is its own item (streamBuilder.expr curOK), and
+	// apply-templates select="@*" at the document node selects nothing (docAttrSelect):
+	// si-apply-templates-010's rules.
+	{`<xsl:mode name="tc" streamable="yes" on-no-match="shallow-copy"/>
+<xsl:template match="sub/text()" mode="tc"><xsl:value-of select="concat(current(), '_T')"/></xsl:template>`,
+		`<out><xsl:apply-templates mode="tc"/></out>`, true},
+	{`<xsl:mode name="dot" streamable="yes"/>
+<xsl:template match="." mode="dot"><xsl:copy><xsl:apply-templates select="@*" mode="dot"/><xsl:apply-templates select="node()" mode="dot"/></xsl:copy></xsl:template>`,
+		`<out><xsl:apply-templates select="." mode="dot"/></out>`, true},
 	// xsl:apply-templates over copies of the matches, to the tree's rules of a mode
 	// that is not streamable (executeCopies): positions and last() are the tree's.
 	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, true},

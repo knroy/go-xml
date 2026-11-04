@@ -432,3 +432,16 @@ func globalVar(el *xdm.Node, q xdm.QName) bool {
 		}
 	}
 }
+
+// docAttrSelect reports whether el, a motionless xsl:apply-templates at the
+// document node, selects its attributes: one attribute step with no
+// predicate (@*, as the rule match="." of si-apply-templates-010 has). A
+// document node has none, so the instruction runs as the tree runs it, over
+// the empty sequence, on the stand-in (as leafEmptySelect on a leaf).
+func docAttrSelect(el *xdm.Node) bool {
+	if el.Attr("", "select") == nil {
+		return false
+	}
+	st, ok := oneStep(parseAt(el, el.AttrValue("select"))).(*xpath.Step)
+	return ok && len(st.Predicates) == 0 && st.Axis == xpath.AxisAttribute
+}

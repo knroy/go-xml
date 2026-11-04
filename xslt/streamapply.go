@@ -108,7 +108,7 @@ func (b *streamBuilder) applyOp(el *xdm.Node, f vfocus) bool {
 // that selects attributes of the context, which its view has. It runs off
 // the cursor.
 func (b *streamBuilder) attrApply(el *xdm.Node, f vfocus) bool {
-	if f == vLeaf && leafEmptySelect(el) {
+	if f == vLeaf && leafEmptySelect(el) || f == vNone && docAttrSelect(el) { // streamsplit_l6.go
 		return b.applyAttrs(el, f) && b.withParams(el, f) // runs on the copy, over nothing
 	}
 	src := el.AttrValue("select")
