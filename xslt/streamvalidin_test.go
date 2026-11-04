@@ -338,6 +338,14 @@ func TestStreamMainValidation(t *testing.T) {
 				`<xsl:template match="/"><o><xsl:value-of select="r/i/string()" separator=","/></o></xsl:template>`},
 			map[string]string{"ok": `<r><i/><i>7</i><i></i><m/><m>ab</m><m>a<?p?>b</m></r>`,
 				"bad-fixed": `<r><m>ba</m></r>`, "bad-child": `<r><m>ab<x/></m></r>`, "bad-comment": `<r><i>x<!----></i></r>`}},
+		{"open", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:o="urn:o" xmlns:vc="http://www.w3.org/2007/XMLSchema-versioning" vc:minVersion="1.1">
+ <xs:element name="r"><xs:complexType>
+   <xs:openContent><xs:any namespace="urn:o" processContents="lax"/></xs:openContent>
+   <xs:sequence><xs:element name="i" type="xs:integer" maxOccurs="3"/></xs:sequence></xs:complexType></xs:element></xs:schema>`,
+			[]string{`<xsl:template match="i"><v d="{data(.) + 1}"/></xsl:template>`,
+				`<xsl:template match="/"><o><xsl:value-of select="count(r/*)"/></o></xsl:template>`},
+			map[string]string{"ok": `<r xmlns:o="urn:o"><o:x>a</o:x><i>1</i>` + "\n" + `<o:y/><i>2</i></r>`,
+				"bad-name": `<r><i>1</i><x/></r>`, "bad-count": `<r xmlns:o="urn:o"><i>1</i><o:x/><i>2</i><i>3</i><i>4</i></r>`}},
 	} {
 		for _, r := range c.rules {
 			for name, doc := range c.docs {

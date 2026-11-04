@@ -120,6 +120,40 @@ const svValues = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
 
 const svValuesDoc = `<r><i/><i></i><i>7</i><u/><u>3</u><f/><f>1.50</f><s a="z"/><s>8</s><m/><m>ab</m><m>a<!--c-->b</m></r>`
 
+// svOpenSchema: XSD 1.1 open content, interleaved and suffixed, on a sequence, an
+// all group, mixed content, an empty model, and an empty type
+// (defaultOpenContent appliesToEmpty).
+const svOpenSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:o="urn:o">
+ <xs:defaultOpenContent appliesToEmpty="true" mode="interleave"><xs:any namespace="urn:e" processContents="skip"/></xs:defaultOpenContent>
+ <xs:element name="r"><xs:complexType><xs:sequence>
+   <xs:element name="il" minOccurs="0" maxOccurs="unbounded"><xs:complexType>
+     <xs:openContent><xs:any namespace="urn:o" processContents="lax"/></xs:openContent>
+     <xs:sequence><xs:element name="a" type="xs:int"/><xs:element name="b" minOccurs="0" maxOccurs="2" type="xs:int"/></xs:sequence></xs:complexType></xs:element>
+   <xs:element name="sf" minOccurs="0" maxOccurs="unbounded"><xs:complexType>
+     <xs:openContent mode="suffix"><xs:any namespace="urn:o" processContents="lax"/></xs:openContent>
+     <xs:sequence><xs:element name="a" type="xs:int"/></xs:sequence></xs:complexType></xs:element>
+   <xs:element name="al" minOccurs="0" maxOccurs="unbounded"><xs:complexType>
+     <xs:openContent><xs:any namespace="urn:o" processContents="lax"/></xs:openContent>
+     <xs:all><xs:element name="a" type="xs:int"/><xs:element name="b" type="xs:int" minOccurs="0"/></xs:all></xs:complexType></xs:element>
+   <xs:element name="mx" minOccurs="0" maxOccurs="unbounded"><xs:complexType mixed="true">
+     <xs:openContent><xs:any namespace="urn:o" processContents="lax"/></xs:openContent>
+     <xs:sequence><xs:element name="a" type="xs:int" minOccurs="0"/></xs:sequence></xs:complexType></xs:element>
+   <xs:element name="none" minOccurs="0" maxOccurs="unbounded"><xs:complexType>
+     <xs:openContent><xs:any namespace="urn:o" processContents="lax"/></xs:openContent><xs:sequence/></xs:complexType></xs:element>
+   <xs:element name="emp" minOccurs="0" maxOccurs="unbounded"><xs:complexType><xs:attribute name="x"/></xs:complexType></xs:element>
+ </xs:sequence></xs:complexType></xs:element>
+ <xs:element name="g" type="xs:date" xmlns="" />
+</xs:schema>`
+
+const svOpenDoc = `<r xmlns:o="urn:o" xmlns:e="urn:e">
+ <il><o:x/><a>1</a><o:y><z/></o:y><b>2</b><o:x>t</o:x><b>3</b></il><il><a>1</a></il>
+ <sf><a>1</a><o:k/></sf>
+ <al><o:x/><b>2</b><o:x/><a>1</a></al>
+ <mx>t<o:x/>u<a>1</a>v</mx>
+ <none><o:x/><o:y/></none>
+ <emp x="1">text<e:q><e:w/></e:q></emp>
+</r>`
+
 // svRun streams doc and returns the grounded document element, the
 // validator's verdict, and whether it ran.
 func svRun(t *testing.T, s *Schema, doc string, m xsdstream.Mode, ground bool) (*xdm.Node, error) {
@@ -227,7 +261,7 @@ func svLoad(t *testing.T, src string) *Schema {
 }
 
 func TestStreamValidationMatchesTree(t *testing.T) {
-	books, misc, values := svLoad(t, svBooks), svLoad(t, svMisc), svLoad(t, svValues)
+	books, misc, values, open := svLoad(t, svBooks), svLoad(t, svMisc), svLoad(t, svValues), svLoad(t, svOpenSchema)
 	strict, doc := xsdstream.Mode{Root: xsdstream.Strict}, xsdstream.Mode{Root: xsdstream.Strict, Doc: true}
 	lax := xsdstream.Mode{Root: xsdstream.Lax}
 	typed := xsdstream.Mode{Root: xsdstream.Type, Type: xdm.QName{Local: "BOOKLIST-type"}}
@@ -249,6 +283,8 @@ func TestStreamValidationMatchesTree(t *testing.T) {
 		{"misc root xsi:type", misc, `<r xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:m="urn:m" xsi:type="m:base"><v xmlns="urn:m">3</v></r>`, strict, false},
 		{"values strict", values, svValuesDoc, strict, false},
 		{"values doc", values, svValuesDoc, doc, false},
+		{"open strict", open, svOpenDoc, strict, false},
+		{"open doc", open, svOpenDoc, doc, false},
 		// Invalid, each for one reason the tree finds.
 		{"order", books, strings.Replace(svBooksDoc, "<TITLE>One</TITLE><PRICE cur=\"USD\">4.50</PRICE>", "<PRICE>4.50</PRICE><TITLE>One</TITLE>", 1), strict, true},
 		{"required attribute", books, strings.Replace(svBooksDoc, ` CAT="H"`, "", 1), strict, true},
@@ -276,6 +312,13 @@ func TestStreamValidationMatchesTree(t *testing.T) {
 		{"fixed mixed", values, strings.Replace(svValuesDoc, `<m>ab</m>`, `<m>ba</m>`, 1), strict, true},
 		{"fixed mixed child", values, strings.Replace(svValuesDoc, `<m>ab</m>`, `<m>ab<x/></m>`, 1), strict, true},
 		{"fixed mixed space", values, strings.Replace(svValuesDoc, `<m>ab</m>`, `<m> </m>`, 1), strict, true},
+		{"open: name outside the wildcard", open, strings.Replace(svOpenDoc, `<b>2</b><o:x>t</o:x>`, `<b>2</b><q/>`, 1), strict, true},
+		{"open: suffix before the end", open, strings.Replace(svOpenDoc, `<sf><a>1</a><o:k/></sf>`, `<sf><o:k/><a>1</a></sf>`, 1), strict, true},
+		{"open: model after the suffix", open, strings.Replace(svOpenDoc, `<o:k/></sf>`, `<o:k/><a>2</a></sf>`, 1), strict, true},
+		{"open: all group", open, strings.Replace(svOpenDoc, `<b>2</b><o:x/><a>1</a>`, `<b>2</b><o:x/><a>1</a><a>2</a>`, 1), strict, true},
+		{"open: empty model", open, strings.Replace(svOpenDoc, `<none><o:x/>`, `<none><x/>`, 1), strict, true},
+		{"open: empty type", open, strings.Replace(svOpenDoc, `<e:q><e:w/></e:q>`, `<q/>`, 1), strict, true},
+		{"open: still complete", open, strings.Replace(svOpenDoc, `<il><a>1</a></il>`, `<il><o:x/></il>`, 1), strict, true},
 		{"xsi:type not derived", misc, strings.Replace(svMiscDoc, `xsi:type="m:ext"`, `xsi:type="m:shapeT"`, 1), strict, true},
 	}
 	for _, r := range rows {
@@ -311,8 +354,7 @@ func TestStreamValidationRefusals(t *testing.T) {
 			"element r has identity constraints"},
 		{"element default", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r" type="xs:int" default="1"/></xs:schema>`, ""},
 		{"open content", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType>
-			<xs:openContent><xs:any/></xs:openContent><xs:sequence/></xs:complexType></xs:element></xs:schema>`,
-			"has open content"},
+			<xs:openContent><xs:any/></xs:openContent><xs:sequence/></xs:complexType></xs:element></xs:schema>`, ""},
 		{"plain", svBooks, ""},
 	} {
 		got := xsdstream.Refusal(svLoad(t, r.schema))

@@ -38,8 +38,8 @@ import (
 // a valid document, and exact about whether a document is valid.
 //
 // What it cannot do as the tree does is refused for the whole schema
-// (streamRefusal): identity constraints, open content, and a defaulted
-// attribute in a namespace.
+// (streamRefusal): identity constraints and a defaulted attribute in a
+// namespace.
 
 func init() {
 	xsdstream.Open = func(schema any, m xsdstream.Mode) xsdstream.Validator {
@@ -59,6 +59,7 @@ const (
 	svEmptyElems               // element-only content whose model admits only the empty sequence
 	svElems                    // element-only content
 	svMixed                    // mixed content
+	svOpen                     // empty content its open content opens (matchOpenOnly)
 )
 
 // svFrame is one open element.
@@ -100,6 +101,8 @@ type svFrame struct {
 	// taken out at its end; tok is the element's ID owner (idToken).
 	edt bool
 	tok *xdm.Node
+	// oc is openContentFor the element's type, or nil.
+	oc *OpenContent
 }
 
 // streamV is a validation run on a stream.
@@ -218,7 +221,7 @@ func (s *streamV) start(el *xdm.Node, depth int) {
 	if depth == 1 {
 		s.startRoot(f, el)
 	} else {
-		s.startChild(&s.frames[depth-2], f, el)
+		s.startChild(depth-2, f, el)
 	}
 	s.hold(f, depth)
 }
@@ -268,8 +271,9 @@ func (s *streamV) startRoot(f *svFrame, el *xdm.Node) {
 
 // startChild is validateChild for el, a child of parent's element: the
 // content model's step, then the assessment of the position it took.
-func (s *streamV) startChild(parent, f *svFrame, el *xdm.Node) {
+func (s *streamV) startChild(pi int, f *svFrame, el *xdm.Node) {
 	v := s.v
+	parent := &s.frames[pi]
 	if parent.held != nil {
 		f.held = parent.held.AppendShallowCopy(el)
 	}
@@ -297,16 +301,34 @@ func (s *streamV) startChild(parent, f *svFrame, el *xdm.Node) {
 	}
 	name := xdm.QName{URI: el.Name().URI, Local: el.Name().Local}
 	var p *position
-	if parent.all != nil {
-		p = s.allStep(parent.all, parent.el, el, name)
-	} else {
-		p = s.seqStep(parent.seq, parent.el, el, name)
+	walk := parent.ct
+	switch {
+	case parent.kind == svOpen:
+		// matchOpenOnly: no content model is walked, so the type the
+		// dynamic EDC check reads is the enclosing walk's.
+		if !parent.oc.Wildcard.AllowsName(name, v.elementDefined) {
+			v.fail(el, "cvc-complex-type.2.4.a",
+				"element {%s}%s is not permitted by the open content wildcard", name.URI, name.Local)
+			return
+		}
+		p = &position{term: parent.oc.Wildcard}
+		walk = nil
+		for i := pi - 1; i >= 0; i-- {
+			if k := s.frames[i].kind; k == svElems || k == svEmptyElems || k == svMixed {
+				walk = s.frames[i].ct
+				break
+			}
+		}
+	case parent.all != nil:
+		p = s.allStep(parent.all, parent.oc, parent.el, el, name)
+	default:
+		p = s.seqStep(parent.seq, parent.oc, parent.el, el, name)
 	}
 	if p == nil {
 		return
 	}
 	saved := v.currentType
-	v.currentType = parent.ct
+	v.currentType = walk
 	if v.schema.Version == Version11 {
 		parent.edt = true
 	}
@@ -459,15 +481,19 @@ func (s *streamV) startAgainstType(f *svFrame, el *xdm.Node, typ Type, decl *Ele
 		}
 		v.validateAttributes(el, t)
 		s.applyDefaults(el)
+		f.oc = v.openContentFor(t)
 		switch t.Content {
 		case ContentEmpty:
 			f.kind = svEmpty
+			if f.oc != nil {
+				f.kind = svOpen
+			}
 		case ContentSimple:
 			f.kind, f.st = svSimple, t.SimpleContent
 		case ContentElementOnly:
-			f.emptiable = particleAcceptsEmpty(t.Particle, map[*Particle]bool{})
+			f.emptiable = f.oc != nil || particleAcceptsEmpty(t.Particle, map[*Particle]bool{})
 			f.kind = svElems
-			if isEmptyContent(t) {
+			if isEmptyContent(t) && f.oc == nil {
 				f.kind = svEmptyElems
 			}
 			s.startModel(f, el, t)
@@ -737,10 +763,12 @@ type svSeq struct {
 
 // seqStep is matchSequence's loop body for the child kid of el: the
 // position it takes, or nil when kid is refused (v.fail has said why).
-func (s *streamV) seqStep(w *svSeq, el, kid *xdm.Node, name xdm.QName) *position {
+func (s *streamV) seqStep(w *svSeq, oc *OpenContent, el, kid *xdm.Node, name xdm.QName) *position {
 	v, m := s.v, w.m
 	if len(m.positions) == 0 {
-		// Open content is refused for streaming (streamRefusal).
+		if oc != nil && oc.Wildcard.AllowsName(kid.Name(), v.elementDefined) {
+			return &position{term: oc.Wildcard}
+		}
 		v.fail(kid, "cvc-complex-type.2.4.d",
 			"element {%s}%s is not permitted here: the content model is empty",
 			kid.Name().URI, kid.Name().Local)
@@ -806,6 +834,16 @@ func (s *streamV) seqStep(w *svSeq, el, kid *xdm.Node, name xdm.QName) *position
 		}
 	}
 	if next < 0 {
+		// XSD 1.1 open content: interleaved anywhere, a suffix once the
+		// model is satisfied.
+		satisfied := w.prevIdx < 0 && m.nullable || w.prevIdx >= 0 && contains(m.last, w.prevIdx)
+		if oc != nil && oc.Wildcard.AllowsName(name, v.elementDefined) &&
+			(oc.Mode == OpenInterleave || satisfied) {
+			if oc.Mode == OpenSuffix {
+				w.inSuffix = true
+			}
+			return &position{term: oc.Wildcard}
+		}
 		if boundRefused && incomplete {
 			v.fail(kid, "cvc-complex-type.2.4.b",
 				"element content is incomplete: {%s}%s cannot follow until an earlier particle has met its minimum",
@@ -841,12 +879,16 @@ type svAll struct {
 	t         *ComplexType
 	particles []*Particle
 	counts    []int
+	inSuffix  bool
 }
 
-func (s *streamV) allStep(w *svAll, el, kid *xdm.Node, name xdm.QName) *position {
+func (s *streamV) allStep(w *svAll, oc *OpenContent, el, kid *xdm.Node, name xdm.QName) *position {
 	v := s.v
 	exhausted := -1
 	for i, p := range w.particles {
+		if w.inSuffix {
+			break
+		}
 		pos := &position{term: p.Term, particle: p}
 		if !pos.matches(name, v.elementDefined) {
 			continue
@@ -865,6 +907,12 @@ func (s *streamV) allStep(w *svAll, el, kid *xdm.Node, name xdm.QName) *position
 		v.fail(kid, "cvc-complex-type.2.4.j", "element {%s}%s appears more than %d times in an all group",
 			name.URI, name.Local, p.MaxOccurs)
 		return nil
+	}
+	if oc != nil && oc.Wildcard.AllowsName(name, v.elementDefined) {
+		if oc.Mode == OpenSuffix {
+			w.inSuffix = true
+		}
+		return &position{term: oc.Wildcard}
 	}
 	v.fail(kid, "cvc-complex-type.2.4.a", "element {%s}%s is not permitted in this all group",
 		name.URI, name.Local)
@@ -955,9 +1003,6 @@ func (s *Schema) streamRefusal() string {
 			return ""
 		}
 		seenT[t] = true
-		if s.Version == Version11 && ct.OpenContent != nil && ct.OpenContent.Wildcard != nil {
-			return fmt.Sprintf("type %s has open content", showName(ct.Name))
-		}
 		for _, u := range ct.AttributeUses {
 			if u.Decl == nil || u.Prohibited || u.Decl.Name.URI == "" {
 				continue
