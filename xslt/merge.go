@@ -246,6 +246,9 @@ func (c *compiler) compileMerge(n *xdm.Node, ns xpath.NamespaceResolver) (Instru
 	}
 	instr.action = action
 	instr.streams, instr.textKeys = mergeStreams(instr, actionElem)
+	if instr.streams {
+		c.mergeLinks = append(c.mergeLinks, instr) // streammerge_accum.go
+	}
 	return instr, nil
 }
 

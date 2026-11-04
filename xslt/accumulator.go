@@ -653,6 +653,9 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	// value its original had, not with what the rules would compute over the
 	// copy's own tree.
 	node = rt.accumulatorOrigin(node)
+	if h := rt.accumHeld[node]; h != nil { // streammerge_accum.go
+		return h.value(def, lex, post)
+	}
 	// A node of a streamed document is answered by the run's observer
 	// (streamaccum.go), whose document stands for the tree's root below.
 	root := node.Root()

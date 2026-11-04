@@ -113,6 +113,29 @@ func mergeKeyClassL4(el *xdm.Node, e xpath.Expr) string {
 		if x.Name.URI != fnNS {
 			return ""
 		}
+		if (x.Name.Local == "accumulator-before" || x.Name.Local == "accumulator-after") && len(x.Args) == 1 {
+			// An accumulator of the module with an atomic as type
+			// (streammerge_accum.go): its values are of that type.
+			lit, ok := x.Args[0].(*xpath.Literal)
+			if !ok || lit.Val == nil {
+				return ""
+			}
+			top := documentElementOf(el)
+			d := accumDeclNamed(top, strings.TrimSpace(lit.Val.String()))
+			if d == nil || reachesOtherModules(top) {
+				return ""
+			}
+			if uri, ok := d.LookupPrefix("xs"); !ok || uri != xdm.NSXS {
+				return ""
+			}
+			switch as := strings.TrimSpace(d.AttrValue("as")); as {
+			case "xs:integer", "xs:decimal", "xs:date", "xs:dateTime", "xs:time":
+				return as
+			case "xs:string":
+				return "string"
+			}
+			return ""
+		}
 		switch x.Name.Local {
 		case "true", "false":
 			if len(x.Args) == 0 {

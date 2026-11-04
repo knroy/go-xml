@@ -81,6 +81,10 @@ type runtime struct {
 type transformState struct {
 	sheet *Stylesheet
 
+	// accumHeld holds the accumulator values of the snapshots of streamed
+	// merge items (streammerge_accum.go), made on first use.
+	accumHeld map[*xdm.Node]*heldAccum
+
 	// readerRoot is the principal input's document node when it was
 	// supplied to TransformReader (accumdyn_l4.go), else nil.
 	readerRoot *xdm.Node

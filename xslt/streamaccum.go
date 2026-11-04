@@ -271,6 +271,7 @@ func accumApplies(set *modeAccumulators, def *accumulatorDef) bool {
 // document has an applicable accumulator the observer cannot compute, once
 // every accumulator has compiled.
 func (c *compiler) linkStreamAccums() {
+	c.linkMergeAccums() // streammerge_accum.go
 	for _, sd := range c.accumLinks {
 		if sd.instr.stream == nil || len(c.sheet.accumulators) == 0 {
 			continue
@@ -320,6 +321,10 @@ type streamAccums struct {
 	// has been met.
 	frames []accumFrame
 	ended  bool
+	// onStep, when set, is told the values after each step: of an element
+	// at its start (post false) and end, of a leaf before and after its end
+	// rules (streammerge_accum.go).
+	onStep func(n *xdm.Node, d int, post bool, ord uint64, cur []xdm.Sequence)
 	// rd is the state of the rules reading accumulators (streamaccum_l4.go).
 	rd accumRuleReads
 }
@@ -337,6 +342,12 @@ type accumFrame struct {
 // non-streamable accumulator from. It must be called before the cursor's
 // first event; stop ends it.
 func (run *streamRun) observeAccums(rt *runtime, set *modeAccumulators, streamed bool) *streamAccums {
+	return run.observeAccumsOf(rt, set, streamed, false)
+}
+
+// observeAccumsOf is observeAccums; all says the accumulators not declared
+// streamable are computed too (a merge source's: streammerge_accum.go).
+func (run *streamRun) observeAccumsOf(rt *runtime, set *modeAccumulators, streamed, all bool) *streamAccums {
 	s := rt.sheet
 	if len(s.accumulators) == 0 {
 		return nil
@@ -355,7 +366,7 @@ func (run *streamRun) observeAccums(rt *runtime, set *modeAccumulators, streamed
 	r.streamAccums = []*streamAccums{sa}
 	sa.ctx = bindRuntime(rt.ctx, &r)
 	for _, k := range slices.Sorted(maps.Keys(s.accumulators)) {
-		if def := s.accumulators[k]; def.streamable && def.pkg == 0 && accumApplies(set, def) {
+		if def := s.accumulators[k]; (def.streamable || all) && def.pkg == 0 && accumApplies(set, def) {
 			sa.defs = append(sa.defs, def)
 		}
 	}
@@ -412,15 +423,27 @@ func (sa *streamAccums) observe(n *xdm.Node, d int, end bool, ord uint64) {
 		sa.frames[0].closed, sa.ended = true, true
 	case n.Kind() != xdm.KindElement:
 		sa.step(n, false, nil, nil)
+		if sa.onStep != nil {
+			sa.onStep(n, d, false, ord, sa.cur)
+		}
 		sa.step(n, true, nil, nil)
+		if sa.onStep != nil {
+			sa.onStep(n, d, true, ord, sa.cur)
+		}
 	case !end:
 		f := sa.frame(d)
 		f.ord, f.closed = ord, false
 		sa.step(n, false, f.before, nil)
+		if sa.onStep != nil {
+			sa.onStep(n, d, false, ord, sa.cur)
+		}
 	default:
 		f := sa.frame(d)
 		sa.step(n, true, f.after, f.before)
 		f.closed = true
+		if sa.onStep != nil {
+			sa.onStep(n, d, true, ord, sa.cur)
+		}
 	}
 }
 

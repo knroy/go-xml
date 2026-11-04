@@ -76,7 +76,7 @@ func mergeStreams(i *mergeInstr, action *xdm.Node) (bool, []int) {
 			}
 			continue
 		}
-		if src.split == nil || src.accums != nil || src.sortBeforeMerge { // validation: mergeDocOf
+		if src.split == nil || src.sortBeforeMerge { // validation: mergeDocOf; accumulators: streammerge_accum.go
 			return false, nil
 		}
 		any = true
@@ -272,6 +272,9 @@ func mergeCalledOK(call *xdm.Node, seen map[string]bool, f *mergeActionFacts) bo
 // anchor.
 type mergeInput struct {
 	src, anchor int
+	// acc records the values of the accumulators of a streamed input's
+	// document (streammerge_accum.go), nil when it has none.
+	acc *mergeAccums
 	// next gives the next item of a streamed input; entries are a collected
 	// input's, with their keys.
 	next    func() (xdm.Item, bool)
@@ -421,10 +424,14 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 		}
 	}
 	streamtrace.Run(streamtrace.Merge)
+	var accs []*mergeAccums
 	var open func(j int) error
 	open = func(j int) error {
 		if j == len(docs) {
-			return i.merge(rt, out, inputs, resolved, colls)
+			if err := i.merge(rt, out, inputs, resolved, colls); err != nil {
+				return err
+			}
+			return mergeAccumsPending(accs) // streammerge_accum.go
 		}
 		d := docs[j]
 		return d.stream(rt.ctx, func(c *xdmstream.Cursor) error {
@@ -437,6 +444,11 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 			}
 			c.Handoff(func() func() { return xpathleaf.LockYield(rt.evalLock) })
 			in := d.in
+			if m := observeMergeAccums(rt, &streamRun{c: c, root: xdm.NewTree().Root}, i.sources[in.src], d.split.minDepth()); m != nil {
+				in.acc = m
+				accs = append(accs, m)
+				defer m.sa.stop()
+			}
 			// The coroutine and the merge take turns evaluating: each lets
 			// the EvalLock go as its turn ends (see LockYield).
 			lock := func() func() { return xpathleaf.LockYield(rt.evalLock) }
@@ -542,7 +554,13 @@ func (in *mergeInput) advance(rt *runtime, keys []*sortKey, colls []xpath.Collat
 			return in.err
 		}
 		var err error
-		if e, err = mergeEntryOf(rt, snapshotItem(it), keys, colls, in.src, in.anchor, in.pos); err != nil {
+		snap := snapshotItem(it)
+		if in.acc != nil {
+			if err := in.acc.attach(rt, it, snap); err != nil { // streammerge_accum.go
+				return err
+			}
+		}
+		if e, err = mergeEntryOf(rt, snap, keys, colls, in.src, in.anchor, in.pos); err != nil {
 			return err
 		}
 		if in.pos > 0 {
@@ -580,7 +598,16 @@ func (in *mergeInput) take() xdm.Item {
 	if in.next == nil {
 		return in.head.item
 	}
-	return snapshotItem(in.head.item)
+	snap := snapshotItem(in.head.item)
+	if in.acc != nil { // the snapshot answers as the one its keys were computed on
+		rt0 := in.acc.sa.rt
+		if a, ok := in.head.item.(*xdm.Node); ok {
+			if b, ok := snap.(*xdm.Node); ok {
+				rt0.noteCopiedAccumulators(a, b)
+			}
+		}
+	}
+	return snap
 }
 
 // merge runs the action on each group of inputs, taken least key first.

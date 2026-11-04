@@ -65,3 +65,54 @@ func TestStreamMergeL4(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamMergeAccums: accumulators on streamed merge sources (merge-051,
+// -082): keys and actions reading them of the items' snapshots give the
+// tree's output or error, streamed (a failing walk re-runs on the tree).
+func TestStreamMergeAccums(t *testing.T) {
+	dir := t.TempDir()
+	for n, d := range streamMergeDocs {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte(d), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const accs = `<xsl:accumulator name="c" as="xs:integer" initial-value="0">
+	    <xsl:accumulator-rule match="e" select="$value + 1"/></xsl:accumulator>
+	  <xsl:accumulator name="w" as="xs:string" initial-value="''">
+	    <xsl:accumulator-rule match="e/n/text()" select="string()"/>
+	    <xsl:accumulator-rule match="e" phase="end" select="$value || '.'"/></xsl:accumulator>
+	  <xsl:accumulator name="bad" as="xs:integer" initial-value="0">
+	    <xsl:accumulator-rule match="e" select="xs:integer(@t) idiv (7 - xs:integer(@t))"/></xsl:accumulator>`
+	cases := []struct {
+		sources, action string
+		rerun           bool
+	}{
+		{mergeSrc("A", "'a.xml'", "log/e", "accumulator-before('c')", `use-accumulators="c w"`) +
+			mergeSrc("B", "'b.xml'", "log/e", "accumulator-before('c')", `use-accumulators="c"`),
+			`<g k="{current-merge-key()}"><xsl:for-each select="current-merge-group()"><i a="{accumulator-after('c')}"/></xsl:for-each></g>`, false},
+		{mergeSrc("A", "'a.xml'", "log/e", "xs:integer(@t)", `use-accumulators="c w"`),
+			`<g><xsl:for-each select="current-merge-group()"><i w="{accumulator-after('w')}"/></xsl:for-each></g>`, false},
+		// Not applicable to B's documents: XTDE3362 in both.
+		{mergeSrc("A", "'b.xml'", "log/e", "xs:integer(@t)", `use-accumulators="c"`),
+			`<g w="{current-merge-group()[1]/accumulator-before('w')}"/>`, true},
+		// A walk failing after the items read: the tree's error.
+		{mergeSrc("A", "'a.xml'", "log/e", "xs:integer(@t)", `use-accumulators="bad"`),
+			`<g b="{current-merge-group()[1]/accumulator-before('bad')}"/>`, true},
+	}
+	for i, c := range cases {
+		sheet := mergeSheet(c.sources, c.action)
+		sheet = sheet[:len(sheet)-len("</xsl:stylesheet>")] + accs + "</xsl:stylesheet>"
+		so, se, sm, st := msgRun(sheet, dir, true)
+		to, te, tm, _ := msgRun(sheet, dir, false)
+		where := fmt.Sprintf("case %d", i)
+		if so != to || se != te || sm != tm {
+			t.Errorf("%s:\nstream %q %q %q\ntree   %q %q %q", where, so, se, sm, to, te, tm)
+		}
+		if st.Guards != 0 || st.Runs[streamtrace.Merge] == 0 {
+			t.Errorf("%s: guards %d, merge runs %d", where, st.Guards, st.Runs[streamtrace.Merge])
+		}
+		if !c.rerun && st.Reruns != 0 {
+			t.Errorf("%s: %d re-runs", where, st.Reruns)
+		}
+	}
+}
