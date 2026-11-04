@@ -225,6 +225,12 @@ var mainCases = []struct {
 	{`<xsl:accumulator name="n" initial-value="0" streamable="yes"><xsl:accumulator-rule match="sub" select="$value + 1"/></xsl:accumulator>` +
 		`<xsl:mode streamable="yes" use-accumulators="n"/><xsl:template match="rec"><r n="{accumulator-before('n')}"><xsl:fork><xsl:sequence><xsl:value-of select="string(sub[1])"/></xsl:sequence>` +
 		`<xsl:sequence><xsl:for-each select="sub"><s b="{accumulator-before('n')}" a="{accumulator-after('n')}"/></xsl:for-each></xsl:sequence></xsl:fork></r></xsl:template>`, true},
+	// A copy-of at the document node whose tail runs on a grounded copy of
+	// the document element: a principal input grounds it, as the tree holds
+	// it (streammain_rootground.go; function-5004). <doc/> raises XPTY0004
+	// in both legs.
+	{`<xsl:function name="p:f" as="node()" streamability="filter"><xsl:param name="n" as="node()"/><xsl:sequence select="$n[self::rec]"/></xsl:function>` +
+		`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:copy-of select="doc/p:f(rec[1])/sub"/></o></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

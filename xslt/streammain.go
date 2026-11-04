@@ -119,7 +119,7 @@ func (s *Stylesheet) mainRefusal() string {
 // may give up (errSplitGiveUp) for the tree to answer.
 func (x *streamExec) mayGiveUp() bool {
 	for _, op := range x.top {
-		if op.apply == applyNone && !op.loop && op.split != nil && op.split.givesUp() && !rootEvents(op) { // streamtee_docnode.go
+		if op.apply == applyNone && !op.loop && op.split != nil && op.split.givesUp() && !rootEvents(op) && !rootGround(op) { // streamtee_docnode.go
 			return true
 		}
 	}

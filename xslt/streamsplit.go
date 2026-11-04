@@ -1789,6 +1789,9 @@ type splitRun struct {
 	// the match to its end.
 	each func(it xdm.Item) error
 	body func(v *xdm.Node, d int) (bool, error)
+	// groundRoot grounds a match that is the document element, as any
+	// other, for a principal input (streammain_rootground.go).
+	groundRoot bool
 	// src, for a group split, hands over the members: the walk's context is
 	// then a stand-in at the depth above them, whose children they are.
 	src memberSource
@@ -2214,7 +2217,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 				}
 			case matchGround:
 				decided = true
-				if s.noRoot && ev.Depth == 1 {
+				if s.noRoot && ev.Depth == 1 && !r.groundRoot {
 					if r.rootCopy == nil {
 						return errSplitGiveUp
 					}

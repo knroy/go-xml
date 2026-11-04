@@ -1399,7 +1399,10 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 			}
 			run.used = true
 			s, err := op.split.choose(rt.ctx, run.c, run.d) // streamcopy_l3choice.go
-			if err == nil {
+			switch {
+			case err == nil && run.d == 0 && run.i == nil && rootGround(op): // streammain_rootground.go
+				err = s.loopGroundRoot(rt, run.c, g, each)
+			case err == nil:
 				err = s.loopAt(rt.ctx, run.c, run.d, g, each, nil)
 			}
 			if err == errSplitGiveUp && run.d == 0 && run.i != nil {
