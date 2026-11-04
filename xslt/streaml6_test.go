@@ -104,6 +104,9 @@ var l6DeclBodies = []struct {
 	{l6UnionDecls, `<out><xsl:for-each select="($ins union doc/rec/sub)"><e n="{name()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
 	{l6UnionDecls, `<xsl:variable name="c" select="false()"/><out><xsl:apply-templates select="if ($c) then doc/rec[1]/* else doc/rec[2]/*" mode="u"/></out>`, true},
 	{l6UnionDecls, `<out><xsl:apply-templates select="($ins union doc/rec[1]/*)" mode="u"/></out>`, true},
+	// apply-templates over values read off the stream (sx-if-218): collected, dispatched.
+	{`<xsl:mode name="v" streamable="yes"/><xsl:template match=".[. instance of xs:integer]" mode="v"><i p="{position()}" of="{last()}"><xsl:value-of select="."/></i></xsl:template>`,
+		`<out><xsl:apply-templates select="if (doc/rec/sub) then 0 else 1" mode="v"/></out>`, true},
 	// xsl:apply-templates over copies of the matches, to the tree's rules of a mode
 	// that is not streamable (executeCopies): positions and last() are the tree's.
 	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, true},

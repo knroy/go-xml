@@ -26,7 +26,7 @@ import "github.com/knroy/go-xml/v2/xdm"
 // instr, may be dispatched by executePop.
 func applyPop(p *streamPop, instr Instruction) bool {
 	a, ok := instr.(*applyTemplatesInstr)
-	return ok && a.atomicOK && (groundApply(p) || len(a.sorts) == 0 && len(a.params) == 0 && dispatchable(p)) // streamsplit_l6.go
+	return ok && a.atomicOK && (groundApply(p) || p.values || len(a.sorts) == 0 && len(a.params) == 0 && dispatchable(p)) // streamsplit_l6.go
 }
 
 // dispatchable reports whether p hands the matches themselves, in every

@@ -139,9 +139,11 @@ func groundApply(p *streamPop) bool {
 	return p.cond == nil && p.ground && p.fn != nil && !p.values
 }
 
-// groundApplyOp reports whether op is an apply op over such a population.
+// groundApplyOp reports whether op is an apply op over such a population,
+// or over values the stream's select makes (a values population: if (P)
+// then 0 else 1, sx-if-218), which are collected and dispatched alike.
 func groundApplyOp(op *streamOp) bool {
-	return op.pop != nil && groundApply(op.pop)
+	return op.apply != applyNone && op.pop != nil && (groundApply(op.pop) || op.pop.values)
 }
 
 // applyCopies takes, for an apply or loop op whose select the split refused
@@ -166,6 +168,13 @@ func (c *compiler) applyCopies(op *streamOp, ns xpath.NamespaceResolver) bool {
 // readyCopies readies an apply op over copies: each match is grounded
 // (none is the document node).
 func (op *streamOp) readyCopies() string {
+	if op.pop.values {
+		// Read as a select's: held to the memory rule at the document node.
+		if why := op.split.memory(0); why != "" {
+			return "apply-templates " + why
+		}
+		return ""
+	}
 	if op.split.minDepth() < 1 {
 		return "apply-templates over copies: a match may be the document node"
 	}
