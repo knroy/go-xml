@@ -196,6 +196,16 @@ func mergeActionOK(action *xdm.Node) bool {
 // walked too, when this module declares it (seen: those walked already).
 // xsl:result-document is no effect a re-run repeats: the re-run takes back
 // the secondary results the failed run made (streamresult.go).
+//
+// The rules an xsl:apply-templates reaches are not walked: none can see
+// the action's focus. A rule runs with the apply-templates' own focus (its
+// last() is the size of that select, evaluated on the group the merge
+// holds); xsl:next-match and xsl:apply-imports, which keep the focus, are
+// XTDE0560 in the action: the merge clears the current template rule
+// (runStream, as executeTree), and the action's context item is a
+// snapshot, never the node a rule matched; xsl:evaluate has the rule's focus,
+// or none (§10.4.1). Their effects are taken back on a re-run: messages
+// and secondary results by effectsMark; fn:trace writes nothing here.
 func mergeActionWalk(el *xdm.Node, seen map[string]bool) bool {
 	ok := true
 	mentions := func(v string) bool {

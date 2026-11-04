@@ -29,7 +29,13 @@ func mergeSheet(sources, action string) string {
 <xsl:template name="main"><out><xsl:merge>` + sources + `<xsl:merge-action>` + action +
 		`</xsl:merge-action></xsl:merge></out></xsl:template>` +
 		`<xsl:template name="mergeValue"><xsl:value-of select="current-merge-key()"/></xsl:template>` +
-		`<xsl:template name="mergeMessage"><xsl:message select="current-merge-key()"/></xsl:template></xsl:stylesheet>`
+		`<xsl:template name="mergeMessage"><xsl:message select="current-merge-key()"/></xsl:template>` +
+		`<xsl:template match="e" mode="m"><r p="{position()}" n="{last()}" t="{trace(@v, 'v')}"><xsl:evaluate xpath="'@v || last() || position()'" context-item="."/></r></xsl:template>` +
+		`<xsl:template match="e"><d n="{last()}"><xsl:apply-templates mode="m" select="."/></d></xsl:template>` +
+		`<xsl:template match="e" mode="nm" priority="2"><xsl:merge>` + mergeSrc("A", "'b.xml'", "log/e", "xs:integer(@t)", "") +
+		`<xsl:merge-action><xsl:next-match/></xsl:merge-action></xsl:merge></xsl:template>` +
+		`<xsl:template match="e" mode="nm" priority="1"><n p="{position()}"/></xsl:template>` +
+		`<xsl:template match="e" mode="msg"><xsl:message select="string(@v)"/><m n="{last()}"/></xsl:template></xsl:stylesheet>`
 }
 
 func mergeSrc(name, uris, sel, key string, extra string) string {
@@ -95,6 +101,22 @@ func TestStreamMergeMatchesTree(t *testing.T) {
 		// error, not XTDE1490 on the re-run.
 		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""),
 			`<xsl:result-document href="r{position()}.xml"><x/></xsl:result-document><g v="{xs:integer(current-merge-group('B')/@t) div 0}"/>`, true},
+		// Rules an xsl:apply-templates in the action reaches run with that
+		// instruction's focus (last() is the size of its select, which the
+		// group holds; xsl:evaluate keeps the rule's focus), fn:trace has no
+		// effect, a message is taken back on a re-run, and the current
+		// template rule is cleared within the merge, so no rule sees the
+		// action's focus: they stream, byte for byte.
+		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""),
+			`<g k="{current-merge-key()}"><xsl:apply-templates select="current-merge-group()" mode="m"/></g>`, true},
+		{mergeSrc("A", "('a.xml', 'b.xml')", "log/e", num, "") + mergeSrc("B", "'c.xml'", "log/g/e", num, ""),
+			`<g><xsl:apply-templates select="current-merge-group()" mode="#current"/></g>`, true},
+		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""),
+			`<g><xsl:apply-templates select="current-merge-group()" mode="msg"/><xsl:value-of select="xs:integer(current-merge-group('B')/@t) div 0"/></g>`, true},
+		// xsl:next-match in an action (of a merge in a rule): XTDE0560, the
+		// rule cleared and the context item a snapshot, never the matched node.
+		{mergeSrc("A", "'a.xml'", "log/e", num, "") + mergeSrc("B", "'b.xml'", "log/e", num, ""),
+			`<xsl:apply-templates select="current-merge-group()[1]" mode="nm"/>`, true},
 	}
 	streamed := 0
 	for i, c := range cases {
