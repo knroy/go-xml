@@ -107,7 +107,12 @@ func (b *streamBuilder) groupOp(el *xdm.Node, f vfocus) bool {
 	for ch := range el.Children() {
 		switch {
 		case ch.Kind() == xdm.KindText && strings.ContainsAny(ch.Value(), "{}"):
-			return b.refuse("text with a brace")
+			// A text value template motionless on the first item's view
+			// (streamshapes.go); a consuming one is refused.
+			tb := &streamBuilder{pl: b.pl, x: b.x, grp: true, key: true}
+			if tv, ok := tb.textTemplate(ch, el, vElem); !ok || tv != nil {
+				return b.refuse("text with a brace")
+			}
 		case ch.Kind() != xdm.KindElement:
 		case isXSL(ch, "sort"):
 			return b.heldGroup(el, f) // streamgroup_held.go
@@ -244,7 +249,10 @@ func (c *compiler) noteStreamGroup(n *xdm.Node, instr *forEachGroupInstr, ns xpa
 				continue
 			}
 			if op.dead = populationRefusal(op.split); op.dead != "" {
-				continue
+				if !crawlable(op) {
+					continue
+				}
+				op.dead = "" // a crawling one, under a body that reads nothing of it (streamgroup_crawl.go)
 			}
 		}
 		op.x.byInstr[instr] = op
@@ -296,7 +304,7 @@ func groupRefusal(instr *forEachGroupInstr) string {
 // population popWalk reads: a path of child steps to elements, predicates
 // decided on the candidate's view.
 func populationRefusal(s *streamSplit) string {
-	_, _, win := groupWindow(s) // streamgroup_window.go
+	_, win := groupWindow(s) // streamgroup_window.go
 	if !s.bare() && !win || s.group || s.outermost || s.innermost || s.hasBranches() {
 		return "grouping population is not a path of child steps"
 	}
@@ -367,12 +375,18 @@ func (run *streamRun) group(rt *runtime, out *outputBuilder, i *forEachGroupInst
 	g := &groupRun{sr: run, rt: rt, i: i, keyAttr: op.keyAttr}
 	if op.fromGroup {
 		g.src = run.grp.src
+	} else if crawlable(op) {
+		w, ok := newCrawlWalk(op.split, rt.ctx, run.c, run.d) // streamgroup_crawl.go
+		if !ok {
+			return errStreamPlan
+		}
+		g.src, g.crawl = w, w
 	} else {
 		w := &popWalk{s: op.split, d: run.d}
 		w.r = splitRun{s: op.split, ctx: rt.ctx, c: run.c}
 		w.filt = xdmstream.Filter{Accept: op.split.accept, Depth: run.d}
 		w.insts = []*splitInst{op.split.inst(0)}
-		w.from, w.to, w.win = groupWindow(op.split) // streamgroup_window.go
+		w.win, _ = groupWindow(op.split) // streamgroup_window.go
 		g.src, g.walk = w, w
 	}
 	if i.groupAdjacent != nil {
@@ -399,11 +413,8 @@ type popWalk struct {
 	done  bool
 	// predErr is the error a predicate raised, the select's.
 	predErr error
-	// win says only the matches counted from to before to are the
-	// population, seen counting them (streamgroup_window.go).
-	win      bool
-	from, to int64
-	seen     int64
+	// win is the window over the matches, if any (streamgroup_window.go).
+	win groupWin
 }
 
 func (p *popWalk) next(read bool) (xdmstream.Event, bool, error) {
@@ -457,9 +468,14 @@ func (p *popWalk) next(read bool) (xdmstream.Event, bool, error) {
 		switch {
 		case !ok:
 			skip = true
-		case j+1 == len(p.s.steps) && p.outside():
-			skip = true // matched, outside the window
 		case j+1 == len(p.s.steps):
+			if out, err := p.win.outside(p.r.ctx); err != nil {
+				p.predErr = err
+				return ev, false, err
+			} else if out {
+				skip = true // matched, outside the window
+				continue
+			}
 			p.at = true
 			return ev, true, nil
 		default:
@@ -530,6 +546,8 @@ type groupRun struct {
 	done     bool
 	// keyErr is the error a key or pattern raised.
 	keyErr error
+	// crawl is src when it is a crawling select's (streamgroup_crawl.go).
+	crawl *crawlWalk
 }
 
 // classify reads what the grouping needs of the item at ev, its view's; an
@@ -689,6 +707,8 @@ func (g *groupRun) run(out *outputBuilder) error {
 func (g *groupRun) phase(err error) int {
 	switch {
 	case g.walk != nil && g.walk.predErr == err:
+		return 1
+	case g.crawl != nil && g.crawl.predErr == err:
 		return 1
 	case g.keyErr == err:
 		return 3

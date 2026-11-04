@@ -131,6 +131,13 @@ var groupBodies = []struct {
 	{`<out><xsl:for-each-group select="subsequence(/doc/t, 2, 3)" group-adjacent="@d"><g k="{current-grouping-key()}"><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></out>`, true},
 	{`<out><xsl:for-each-group select="subsequence(*/g/t, 2, 2)" group-adjacent="position()"><g n="{count(current-group())}" k="{@k}"/></xsl:for-each-group></out>`, true},
 	{`<out><xsl:for-each-group select="subsequence(/doc/t, 3)" group-ending-with="."><g><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></out>`, true},
+	// A window by a test of position() alone, (P)[p]; a crawling population
+	// (its matches nest) under a body that reads nothing of the group, text
+	// value templates in the body (L5, streamgroup_crawl.go).
+	{`<out><xsl:for-each-group select="(/doc/t)[position() mod 2 = 1]" group-adjacent="@d"><g k="{current-grouping-key()}"><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></out>`, true},
+	{`<out><xsl:for-each-group select="(//t)[position() = 1 to 3]" group-adjacent="position()"><g p="{position()}" n="{name()}" k="{@k}"/></xsl:for-each-group></out>`, true},
+	{`<out><xsl:for-each-group select="//t" group-ending-with="." expand-text="yes">{position()}:{@d};</xsl:for-each-group></out>`, true},
+	{`<out><xsl:for-each-group select="/doc/t" group-adjacent="@d" expand-text="yes"><g>{current-grouping-key()}</g></xsl:for-each-group></out>`, true},
 	// A population of attributes, leaves or outermost() matches, held and
 	// grouped by the tree's code (L5, streamgroup_population.go); refused
 	// when the body reaches a template.
