@@ -203,7 +203,7 @@ func (i *applyTemplatesInstr) executeCopies(rt *runtime, out *outputBuilder, run
 		return nil
 	}, func(item func(xdm.Item) error, _ func() (bool, error)) error {
 		run.used = true
-		return op.split.loopAt(rt.ctx, run.c, run.d, run.groupAt(op), item, nil)
+		return run.splitOf(op).loopAt(rt.ctx, run.c, run.d, run.groupAt(op), item, nil)
 	})
 	if err != nil {
 		return err

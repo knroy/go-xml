@@ -97,6 +97,13 @@ var l6DeclBodies = []struct {
 	{`<xsl:mode name="h2" streamable="yes"/>
 <xsl:template match="rec[has-children()]" mode="h2"><xsl:copy-of select="."/></xsl:template>`,
 		`<out><xsl:apply-templates mode="h2"/></out>`, false},
+	// A choice of two streamed populations (choiceOfStreams), and F union P with F
+	// fresh (unionPop), in loops and applies (sx-if-115/118, sx-union-115/118).
+	{l6UnionDecls, `<xsl:variable name="c" select="true()"/><out><xsl:for-each select="if ($c) then doc/rec else doc/rec/sub"><e n="{name()}"><xsl:value-of select="string(.)"/></e></xsl:for-each></out>`, true},
+	{l6UnionDecls, `<xsl:variable name="c" select="false()"/><out><xsl:for-each select="if ($c) then doc/rec else doc/rec/sub"><e n="{name()}"><xsl:value-of select="string(.)"/></e></xsl:for-each></out>`, true},
+	{l6UnionDecls, `<out><xsl:for-each select="($ins union doc/rec/sub)"><e n="{name()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
+	{l6UnionDecls, `<xsl:variable name="c" select="false()"/><out><xsl:apply-templates select="if ($c) then doc/rec[1]/* else doc/rec[2]/*" mode="u"/></out>`, true},
+	{l6UnionDecls, `<out><xsl:apply-templates select="($ins union doc/rec[1]/*)" mode="u"/></out>`, true},
 	// xsl:apply-templates over copies of the matches, to the tree's rules of a mode
 	// that is not streamable (executeCopies): positions and last() are the tree's.
 	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, true},
@@ -113,6 +120,11 @@ var l6DeclBodies = []struct {
 const l6ForeignRules = `<xsl:template match="@*" mode="a"><a n="{name()}" v="{.}" p="{position()}" of="{last()}"/></xsl:template>
 <xsl:template match=".[. instance of map(*)]" mode="a"><m k="{.?k}"/></xsl:template>
 <xsl:template match="sub" mode="a"><s x="{@x}" up="{name(..)}"/></xsl:template>`
+
+// l6UnionDecls are a fresh global and a streamable mode for populations.
+const l6UnionDecls = `<xsl:variable name="ins" as="element()*"><a>A</a><b>B</b></xsl:variable>
+<xsl:mode name="u" streamable="yes" on-no-match="deep-skip"/>
+<xsl:template match="rec/*" mode="u"><u p="{position()}"><xsl:value-of select="."/></u></xsl:template>`
 
 // l6CopyRules are the rules of a mode that is not streamable, for copies.
 const l6CopyRules = `<xsl:template match="rec" mode="t"><xsl:param name="p" select="'-'"/><r k="{@k}" p="{$p}" n="{position()}" of="{last()}"><xsl:value-of select="count(.//sub)"/></r></xsl:template>`

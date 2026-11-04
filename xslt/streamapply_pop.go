@@ -97,7 +97,7 @@ func (i *applyTemplatesInstr) executePop(rt *runtime, out *outputBuilder, run *s
 			return err
 		}
 		run.used = true
-		return op.split.loopAt(rt.ctx, run.c, run.d, run.groupAt(op), nil, func(v *xdm.Node, md int) (bool, error) {
+		return run.splitOf(op).loopAt(rt.ctx, run.c, run.d, run.groupAt(op), nil, func(v *xdm.Node, md int) (bool, error) { // streampop_l6.go
 			if err := rt.ctx.Err(); err != nil {
 				return false, err
 			}

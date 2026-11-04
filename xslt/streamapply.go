@@ -263,6 +263,7 @@ func (op *streamOp) readyApply() string {
 			return why // a population's own walk dispatches elements only
 		}
 		s.mode = matchBody
+		return op.readyAltApply() // streampop_l6.go
 	}
 	return ""
 }

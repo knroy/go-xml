@@ -1094,11 +1094,17 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 			// of one match at a time: a match that is the document element
 			// is copied whole, which costs what its tree costs.
 			s.mode = matchGround
+			if why := op.readyAlt(op.ctxDepth(minD), k); why != "" { // streampop_l6.go
+				return why
+			}
 			kinds[streamtrace.KindGround]++
 			kinds[streamtrace.KindForEach]++
 			continue
 		default:
 			return "loop body: neither streamed nor grounded (a match may be the document node)"
+		}
+		if why := op.readyAlt(op.ctxDepth(minD), k); why != "" { // streampop_l6.go
+			return why
 		}
 		kinds[streamtrace.KindForEach]++
 		for i := range kinds {
@@ -1255,6 +1261,9 @@ type streamRun struct {
 	// (streamlive.go).
 	applyFeeds map[*streamOp]*burstFeed
 	kidFilters []*xdmstream.Filter
+	// popSplit is the split of the branch a population's choice took, when
+	// it has its own (streampop_l6.go).
+	popSplit *streamSplit
 	// teed says a fork's tee has taken the cursor over (streamtee_try.go).
 	teed bool
 	// typed says the document is validated as it is read (streamcopy_l3.go).

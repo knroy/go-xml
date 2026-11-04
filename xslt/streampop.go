@@ -67,6 +67,11 @@ type streamPop struct {
 	oneOrMore *xpath.Compiled   // one-or-more(()): raised when nothing was handed
 	// cut, for insert-before($t, n, P), is where $t (parts 0 and 2) is cut.
 	cut *popWin
+	// split, in a branch of a choice whose branches both read the stream,
+	// is the branch's own (nil: the op's); union is F union () for
+	// F union P, F's nodes merged into the matches by order (streampop_l6.go).
+	split *streamSplit
+	union *xpath.Compiled
 }
 
 // popWin is a window over the stream part's matches: of kind head, tail,
@@ -95,6 +100,7 @@ type popBuilder struct {
 	focus      vfocus
 	split      *streamSplit // the stream part's, once found
 	why        string
+	el         *xdm.Node // the instruction (streampop_l6.go: fresh operands)
 }
 
 func (pb *popBuilder) part(x xpath.Expr) *xpath.Compiled {
@@ -113,7 +119,7 @@ func (c *compiler) popFor(op *streamOp, ns xpath.NamespaceResolver) (*streamPop,
 	if e == nil {
 		return nil, nil, "select does not parse again"
 	}
-	pb := &popBuilder{c: c, sel: op.sel, ns: ns, doc: op.doc, group: op.inGroup, key: op.key, focus: vElem}
+	pb := &popBuilder{c: c, sel: op.sel, ns: ns, doc: op.doc, group: op.inGroup, key: op.key, focus: vElem, el: op.el}
 	if op.doc {
 		pb.focus = vNone
 	}
@@ -145,11 +151,18 @@ func (pb *popBuilder) pop(e xpath.Expr) *streamPop {
 		if !pb.motionless(x.Cond) {
 			return nil
 		}
+		if p := pb.choiceOfStreams(x); p != nil { // streampop_l6.go
+			return p
+		}
 		t, f := pb.pop(x.Then), pb.pop(x.Else)
 		if t == nil || f == nil {
 			return nil
 		}
 		return &streamPop{cond: pb.part(x.Cond), then: t, els: f, off: t.off || f.off}
+	case *xpath.BinaryOp:
+		if p := pb.unionPop(x); p != nil { // streampop_l6.go
+			return p
+		}
 	case *xpath.SequenceExpr:
 		p := &streamPop{at: -1}
 		for _, it := range x.Items {
@@ -494,6 +507,11 @@ func (p *streamPop) read(run *streamRun, rt *runtime, op *streamOp, each func(xd
 			p = p.els
 		}
 	}
+	if p.split != nil { // streampop_l6.go
+		prev := run.popSplit
+		run.popSplit = p.split
+		defer func() { run.popSplit = prev }()
+	}
 	// The motionless parts and the windows' arguments first, as the tree
 	// evaluates the whole select before the body.
 	vals := make([]xdm.Sequence, len(p.parts))
@@ -523,7 +541,14 @@ func (p *streamPop) read(run *streamRun, rt *runtime, op *streamOp, each func(xd
 		vals[0], vals[2] = t[:at-1], t[at-1:]
 	}
 	handed := false
+	merge, err := p.unionMerge(run, rt, offEach) // streampop_l6.go
+	if err != nil {
+		return err
+	}
 	gate := func() (bool, error) {
+		if err := merge.atCursor(); err != nil {
+			return false, err
+		}
 		for j := range wins {
 			ok, err := wins[j].pass(offEach)
 			if err != nil || !ok {
@@ -534,6 +559,9 @@ func (p *streamPop) read(run *streamRun, rt *runtime, op *streamOp, each func(xd
 		return true, nil
 	}
 	item := func(it xdm.Item) error {
+		if err := merge.before(it); err != nil {
+			return err
+		}
 		if ok, err := gate(); err != nil || !ok {
 			return err
 		}
@@ -564,6 +592,9 @@ func (p *streamPop) read(run *streamRun, rt *runtime, op *streamOp, each func(xd
 		if err := stream(item, gate); err != nil {
 			return err
 		}
+		if err := merge.rest(); err != nil {
+			return err
+		}
 		for j := range wins {
 			if err := wins[j].end(offEach); err != nil {
 				return err
@@ -587,8 +618,9 @@ func (run *streamRun) popFeed(instr Instruction, rt *runtime, op *streamOp, g *g
 		return op.pop.read(run, rt, op, each, func(item func(xdm.Item) error, gate func() (bool, error)) error {
 			run.used = true
 			d := run.d
-			if op.split.mode == matchBody {
-				return op.split.loopAt(rt.ctx, run.c, d, g, nil, func(v *xdm.Node, md int) (bool, error) {
+			s := run.splitOf(op) // streampop_l6.go
+			if s.mode == matchBody {
+				return s.loopAt(rt.ctx, run.c, d, g, nil, func(v *xdm.Node, md int) (bool, error) {
 					if ok, err := gate(); err != nil || !ok {
 						return false, err
 					}
@@ -604,7 +636,7 @@ func (run *streamRun) popFeed(instr Instruction, rt *runtime, op *streamOp, g *g
 					return read, err
 				})
 			}
-			return op.split.loopAt(rt.ctx, run.c, d, g, item, nil)
+			return s.loopAt(rt.ctx, run.c, d, g, item, nil)
 		})
 	}}
 }
