@@ -39,3 +39,23 @@ func unionNodes(e xpath.Expr) bool {
 	}
 	return nodeValued(e)
 }
+
+// sharedTail takes apart a union of two paths with one tail of axis steps,
+// A/T union B/T, as (A union B)/T: a path's last steps apply to each node
+// of what precedes them, so they distribute over a union (not over
+// intersect or except). It returns T and the operands without it, or the
+// operands as they are.
+func sharedTail(op string, l, r splitPathParts) ([]xpath.Expr, splitPathParts, splitPathParts) {
+	if op != "union" || len(l.tail) == 0 || len(l.tail) != len(r.tail) || l.mapR != nil || r.mapR != nil ||
+		l.skip != 0 || r.skip != 0 {
+		return nil, l, r
+	}
+	for i := range l.tail {
+		if _, ok := l.tail[i].(*xpath.Step); !ok || l.tail[i].String() != r.tail[i].String() {
+			return nil, l, r
+		}
+	}
+	tail := l.tail
+	l.tail, r.tail = nil, nil
+	return tail, l, r
+}

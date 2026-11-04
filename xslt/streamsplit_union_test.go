@@ -43,6 +43,12 @@ var unionBodies = []struct {
 	{`<out><xsl:for-each select="/doc/rec"><xsl:value-of select="(. | sub) ! local-name()"/></xsl:for-each></out>`, true},
 	// Refused: operands with a tail of their own.
 	{`<out><xsl:value-of select="(/doc/rec/@k | //sub/@x)[position() lt 3]" separator=","/></out>`, false},
+	// One tail of axis steps on both: (A union B)/T (J1, sharedTail).
+	{`<out><xsl:value-of select="(/doc/rec[1]/sub/ancestor::* union /doc/rec[2]/sub/ancestor::*) ! name()" separator=","/></out>`, true},
+	{`<out><xsl:value-of select="(//sub/ancestor-or-self::*/@* union //rec/ancestor-or-self::*/@*)" separator="|"/></out>`, true},
+	{`<out><xsl:value-of select="(/doc/rec/@k | //sub/@k)" separator=","/></out>`, true},
+	// ... a union only: except and intersect do not distribute.
+	{`<out><xsl:value-of select="(//sub/ancestor::* except //rec/ancestor::*) ! name()" separator=","/></out>`, false},
 	// A map reading position() is refused by the split, but held at the
 	// document node (streamhold.go) it streams.
 	{`<out><xsl:value-of select="(//rec | //sub) ! position()" separator=","/></out>`, true},

@@ -96,6 +96,7 @@ func (w *splitter) setOf(x *xpath.BinaryOp) (splitPathParts, bool) {
 	if !ok {
 		return pp, false
 	}
+	tail, l, r := sharedTail(x.Op, l, r) // streamsplit_foreign.go
 	for _, side := range []splitPathParts{l, r} {
 		if side.oi != "" || side.group || len(side.tail) > 0 {
 			w.refuse(x.Op + " of a path with a tail")
@@ -122,7 +123,7 @@ func (w *splitter) setOf(x *xpath.BinaryOp) (splitPathParts, bool) {
 		b.set = &splitSet{op: x.Op, l: ls, r: rs}
 	}
 	pp.steps = append(l.steps[:len(l.steps):len(l.steps)], r.steps...)
-	pp.br = b
+	pp.br, pp.tail = b, tail
 	return pp, true
 }
 
