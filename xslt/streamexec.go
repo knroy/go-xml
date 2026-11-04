@@ -693,7 +693,7 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "result-document" {
 			return b.resultDocAttrs(el, f) && b.content(el, f) // streamresult.go
 		}
-		if b.noIdent && (local == "sequence" || local == "variable") {
+		if b.noIdent && (local == "sequence" || local == "variable") && !leafAtomic(el) { // streamcopy_l3leaf.go
 			// They could hand the copy on as the node it stands for.
 			return b.refuse("xsl:" + local + " on a copied text, comment or PI node")
 		}

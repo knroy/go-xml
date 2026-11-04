@@ -95,3 +95,27 @@ func TestStreamCopyChoice(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamLeafAtomicSequence: a rule for a text, comment or PI node may
+// return, or bind, atomic values made of its copy with xsl:sequence or
+// xsl:variable: no node of the copy is handed on (streamcopy_l3leaf.go).
+func TestStreamLeafAtomicSequence(t *testing.T) {
+	dir := t.TempDir()
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, rules := range []string{
+			`<xsl:template match="text()" mode="s"><xsl:sequence select="concat('[', ., ']')"/></xsl:template>`,
+			`<xsl:template match="text()" mode="s"><xsl:sequence select="string()"/></xsl:template>` +
+				`<xsl:template match="comment() | processing-instruction()" mode="s"><xsl:variable name="v" select="string-length(.)"/><c n="{$v}"/></xsl:template>`,
+		} {
+			sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:mode name="s" streamable="yes"/>
+<xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml"><o><xsl:apply-templates select="." mode="s"/></o></xsl:source-document></top></xsl:template>
+` + rules + `
+</xsl:stylesheet>`
+			coreCheck(t, sheet, dir, name+": "+rules, true, TransformOptions{})
+		}
+	}
+}
