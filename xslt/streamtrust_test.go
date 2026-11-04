@@ -188,7 +188,8 @@ func TestStreamTrustReproducers(t *testing.T) {
 				strings.HasPrefix(tc.name, "M") && strings.Contains(tc.name, "control") ||
 				tc.name == "F1d control: motionless attribute set" || // since M6
 				tc.name == "F1 control: absorbing fn, modelled body" || // since G4: $n/@k is ./@k on the view
-				tc.name == "S3 control: literal serialization attributes" // since G6: xsl:result-document
+				tc.name == "S3 control: literal serialization attributes" || // since G6: xsl:result-document
+				tc.name == "M8 rule pattern reads a verified accumulator" // since K2 2f6bca51: accumulator-before in a pattern's predicate
 			if burstRuns != mustStream {
 				t.Fatalf("streamed path taken: %v", burstRuns)
 			}
