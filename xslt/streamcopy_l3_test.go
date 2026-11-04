@@ -3,6 +3,7 @@ package xslt
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -144,5 +145,31 @@ func TestStreamAtomicTypedVariable(t *testing.T) {
 		}
 		body := `<xsl:variable name="n" as="xs:string" select="."/><o><xsl:value-of select="string-length($n)"/></o>`
 		coreCheck(t, coreSheet(body), dir, name+": "+body, true, TransformOptions{})
+	}
+}
+
+// TestStreamApplyLeafMatches: an apply-templates whose select may match
+// text, comment or PI nodes dispatches each such match on its copy, in its
+// place among the element matches, with its position (streamapply.go,
+// lane L3).
+func TestStreamApplyLeafMatches(t *testing.T) {
+	dir := t.TempDir()
+	rules := `<xsl:template match="rec" mode="s"><r p="{position()}"/></xsl:template>
+<xsl:template match="text()" mode="s"><t p="{position()}"><xsl:value-of select="."/></t></xsl:template>
+<xsl:template match="comment()" mode="s"><c p="{position()}"/></xsl:template>`
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, sel := range []string{"doc/rec/sub/text()", "doc/node()", "node()", "doc/rec/text()", "doc/comment()"} {
+			for _, rs := range []string{rules, ""} {
+				sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:mode name="s" streamable="yes"/>
+<xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml"><o><xsl:apply-templates select="` + sel + `" mode="s"/></o></xsl:source-document></top></xsl:template>
+` + rs + `
+</xsl:stylesheet>`
+				coreCheck(t, sheet, dir, name+": "+sel+" rules="+strconv.FormatBool(rs != ""), true, TransformOptions{})
+			}
+		}
 	}
 }

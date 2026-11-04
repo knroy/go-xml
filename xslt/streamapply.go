@@ -249,8 +249,8 @@ func (op *streamOp) readyApply() string {
 			// A rule may read a match whole, and with it the matches inside.
 			return "apply-templates select: matches may lie inside each other"
 		}
-		if why := leafApplyRefusal(s); why != "" {
-			return why
+		if why := leafApplyRefusal(s); why != "" && op.pop != nil && !op.pop.windowsOnly() {
+			return why // a population's own walk dispatches elements only
 		}
 		s.mode = matchBody
 	}
@@ -803,6 +803,11 @@ func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run
 			return false, err
 		}
 		pos++
+		if v.Kind() != xdm.KindElement {
+			// A kept text, comment or PI match, its copy complete, the
+			// cursor at it: dispatched as children() dispatches one (lane L3).
+			return true, run.leaf(focus, pos, v, mode, params, tunnels, out)
+		}
 		return run.element(focus, pos, v, md, mode, params, tunnels, out)
 	}); err != nil {
 		return err
