@@ -64,63 +64,60 @@ var errAccumOffStream = fmt.Errorf("%w: an accumulator value the stream does not
 // --- Compiling --------------------------------------------------------------
 
 // accumStreamWhy reports why the observer cannot compute def as the tree
-// does, or "".
-func accumStreamWhy(def *accumulatorDef) string {
+// does, or "", and the names (as written) of the accumulators its rules
+// read of their node (streamaccum_l4.go).
+func accumStreamWhy(def *accumulatorDef) (string, []string) {
 	name := "accumulator " + def.name.Lexical()
 	if def.pkg != 0 || def.el == nil {
-		return name + ": in a package"
+		return name + ": in a package", nil
 	}
 	e := parseAt(def.el, def.el.AttrValue("initial-value"))
 	if e == nil || !(viewCheck{noIdent: true}).safe(e, vNone, false) || !accumValueSafe(e) {
-		return name + ": initial-value " + def.el.AttrValue("initial-value")
+		return name + ": initial-value " + def.el.AttrValue("initial-value"), nil
 	}
 	atomic := atomicSequenceType(def.el.AttrValue("as"))
 	// A map or array $value is a lookup's target: what it is applied to is
 	// atomized, and what it returns is a value it holds.
 	as := strings.TrimSpace(def.el.AttrValue("as"))
 	lookup := strings.HasPrefix(as, "map(") || strings.HasPrefix(as, "array(")
+	var deps []string
 	for _, r := range def.rules {
 		can, why := accumPatternClasses(r.match)
 		if why != "" {
-			return name + ": " + why
+			return name + ": " + why, nil
 		}
-		src, at := "", r.el
+		var exprs []accumRuleExpr
 		switch {
 		case r.select_ != nil:
-			src = r.el.AttrValue("select")
+			exprs = []accumRuleExpr{{at: r.el, src: r.el.AttrValue("select"), held: !atomic}}
 		case r.body != nil:
-			// A sequence constructor of one xsl:sequence: its select is the
-			// value.
-			var one *xdm.Node
-			for ch := range r.el.Children() {
-				switch {
-				case ch.Kind() == xdm.KindElement && one == nil && isXSL(ch, "sequence") &&
-					ch.Attr("", "select") != nil && ch.NumAttrs() == 1:
-					one = ch
-				case ch.Kind() == xdm.KindElement,
-					ch.Kind() == xdm.KindText && strings.TrimSpace(ch.Value()) != "":
-					return name + ": a rule's sequence constructor"
-				}
+			// A sequence constructor of xsl:variable instructions and one
+			// xsl:sequence: its select is the value (streamaccum_l4.go).
+			var ok bool
+			if exprs, ok = accumBodyExprs(r.el, atomic); !ok {
+				return name + ": a rule's sequence constructor", nil
 			}
-			if one == nil {
-				return name + ": a rule's sequence constructor"
-			}
-			src, at = one.AttrValue("select"), one
 		default:
 			continue // the empty sequence
 		}
-		e := parseAt(at, src)
-		if e == nil || !atomic && !accumValueSafe(e) {
-			return name + ": a rule's value may hold a node: " + src
-		}
-		for cl, f := range [numClasses]vfocus{classElem: vElem, classLeaf: vLeaf, classDoc: vNone} {
-			if can[cl] && nodeClass(cl) != classAttr &&
-				!(viewCheck{noIdent: true, up: true, curOK: true, cur: f, lookup: lookup, accum: true}).safe(e, f, false) {
-				return name + ": a rule's value reads more than the node has: " + src
+		for _, x := range exprs {
+			e := parseAt(x.at, x.src)
+			if e == nil || x.held && !accumValueSafe(e) {
+				return name + ": a rule's value may hold a node: " + x.src, nil
+			}
+			if !accumReadsOK(e, r.post, &deps) {
+				return name + ": a rule reads an accumulator other than of its node: " + x.src, nil
+			}
+			for cl, f := range [numClasses]vfocus{classElem: vElem, classLeaf: vLeaf, classDoc: vNone} {
+				if can[cl] && nodeClass(cl) != classAttr &&
+					!(viewCheck{noIdent: true, up: true, curOK: true, cur: f, lookup: lookup, accum: true,
+						acc: true, after: r.post}).safe(e, f, false) {
+					return name + ": a rule's value reads more than the node has: " + x.src, nil
+				}
 			}
 		}
 	}
-	return ""
+	return "", deps
 }
 
 // accumPatternClasses is patternClasses for an accumulator rule, whose
@@ -244,6 +241,7 @@ func accumValueSafe(e xpath.Expr) bool {
 // run is TransformReader's, whose tree-mode answer computes a non-streamable
 // accumulator as well (a source-document's raises XTDE3362 on reading one).
 func (s *Stylesheet) accumRefusal(set *modeAccumulators, main bool) string {
+	reads := map[*accumulatorDef][]string{}
 	for _, k := range slices.Sorted(maps.Keys(s.accumulators)) {
 		def := s.accumulators[k]
 		if !accumApplies(set, def) {
@@ -255,11 +253,13 @@ func (s *Stylesheet) accumRefusal(set *modeAccumulators, main bool) string {
 			}
 			continue
 		}
-		if why := accumStreamWhy(def); why != "" {
+		why, deps := accumStreamWhy(def)
+		if why != "" {
 			return why
 		}
+		reads[def] = deps
 	}
-	return ""
+	return s.accumReadsWhy(reads) // streamaccum_l4.go
 }
 
 // accumApplies reports whether def is applicable under set (nil: all).
@@ -271,6 +271,7 @@ func accumApplies(set *modeAccumulators, def *accumulatorDef) bool {
 // document has an applicable accumulator the observer cannot compute, once
 // every accumulator has compiled.
 func (c *compiler) linkStreamAccums() {
+	c.linkMergeAccums() // streammerge_accum.go
 	for _, sd := range c.accumLinks {
 		if sd.instr.stream == nil || len(c.sheet.accumulators) == 0 {
 			continue
@@ -320,6 +321,12 @@ type streamAccums struct {
 	// has been met.
 	frames []accumFrame
 	ended  bool
+	// onStep, when set, is told the values after each step: of an element
+	// at its start (post false) and end, of a leaf before and after its end
+	// rules (streammerge_accum.go).
+	onStep func(n *xdm.Node, d int, post bool, ord uint64, cur []xdm.Sequence)
+	// rd is the state of the rules reading accumulators (streamaccum_l4.go).
+	rd accumRuleReads
 }
 
 type accumFrame struct {
@@ -335,6 +342,12 @@ type accumFrame struct {
 // non-streamable accumulator from. It must be called before the cursor's
 // first event; stop ends it.
 func (run *streamRun) observeAccums(rt *runtime, set *modeAccumulators, streamed bool) *streamAccums {
+	return run.observeAccumsOf(rt, set, streamed, false)
+}
+
+// observeAccumsOf is observeAccums; all says the accumulators not declared
+// streamable are computed too (a merge source's: streammerge_accum.go).
+func (run *streamRun) observeAccumsOf(rt *runtime, set *modeAccumulators, streamed, all bool) *streamAccums {
 	s := rt.sheet
 	if len(s.accumulators) == 0 {
 		return nil
@@ -348,14 +361,19 @@ func (run *streamRun) observeAccums(rt *runtime, set *modeAccumulators, streamed
 	r := *rt
 	r.bursts = nil // the rules are no instruction of a plan
 	sa := &streamAccums{rt: &r, ctx: rt.ctx, run: run, root: run.root, at: map[*accumulatorDef]int{}}
+	// The rules run on a runtime of their own, which their calls of
+	// accumulator-before and -after find this run on (streamaccum_l4.go).
+	r.streamAccums = []*streamAccums{sa}
+	sa.ctx = bindRuntime(rt.ctx, &r)
 	for _, k := range slices.Sorted(maps.Keys(s.accumulators)) {
-		if def := s.accumulators[k]; def.streamable && def.pkg == 0 && accumApplies(set, def) {
+		if def := s.accumulators[k]; (def.streamable || all) && def.pkg == 0 && accumApplies(set, def) {
 			sa.defs = append(sa.defs, def)
 		}
 	}
 	slices.SortFunc(sa.defs, func(a, b *accumulatorDef) int { return a.declOrder - b.declOrder })
 	n := len(sa.defs)
 	sa.cur, sa.ext, sa.errs, sa.read = make([]xdm.Sequence, n), make([]accumExtend, n), make([]error, n), make([]int, n)
+	sa.rd.init(n)
 	f := sa.frame(0)
 	for i, def := range sa.defs {
 		sa.at[def] = i
@@ -367,9 +385,12 @@ func (run *streamRun) observeAccums(rt *runtime, set *modeAccumulators, streamed
 			cur, err = sa.rt.convertAccum(def, cur)
 		}
 		sa.cur[i], sa.errs[i] = cur, err
+		if err != nil {
+			sa.rd.failed(i)
+		}
 	}
-	sa.step(sa.root, false, f.before)
 	rt.streamAccums = append(rt.streamAccums, sa)
+	sa.step(sa.root, false, f.before, nil)
 	run.c.Observe(sa.observe)
 	return sa
 }
@@ -398,42 +419,69 @@ func (sa *streamAccums) frame(d int) *accumFrame {
 func (sa *streamAccums) observe(n *xdm.Node, d int, end bool, ord uint64) {
 	switch {
 	case n == nil:
-		sa.step(sa.root, true, sa.frames[0].after)
+		sa.step(sa.root, true, sa.frames[0].after, sa.frames[0].before)
 		sa.frames[0].closed, sa.ended = true, true
 	case n.Kind() != xdm.KindElement:
-		sa.step(n, false, nil)
-		sa.step(n, true, nil)
+		sa.step(n, false, nil, nil)
+		if sa.onStep != nil {
+			sa.onStep(n, d, false, ord, sa.cur)
+		}
+		sa.step(n, true, nil, nil)
+		if sa.onStep != nil {
+			sa.onStep(n, d, true, ord, sa.cur)
+		}
 	case !end:
 		f := sa.frame(d)
 		f.ord, f.closed = ord, false
-		sa.step(n, false, f.before)
+		sa.step(n, false, f.before, nil)
+		if sa.onStep != nil {
+			sa.onStep(n, d, false, ord, sa.cur)
+		}
 	default:
 		f := sa.frame(d)
-		sa.step(n, true, f.after)
+		sa.step(n, true, f.after, f.before)
 		f.closed = true
+		if sa.onStep != nil {
+			sa.onStep(n, d, true, ord, sa.cur)
+		}
 	}
 }
 
 // step applies the start (or end: post) rules of each accumulator to n, and
 // records the values in into (when set). An accumulator that has failed
-// stays failed: the tree's walk stops at its first error.
-func (sa *streamAccums) step(n *xdm.Node, post bool, into []xdm.Sequence) {
-	for i, def := range sa.defs {
-		if sa.errs[i] == nil {
-			next, err := sa.rt.applyAccumRules(def, n, sa.cur[i], sa.ctx, post)
-			if err == nil {
-				next, err = sa.ext[i].extend(sa.ctx, sa.cur[i], next)
-			}
-			if err != nil {
-				sa.errs[i] = err
-			} else {
-				sa.cur[i] = next
-			}
+// stays failed: the tree's walk stops at its first error. before holds n's
+// values before its start rules, at an element's end (nil at a leaf's end:
+// streamaccum_l4.go keeps them). A rule reading another accumulator of n
+// has that one stepped first (stepOne).
+func (sa *streamAccums) step(n *xdm.Node, post bool, into, before []xdm.Sequence) {
+	sa.rd.begin(n, post, before)
+	for i := range sa.defs {
+		sa.stepOne(i)
+	}
+	sa.rd.end()
+	if into != nil {
+		copy(into, sa.cur)
+	}
+}
+
+// stepOne applies accumulator i's rules of the step in progress, once.
+func (sa *streamAccums) stepOne(i int) {
+	if !sa.rd.enter(i, sa.cur[i]) {
+		return
+	}
+	if sa.errs[i] == nil {
+		next, err := sa.rt.applyAccumRules(sa.defs[i], sa.rd.n, sa.cur[i], sa.ctx, sa.rd.post)
+		if err == nil {
+			next, err = sa.ext[i].extend(sa.ctx, sa.cur[i], next)
 		}
-		if into != nil {
-			into[i] = sa.cur[i]
+		if err != nil {
+			sa.errs[i] = err
+			sa.rd.failed(i)
+		} else {
+			sa.cur[i] = next
 		}
 	}
+	sa.rd.leave(i)
 }
 
 // streamAccumsOf returns the observer of the run that node is of: a view
@@ -444,7 +492,7 @@ func (sa *streamAccums) step(n *xdm.Node, post bool, into []xdm.Sequence) {
 func (rt *runtime) streamAccumsOf(node *xdm.Node) (*streamAccums, error) {
 	for i := len(rt.streamAccums) - 1; i >= 0; i-- {
 		sa := rt.streamAccums[i]
-		if node == sa.root {
+		if node == sa.root || node == sa.rd.n && node != nil {
 			return sa, nil
 		}
 		if _, ok := sa.run.c.Ordinal(node); ok {
@@ -464,12 +512,15 @@ func (sa *streamAccums) value(def *accumulatorDef, node *xdm.Node, post bool) (x
 	if !ok {
 		return nil, errAccumOffStream
 	}
+	if sa.rd.n != nil {
+		return sa.stepValue(i, node, post) // a rule's read (streamaccum_l4.go)
+	}
 	if sa.read[i] == 0 {
 		sa.reads++
 		sa.read[i] = sa.reads
 	}
-	if sa.errs[i] != nil {
-		return nil, sa.errs[i]
+	if err := sa.effErr(i); err != nil {
+		return nil, err
 	}
 	d, ord := 0, uint64(0)
 	if node != sa.root {
@@ -488,8 +539,8 @@ func (sa *streamAccums) value(def *accumulatorDef, node *xdm.Node, post bool) (x
 		if err := sa.consume(d); err != nil {
 			return nil, err
 		}
-		if sa.errs[i] != nil {
-			return nil, sa.errs[i]
+		if err := sa.effErr(i); err != nil {
+			return nil, err
 		}
 	}
 	return sa.frames[d].after[i], nil
@@ -533,14 +584,14 @@ func (sa *streamAccums) pending() error {
 	}
 	best := -1
 	for i, r := range sa.read {
-		if r > 0 && sa.errs[i] != nil && (best < 0 || r < sa.read[best]) {
+		if r > 0 && sa.effErr(i) != nil && (best < 0 || r < sa.read[best]) {
 			best = i
 		}
 	}
 	if best < 0 {
 		return nil
 	}
-	return sa.errs[best]
+	return sa.effErr(best)
 }
 
 // finish ends a source-document run whose body succeeded: when an

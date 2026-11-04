@@ -108,7 +108,7 @@ func (b *streamBuilder) tryParts(el *xdm.Node, f vfocus) ([]*xdm.Node, bool) {
 	if v := strings.TrimSpace(el.AttrValue("rollback-output")); v != "" && v != "yes" && v != "true" && v != "1" {
 		return nil, b.refuse("xsl:try rollback-output=" + v)
 	}
-	if readsAccumulator(el) {
+	if tryReadsFallible(el) { // streamtry_l4.go
 		return nil, b.refuse("xsl:try reading an accumulator")
 	}
 	var body []*xdm.Node
@@ -202,6 +202,9 @@ func (x *streamExec) readyTries() string {
 func (op *streamOp) exactInTry() string {
 	switch {
 	case op.apply != applyNone:
+		if op.applyCannotFail() { // streamtry_l4.go
+			return ""
+		}
 		return "xsl:apply-templates in its body"
 	case op.group:
 		return "xsl:for-each-group in its body"

@@ -41,6 +41,9 @@ type mergeInstr struct {
 	// data-type, an attribute value template, must resolve to "text".
 	streams  bool
 	textKeys []int
+	// groupsFirst says the action may ask for last(): the streamed merge
+	// forms every group before the first action runs (streammerge_l4.go).
+	groupsFirst bool
 }
 
 // mergeSource is a compiled xsl:merge-source: one merge source definition.
@@ -245,6 +248,9 @@ func (c *compiler) compileMerge(n *xdm.Node, ns xpath.NamespaceResolver) (Instru
 	instr.streams, instr.textKeys = mergeStreams(instr, actionElem)
 	if instr.streams && c.streamMayAlias() { // streamalias_l7.go
 		instr.streams, instr.textKeys = false, nil
+	}
+	if instr.streams {
+		c.mergeLinks = append(c.mergeLinks, instr) // streammerge_accum.go
 	}
 	return instr, nil
 }

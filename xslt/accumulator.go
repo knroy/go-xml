@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -652,6 +653,9 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	// value its original had, not with what the rules would compute over the
 	// copy's own tree.
 	node = rt.accumulatorOrigin(node)
+	if h := rt.accumHeld[node]; h != nil { // streammerge_accum.go
+		return h.value(def, lex, post)
+	}
 	// A node of a streamed document is answered by the run's observer
 	// (streamaccum.go), whose document stands for the tree's root below.
 	root := node.Root()
@@ -686,7 +690,13 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	// so the walk starts at that tree's root even when the node is deep in
 	// it — the value at a node depends on everything that precedes it.
 	if sa != nil {
-		return sa.value(def, node, post)
+		v, err := sa.value(def, node, post)
+		if errors.Is(err, errAccumCircular) { // streamaccum_l4.go: the message below
+			return nil, fmt.Errorf(
+				"XTDE3400: accumulator %s is defined circularly: a rule reads "+
+					"the value of %s(%q) it is computing", def.name.Lexical(), fname, lex)
+		}
+		return v, err
 	}
 	vals, err := rt.accumulatorValuesFor(def, node.Root(), ctx)
 	if err != nil {

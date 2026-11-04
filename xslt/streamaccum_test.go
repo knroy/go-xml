@@ -107,7 +107,10 @@ func TestStreamAccumMatchesTree(t *testing.T) {
 					if b.stream && trusted && runs == 0 {
 						t.Errorf("%s: not streamed: %s", where, w)
 					}
-					if !b.stream && runs != 0 {
+					// Set 0's n can fail only at its start: a try reading it
+					// may stream (streamtry_l4.go).
+					tryAt0 := ai == 0 && strings.HasPrefix(b.body, "<xsl:try>")
+					if !b.stream && !tryAt0 && runs != 0 {
 						t.Errorf("%s: streamed", where)
 					}
 					if st.Reruns != 0 && name != "bad" && ai != 3 {

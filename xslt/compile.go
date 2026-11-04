@@ -28,6 +28,9 @@ type compiler struct {
 	// accumLinks are the streamed containers whose accumulators are checked
 	// once every one has compiled (streamaccum.go).
 	accumLinks []streamLink
+	// mergeLinks are the streamed merges whose sources' accumulators are
+	// checked then too (streammerge_accum.go).
+	mergeLinks []*mergeInstr
 	opts       CompileOptions
 	sheet      *Stylesheet
 	declOrder  int
