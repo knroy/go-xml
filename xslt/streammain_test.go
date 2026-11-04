@@ -164,6 +164,27 @@ var mainCases = []struct {
 	{globalItemRow + `<xsl:param name="aa" select="accumulator-after#1"/><xsl:accumulator name="n" as="xs:integer" initial-value="0" streamable="yes">` +
 		`<xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator><xsl:mode streamable="yes" use-accumulators="n"/>` +
 		`<xsl:template match="rec"><r b="{accumulator-before('n')}"><xsl:apply-templates/><e><xsl:value-of select="../$aa('n')"/></e></r></xsl:template>`, true},
+	// A grouping over attributes, text or node() children in a rule for the
+	// document element: the population a pruned copy of the document built
+	// from the events (L5, streamgroup_pruned.go; si-group-024/033/037).
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:for-each-group select="rec/@k" group-adjacent="."><g k="{current-grouping-key()}" v="{current-group()/../@v}"/></xsl:for-each-group></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:for-each-group select="*/text()" group-starting-with="text()[contains(., 't')]"><g><xsl:copy-of select="snapshot(current-group())/.."/></g></xsl:for-each-group></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="rec"><xsl:copy><xsl:for-each-group select="node()" group-adjacent="node-name(.), @x" composite="yes">` +
+		`<xsl:copy><xsl:copy-of select="@x"/><xsl:apply-templates select="current-group()/node()"/></xsl:copy></xsl:for-each-group></xsl:copy></xsl:template>`, true},
+	// A group-by in xsl:fork over elements whose body applies templates to,
+	// or sequences, the group: the members copied with their ancestors
+	// (si-fork-802, si-group-205).
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/"><o><xsl:fork><xsl:for-each-group select="doc/rec" group-by="@k">` +
+		`<g k="{current-grouping-key()}"><xsl:apply-templates select="current-group()"/></g></xsl:for-each-group></xsl:fork></o></xsl:template>` +
+		`<xsl:template match="rec/@*"><xsl:element name="{name()}"><xsl:value-of select="."/></xsl:element></xsl:template><xsl:template match="rec/@k" priority="5"/>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:fork><xsl:for-each-group select="doc/rec" group-by="@k">` +
+		`<g k="{current-grouping-key()}"><xsl:sequence select="current-group()"/></g></xsl:for-each-group></xsl:fork></o></xsl:template>`, true},
+	// ... and one whose body reads only the key and values of the group:
+	// streamcopy_l3group.go's one fragment (si-fork-809).
+	{`<xsl:mode streamable="yes"/><xsl:output method="text"/><xsl:template match="/"><o><xsl:fork><xsl:for-each-group select="doc/rec" composite="yes" group-by="@k, name()">` +
+		`<xsl:value-of select="current-grouping-key(), sum(current-group()/@v)" separator=", "/><br/></xsl:for-each-group></xsl:fork></o></xsl:template>`, true},
+	// ... refused when the body counts siblings, which the copy prunes.
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:for-each-group select="rec/@k" group-adjacent="."><g n="{generate-id(current-group()[1]/..)}"/></xsl:for-each-group></o></xsl:template>`, false},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

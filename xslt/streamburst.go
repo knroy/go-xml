@@ -60,6 +60,9 @@ type burstFeed struct {
 	// treeApply drives an xsl:apply-templates over fresh copies: eval
 	// reads them, the tree applies (streamcopy_l3apply.go).
 	treeApply bool
+	// offBody, for an xsl:for-each-group whose population eval builds, says
+	// its grouping and body run off the stream (streamgroup_pruned.go).
+	offBody bool
 }
 
 // burstResolver is a document resolver that can stream a document.
