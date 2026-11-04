@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
@@ -74,6 +75,23 @@ var l7Analysis = []struct {
 // TestStreamL7MatchesTree runs l7Rows on every core document and
 // whitespace declaration against the tree.
 func TestStreamL7MatchesTree(t *testing.T) {
+	// streamable-116: a streamed principal input in a streamable mode has an
+	// absent global context item (§2.3.2): XPDY0002 from TransformReader,
+	// streamed or not; Transform of a tree keeps the source as the item.
+	g := mainSheet(`<xsl:mode streamable="yes"/><xsl:variable name="g" select="count(//rec)"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`)
+	for _, streamed := range []bool{true, false} {
+		if out, _ := mainRun(g, coreDocs["flat"], streamed, TransformOptions{}); !strings.Contains(out, "XPDY0002") {
+			t.Errorf("TransformReader (streamed %v): %q, want XPDY0002", streamed, out)
+		}
+	}
+	if tree, err := xdm.ParseString(g, xdm.ParseOptions{}); err == nil {
+		if s, err := Compile(tree.Root, CompileOptions{}); err == nil {
+			src, _ := xdm.ParseString(coreDocs["flat"], xdm.ParseOptions{})
+			if res, err := s.Transform(context.Background(), src.Root, TransformOptions{}); err != nil || !strings.Contains(res.String(), `g="3"`) {
+				t.Errorf("Transform of a tree: %v %v, want g=\"3\"", res, err)
+			}
+		}
+	}
 	// The analysis rows (l7Analysis): verdicts, no run.
 	for _, c := range l7Analysis {
 		p, known := analyzeInstrSource(t, c.src)

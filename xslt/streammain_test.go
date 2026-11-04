@@ -35,10 +35,12 @@ func mainRun(sheet, doc string, streamed bool, opts TransformOptions) (out strin
 	if streamed {
 		res, err = s.TransformReader(context.Background(), readOnly{strings.NewReader(doc)}, opts)
 	} else {
-		var src *xdm.Tree
-		if src, err = xdm.Parse(strings.NewReader(doc), opts.SourceParseOptions); err == nil {
-			res, err = s.Transform(context.Background(), src.Root, opts)
-		}
+		// The tree leg is TransformReader's own fallback (Parse + Transform
+		// with the global context item it gives: absent for a streamable
+		// initial mode, streamglobal_l7.go).
+		noBursts = true
+		res, err = s.TransformReader(context.Background(), readOnly{strings.NewReader(doc)}, opts)
+		noBursts = false
 	}
 	if err != nil {
 		return "error: " + err.Error(), tr
@@ -102,11 +104,12 @@ var mainCases = []struct {
 	{`<xsl:mode streamable="yes" on-no-match="deep-skip"/><xsl:template match="/"><o><xsl:apply-templates/></o></xsl:template>` +
 		`<xsl:template match="doc|rec"><xsl:apply-templates/></xsl:template><xsl:template match="sub"><s x="{@x}"/></xsl:template>`, true},
 	{`<xsl:mode streamable="yes"/><xsl:param name="g" select="'G'"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, true},
-	// A global that reads the context item, the global context item: the
-	// tree's document node is read outside the rules. An accumulator streams
-	// since M4 (streamaccum.go).
-	{`<xsl:mode streamable="yes"/><xsl:variable name="g" select="count(//rec)"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, false},
-	{`<xsl:mode streamable="yes"/><xsl:variable name="g"><xsl:value-of select="name(/*)"/></xsl:variable><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, false},
+	// A global that reads the context item: the global context item is
+	// absent for a streamed principal input (§2.3.2; streamglobal_l7.go), so
+	// XPDY0002 in both legs (streamable-116). An accumulator streams since
+	// M4 (streamaccum.go).
+	{`<xsl:mode streamable="yes"/><xsl:variable name="g" select="count(//rec)"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:variable name="g"><xsl:value-of select="name(/*)"/></xsl:variable><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, true},
 	// An xsl:global-context-item with no type reads nothing of it
 	// (accumulator-034s..036s); a type is checked against the tree's.
 	{`<xsl:mode streamable="yes"/><xsl:global-context-item use="required"/><xsl:template match="rec"><r/></xsl:template>`, true},

@@ -2405,6 +2405,9 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 			c.sheet.modeNoMatchPrec[name] = rank
 		}
 	}
+	if a := el.Attr("", "streamable"); a != nil {
+		c.noteModeStreamable(name, isYes(a.Value()), precedence) // streamglobal_l7.go
+	}
 	if a := el.Attr("", "typed"); a != nil {
 		if c.sheet.modeTyped == nil {
 			c.sheet.modeTyped = map[string]string{}
