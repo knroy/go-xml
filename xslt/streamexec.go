@@ -114,6 +114,9 @@ type streamExec struct {
 	// properties of the stand-in, and docMotionless that one reads nothing
 	// of the document (streamcopy_l3.go).
 	docProps, docMotionless bool
+	// kids says a motionless part of a rule's body reads has-children of
+	// its element, answered by a Peek (streamkids_l6.go).
+	kids bool
 }
 
 func newStreamExec() *streamExec {
@@ -820,8 +823,12 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 // what f has, and returns nodes of it only where nodeOK.
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := parseAt(el, src)
-	if e == nil || !(viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f}).safe(e, f, nodeOK) {
+	peek := b.kidsAt(el, e, f) // streamkids_l6.go
+	if e == nil || !(viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek}).safe(e, f, nodeOK) {
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
+	}
+	if peek {
+		b.x.kids = true
 	}
 	return true
 }

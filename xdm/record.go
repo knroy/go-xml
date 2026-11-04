@@ -69,6 +69,8 @@ const (
 	fManyAttrs             // attribute count is in tree.source.attrCounts
 	fShallow               // a streamed element or document node without its content (streamview.go)
 	fOrigin                // copied out of a stream: order and identity are its original's (streamview.go)
+	fKidsKnown             // a shallow node whose has-children the stream answered (streamkids.go)
+	fKids                  // with fKidsKnown: it has children
 )
 
 // Tree owns the records of one document, or of a fragment: the parentless

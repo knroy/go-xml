@@ -294,6 +294,9 @@ type rulePlan struct {
 	why [numClasses]string
 	// keeps is resultKeeps of the body (streammain.go).
 	keeps string
+	// kids says the pattern or the element's body reads has-children of
+	// the element (streamkids_l6.go).
+	kids bool
 }
 
 // rulesPlan is the record of the trusting walk over the rules of every
@@ -351,6 +354,7 @@ func (c *compiler) planRule(el *xdm.Node, p *Pattern, from int) *rulePlan {
 	}
 	r := &rulePlan{}
 	r.can, r.pattern = patternClassesAt(p, el)
+	r.kids = r.pattern == "" && patternKids(p) // streamkids_l6.go
 	r.keeps = resultKeeps(el)
 	kids := el.ChildElements()
 	for cl := range numClasses {
@@ -381,6 +385,7 @@ func (c *compiler) planRule(el *xdm.Node, p *Pattern, from int) *rulePlan {
 			r.x[cl] = x
 			c.ruleExecs = append(c.ruleExecs, x)
 		}
+		r.kids = r.kids || cl == classElem && x.kids // streamkids_l6.go
 	}
 	return r
 }
@@ -501,7 +506,8 @@ func patternClassesAt(p *Pattern, el *xdm.Node) (can [numClasses]bool, why strin
 				ok := true
 				if i < len(a.steps)-1 || c[classElem] {
 					ok = (viewCheck{acc: patternAccOK(i, len(a.steps), c[classElem], c[classLeaf], c[classAttr]), // streamview_k2.go
-						globals: el, curOK: el != nil && c[classElem] && !c[classLeaf] && !c[classAttr] && !c[classDoc], cur: vElem}).safe(pr, vElem, true) // streamsplit_l6.go
+						globals: el, curOK: el != nil && c[classElem] && !c[classLeaf] && !c[classAttr] && !c[classDoc], cur: vElem, // streamsplit_l6.go
+						peek: el != nil && i == len(a.steps)-1 && c[classElem] && !c[classLeaf] && !c[classAttr] && !c[classDoc] && topKids(pr)}).safe(pr, vElem, true) // streamkids_l6.go
 				}
 				if i == len(a.steps)-1 && (c[classLeaf] || c[classAttr]) {
 					ok = ok && (viewCheck{noIdent: c[classLeaf], up: c[classLeaf]}).safe(pr, vLeaf, true)
@@ -748,6 +754,9 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 			}
 			if x := r.x[k.class]; x != nil {
 				visit(x, k.top)
+			}
+			if r.kids && why == "" { // streamkids_l6.go
+				why = s.kidsLinkWhy(k.mode)
 			}
 		}
 	}

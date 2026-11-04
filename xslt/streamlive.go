@@ -87,6 +87,11 @@ func (run *streamRun) dispatchAt(f focuser, node *xdm.Node, pos, size int, mode 
 	params, tunnels paramValues, out *outputBuilder) error {
 
 	s := f.disp.sheet
+	if s.kidsModes[mode] && node.Kind() == xdm.KindElement {
+		if done, err := run.kidsDispatch(f, node, pos, size, mode, params, tunnels, out); done { // streamkids_l6.go
+			return err
+		}
+	}
 	if err := s.checkModeTyped(node, mode); err != nil {
 		return err
 	}

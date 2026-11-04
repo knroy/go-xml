@@ -84,6 +84,19 @@ var l6DeclBodies = []struct {
 	{l6ForeignRules, `<out><xsl:for-each select="doc/rec"><xsl:variable name="m" select="map{1: copy-of(sub)}"/><e><xsl:apply-templates select="$m?*" mode="a"/></e></xsl:for-each></out>`, true},
 	// A variable holding the stream's own (grounded) nodes is not fresh: refused.
 	{l6ForeignRules, `<out><xsl:for-each select="doc/rec"><xsl:variable name="v" select="sub"/><e><xsl:apply-templates select="$v" mode="a"/></e></xsl:for-each></out>`, false},
+	// has-children of the element dispatched, answered by a Peek (streamkids_l6.go):
+	// in a motionless xsl:attribute before the consumer (sf-has-children-001), in
+	// patterns (streamable-135), and refused where a rule reads its element whole.
+	{`<xsl:mode name="h" streamable="yes"/>
+<xsl:template match="*" mode="h"><xsl:copy><xsl:copy-of select="@*"/><xsl:attribute name="hc" select="has-children(.)"/><xsl:apply-templates mode="h"/></xsl:copy></xsl:template>`,
+		`<out><xsl:apply-templates mode="h"/></out>`, true},
+	{`<xsl:mode name="h1" streamable="yes"/>
+<xsl:template match="*[has-children()]" mode="h1"><xsl:copy><xsl:copy-of select="@*"/><xsl:apply-templates mode="h1"/></xsl:copy></xsl:template>
+<xsl:template match="*[not(has-children())]" mode="h1"><xsl:copy><xsl:copy-of select="@*"/><xsl:attribute name="empty" select="true()"/></xsl:copy></xsl:template>`,
+		`<out><xsl:apply-templates mode="h1"/></out>`, true},
+	{`<xsl:mode name="h2" streamable="yes"/>
+<xsl:template match="rec[has-children()]" mode="h2"><xsl:copy-of select="."/></xsl:template>`,
+		`<out><xsl:apply-templates mode="h2"/></out>`, false},
 	// xsl:apply-templates over copies of the matches, to the tree's rules of a mode
 	// that is not streamable (executeCopies): positions and last() are the tree's.
 	{l6CopyRules, `<out><xsl:apply-templates select="doc/rec/copy-of(.)" mode="t"/></out>`, true},

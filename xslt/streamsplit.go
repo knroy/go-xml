@@ -1210,6 +1210,10 @@ type viewCheck struct {
 	// key() over a global variable's document is admitted (viewKeyOK,
 	// streamsplit_l6.go).
 	globals *xdm.Node
+	// peek admits has-children(.) of an element's view, which the stream
+	// answers by a Peek at its start tag (streamkids_l6.go); set only where
+	// every such call is of the focus itself (topKids).
+	peek bool
 }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
@@ -1422,6 +1426,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 	switch x.Name.URI {
 	case fnNS:
 		n := x.Name.Local
+		if n == "has-children" && vc.peek && f == vElem && (len(x.Args) == 0 || len(x.Args) == 1 && isContextItem(x.Args[0])) {
+			return true // streamkids_l6.go
+		}
 		if n == "has-children" && vc.kids && f != vLeaf {
 			if len(x.Args) == 0 || len(x.Args) == 1 && isContextItem(x.Args[0]) {
 				// has-children(.): the cursor's Peek answers it (DESIGN section 1.4).
