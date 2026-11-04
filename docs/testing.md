@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,106 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,112 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -577,7 +577,7 @@ With `GOXSLT_RECORD_DIR` set, tests/xslts writes
 fails when any of these is true:
 - a difference is unexplained;
 - fewer cases streamed than the floor (`-floor`, `GOXSLT_STREAM_FLOOR`,
-  default 2180);
+  default 2281);
 - a guard fired;
 - the off leg streamed.
 
@@ -597,16 +597,16 @@ with `SecondaryResult.Serialize` (the summary counts them). A case whose
 third, plain run also differs is counted unstable (the clock, generate-id);
 any other difference fails.
 
-At 8f4e6c4a (validated inputs, try output and secondary results, H1–H3),
-with `-output` against 77afd3fb, it reads:
-- 2,180 cases on the streamed path (2,124 at the base): runs core 2,091,
-  main 75 (principal inputs through `TransformReader`), merge 26; 66 with a
+At 9d90a6a7 (the completion lanes J1–J4), with `-output` against ef0f1b47,
+it reads:
+- 2,281 cases on the streamed path (2,180 at the base): runs core 2,189,
+  main 79 (principal inputs through `TransformReader`), merge 26; 66 with a
   fallback (a held select past its cap, or one meeting the document element,
   answered from the tree), 120 re-run on the tree; 0 guard hits;
 - zero unexplained differences;
-- the output leg: all 2,180 streamed cases byte-identical, 436 of them
+- the output leg: all 2,281 streamed cases byte-identical, 475 of them
   writing output before the end; 561 secondary results in 226 cases
-  byte-identical, 73 of them in 40 streamed cases.
+  byte-identical, 84 of them in 44 streamed cases.
 
 The TSV line holds the runs per strategy (core: containers; main: principal
 inputs `TransformReader` streamed; merge: streamed merge sources), fallbacks, guard hits, re-runs and
@@ -643,7 +643,9 @@ output (an element, an html page, a try), and requires the bytes `Output`
 receives and the error to be `Result.Serialize`'s; a share of its cases wrap
 template bodies in tries (rollback yes and no, nested, items and errors before
 and after, catches that take or miss the error; `GOXSLT_STREAM_FUZZ_TRYOUT=0`
-leaves them out). `TestSecondaryOutputFuzz` runs result-documents before,
+leaves them out), and a share of those try bodies make one element (plain,
+attributes before or after content, html) or begin with attributes.
+`TestSecondaryOutputFuzz` runs result-documents before,
 after and inside streamed containers and streamable modes (per record, per
 group, failing, under a try, nested, colliding) with and without
 `SecondaryOutput`, comparing the principal result, every secondary result by
@@ -681,7 +683,8 @@ after the merge (seed 31) 5 more, in loops over kept leaves. At c257efe2
 `TestStreamFuzz` and `TestStreamFuzzMain`, 100,000 each (seed 51), give 0
 differences. After H1–H3, `TestStreamFuzz`, `TestStreamFuzzMain`,
 `TestStreamFuzzMerge`, `TestStreamOutFuzz`, `TestStreamFuzzG6` and
-`TestSecondaryOutputFuzz` each give 0 differences in 100,000 cases.
+`TestSecondaryOutputFuzz` each give 0 differences in 100,000 cases. After the
+completion lanes (J1–J4) the six are run at 100,000 cases (seed 91).
 
 `TestStreamFuzzMain` applies each case of the modes grammar to its document
 in an initial mode through `TransformReader` and through `xdm.Parse` +
@@ -727,7 +730,15 @@ on a cursor's events against the typed copy) and `go test ./xslt -run
 nesting, indent, html, namespaces, `rollback-output="no"` and XTDE3530, against
 `Result.Serialize`); `go test ./xslt -run TestSecondaryOutput` (each writer's
 bytes against `SecondaryResult.Serialize`, held results, errors and
-`MaxNodes`); `go test ./xslt -run TestXTDE1500SymlinkedPath`.
+`MaxNodes`); `go test ./xslt -run TestXTDE1500SymlinkedPath`. For the
+completion lanes: `go test ./xslt -run
+'TestStreamForeignUnionOrder|TestStreamHeldGroupCap'` (unions with a
+variable's nodes in either creation order, the held group-by's cap);
+`-run TestStreamTryOutOneElement` (a try around one large element under
+`Output`: `MaxNodes` with `rollback-output="no"`, peak heap with "yes");
+`-run 'TestStreamLiveBuiltIn|TestStreamDispatchAllocs|TestStreamDispatchWarnings'`
+(the built-in rule on the parse's record, allocations per record against the
+tree's, warnings as the tree's).
 
 
 ## The ratchet

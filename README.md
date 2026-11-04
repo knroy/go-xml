@@ -139,7 +139,7 @@ and maintains it as a project of his own.
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 3,106 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 3,112 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -191,7 +191,7 @@ true here:
    accumulators, `xsl:fork` and `xsl:map`, `xsl:merge` over streamable
    sources, set operators, climbing paths, kept text nodes, `xsl:message` and
    `xsl:result-document`, and validated inputs; `TransformOptions.Output` and
-   `SecondaryOutput` write the results as they are made (2,180 W3C cases
+   `SecondaryOutput` write the results as they are made (2,281 W3C cases
    stream; see [known gaps](docs/known-gaps.md)). Otherwise the streaming cases are in
    scope and counted: the stylesheet-level half of streaming, the §19.8
    streamability analysis that refuses a construct with `XTSE3430`, is
@@ -1475,7 +1475,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (3,106 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (3,112 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,517 XQuery cases | XSLT (it is an XPath suite) |
