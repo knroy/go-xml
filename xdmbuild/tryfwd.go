@@ -465,8 +465,21 @@ func (m *tryMark) rollback() int64 {
 	}
 	t := m.base.b
 	if t.open != nil {
-		for c := t.open.LastChild(); c != nil && !s.anchors[c] && c != m.kept; c = t.open.LastChild() {
+		// kept may have been taken back since (flush), and its node's
+		// place in the store given to a child appended after it, which
+		// would then pass for it: a text one the catch's text merges into,
+		// never written.
+		kept := m.kept
+		if s.kept != kept {
+			kept = nil
+		}
+		for c := t.open.LastChild(); c != nil && !s.anchors[c] && c != kept; c = t.open.LastChild() {
 			t.open.RemoveLastChild()
+		}
+		if kept == nil && m.kept != nil {
+			// A stand-in for it, written and still in the tree, as at the
+			// mark: what comes next sees an element with content (XTDE0410).
+			kept = t.open.AppendComment("")
 		}
 		if m.hasText {
 			t.open.AppendText(m.text) // written since, merged into, or neither
@@ -474,7 +487,7 @@ func (m *tryMark) rollback() int64 {
 		if m.elem != nil {
 			t.ReplaceOpen(m.elem) // the attributes the try handed on taken off
 		}
-		s.kept = m.kept
+		s.kept = kept
 	} else if m.started {
 		for _, it := range t.items[m.base.items:] {
 			if nd, ok := it.(*xdm.Node); ok {
