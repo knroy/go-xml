@@ -210,3 +210,19 @@ func (m *unionMerger) rest() error {
 	m.nodes = nil
 	return nil
 }
+
+// flatArray reads [A, B]?* (and array { E }?*) as (A, B) (E): ?* of an
+// array is its members, concatenated, and the constructor's members are
+// its operands' values, evaluated in order (sx-square-array-018, -115,
+// -118). nil when e is not that.
+func flatArray(e xpath.Expr) xpath.Expr {
+	l, ok := e.(*xpath.LookupExpr)
+	if !ok || !l.Wildcard || l.Base == nil {
+		return nil
+	}
+	a, ok := l.Base.(*xpath.ArrayConstructor)
+	if !ok {
+		return nil
+	}
+	return &xpath.SequenceExpr{Items: a.Members}
+}

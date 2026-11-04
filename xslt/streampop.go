@@ -146,6 +146,9 @@ func (s *streamSplit) valuesOnly() bool {
 
 // pop builds the population e, or returns nil.
 func (pb *popBuilder) pop(e xpath.Expr) *streamPop {
+	if y := flatArray(e); y != nil { // streampop_l6.go
+		return pb.pop(y)
+	}
 	switch x := e.(type) {
 	case *xpath.IfExpr:
 		if !pb.motionless(x.Cond) {

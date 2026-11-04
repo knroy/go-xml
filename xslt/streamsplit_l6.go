@@ -149,19 +149,26 @@ func groundApplyOp(op *streamOp) bool {
 // applyCopies takes, for an apply or loop op whose select the split refused
 // (a nested P in P/copy-of(.): "not within the match"), the population of
 // copies instead; it reports whether it did.
+//
+// Any population the builder takes is taken so (its stream part split on
+// its own): copies, a choice, a union with a fresh operand, parts around the
+// stream part ([$v, P/copy-of()]?* read as ($v, P/copy-of())); an apply op's
+// only when applyPop dispatches it. The values fallback of popFor, which
+// reads the whole select's split, is not open here: there is none.
 func (c *compiler) applyCopies(op *streamOp, ns xpath.NamespaceResolver) bool {
 	e := reparse(op.sel, ns)
 	if e == nil {
 		return false
 	}
-	if _, ok := copyOfTail(e); !ok {
+	pb := &popBuilder{c: c, sel: op.sel, ns: ns, doc: op.doc, group: op.inGroup, key: op.key, focus: vElem, el: op.el}
+	if op.doc {
+		pb.focus = vNone
+	}
+	pop := pb.pop(withChecks(foreignSets(c.inlineCalls(e))))
+	if pop == nil || pb.split == nil || op.apply != applyNone && !applyPop(pop, op.instr) {
 		return false
 	}
-	pop, s, why := c.popFor(op, ns)
-	if why != "" || pop == nil || !groundApply(pop) || op.apply != applyNone && !applyPop(pop, op.instr) {
-		return false
-	}
-	op.pop, op.split, op.dead = pop, s, ""
+	op.pop, op.split, op.dead = pop, pb.split, ""
 	return true
 }
 
