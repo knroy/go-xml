@@ -214,6 +214,13 @@ var mainCases = []struct {
 	{`<xsl:accumulator name="n" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>` +
 		`<xsl:mode streamable="yes" use-accumulators="n"/><xsl:template match="/"><o><xsl:for-each select="//sub/ancestor::rec">` +
 		`<e k="{@k}" n="{accumulator-before('n')}"/></xsl:for-each></o></xsl:template>`, false},
+	// An accumulator rule whose value is a sequence constructor, at a text
+	// node: its context has no children, as for a select (streamtrust.go
+	// accumulatorOK; accumulator-036s).
+	{`<xsl:accumulator name="t" initial-value="0" as="xs:integer" streamable="yes"><xsl:accumulator-rule match="sub/text()">` +
+		`<xsl:sequence select="$value + string-length(.)"/></xsl:accumulator-rule></xsl:accumulator>` +
+		`<xsl:mode streamable="yes" use-accumulators="t"/><xsl:template match="doc"><o><n><xsl:value-of select="count(.//sub)"/></n>` +
+		`<t><xsl:value-of select="accumulator-after('t')"/></t></o></xsl:template>`, true},
 	// unparsed-entity-uri#1 and -public-id#1 at an element's view: its
 	// tree's DTD is the document's (sf-unparsed-entity-02).
 	{`<xsl:mode streamable="yes"/><xsl:template match="doc"><o><xsl:value-of select="unparsed-entity-uri('pic'), unparsed-entity-public-id('pic')"/></o></xsl:template>`, true},

@@ -238,8 +238,12 @@ func (t *declTrust) accumulatorOK(acc *xdm.Node) bool {
 			continue
 		}
 		// The contained sequence constructor, which the refusal check
-		// leaves alone; here it is simply assessed.
-		p, known, unverified := sequenceConstructorVerdict(rule, postureStriding, t.sets, t.funcs, t)
+		// leaves alone; here it is simply assessed, its context the matched
+		// node as for a select (accumulator-036s: cost/text()).
+		ia := &instrAnalyzer{ctxPosture: postureStriding, ctxAllowsChildren: kids,
+			known: true, attrSets: t.sets, funcs: t.funcs, trust: t}
+		p := ia.body(rule)
+		known, unverified := ia.known, ia.unverified
 		if !known || unverified || p.sweep != sweepMotionless ||
 			(p.posture != postureGrounded && !atomic) {
 			return false
