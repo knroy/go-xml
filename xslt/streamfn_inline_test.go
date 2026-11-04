@@ -25,9 +25,9 @@ func TestStreamInlinedCallsMatchTree(t *testing.T) {
 		`<s><xsl:value-of select="$n/sub/@x"/></s></xsl:function>` +
 		// Refused: the body reads a focus it has not (XPDY0002 on the tree),
 		// or the parameter where the body has a focus of its own.
-		`<xsl:function name="p:focus" streamability="absorbing"><xsl:param name="n" as="node()*"/>` +
+		`<xsl:function name="p:focus"><xsl:param name="n" as="node()*"/>` +
 		`<f><xsl:value-of select="name(.)"/></f><xsl:copy-of select="$n"/></xsl:function>` +
-		`<xsl:function name="p:inner" streamability="absorbing"><xsl:param name="n" as="node()*"/>` +
+		`<xsl:function name="p:inner"><xsl:param name="n" as="node()*"/>` +
 		`<xsl:for-each select="1 to 2"><xsl:copy-of select="$n"/></xsl:for-each></xsl:function>` +
 		// Lane L2 round 4: recursion on the streamed current group (call
 		// frames, streamfn_frame.go), su-absorbing-202's shape.

@@ -22,7 +22,7 @@ func TestStreamSheetCallsMatchTree(t *testing.T) {
 		`<xsl:sequence select="$n[@k = $k]"/></xsl:function>` +
 		`<xsl:function name="p:cnts" streamability="absorbing" as="xs:integer"><xsl:param name="n" as="node()*"/>` +
 		`<xsl:sequence select="count($n/descendant::*)"/></xsl:function>` +
-		`<xsl:function name="p:up" streamability="absorbing" as="xs:string"><xsl:param name="n" as="node()"/>` +
+		`<xsl:function name="p:up" as="xs:string"><xsl:param name="n" as="node()"/>` +
 		`<xsl:sequence select="string($n/..)"/></xsl:function>` +
 		`<xsl:function name="p:self" streamability="filter" as="node()"><xsl:param name="n" as="node()"/>` +
 		`<xsl:sequence select="$n"/></xsl:function>` +
