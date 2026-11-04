@@ -213,3 +213,71 @@ func (i *applyTemplatesInstr) executeCopies(rt *runtime, out *outputBuilder, run
 	run.off = off
 	return err
 }
+
+// groundLastWhy is why el, an xsl:for-each whose body was not planned (it
+// runs on the tree's code over grounded copies or values: op.grounded), may
+// not run streamed: its body may read last(). §19.8.9.14 makes last()
+// motionless over a grounded population, so the analysis admits it, but the
+// streamed loop hands its items one at a time with no context size
+// (forEachInstr.Execute, size 0: XPDY0002 where the tree gives the count).
+// Conservatively: "last(" anywhere in the body's attributes or text, in a
+// named template it calls (which keeps the focus), or an attribute set it
+// uses (evaluated with the instruction's focus).
+func groundLastWhy(el *xdm.Node) string {
+	if !isXSL(el, "for-each") {
+		return ""
+	}
+	seen := map[*xdm.Node]bool{}
+	var reads func(n *xdm.Node) bool
+	reads = func(n *xdm.Node) bool {
+		if seen[n] {
+			return false
+		}
+		seen[n] = true
+		for ch := range n.Children() {
+			switch ch.Kind() {
+			case xdm.KindText:
+				if strings.Contains(ch.Value(), "last(") {
+					return true
+				}
+			case xdm.KindElement:
+				for a := range ch.Attrs() {
+					if strings.Contains(a.Value(), "last(") || a.Name().Local == "use-attribute-sets" {
+						return true
+					}
+				}
+				if isXSL(ch, "call-template") {
+					t := namedTemplate(ch)
+					if t == nil || reads(t) {
+						return true
+					}
+				}
+				if reads(ch) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if reads(el) {
+		return "loop body over a grounded population may read last()"
+	}
+	return ""
+}
+
+// namedTemplate is the xsl:template of el's module that el, an
+// xsl:call-template, names by the same lexical name, or nil (another module,
+// another prefix).
+func namedTemplate(el *xdm.Node) *xdm.Node {
+	name := el.AttrValue("name")
+	root := documentElementOf(el)
+	if root == nil || name == "" {
+		return nil
+	}
+	for ch := range root.Children() {
+		if ch.Kind() == xdm.KindElement && isXSL(ch, "template") && ch.AttrValue("name") == name {
+			return ch
+		}
+	}
+	return nil
+}

@@ -23,6 +23,11 @@ var l6Bodies = []struct {
 	// xsl:iterate over attributes and over values (si-iterate-134's shape).
 	{`<out><xsl:iterate select="//rec/@k"><xsl:param name="s" select="''"/><xsl:on-completion><xsl:value-of select="$s"/></xsl:on-completion><xsl:next-iteration><xsl:with-param name="s" select="concat($s, .)"/></xsl:next-iteration></xsl:iterate></out>`, true},
 	{`<out><xsl:iterate select=".//*/name()"><xsl:param name="n" select="0"/><xsl:on-completion><xsl:value-of select="$n"/></xsl:on-completion><xsl:next-iteration><xsl:with-param name="n" select="$n + string-length(.)"/></xsl:next-iteration></xsl:iterate></out>`, true},
+	// A for-each over copies of nested matches (applyCopies on a loop op).
+	{`<out><xsl:for-each select=".//rec/copy-of(.)"><r k="{@k}" n="{count(.//sub)}"/></xsl:for-each></out>`, true},
+	// A grounded loop body reading last() stays on the tree (groundLastWhy).
+	{`<out><xsl:for-each select="copy-of(doc/rec)"><r n="{position()}" of="{last()}"/></xsl:for-each></out>`, false},
+	{`<out><xsl:for-each select="doc/rec/copy-of(.)"><r of="{last()}" n="{count(.//sub)}"/></xsl:for-each></out>`, false},
 	// A motionless loop over the view's attributes (motionlessLoop, leafBody).
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:for-each select="@*"><n><xsl:value-of select="name(.)"/></n><v><xsl:value-of select="."/></v></xsl:for-each></e></xsl:for-each></out>`, true},
 }
