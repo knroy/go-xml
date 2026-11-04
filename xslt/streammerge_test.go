@@ -70,7 +70,9 @@ func TestStreamMergeMatchesTree(t *testing.T) {
 		{`<xsl:merge-source name="B" select="doc('b.xml')/log/e"><xsl:merge-key select="xs:integer(@t)"/></xsl:merge-source>` + mergeSrc("A", "('a.xml', 'c.xml')", "*/e", num, ""), group, true},
 		{`<xsl:merge-source name="B" select="doc('b.xml')/log/e"><xsl:merge-key select="xs:integer(@t)"/></xsl:merge-source>` + mergeSrc("A", "'a.xml'", "log/e", num, ""),
 			`<g k="{current-merge-key()}"><xsl:copy-of select="current-merge-group()"/><xsl:value-of select="current-merge-group()/@v"/></g>`, true},
-		{mergeSrc("A", "'a.xml'", "log/e", num, "") + `<xsl:merge-source name="B" select="doc('b.xml')/log/e"><xsl:merge-key select="xs:integer(@t)"/></xsl:merge-source>`, group, false},
+		// A collected source after a streamed one: both modes collect it
+		// first (executeTree, runStream), so its tree comes first.
+		{mergeSrc("A", "'a.xml'", "log/e", num, "") + `<xsl:merge-source name="B" select="doc('b.xml')/log/e"><xsl:merge-key select="xs:integer(@t)"/></xsl:merge-source>`, group, true},
 		{mergeSrc("A", "'a.xml'", "log/e[@t != '3']", num, "") + mergeSrc("B", "'b.xml'", "log/e[2]", num, ""), group, true},
 		// Descending, the snapshot's ancestors, a namespace kept.
 		{`<xsl:merge-source name="A" for-each-source="'desc.xml'" select="log/e"><xsl:merge-key select="xs:integer(@t)" order="descending"/></xsl:merge-source>`,

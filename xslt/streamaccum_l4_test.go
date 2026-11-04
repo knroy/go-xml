@@ -40,8 +40,9 @@ var accumReadDecls = []struct {
 	   <xsl:accumulator-rule match="rec" phase="end" select="accumulator-after('a') + 1"/></xsl:accumulator>
 	 <xsl:accumulator name="b" as="xs:integer" initial-value="0" streamable="yes">
 	   <xsl:accumulator-rule match="rec" phase="end" select="accumulator-after('a')"/></xsl:accumulator>`, true},
-	// A read of an accumulator that fails later in the document: the
-	// tree's walk of a fails at that read, with b's error.
+	// A read of an accumulator that fails later in the document: a's
+	// reads before b's failure stand, after it a fails with b's error
+	// (§18.2.5).
 	{`<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes">
 	   <xsl:accumulator-rule match="rec" select="accumulator-before('b') + xs:integer(if (@k = 'c') then 'x' else '1')"/></xsl:accumulator>
 	 <xsl:accumulator name="b" as="xs:integer" initial-value="0" streamable="yes">
@@ -116,10 +117,10 @@ func TestStreamAccumReadsMatchTree(t *testing.T) {
 	}
 }
 
-// TestStreamTryAccumFailsAtStart: an xsl:try reading an accumulator that
-// can fail only in its initial value streams through TransformReader and
-// catches what the tree catches (accumulator-056s); one whose rules may
-// fail later is left to the tree.
+// TestStreamTryAccumFailsAtStart: an xsl:try reading an accumulator
+// streams through TransformReader and catches what the tree catches: a read
+// fails, in both, exactly when the value depends on a failed step
+// (§18.2.5; accumulator-056s, -057s).
 func TestStreamTryAccumFailsAtStart(t *testing.T) {
 	cases := []struct {
 		initial, rule string
@@ -128,8 +129,8 @@ func TestStreamTryAccumFailsAtStart(t *testing.T) {
 		{"0", "$value + 1", true},
 		{"100 div 0", "$value + 1", true},
 		{"0", "($value - 2) + 1", true},
-		{"0", "$value idiv (xs:integer(@v) - 2)", false},
-		{"0", "string-length(@k)", false},
+		{"0", "$value idiv (xs:integer(@v) - 2)", true},
+		{"0", "string-length(@k)", true},
 	}
 	for name, doc := range mainDocs {
 		for ci, c := range cases {
@@ -179,8 +180,9 @@ func TestAccumDynamicCallStreamedInput(t *testing.T) {
 }
 
 // TestStreamCopyAccumulatorsNo: copy-accumulators="no" is the default the
-// plan already takes (accumulator-049s): it is no reason to refuse, and the
-// output is the tree's.
+// plan already takes (accumulator-049s), and "yes" records the values of
+// the grounded matches for their copies (accumulator-048s): neither is a
+// reason to refuse, and the output is the tree's.
 func TestStreamCopyAccumulatorsNo(t *testing.T) {
 	var why string
 	traceMain = func(m, w string) {
@@ -203,7 +205,7 @@ func TestStreamCopyAccumulatorsNo(t *testing.T) {
 		if so != to {
 			t.Errorf("copy-accumulators=%s:\nstreamed %s\ntree     %s", v, so, to)
 		}
-		if refused := strings.Contains(w, "copy-accumulators"); refused != (v == "yes") {
+		if strings.Contains(w, "copy-accumulators") {
 			t.Errorf("copy-accumulators=%s: refusal %q", v, w)
 		}
 	}

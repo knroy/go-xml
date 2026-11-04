@@ -80,6 +80,10 @@ type accumulatorValues struct {
 	base          int
 	before, after []xdm.Sequence
 	state         []uint8
+	// err is the error the walk stopped at (§18.2.5): the values set before
+	// it stand; a value not set is functionally dependent on the failed
+	// computation, and a read of it raises err.
+	err error
 }
 
 const (
@@ -377,12 +381,17 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	defer delete(rt.accumBuilding, key)
 	cur, err := def.initial.Eval(withFocusCurrent(ctx, root, 1, 1))
 	if err != nil {
-		return nil, fmt.Errorf(
+		err = fmt.Errorf(
 			"evaluating xsl:accumulator %s initial-value: %w",
 			def.name.Lexical(), err)
+	} else {
+		cur, err = rt.convertAccum(def, cur)
 	}
-	if cur, err = rt.convertAccum(def, cur); err != nil {
-		return nil, err
+	if err != nil {
+		// §18.2.5: every value depends on the initial one.
+		vals.err = err
+		rt.accumValues[key] = vals
+		return vals, nil
 	}
 
 	// The walk is pre/post order over the whole tree: every node records the
@@ -449,7 +458,16 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 		return nil
 	}
 	if err := walk(root); err != nil {
-		return nil, err
+		// §18.2.5 (Dynamic Errors in Accumulators): the error "is signaled
+		// as an error from any subsequent call on accumulator-before or
+		// accumulator-after that references the accumulator", "understood
+		// in terms of functional dependency": a call fails only when the
+		// value at its node depends on the failed computation -- the values
+		// the walk set before it failed stand. This used to fail every read
+		// of the accumulator, wherever the walk failed, which a streamed run
+		// cannot know until the failing node and the spec does not ask for
+		// (accumulator-057s).
+		vals.err = err
 	}
 
 	rt.accumValues[key] = vals
@@ -710,6 +728,9 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	// the walk lies past the table; neither was visited.
 	i := node.Index() - vals.base
 	if node.Index() < 0 || i < 0 || i >= len(table) || vals.state[i]&set == 0 {
+		if vals.err != nil && node.Index() >= 0 {
+			return nil, vals.err // §18.2.5: the value depends on the failed step
+		}
 		// The walk visits every node the checks above let through, so a
 		// missing entry means the walk is still in progress and has not
 		// reached this value: the rule computing it is reading it. That

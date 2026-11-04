@@ -59,8 +59,8 @@ var accumBodies = []struct {
 	{`<xsl:for-each-group select="*/rec" group-adjacent="@k"><g n="{count(current-group())}" b="{accumulator-before('n')}"/></xsl:for-each-group>`, false},
 	{`<xsl:for-each-group select="*/rec" group-adjacent="@k"><g b="{accumulator-before('n')}"><xsl:copy-of select="current-group()"/></g></xsl:for-each-group>`, false},
 	{`<xsl:for-each-group select="*/rec" group-adjacent="@k"><g><xsl:value-of select="count(current-group())"/><xsl:value-of select="accumulator-before('n')"/></g></xsl:for-each-group>`, false},
-	// In an xsl:try: the tree raises an accumulator's error at its first
-	// read, inside the try; the stream may raise it after the try ends.
+	// In an xsl:try: a read raises an accumulator's error in both modes when
+	// the value read depends on the failed step (§18.2.5).
 	{`<xsl:try><xsl:for-each select="*/rec"><r n="{accumulator-before('n')}"/></xsl:for-each><xsl:catch><c/></xsl:catch></xsl:try>`, false},
 	{`<xsl:try><xsl:value-of select="count(//rec)"/><xsl:catch><c n="{accumulator-before('n')}"/></xsl:catch></xsl:try>`, false},
 	// Below an element's start: the after-value needs it read first.
@@ -107,9 +107,9 @@ func TestStreamAccumMatchesTree(t *testing.T) {
 					if b.stream && trusted && runs == 0 {
 						t.Errorf("%s: not streamed: %s", where, w)
 					}
-					// Set 0's n can fail only at its start: a try reading it
-					// may stream (streamtry_l4.go).
-					tryAt0 := ai == 0 && strings.HasPrefix(b.body, "<xsl:try>")
+					// A try reading an accumulator may stream (§18.2.5): its
+					// output is still the tree's.
+					tryAt0 := strings.HasPrefix(b.body, "<xsl:try>")
 					if !b.stream && !tryAt0 && runs != 0 {
 						t.Errorf("%s: streamed", where)
 					}
@@ -183,10 +183,10 @@ func TestStreamAccumMainMatchesTree(t *testing.T) {
 }
 
 // TestStreamAccumErrors: an accumulator's error is the tree's error, raised
-// as the tree raises it -- by the first read of an accumulator whose walk
-// fails anywhere in the document, before any error the run meets after that
-// read, after a parse error -- through TransformReader, which has no tree
-// to re-run on, and through a source-document container, which has.
+// as the tree raises it -- by a read whose value depends on the failed
+// computation (§18.2.5), after a parse error -- through TransformReader,
+// which has no tree to re-run on, and through a source-document container,
+// which has.
 func TestStreamAccumErrors(t *testing.T) {
 	const accs = `
 	<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes">

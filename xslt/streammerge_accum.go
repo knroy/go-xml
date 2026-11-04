@@ -84,14 +84,17 @@ type mergeAccumList struct {
 }
 
 type mergeAccumEntry struct {
-	ord           uint64 // 0 for a leaf
-	before, after []xdm.Sequence
+	ord               uint64 // 0 for a leaf
+	before, after     []xdm.Sequence
+	beforeAt, afterAt uint64 // the steps they were computed at
+	closed            bool
 }
 
 // heldAccum is the values of a snapshot's node (accumHeld).
 type heldAccum struct {
-	sa            *streamAccums
-	before, after []xdm.Sequence
+	sa                *streamAccums
+	before, after     []xdm.Sequence
+	beforeAt, afterAt uint64
 }
 
 // observeMergeAccums starts computing the accumulators of src's document on
@@ -124,11 +127,11 @@ func (m *mergeAccums) note(n *xdm.Node, d int, post bool, ord uint64, cur []xdm.
 		return
 	}
 	l := &m.lists[len(m.lists)-1]
-	vals := slices.Clone(cur)
+	vals, at := slices.Clone(cur), m.sa.rd.phase
 	k := d - m.minD
 	switch {
 	case !post:
-		e := mergeAccumEntry{before: vals}
+		e := mergeAccumEntry{before: vals, beforeAt: at}
 		if isEl {
 			e.ord = ord
 			for len(m.open) <= k {
@@ -139,10 +142,12 @@ func (m *mergeAccums) note(n *xdm.Node, d int, post bool, ord uint64, cur []xdm.
 		l.entries = append(l.entries, e)
 	case isEl:
 		if k < len(m.open) && m.open[k] >= 0 {
-			l.entries[m.open[k]].after = vals
+			e := &l.entries[m.open[k]]
+			e.after, e.afterAt, e.closed = vals, at, true
 		}
 	default:
-		l.entries[len(l.entries)-1].after = vals
+		e := &l.entries[len(l.entries)-1]
+		e.after, e.afterAt, e.closed = vals, at, true
 	}
 }
 
@@ -170,10 +175,11 @@ func (m *mergeAccums) attach(rt *runtime, it, snap xdm.Item) error {
 			es := l.entries[ei:]
 			var pair func(a *xdm.Node) bool
 			pair = func(a *xdm.Node) bool {
-				if len(es) == 0 || es[0].after == nil {
+				if len(es) == 0 || !es[0].closed {
 					return false
 				}
-				rt.accumHeld[a] = &heldAccum{sa: m.sa, before: es[0].before, after: es[0].after}
+				e := es[0]
+				rt.accumHeld[a] = &heldAccum{sa: m.sa, before: e.before, after: e.after, beforeAt: e.beforeAt, afterAt: e.afterAt}
 				es = es[1:]
 				for ch := a.FirstChild(); ch != nil; ch = ch.NextSibling() {
 					if !pair(ch) {
@@ -209,13 +215,14 @@ func (h *heldAccum) value(def *accumulatorDef, lex string, post bool) (xdm.Seque
 		sa.reads++
 		sa.read[i] = sa.reads
 	}
-	if err := sa.effErr(i); err != nil {
-		return nil, err
-	}
+	v, at := h.before[i], h.beforeAt
 	if post {
-		return h.after[i], nil
+		v, at = h.after[i], h.afterAt
 	}
-	return h.before[i], nil
+	if !sa.rd.valid(i, at) { // §18.2.5
+		return nil, sa.errs[i]
+	}
+	return v, nil
 }
 
 // mergeAccumsPending is the error the tree would have raised for the
