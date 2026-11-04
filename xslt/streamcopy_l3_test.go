@@ -67,3 +67,31 @@ func TestStreamCopyDocNode(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamCopyChoice: in a rule that may match the document element, a
+// copy-of or a sequence in element content whose select is a motionless
+// choice of paths copies the chosen branch's matches as they are read, and
+// a value-of of copies of attributes and children reads values: no
+// grounded copies collected (streamcopy_l3choice.go).
+func TestStreamCopyChoice(t *testing.T) {
+	dir := t.TempDir()
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, rule := range []string{
+			`<r><xsl:sequence select="if (@k = 'a') then sub else if (@k = 'b') then sub[@x = '3'] else ()"/></r>`,
+			`<r><xsl:copy-of select="if (@k = 'a') then sub else rec"/></r>`,
+			`<r><xsl:copy-of select="if (@k) then () else *"/></r>`,
+			`<r><xsl:value-of select="copy-of(@*), sub" separator=":"/></r>`,
+		} {
+			sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:mode name="s" streamable="yes"/>
+<xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml"><xsl:apply-templates select="." mode="s"/></xsl:source-document></top></xsl:template>
+<xsl:template match="rec" mode="s">` + rule + `</xsl:template>
+<xsl:template match="text()" mode="s"/>
+</xsl:stylesheet>`
+			coreCheck(t, sheet, dir, name+": "+rule, true, TransformOptions{})
+		}
+	}
+}

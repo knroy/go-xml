@@ -959,6 +959,9 @@ func noTextNodes(e xpath.Expr) bool {
 		if isCurrentGroup(x) {
 			return true // a streamed group's members are elements
 		}
+		if (x.Name.Local == "copy-of" || x.Name.Local == "snapshot") && x.Name.URI == fnNS && len(x.Args) == 1 {
+			return noTextNodes(x.Args[0]) // copies of what it selects (lane L3)
+		}
 	case *xpath.SequenceExpr:
 		for _, it := range x.Items {
 			if !noTextNodes(it) {
@@ -1082,6 +1085,10 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 	}
 	s := op.split
 	copies := isXSL(op.el, "copy-of") || isXSL(op.el, "sequence") && inElement(op.el)
+	if copies && s.cond != nil && copiesChoice(s, minD) { // streamcopy_l3choice.go
+		op.copies = true
+		return ""
+	}
 	if c := s.class(); copies && (c == "nodes" || c == "subtree") &&
 		s.cond == nil && s.red == "" && (isVarRef(s.outer.Expr(), splitItems) || copiedItems(s.outer.Expr())) { // streamsplit_fns.go
 		switch {
@@ -1242,7 +1249,10 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 				return errStreamPlan
 			}
 			run.used = true
-			err := op.split.loopAt(rt.ctx, run.c, run.d, g, each, nil)
+			s, err := op.split.choose(rt.ctx, run.c, run.d) // streamcopy_l3choice.go
+			if err == nil {
+				err = s.loopAt(rt.ctx, run.c, run.d, g, each, nil)
+			}
 			if err == errSplitGiveUp && run.d == 0 && run.i != nil {
 				// The document element itself is copied: from the tree,
 				// nothing of it having been copied yet.
