@@ -37,6 +37,9 @@ var k2Bodies = []struct {
 	{`<out><xsl:attribute name="{concat('n', count(//sub))}">v</xsl:attribute></out>`, true},
 	// generate-id() of an element's view in a motionless part (viewIdentOK).
 	{`<out><xsl:for-each select="doc/rec"><e n="{string-length(generate-id()) gt 1}"><xsl:value-of select="generate-id() = generate-id(.)"/></e></xsl:for-each></out>`, true},
+	// A tail that is a sequence of values (seqOfValues).
+	{`<out><xsl:value-of select="doc/rec/(@k/string(), @v/string(), sub/string())" separator="|"/></out>`, true},
+	{`<out><xsl:value-of select="count(doc/rec/(@k/string(), sub/string()))"/></out>`, true},
 	// (if (c) then A else B) ! R as if (c) then A ! R else B ! R (hoistMapChoice).
 	{`<xsl:variable name="c" select="true()"/><out><xsl:value-of select="(if ($c) then /doc/rec[1]/sub/ancestor-or-self::* else /doc/rec[1]/sub/ancestor::*) ! name()" separator=","/></out>`, true},
 	{`<xsl:variable name="c" select="false()"/><out><xsl:value-of select="(if ($c) then /doc/rec[1]/sub/ancestor-or-self::* else /doc/rec[1]/sub/ancestor::*) ! name()" separator=","/></out>`, true},

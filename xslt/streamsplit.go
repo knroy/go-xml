@@ -510,6 +510,9 @@ var splitClassRank = map[string]int{"bounded": 0, "output": 1, "nodes": 2, "subt
 // valueTail reports, conservatively, whether a tail makes only atomic
 // values: its last step does, perhaps filtered.
 func valueTail(e xpath.Expr) bool {
+	if seqOfValues(e) { // streamsplit_k2.go
+		return true
+	}
 	if pe, ok := e.(*xpath.PathExpr); ok && len(pe.Steps) > 0 {
 		e = pe.Steps[len(pe.Steps)-1]
 	}
@@ -615,7 +618,7 @@ func tailKindOK(e xpath.Expr) bool {
 	if f, ok := e.(*xpath.FuncCall); ok && f.Name.URI == fnNS && splitAtomicFns[f.Name.Local] {
 		return true
 	}
-	return atomicValued(e) || tailValue(e) || nodeValued(e) || copyTail(e)
+	return atomicValued(e) || tailValue(e) || nodeValued(e) || copyTail(e) || seqOfValues(e) // streamsplit_k2.go
 }
 
 // splitAtomicFns return atomic values, beside those atomicValued knows.

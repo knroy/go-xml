@@ -170,3 +170,20 @@ func hoistMapChoice(e xpath.Expr, focus vfocus, key bool) xpath.Expr {
 		Then: &xpath.SimpleMap{Left: x.Then, Right: m.Right},
 		Else: &xpath.SimpleMap{Left: x.Else, Right: m.Right}}
 }
+
+// seqOfValues reports whether e is a sequence whose every item makes only
+// atomic values by its last step: (@nr/string(), chtitle/string()). The
+// tail then gives values only (no XPTY0018), and holding them costs what
+// the result does.
+func seqOfValues(e xpath.Expr) bool {
+	x, ok := e.(*xpath.SequenceExpr)
+	if !ok || len(x.Items) == 0 {
+		return false
+	}
+	for _, it := range x.Items {
+		if !valueTail(it) {
+			return false
+		}
+	}
+	return true
+}
