@@ -30,7 +30,9 @@ var l6Bodies = []struct {
 	{`<out><xsl:for-each select="doc/rec/copy-of(.)"><r of="{last()}" n="{count(.//sub)}"/></xsl:for-each></out>`, false},
 	// Simple content over the context's subtree, from its grounded copy (groundContextSplit).
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:value-of select="descendant-or-self::*" separator="~"/></e></xsl:for-each></out>`, true},
-	{`<out><xsl:for-each select="doc/rec"><e><xsl:value-of select="(sub/@x, .//sub)" separator="|"/></e></xsl:for-each></out>`, true},
+	// Two consuming operands of "," make the body free-ranging (§19.8.1, the
+	// general rules): XTSE3430 on both sides.
+	{`<out><xsl:for-each select="doc/rec"><e><xsl:value-of select="(sub/@x, .//sub)" separator="|"/></e></xsl:for-each></out>`, false},
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:attribute name="a" select="descendant-or-self::*/name()"/></e></xsl:for-each></out>`, true},
 	// A motionless xsl:iterate over the ancestors' views (motionlessIterate), and a
 	// motionless for-each over a variable's items with xsl:sort (foreignSort).
@@ -111,8 +113,12 @@ var l6DeclBodies = []struct {
 	{l6UnionDecls, `<xsl:variable name="c" select="false()"/><out><xsl:apply-templates select="if ($c) then doc/rec[1]/* else doc/rec[2]/*" mode="u"/></out>`, true},
 	{l6UnionDecls, `<out><xsl:apply-templates select="($ins union doc/rec[1]/*)" mode="u"/></out>`, true},
 	// apply-templates over values read off the stream (sx-if-218): collected, dispatched.
-	{`<xsl:mode name="v" streamable="yes"/><xsl:template match=".[. instance of xs:integer]" mode="v"><i p="{position()}" of="{last()}"><xsl:value-of select="."/></i></xsl:template>`,
+	// last() in a streamable mode's rule is free-ranging (§19.8.9.14, the context
+	// posture striding): XTSE3430 on both sides.
+	{`<xsl:mode name="v" streamable="yes"/><xsl:template match=".[. instance of xs:integer]" mode="v"><i p="{position()}"><xsl:value-of select="."/></i></xsl:template>`,
 		`<out><xsl:apply-templates select="if (doc/rec/sub) then 0 else 1" mode="v"/></out>`, true},
+	{`<xsl:mode name="v" streamable="yes"/><xsl:template match=".[. instance of xs:integer]" mode="v"><i p="{position()}" of="{last()}"><xsl:value-of select="."/></i></xsl:template>`,
+		`<out><xsl:apply-templates select="if (doc/rec/sub) then 0 else 1" mode="v"/></out>`, false},
 	// [A, B]?* read as (A, B) (flatArray), the select's split refused (sx-square-array-*).
 	{l6UnionDecls, `<out><xsl:for-each select="[$ins, doc/rec/sub/copy-of()]?*"><e n="{name()}"><xsl:value-of select="."/></e></xsl:for-each></out>`, true},
 	{l6UnionDecls, `<out><xsl:apply-templates select="[doc/rec[1]/*/snapshot(), $ins]?*" mode="u"/></out>`, true},
