@@ -770,6 +770,9 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "iterate" {
 			return b.motionlessIterate(el, f) // streamsplit_l6.go
 		}
+		if done, ok := b.leafNext(el, f); done { // streamlast_mm2.go
+			return ok
+		}
 		if local == "copy" && f == vNone && !b.noIdent && streamMotionless[local] {
 			// Of the document node: it reads the document's properties of
 			// the stand-in once the rest has been read (streamcopy_l3.go).

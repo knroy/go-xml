@@ -20,3 +20,21 @@ func (b *streamBuilder) loopContent(el *xdm.Node) bool {
 	b.last = old
 	return ok
 }
+
+// leafNext checks el when it is an xsl:next-match or xsl:apply-imports in
+// the body of a rule for a text, comment, PI or attribute node (focus
+// vLeaf, run off the cursor on the complete node). The tree's instruction
+// hands that node, with its focus, to the next rule of the current mode:
+// planRules checks every rule of that mode for the node's class, and the
+// built-in rules, as for an xsl:apply-templates of it. Not at the top of the
+// result, where a built-in's copy would stand for the stream's node (the
+// tree keeps the source's own there).
+func (b *streamBuilder) leafNext(el *xdm.Node, f vfocus) (done, ok bool) {
+	if !isXSL(el, "next-match") && !isXSL(el, "apply-imports") || f != vLeaf || !b.x.rule {
+		return false, false
+	}
+	if topOf(el) != "" {
+		return true, b.refuse(elName(el) + " at the top of a leaf rule's result")
+	}
+	return true, b.applyAttrs(el, f) && b.withParams(el, f)
+}

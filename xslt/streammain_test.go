@@ -203,6 +203,13 @@ var mainCases = []struct {
 	// (streamlast_mm2.go; streamable-137).
 	{`<xsl:mode streamable="yes"/><xsl:template match="*"><p><xsl:for-each select="ancestor-or-self::node()"><xsl:value-of select="name()"/>` +
 		`<xsl:if test="position() != last()">/</xsl:if></xsl:for-each></p><xsl:apply-templates/></xsl:template>`, true},
+	// xsl:next-match in a rule for a text node: the next rule, or the
+	// built-in, on the complete node (leafNext, streamlast_mm2.go;
+	// streamable-138); at the top of the result it stays on the tree.
+	{`<xsl:mode streamable="yes"/><xsl:template match="text()" priority="2"><t><xsl:next-match/></t></xsl:template>` +
+		`<xsl:template match="text()"><xsl:value-of select="concat(name(..), ':', .)"/></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="text()"><t><xsl:next-match/></t></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="text()"><xsl:next-match/></xsl:template>`, false},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
