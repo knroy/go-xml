@@ -41,6 +41,8 @@ func TestStreamXMLToJSONMatchesTree(t *testing.T) {
 		`<j><xsl:value-of select="xml-to-json(., map{'indent': true()})"/></j>`,
 		`<j><xsl:value-of select="xml-to-json(*, map{'indent': false(), 'other': 1})"/></j>`,
 		`<j><xsl:value-of select="xml-to-json(/*, map{'indent': true()})"/></j>`,
+		// One match at most (sf-xml-to-json-005's shape): nested candidates.
+		`<j><xsl:value-of select="xml-to-json(/descendant::node()[../@key='a'][1])"/></j>`,
 	}
 	for name, d := range docs {
 		dir := t.TempDir()

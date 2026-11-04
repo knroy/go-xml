@@ -58,6 +58,9 @@ func (w *splitter) jsonCall(x *xpath.FuncCall, put func(xpath.Expr), use splitUs
 	if w.pe != nil {
 		return true, w.refuse("a second consuming operand")
 	}
+	if w.group {
+		return true, w.refuse("xml-to-json() in a group's body")
+	}
 	wrap := func(y xpath.Expr) {
 		put(&xpath.FuncCall{Name: xdm.QName{URI: fnNS, Local: "zero-or-one"}, Args: []xpath.Expr{y}})
 	}
@@ -69,11 +72,6 @@ func (w *splitter) jsonCall(x *xpath.FuncCall, put func(xpath.Expr), use splitUs
 		if pp, found = w.pathOf(x.Args[0]); !found || pp.ctxItem || len(pp.tail) > 0 || pp.br != nil ||
 			pp.mapR != nil || pp.skip > 0 || pp.oi != "" || pp.group {
 			return true, w.refuse("xml-to-json() of " + x.Args[0].String())
-		}
-		for _, st := range pp.steps {
-			if st.Axis != xpath.AxisChild {
-				return true, w.refuse("xml-to-json() of a path whose matches may nest")
-			}
 		}
 	}
 	w.pe, w.put, w.use, w.path, w.json = x.Args[0], wrap, use, pp, &jsonSplit{indent: indent}
@@ -111,21 +109,38 @@ func jsonIndentOption(e xpath.Expr) (indent, ok bool) {
 	return indent, true
 }
 
-// jsonAfter checks, once path has set s up, that each match is an element
-// read once at its start tag: no tail, reducer, nesting or leaf. The matches
-// are then written in matchText's place (walk), the context by run.
+// jsonAfter checks, once path has set s up, that each match is read once at
+// its start tag: no tail or reducer; matches that cannot nest, or one match
+// at most (a single step's [1] from the one context), which nothing after
+// it can be. The matches are then written in matchText's place (walk), the
+// context by run. A leaf match is not an element or document node: its run
+// ends (leaf), and the tree raises the XPTY0004.
 func (s *streamSplit) jsonAfter(w *splitter) string {
 	s.json = w.json
 	if s.ctxItem {
 		return ""
 	}
-	if s.tail != nil || s.tailText != "" || s.red != "" || s.nests || s.leaves || s.keepLeaves ||
-		s.outermost || s.innermost || s.group || s.skip != 0 || s.hasBranches() || w.kids ||
-		s.mode != matchText && s.mode != matchGround {
-		return "xml-to-json() of matches not each an element read once"
+	if s.tail != nil || s.tailText != "" || s.red != "" || s.outermost || s.innermost || s.group ||
+		s.skip != 0 || s.hasBranches() || w.kids || s.mode != matchText && s.mode != matchGround ||
+		s.nests && !s.jsonOne() {
+		return "xml-to-json() of matches not each read once at its start tag"
 	}
-	s.mode, s.later = matchText, false
+	s.mode, s.later, s.keepLeaves, s.leafOnly = matchText, false, false, false
 	return ""
+}
+
+// jsonOne reports whether P is one step with a positional [1]: one match
+// at most, from the one context.
+func (s *streamSplit) jsonOne() bool {
+	if len(s.steps) != 1 {
+		return false
+	}
+	for _, p := range s.steps[0].preds {
+		if p.e == nil && p.pe == nil && p.at == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // jsonContext writes the context: the document node (d 0, before its first

@@ -2181,6 +2181,9 @@ func (s *streamSplit) textAtomic(t string) *xdm.Atomic {
 // which a matchBody loop's body is handed as a match.
 func (r *splitRun) leaf(n *xdm.Node, d int) error {
 	s := r.s
+	if s.json != nil {
+		return errJSONStream // streamfn_json.go: not an element or document node
+	}
 	switch {
 	case s.mode == matchCount || s.red == "nth" && !s.atomize && s.tailText == "" && s.tail == nil && r.idx+1 < s.nth:
 		return r.take(xdm.Sequence{nil})
