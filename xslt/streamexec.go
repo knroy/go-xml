@@ -1703,7 +1703,7 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 				return err
 			}
 		}
-		acc := run.observeAccums(rt, i.accums, true)
+		acc := run.observeAccumsOf(rt, i.accums, true, false, i.pkg) // streamtrust_pkguse.go
 		defer acc.stop()
 		// The body's focus is the document node, which the stream does not
 		// build: the plan reads of it only what an empty one has.

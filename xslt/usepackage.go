@@ -1981,6 +1981,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	compilePackage = packageSerial
 	defer func() { compilePackage = savedPkg }()
 	defer c.enterPkgFrame(u)() // streampkgframe_l7.go: a frame package's compile state
+	defer c.enterOwnPkg(u)()   // streamtrust_pkguse.go
 	// A used package brings its own in-scope schema components, so the
 	// xsl:import-schema pre-pass runs again for it. 2.5.3 makes the set
 	// package-scoped in as many words: "The schema components that may be

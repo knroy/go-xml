@@ -64,8 +64,14 @@ var errAccumOffStream = fmt.Errorf("%w: an accumulator value the stream does not
 // does, or "", and the names (as written) of the accumulators its rules
 // read of their node (streamaccum_l4.go).
 func accumStreamWhy(def *accumulatorDef) (string, []string) {
+	return accumStreamWhyIn(def, 0)
+}
+
+// accumStreamWhyIn is accumStreamWhy for a run of a container in package
+// pkg (streamtrust_pkguse.go), whose own accumulators the observer computes.
+func accumStreamWhyIn(def *accumulatorDef, pkg int) (string, []string) {
 	name := "accumulator " + def.name.Lexical()
-	if def.pkg != 0 || def.el == nil {
+	if def.pkg != pkg || def.el == nil {
 		return name + ": in a package", nil
 	}
 	e := parseAt(def.el, def.el.AttrValue("initial-value"))
@@ -238,14 +244,20 @@ func accumValueSafe(e xpath.Expr) bool {
 // run is TransformReader's, whose tree-mode answer computes a non-streamable
 // accumulator as well (a source-document's raises XTDE3362 on reading one).
 func (s *Stylesheet) accumRefusal(set *modeAccumulators, main bool) string {
+	return s.accumRefusalIn(set, main, 0)
+}
+
+// accumRefusalIn is accumRefusal for a container in package pkg: the
+// accumulators applicable are that package's (§3.5.5).
+func (s *Stylesheet) accumRefusalIn(set *modeAccumulators, main bool, pkg int) string {
 	reads := map[*accumulatorDef][]string{}
 	for _, k := range slices.Sorted(maps.Keys(s.accumulators)) {
 		def := s.accumulators[k]
-		if !accumApplies(set, def) || def.pkg != 0 {
-			// A used package's accumulator is its own (§3.5.5): what a
-			// streamed run reaches of the package reads none
-			// (selfContainedFn, pkgFrameBanned), and the observer computes
-			// the top-level package's only (observeAccums).
+		if !accumApplies(set, def) || def.pkg != pkg {
+			// A package's accumulator is its own (§3.5.5): what a streamed
+			// run reaches of another package reads none (selfContainedFn,
+			// pkgFrameBanned), and the observer computes the container's
+			// package's only (observeAccumsOf; streamtrust_pkguse.go).
 			continue
 		}
 		if !def.streamable {
@@ -254,9 +266,13 @@ func (s *Stylesheet) accumRefusal(set *modeAccumulators, main bool) string {
 			}
 			continue
 		}
-		why, deps := accumStreamWhy(def)
+		why, deps := accumStreamWhyIn(def, pkg)
 		if why != "" {
 			return why
+		}
+		if pkg != 0 && len(deps) > 0 {
+			// accumReadsWhy resolves names in the top-level package.
+			return "accumulator " + def.name.Lexical() + ": in a package, a rule reads an accumulator"
 		}
 		reads[def] = deps
 	}
@@ -277,7 +293,7 @@ func (c *compiler) linkStreamAccums() {
 		if sd.instr.stream == nil || len(c.sheet.accumulators) == 0 {
 			continue
 		}
-		if why := c.sheet.accumRefusal(sd.instr.accums, false); why != "" {
+		if why := c.sheet.accumRefusalIn(sd.instr.accums, false, sd.instr.pkg); why != "" {
 			sd.instr.stream = nil
 			if traceCore != nil {
 				traceCore(sd.el, why)
@@ -350,12 +366,13 @@ type accumFrame struct {
 // non-streamable accumulator from. It must be called before the cursor's
 // first event; stop ends it.
 func (run *streamRun) observeAccums(rt *runtime, set *modeAccumulators, streamed bool) *streamAccums {
-	return run.observeAccumsOf(rt, set, streamed, false)
+	return run.observeAccumsOf(rt, set, streamed, false, 0)
 }
 
 // observeAccumsOf is observeAccums; all says the accumulators not declared
 // streamable are computed too (a merge source's: streammerge_accum.go).
-func (run *streamRun) observeAccumsOf(rt *runtime, set *modeAccumulators, streamed, all bool) *streamAccums {
+// pkg is the package whose accumulators are computed (0: the top-level).
+func (run *streamRun) observeAccumsOf(rt *runtime, set *modeAccumulators, streamed, all bool, pkg int) *streamAccums {
 	s := rt.sheet
 	if len(s.accumulators) == 0 {
 		return nil
@@ -374,7 +391,7 @@ func (run *streamRun) observeAccumsOf(rt *runtime, set *modeAccumulators, stream
 	r.streamAccums = []*streamAccums{sa}
 	sa.ctx = bindRuntime(rt.ctx, &r)
 	for _, k := range slices.Sorted(maps.Keys(s.accumulators)) {
-		if def := s.accumulators[k]; (def.streamable || all) && def.pkg == 0 && accumApplies(set, def) {
+		if def := s.accumulators[k]; (def.streamable || all) && def.pkg == pkg && accumApplies(set, def) {
 			sa.defs = append(sa.defs, def)
 		}
 	}

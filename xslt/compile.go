@@ -199,6 +199,9 @@ type compiler struct {
 	// l7PkgCur the one compiling now (streampkgframe_l7.go).
 	l7PkgFrames map[*xdm.Node]*pkgFrameState
 	l7PkgCur    *pkgFrameState
+	// ownPkg is the root of the used package compiling now when its own
+	// declarations are the ones in force (streamtrust_pkguse.go).
+	ownPkg *xdm.Node
 	// mergedText records, for each text node mergeAcrossComments built out
 	// of pieces separated by comments, the element the pieces were in.
 	mergedText map[*xdm.Node]*xdm.Node
