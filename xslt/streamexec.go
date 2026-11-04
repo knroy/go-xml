@@ -107,6 +107,9 @@ type streamExec struct {
 	rule bool
 	// tries are the consumers of each streamed xsl:try's body (streamtry.go).
 	tries [][]*streamOp
+	// inlines are the calls planned as their functions' bodies, by the
+	// caller's instruction (streamfn_inline.go).
+	inlines map[*xdm.Node]*inlinedCall
 }
 
 func newStreamExec() *streamExec {
@@ -315,6 +318,9 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 	if el.Attr("", "select") != nil {
 		switch local {
 		case "value-of", "copy-of", "sequence", "attribute", "break":
+			if done, ok := b.inlineCallOp(el, f); done { // streamfn_inline.go
+				return ok
+			}
 			return b.selectOp(el, f)
 		case "on-empty", "on-non-empty":
 			return b.selectOp(el, f) // streamonempty.go
@@ -977,6 +983,9 @@ func isVarRef(e xpath.Expr, q xdm.QName) bool {
 // instruction compiled and split, the memory rule kept (DESIGN section 2.1,
 // rule 3), each loop's strategy chosen; it returns why not.
 func (x *streamExec) ready() string {
+	if why := x.readyInlines(); why != "" { // streamfn_inline.go
+		return why
+	}
 	minD := 0
 	if x.class == classElem {
 		minD = 1 // a rule's context element: the document element, or below
