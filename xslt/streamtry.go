@@ -189,6 +189,9 @@ func (x *streamExec) readyTries() string {
 				return "xsl:try: " + why
 			}
 			op.groundNow()
+			if op.fork {
+				op.forkInTry() // streamtee_try.go
+			}
 		}
 	}
 	return ""
@@ -203,7 +206,7 @@ func (op *streamOp) exactInTry() string {
 	case op.group:
 		return "xsl:for-each-group in its body"
 	case op.fork:
-		return elName(op.el) + " with several consuming prongs in its body"
+		return op.prongsExactInTry() // streamtee_try.go
 	case op.split == nil:
 		return "a consumer with no split in its body"
 	case op.loop:
@@ -397,6 +400,9 @@ func (t streamTry) caught() error {
 	}
 	if traceTry != nil {
 		traceTry()
+	}
+	if run.teed {
+		return nil // the fork's prongs read the document through (streamtee_try.go)
 	}
 	ev := run.c.At()
 	if run.d == 0 {

@@ -94,6 +94,20 @@ var applyCases = []struct {
 	// Two rules matching, on-multiple-match="fail".
 	{`<xsl:mode streamable="yes" on-multiple-match="fail"/><xsl:template match="rec"/><xsl:template match="*[@k]"/>`,
 		`<xsl:apply-templates select="*/rec"/>`, true},
+	// Several consumers of a rule's element: the body on a grounded copy
+	// of it (streamtee_ground.go): fork prongs, and a copy in a variable
+	// beside a motionless apply-templates over it in another mode
+	// (streamable-009's shape).
+	{`<xsl:mode streamable="yes"/><xsl:template match="rec"><r><xsl:fork><xsl:sequence><xsl:value-of select="count(sub)"/></xsl:sequence>` +
+		`<xsl:sequence><xsl:value-of select="string(.)"/></xsl:sequence></xsl:fork></r></xsl:template>`,
+		`<xsl:apply-templates select="*/rec"/>`, true},
+	{`<xsl:mode name="s" streamable="yes"/><xsl:template match="rec" mode="s"><xsl:variable name="c"><xsl:copy-of select="."/></xsl:variable>` +
+		`<r><xsl:apply-templates select="$c/rec/sub"/></r></xsl:template><xsl:template match="sub"><s x="{@x}"/></xsl:template>`,
+		`<xsl:apply-templates select="*/rec" mode="s"/>`, true},
+	// The document node's names through self or ancestor-or-self, beside
+	// its consumer (accumulator-087s's shape, streamtee_docnode.go).
+	{`<xsl:mode streamable="yes"/><xsl:template match="/|*"><e p="/{string-join(ancestor-or-self::node()/node-name(), '/')}">` +
+		`<xsl:apply-templates/></e></xsl:template>`, `<xsl:apply-templates select="."/>`, true},
 	// Refused: a positional pattern, a mode that is not streamable, a
 	// rule body that reads twice, a sort.
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, `<xsl:apply-templates select="*/rec"/>`, false},

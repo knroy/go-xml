@@ -107,6 +107,9 @@ type streamExec struct {
 	rule bool
 	// tries are the consumers of each streamed xsl:try's body (streamtry.go).
 	tries [][]*streamOp
+	// groundRule says it is a rule's body that runs on a grounded copy of
+	// its element (streamtee_ground.go).
+	groundRule bool
 }
 
 func newStreamExec() *streamExec {
@@ -163,6 +166,11 @@ type streamOp struct {
 	// pop, for a loop whose select is not a bare path, is its population
 	// (streampop.go); split is then its stream part's.
 	pop *streamPop
+	// tee, for a variable's map constructor whose entries each consume, is
+	// its plan in place of a split (streamtee_map.go).
+	tee *streamTee
+	// inTry says it is a fork in a streamed xsl:try's body (streamtee_try.go).
+	inTry bool
 }
 
 // streamBuilder builds a plan from the source of a container.
@@ -476,6 +484,9 @@ func (c *compiler) noteStreamParam(n *xdm.Node, sel *xpath.Compiled, ns xpath.Na
 			if op.el == n && op.avt == "" && op.instr == nil {
 				op.instr, op.sel = exprInstr{}, sel
 				if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead == "" {
+					x.byExpr[sel] = op
+				} else if op.tee = c.teeFor(op, sel, ns); op.tee != nil { // streamtee_map.go
+					op.dead = ""
 					x.byExpr[sel] = op
 				}
 			}
@@ -1062,6 +1073,9 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 	if copiedPopulation(op) {
 		return "" // streamgroup.go
 	}
+	if op.tee != nil {
+		return op.tee.ready(op) // streamtee_map.go
+	}
 	s := op.split
 	copies := isXSL(op.el, "copy-of") || isXSL(op.el, "sequence") && inElement(op.el)
 	if c := s.class(); copies && (c == "nodes" || c == "subtree") &&
@@ -1193,6 +1207,8 @@ type streamRun struct {
 	// (streamlive.go).
 	applyFeeds map[*streamOp]*burstFeed
 	kidFilters []*xdmstream.Filter
+	// teed says a fork's tee has taken the cursor over (streamtee_try.go).
+	teed bool
 }
 
 // feed returns the feed that drives instr from the cursor, or nil when instr
@@ -1283,7 +1299,15 @@ func (run *streamRun) evalOp(rt *runtime, op *streamOp) (xdm.Sequence, error) {
 		return nil, errStreamPlan
 	}
 	run.used = true
-	seq, err := op.split.evalAt(rt.ctx, run.c, run.d, g)
+	var (
+		seq xdm.Sequence
+		err error
+	)
+	if op.tee != nil {
+		seq, err = run.teeEval(rt, op) // streamtee_map.go
+	} else {
+		seq, err = op.split.evalAt(rt.ctx, run.c, run.d, g)
+	}
 	if err == errSplitGiveUp && run.d == 0 && run.i != nil {
 		return run.fallback(rt, op.sel)
 	}
@@ -1498,7 +1522,7 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 			valid = vin.attach(c, strip) // streamvalidin.go
 		}
 		c.Handoff(func() func() { return xpathleaf.LockYield(rt.evalLock) }) // streamfork.go
-		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread, root: xdm.NewTree().Root, held: held}
+		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread, root: streamStandIn(br, href, base, vin), held: held}
 		defer func() { *kept = run.kept }()
 		acc := run.observeAccums(rt, i.accums, true)
 		defer acc.stop()

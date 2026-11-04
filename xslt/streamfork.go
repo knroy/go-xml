@@ -245,6 +245,7 @@ func (run *streamRun) fork(rt *runtime, op *streamOp, body []Instruction, out *o
 	saved := make([]held, len(cons))
 	kept := false
 	back := xpathleaf.LockYield(rt.evalLock)
+	run.teed = true
 	cerrs := run.c.Tee(len(cons), func(j int, c *xdmstream.Cursor) error {
 		defer xpathleaf.LockYield(rt.evalLock) // done: let go, for good
 		k := cons[j]
@@ -255,6 +256,9 @@ func (run *streamRun) fork(rt *runtime, op *streamOp, body []Instruction, out *o
 		err := body[k].Execute(&sub, outs[k])
 		if err == nil && !pr.used {
 			err = pr.drain()
+		}
+		if err != nil && op.inTry {
+			err = readOn(c, err) // streamtee_try.go
 		}
 		if pr.kept {
 			kept = true

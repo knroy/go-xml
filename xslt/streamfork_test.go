@@ -28,11 +28,14 @@ var forkBodies = []struct {
 		`<xsl:sequence select="max(//rec/@v)"/><xsl:sequence select="exists(//other)"/></xsl:fork></out>`, true},
 	{`<out><xsl:fork><xsl:sequence><xsl:for-each select="/doc/rec"><r k="{@k}"/></xsl:for-each></xsl:sequence>` +
 		`<xsl:sequence><xsl:for-each select="/doc/rec/sub"><s x="{@x}"><xsl:value-of select="."/></s></xsl:for-each></xsl:sequence></xsl:fork></out>`, true},
-	// A tee in a streamed xsl:try's body: the try cannot order its prongs'
-	// errors, so the container runs on the tree (it panicked at the planner
-	// once fork and try met).
+	// A tee in a streamed xsl:try's body (it panicked at the planner once
+	// fork and try met): the first error in prong order is the try's, and a
+	// failed prong reads on to the end, so a parse error is still the
+	// document's (streamtee_try.go; si-fork-008).
 	{`<out><xsl:try><xsl:fork><xsl:sequence select="count(//rec)"/><xsl:sequence select="sum(/doc/rec/@v)"/></xsl:fork>` +
-		`<xsl:catch><caught/></xsl:catch></xsl:try></out>`, false},
+		`<xsl:catch><caught/></xsl:catch></xsl:try></out>`, true},
+	{`<out><xsl:try><xsl:fork><xsl:sequence select="count(/doc/rec/xs:integer(@k))"/><xsl:sequence select="string-join(outermost(//sub)/@x)"/></xsl:fork>` +
+		`<xsl:catch errors="*:FORG0001"><caught/></xsl:catch></xsl:try></out>`, true},
 	// A prong's error, the first in prong order is the fork's: xs:integer
 	// of v="x" fails in prong 2, the sum over k fails (FORG0001) in prong 1.
 	{`<out><xsl:fork><xsl:sequence select="sum(/doc/rec/@k)"/><xsl:sequence select="sum(/doc/rec/xs:integer(@v))"/></xsl:fork></out>`, true},
@@ -43,6 +46,14 @@ var forkBodies = []struct {
 		`<m n="{$m?n}" s="{$m?s}" k="{$m?k}"/>`, true},
 	{`<xsl:variable name="m" as="map(*)"><xsl:map><xsl:map-entry key="'a'" select="count(//rec)"/>` +
 		`<xsl:map-entry key="'a'" select="count(//sub)"/></xsl:map></xsl:variable><m n="{$m?a}"/>`, true}, // XTDE3365
+	// A map constructor whose values each read the document, in a
+	// variable's select: a tee of its entries (streamtee_map.go;
+	// sx-MapExpr-002/004/005). The second fails on the nested document's
+	// v="x" (FORG0001) as the tree's does.
+	{`<xsl:variable name="m" as="map(*)" select="map{'n': count(//rec), 'k': string-join(//rec/@k, ','), 'c': 1}"/>` +
+		`<m n="{$m?n}" k="{$m('k')}" c="{$m?c}"/>`, true},
+	{`<xsl:variable name="m" as="map(*)" select="map{'lo': min(//rec/@v/number()), 'hi': max(//rec/@v/number()), 's': sum(//rec/@v)}"/>` +
+		`<m lo="{$m?lo}" hi="{$m?hi}" s="{$m?s}"/>`, true},
 	// At most one prong reads: a sequence constructor.
 	{`<out><xsl:fork><xsl:sequence select="'['"/><xsl:sequence><a/></xsl:sequence><xsl:sequence select="']'"/></xsl:fork></out>`, true},
 	{`<out><xsl:fork><xsl:sequence select="'['"/><xsl:sequence><a><xsl:value-of select="count(//rec)"/></a></xsl:sequence></xsl:fork></out>`, true},

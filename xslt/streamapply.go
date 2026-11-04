@@ -353,6 +353,10 @@ func (c *compiler) planRule(el *xdm.Node, p *Pattern, from int) *rulePlan {
 			b = b.strict()
 		}
 		if !b.ruleBody(el, kids, from, f) {
+			if gx := groundRuleExec(el, cl, b.why); gx != nil { // streamtee_ground.go
+				r.x[cl] = gx
+				continue
+			}
 			r.why[cl] = b.why
 			continue
 		}
@@ -593,6 +597,10 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 			return
 		}
 		visited[visitKey{x, top}] = true
+		if streamed && x.groundRule && top != notTop && why == "" {
+			// The copy's nodes would be the principal result's (streamtee_ground.go).
+			why = "a rule on a grounded copy at the top of the result"
+		}
 		if streamed && x.class == classDoc && x.mayGiveUp() && why == "" {
 			why = "a select at the document node may fall back to its tree"
 		}
@@ -1043,6 +1051,9 @@ func (run *streamRun) rule(rt *runtime, t *Template, node *xdm.Node, params, tun
 		return errStreamPlan // linkApply has seen to it that there is one
 	}
 	defer rt.leaveFrame(rt.enterFrame())
+	if x.groundRule {
+		return run.groundRule(rt, t, params, tunnels, out) // streamtee_ground.go
+	}
 	prev := run.x
 	run.x = x
 	err := runTemplateBody(rt, t, params, tunnels, out)
