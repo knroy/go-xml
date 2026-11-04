@@ -243,7 +243,7 @@ func (c *compiler) compileMerge(n *xdm.Node, ns xpath.NamespaceResolver) (Instru
 	}
 	instr.action = action
 	instr.streams, instr.textKeys = mergeStreams(instr, actionElem)
-	if instr.streams && c.streamMayAlias() { // streamalias_l7.go
+	if instr.streams && c.streamMayAlias(false) { // streamalias_l7.go
 		instr.streams, instr.textKeys = false, nil
 	}
 	return instr, nil

@@ -49,6 +49,8 @@ var l7Rows = []struct {
 	{`<xsl:variable name="g" select="doc('doc.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(/doc/rec intersect $g)"/></out>`, false},
 	{`<xsl:variable name="g" select="doc('doc.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(/doc/rec union $g)"/></out>`, false},
 	{``, `<xsl:variable name="g" select="doc('doc.xml')//sub"/><out><xsl:copy-of select="//sub except $g"/></out>`, false},
+	// doc() of another URI: another tree in both modes, so it streams.
+	{`<xsl:variable name="g" select="doc('other.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(/doc/rec union $g)"/></out>`, true},
 }
 
 // l7Analysis are §19.8 verdicts lane L7 models (streamability_l7.go).
@@ -82,6 +84,9 @@ func TestStreamL7MatchesTree(t *testing.T) {
 	for name, doc := range coreDocs {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "other.xml"), []byte(coreDocs["flat"]), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		for di, d := range coreDecls {

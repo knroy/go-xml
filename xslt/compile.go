@@ -182,8 +182,8 @@ type compiler struct {
 	// over one and evaluate its use-when expressions a second time.
 	staticVars []staticVar
 	staticDone map[*xdm.Node]*xdm.Node
-	// l7Alias caches streamMayAlias (1 yes, -1 no) for l7AliasN modules (streamalias_l7.go).
-	l7Alias  int8
+	// l7Alias caches the scan streamMayAlias reads, made over l7AliasN modules (streamalias_l7.go).
+	l7Alias  *aliasScan
 	l7AliasN int
 	// mergedText records, for each text node mergeAcrossComments built out
 	// of pieces separated by comments, the element the pieces were in.
