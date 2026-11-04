@@ -107,7 +107,8 @@ func (s *streamSplit) climbSetPath(w *splitter, p splitPathParts, part func(xpat
 	// s.tail stands for the tails where only its presence is read (not a
 	// bare path, a tail per match); tailOf hands the views to climbSetTake.
 	s.climbSet, s.climb, s.mode, s.tail = plan, true, matchView, plan.tails[0]
-	s.atomize = w.use == useAtomize || splitFolds[s.red]
+	s.atomize = w.use == useAtomize || w.use == useString || splitFolds[s.red]
+	s.strVal = w.use == useString
 	if why := s.branchChecks(); why != "" {
 		return why
 	}
