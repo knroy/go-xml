@@ -224,3 +224,27 @@ func TestStreamDocEntities(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamCommentSelectValues: xsl:comment and xsl:processing-instruction
+// make simple content of their select, so a select of elements is read as
+// their values, not collected as grounded copies, also below a loop whose
+// match may be the document element (streamexec.go noteStreamSelect,
+// streamcopy_l3leaf.go).
+func TestStreamCommentSelectValues(t *testing.T) {
+	dir := t.TempDir()
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, body := range []string{
+			`<o><xsl:for-each select="outermost(//rec)"><in><xsl:where-populated><xsl:comment select="sub[parent::rec]"/></xsl:where-populated>` +
+				`<xsl:where-populated><xsl:comment select="count(ancestor::node())"/></xsl:where-populated></in></xsl:for-each></o>`,
+			`<o><xsl:for-each select="outermost(//rec)"><in><xsl:sequence select="()"/><xsl:on-empty><xsl:comment select="sub[parent::rec]"/>` +
+				`<xsl:comment select="count(ancestor::node())"/></xsl:on-empty></in></xsl:for-each></o>`,
+			`<o><xsl:for-each select="outermost(//rec)"><in><xsl:processing-instruction name="p" select="sub"/></in></xsl:for-each></o>`,
+			`<o><xsl:comment select="doc/rec"/></o>`,
+		} {
+			coreCheck(t, coreSheet(body), dir, name+": "+body, true, TransformOptions{})
+		}
+	}
+}

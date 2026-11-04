@@ -11,6 +11,7 @@ package xslt
 import (
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -33,4 +34,28 @@ func leafAtomic(el *xdm.Node) bool {
 	}
 	e := parseAt(el, src)
 	return e != nil && atomicValued(e)
+}
+
+// laxAtomize marks s, and every branch of a choice, as the split of an
+// xsl:comment or xsl:processing-instruction select: its value is made by
+// constructedText, which atomizes with xdm.Atomize, so a typed match is
+// atomized so too (no FOTY0012 where the tree raises none).
+func (s *streamSplit) laxAtomize() {
+	s.laxAtom = true
+	if s.cond != nil {
+		s.then.laxAtomize()
+		s.els.laxAtomize()
+	}
+}
+
+// groundAtomizedAs is groundAtomized, unchecked with lax.
+func groundAtomizedAs(c *xdmstream.Cursor, lax bool) (xdm.Sequence, error) {
+	if !lax {
+		return groundAtomized(c)
+	}
+	g, err := c.Ground()
+	if err != nil {
+		return nil, err
+	}
+	return xdm.Atomize(xdm.One(g)), nil
 }

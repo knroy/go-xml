@@ -866,9 +866,15 @@ func (c *compiler) noteStreamSelect(n *xdm.Node, instr Instruction, sel *xpath.C
 				continue
 			}
 		}
-		simple := isXSL(n, "value-of") || isXSL(n, "attribute")
+		// §5.7.2 for all four; comment and PI atomize as constructedText,
+		// unchecked (streamcopy_l3leaf.go, laxAtomize).
+		leafText := isXSL(n, "comment") || isXSL(n, "processing-instruction")
+		simple := isXSL(n, "value-of") || isXSL(n, "attribute") || leafText
 		if op.split, op.dead = c.splitForDoc(sel, ns, op.doc, simple, op.inGroup, op.key); op.dead != "" { // streamcopy_l3.go
 			continue
+		}
+		if leafText {
+			op.split.laxAtomize()
 		}
 		op.x.byInstr[instr] = op
 	}

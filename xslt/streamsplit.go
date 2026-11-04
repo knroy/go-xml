@@ -180,6 +180,9 @@ type streamSplit struct {
 	// climbSet, for P whose branches climb each its own way
 	// (streamsplit_climbset.go): their tails and the operator.
 	climbSet *climbSetPlan
+	// laxAtom says a typed match is atomized as xdm.Atomize does, without
+	// AtomizeChecked's errors (streamcopy_l3leaf.go).
+	laxAtom bool
 	// docCopy says the expression is a copy of the document, built off the
 	// cursor; docText that it is the document's string value, read off it
 	// (streamcopy_l3.go).
@@ -1876,7 +1879,7 @@ func (r *splitRun) run(v *xdm.Node, d int) error {
 			return r.jsonContext(v, d) // streamfn_json.go
 		}
 		if s.atomize && v != nil && typedValue(s, v) { // streamvalidin.go
-			items, err := groundAtomized(c)
+			items, err := groundAtomizedAs(c, s.laxAtom)
 			if err != nil {
 				return err
 			}
@@ -2073,7 +2076,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					break
 				}
 				if typedValue(s, ev.Node) { // streamvalidin.go
-					items, err := groundAtomized(c)
+					items, err := groundAtomizedAs(c, s.laxAtom)
 					if err != nil {
 						return err
 					}
