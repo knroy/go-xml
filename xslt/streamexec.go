@@ -190,6 +190,9 @@ type streamOp struct {
 	// eventPop says a held grouping population is copied off the cursor as
 	// events, into one fragment (streamcopy_l3group.go).
 	eventPop bool
+	// pruned says a grouping population is copied off the cursor into a
+	// pruned copy of the document (streamgroup_pruned.go).
+	pruned *prunedPop
 	// frame, for a loop that is a recursive call's (streamfn_loop.go), is
 	// the call frame its body is planned in.
 	frame *streamExec
@@ -1199,6 +1202,9 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 	}
 	s := op.split
 	copies := isXSL(op.el, "copy-of") || isXSL(op.el, "sequence") && inElement(op.el)
+	if prunedReady(op) { // streamgroup_pruned.go
+		return ""
+	}
 	if eventPopulation(op) { // streamcopy_l3group.go
 		return ""
 	}
@@ -1367,6 +1373,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 	}
 	if op.treeApply {
 		return run.treeApplyFeed(instr, op) // streamcopy_l3apply.go
+	}
+	if op.pruned != nil {
+		return run.prunedFeed(instr, rt, op) // streamgroup_pruned.go
 	}
 	if op.split != nil && op.split.docCopy {
 		return run.docCopyFeed(instr, rt, op) // streamcopy_l3.go

@@ -70,6 +70,13 @@ func (b *streamBuilder) groupOp(el *xdm.Node, f vfocus) bool {
 	if b.groundedSelect(el) {
 		return b.groundedGroup(el, f)
 	}
+	if p := b.prunedPopulation(el); p != nil { // streamgroup_pruned.go
+		if !b.heldGroup(el, f) {
+			return false
+		}
+		b.x.ops[el].pruned = p
+		return true
+	}
 	if b.heldPopulation(el, f) {
 		return b.heldGroup(el, f) // streamgroup_population.go
 	}

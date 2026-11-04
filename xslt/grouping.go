@@ -51,6 +51,8 @@ func (i *forEachGroupInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if f := rt.burstsFor(i); f != nil && f.group != nil {
 		// Streamed (streamgroup.go): each group as the cursor reaches it.
 		return f.run.group(rt, out, i, f.group)
+	} else if f != nil && f.offBody {
+		return i.executeOff(rt, out, f) // streamgroup_pruned.go
 	}
 	// A grounded population of a streamed container is read off the cursor
 	// (streamgroup.go, groundedGroup).

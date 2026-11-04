@@ -157,6 +157,15 @@ var mainCases = []struct {
 	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><xsl:result-document href="r.xml"><xsl:copy-of select="."/></xsl:result-document></xsl:template>`, true},
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/*"><xsl:result-document href="r.xml"><xsl:apply-templates/></xsl:result-document></xsl:template>`, true},
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/*"><xsl:result-document href="r.xml"><o><xsl:apply-templates/></o></xsl:result-document></xsl:template>`, true},
+	// A grouping over attributes, text or node() children in a rule for the
+	// document element: the population a pruned copy of the document built
+	// from the events (L5, streamgroup_pruned.go; si-group-024/033/037).
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:for-each-group select="rec/@k" group-adjacent="."><g k="{current-grouping-key()}" v="{current-group()/../@v}"/></xsl:for-each-group></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:for-each-group select="*/text()" group-starting-with="text()[contains(., 't')]"><g><xsl:copy-of select="snapshot(current-group())/.."/></g></xsl:for-each-group></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="rec"><xsl:copy><xsl:for-each-group select="node()" group-adjacent="node-name(.), @x" composite="yes">` +
+		`<xsl:copy><xsl:copy-of select="@x"/><xsl:apply-templates select="current-group()/node()"/></xsl:copy></xsl:for-each-group></xsl:copy></xsl:template>`, true},
+	// ... refused when the body counts siblings, which the copy prunes.
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:for-each-group select="rec/@k" group-adjacent="."><g n="{generate-id(current-group()[1]/..)}"/></xsl:for-each-group></o></xsl:template>`, false},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
