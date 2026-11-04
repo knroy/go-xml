@@ -172,6 +172,10 @@ var mainCases = []struct {
 		`<xsl:template match="rec/@*"><xsl:element name="{name()}"><xsl:value-of select="."/></xsl:element></xsl:template><xsl:template match="rec/@k" priority="5"/>`, true},
 	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:fork><xsl:for-each-group select="doc/rec" group-by="@k">` +
 		`<g k="{current-grouping-key()}"><xsl:sequence select="current-group()"/></g></xsl:for-each-group></xsl:fork></o></xsl:template>`, true},
+	// ... and one whose body reads only the key and values of the group:
+	// streamcopy_l3group.go's one fragment (si-fork-809).
+	{`<xsl:mode streamable="yes"/><xsl:output method="text"/><xsl:template match="/"><o><xsl:fork><xsl:for-each-group select="doc/rec" composite="yes" group-by="@k, name()">` +
+		`<xsl:value-of select="current-grouping-key(), sum(current-group()/@v)" separator=", "/><br/></xsl:for-each-group></xsl:fork></o></xsl:template>`, true},
 	// ... refused when the body counts siblings, which the copy prunes.
 	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:for-each-group select="rec/@k" group-adjacent="."><g n="{generate-id(current-group()[1]/..)}"/></xsl:for-each-group></o></xsl:template>`, false},
 	// Not a streamable mode, or a rule the core does not take.
