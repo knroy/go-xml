@@ -750,3 +750,18 @@ func (i *inlineCallInstr) run(rt *runtime, vals []xdm.Sequence) (xdm.Sequence, e
 	return i.returns.convertAsLazy(tmp.Sequence(),
 		func() string { return "result of " + i.name.Lexical() }, "XTTE0780")
 }
+
+// foreignArgs reports whether every argument of x, a call on a stylesheet
+// function, is foreign (streamsplit_union.go): values, or a variable's
+// nodes, which a streamed body's variables hold grounded (§19.8.4.41), never
+// the stream's. A function has no focus, so its body then reads nothing of
+// the stream, whatever it is: the call is motionless at any focus, as one
+// in the inlined body's recursion on copies is (mf:group($group-copy[...])).
+func foreignArgs(x *xpath.FuncCall) bool {
+	for _, a := range x.Args {
+		if !foreign(a) || refsSplitItems(a) || readsFunctionContext(a) { // the stream's own nodes
+			return false
+		}
+	}
+	return true
+}

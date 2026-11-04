@@ -267,6 +267,9 @@ func sheetCallFresh(x *xpath.FuncCall) bool {
 // sheetCall is viewCheck.call for a call on a stylesheet function: a values
 // call over operands the view answers, atomized.
 func (vc viewCheck) sheetCall(x *xpath.FuncCall, f vfocus) bool {
+	if foreignArgs(x) { // streamfn_inline.go
+		return true
+	}
 	sc, ok := sheetCallOf(x)
 	if !ok || !sc.values {
 		return false
