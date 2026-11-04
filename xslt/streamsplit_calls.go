@@ -184,6 +184,7 @@ func sheetBody(fn *xdm.Node) xpath.Expr {
 			if ch.Attr("", "select") != nil || ch.FirstChild() != nil {
 				return nil
 			}
+		case isXSL(ch, "variable") && seq == nil && constantVariable(ch): // streamfn_copies.go
 		case isXSL(ch, "sequence") && seq == nil && ch.FirstChild() == nil:
 			seq = ch
 		default:

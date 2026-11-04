@@ -13,38 +13,48 @@ package xslt
 // still giving up past the tree's records.
 
 import (
-	"reflect"
+	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // itemsOnlyCopied reports whether s's outer reads $items (or $value) only
-// as the one argument of fn:copy-of or fn:snapshot.
+// inside the argument of fn:copy-of or fn:snapshot: what reaches the result
+// of them is copied, as the tree-mode run copies it beside its document.
 func (s *streamSplit) itemsOnlyCopied() bool {
 	if s.cond != nil || s.outer == nil {
 		return false
 	}
-	e := s.outer.Expr()
-	copied, bare := 0, 0
-	exprWalk(reflect.ValueOf(&e).Elem(), func(v reflect.Value) {
-		if v.Kind() != reflect.Interface {
-			return
-		}
-		switch x := v.Interface().(type) {
-		case *xpath.FuncCall:
-			if x.Name.URI == fnNS && len(x.Args) == 1 && (x.Name.Local == "copy-of" || x.Name.Local == "snapshot") {
-				if r, ok := x.Args[0].(*xpath.VarRef); ok && isSplitItems(r) {
-					copied++
-				}
-			}
-		case *xpath.VarRef:
-			if isSplitItems(x) {
-				bare++
+	return itemsInCopy(s.outer.Expr(), false)
+}
+
+// itemsInCopy reports whether every $items in e is inside a copy-of or
+// snapshot argument (in: e is one), and there is one.
+func itemsInCopy(e xpath.Expr, in bool) bool {
+	all, copied := itemRefs(e), map[*xpath.VarRef]bool{}
+	if in {
+		copied = all
+	}
+	walkExprCalls(e, func(x *xpath.FuncCall) {
+		if x.Name.URI == fnNS && len(x.Args) == 1 && (x.Name.Local == "copy-of" || x.Name.Local == "snapshot") {
+			for r := range itemRefs(x.Args[0]) {
+				copied[r] = true
 			}
 		}
 	})
-	return copied > 0 && copied == bare
+	return len(all) > 0 && len(copied) == len(all)
+}
+
+// itemRefs are the references to $items or $value in e.
+func itemRefs(e xpath.Expr) map[*xpath.VarRef]bool {
+	out := map[*xpath.VarRef]bool{}
+	walkExprVars(e, func(r *xpath.VarRef) {
+		if isSplitItems(r) {
+			out[r] = true
+		}
+	})
+	return out
 }
 
 // sheetCopiesPop reports whether the loop el's select, split as s, is a
@@ -80,4 +90,41 @@ func sheetCopiesPop(s *streamSplit, el *xdm.Node) bool {
 		}
 	}
 	return items == 1
+}
+
+// constantVariable reports whether v, an xsl:variable of a function's body,
+// is a constant tree: no select, its content literal elements and text with
+// no value template and no instruction, so it reads nothing of the
+// parameters or the focus.
+func constantVariable(v *xdm.Node) bool {
+	for a := range v.Attrs() {
+		if n := a.Name(); n.URI == "" && n.Local != "name" && n.Local != "as" {
+			return false
+		}
+	}
+	ok := true
+	var walk func(n *xdm.Node)
+	walk = func(n *xdm.Node) {
+		for ch := range n.Children() {
+			switch ch.Kind() {
+			case xdm.KindText:
+				if strings.ContainsAny(ch.Value(), "{}") {
+					ok = false
+				}
+			case xdm.KindElement:
+				if ch.Name().URI == xdm.NSXSL {
+					ok = false
+					return
+				}
+				for a := range ch.Attrs() {
+					if a.Name().URI == xdm.NSXSL || strings.ContainsAny(a.Value(), "{}") {
+						ok = false
+					}
+				}
+				walk(ch)
+			}
+		}
+	}
+	walk(v)
+	return ok
 }

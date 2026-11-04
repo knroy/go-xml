@@ -40,7 +40,10 @@ func TestStreamSheetCallsMatchTree(t *testing.T) {
 		`<xsl:function name="p:two" as="xs:integer"><xsl:param name="one" as="node()?"/><xsl:param name="two" as="xs:string*"/>` +
 		`<xsl:sequence select="count($two) + count($one)"/></xsl:function>` +
 		`<xsl:function name="p:kids" as="node()*"><xsl:param name="n" as="element()"/>` +
-		`<xsl:sequence select="$n/*[position() mod 2 = 1]"/></xsl:function>`
+		`<xsl:sequence select="$n/*[position() mod 2 = 1]"/></xsl:function>` +
+		`<xsl:function name="p:first" as="node()*"><xsl:param name="n" as="element()"/>` +
+		`<xsl:variable name="e" as="element()"><xxx/></xsl:variable>` +
+		`<xsl:sequence select="if (has-children($n)) then $n else p:first($e)"/></xsl:function>`
 	bodies := []struct {
 		body   string
 		stream bool
@@ -88,6 +91,9 @@ func TestStreamSheetCallsMatchTree(t *testing.T) {
 		// A loop over a call on the matches' copies, its element() parameter
 		// checking there is one (su-shallow-descent-001's shape).
 		{`<o><xsl:for-each select="p:kids(doc/rec)"><c><xsl:copy-of select="@x"/></c></xsl:for-each></o>`, true},
+		// The document element returned by the call and copied: its copy is
+		// the result, its identity unseen (su-shallow-descent-004's shape).
+		{`<o><xsl:copy-of select="p:first(doc)"/></o>`, true},
 	}
 	n := 0
 	for name, doc := range coreDocs {
