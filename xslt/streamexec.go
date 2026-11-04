@@ -550,7 +550,11 @@ func (b *streamBuilder) loopOp(el *xdm.Node, f vfocus) bool {
 	for ch := range el.Children() {
 		if ch.Kind() != xdm.KindElement {
 			if ch.Kind() == xdm.KindText && strings.ContainsAny(ch.Value(), "{}") {
-				return b.refuse("text with a brace")
+				// A text value template motionless on each match's view
+				// (streamshapes.go); a consuming one is refused.
+				if tv, ok := inner.textTemplate(ch, el, vElem); !ok || tv != nil {
+					return b.refuse("text with a brace")
+				}
 			}
 			continue
 		}

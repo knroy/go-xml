@@ -137,6 +137,11 @@ var popBodies = []struct {
 	{`<out><xsl:for-each select="snapshot(subsequence(doc/rec/@k, 2))"><e v="{.}" p="{../@v}" n="{count(../../*)}"/></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="remove(snapshot(doc/rec), 2)"><e p="{position()}" v="{@v}"/></xsl:for-each></out>`, true},
 	{`<out><xsl:for-each select="snapshot(doc/rec/sub/text())"><e v="{.}" p="{../@x}" a="{name(../..)}"/></xsl:for-each></out>`, true},
+	// A text value template motionless on the match's view in a loop body
+	// (J1); a consuming one refused.
+	{`<out><xsl:iterate select="doc/rec" expand-text="yes">{position()}:{@k} </xsl:iterate></out>`, true},
+	{`<out><xsl:for-each select="//sub" expand-text="yes">[{name(..)}/{@x}]</xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="doc/rec" expand-text="yes">{count(sub)} </xsl:for-each></out>`, false},
 	// Populations of kept leaves (G4): each a complete copy, its body off the
 	// cursor (fuzz seed 31: 9679, 16992, 23798, 30006, 75161).
 	{`<out><xsl:for-each select="tail(doc/rec/node())"><e p="{position()}"><xsl:value-of select=". || '|'"/></e></xsl:for-each></out>`, true},
