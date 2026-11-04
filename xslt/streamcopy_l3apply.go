@@ -80,7 +80,7 @@ func elemCopySplit(sel *xpath.Compiled, doc bool) *streamSplit {
 
 // treeApplyFeed is the feed of op, a treeApply op, for instr.
 func (run *streamRun) treeApplyFeed(instr Instruction, op *streamOp) *burstFeed {
-	return &burstFeed{instr: instr, treeApply: true,
+	return &burstFeed{instr: instr, treeApply: true, keep: run,
 		eval: func(rt *runtime) (xdm.Sequence, error) { return run.evalOp(rt, op) }}
 }
 
@@ -89,6 +89,10 @@ func (run *streamRun) treeApplyFeed(instr Instruction, op *streamOp) *burstFeed 
 // those items, with a feed that knows only them (so nothing below it reads
 // the stream).
 func (i *applyTemplatesInstr) executeTreeApply(rt *runtime, out *outputBuilder, f *burstFeed) error {
+	if sa := rt.runAccums(f.keep); sa != nil {
+		sa.keep++
+		defer func() { sa.keep-- }()
+	}
 	seq, err := f.eval(rt)
 	if err != nil {
 		return err

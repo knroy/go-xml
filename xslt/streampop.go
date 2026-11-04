@@ -144,7 +144,8 @@ func (s *streamSplit) valuesOnly() bool {
 	if s.cond != nil {
 		return s.then.valuesOnly() && s.els.valuesOnly()
 	}
-	return s.steps == nil && !s.ctxItem || s.red != "" && s.red != "nth" || s.atomize || s.tailText != ""
+	return s.steps == nil && !s.ctxItem || s.red != "" && s.red != "nth" || s.atomize || s.tailText != "" ||
+		s.tail != nil && atomicValued(oneStep(s.tail.Expr())) // P/name(): a value of each match
 }
 
 // pop builds the population e, or returns nil.
@@ -308,8 +309,10 @@ func (pb *popBuilder) stream(p *streamPop, e xpath.Expr) bool {
 		p.off = true
 	case s.bare() && p.fn != nil:
 		// copy-of(P), snapshot(P): each match grounded, then copied.
-		_, elem := testKinds(s.steps[len(s.steps)-1].test)
-		if !elem || s.leaves {
+		// Only the last step's test says what a match may be: s.leaves is
+		// also set by a // step (its node() may match a leaf as a context).
+		leaf, elem := testKinds(s.steps[len(s.steps)-1].test)
+		if !elem || leaf {
 			return false
 		}
 		p.ground, p.off = true, true

@@ -60,6 +60,10 @@ type burstFeed struct {
 	// treeApply drives an xsl:apply-templates over fresh copies: eval
 	// reads them, the tree applies (streamcopy_l3apply.go).
 	treeApply bool
+	// keep, on a treeApply feed, is its run: while the copies are read and
+	// applied, its observer keeps their originals' accumulator values
+	// (streamaccum_l6.go), as executeCopies does.
+	keep *streamRun
 	// offBody, for an xsl:for-each-group whose population eval builds, says
 	// its grouping and body run off the stream (streamgroup_pruned.go).
 	offBody bool

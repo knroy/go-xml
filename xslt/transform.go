@@ -1067,6 +1067,10 @@ func (s *Stylesheet) stripWhitespaceForFrom(pkg int, root, want *xdm.Node) (*xdm
 	var found *xdm.Node
 	tree := xdm.NewTree()
 	tree.Root.SetBaseURI(root.BaseURI())
+	// Stripping is part of building the source tree (§4.4): the stripped
+	// document is still the one fetched by its URI (F&O §2.6), and the
+	// resolvers hand it out for that URI.
+	tree.Root.SetDocumentURI(root.DocumentURI())
 	// The DOCTYPE text is a property of the tree, not of the root node, and
 	// it is where the unparsed-entity declarations live. Building a fresh
 	// tree without it made fn:unparsed-entity-uri answer "" for every

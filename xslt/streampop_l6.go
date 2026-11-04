@@ -239,6 +239,7 @@ func (pb *popBuilder) filteredCopies(x *xpath.FilterExpr) *streamPop {
 	}
 	p := pb.pop(x.Base)
 	if p == nil || !groundApply(p) || p.post != nil {
+		pb.split = nil // a refused base leaves the select to the other readings (rangeWindow)
 		return nil
 	}
 	p.post = pb.part(&xpath.FilterExpr{Base: &xpath.VarRef{Name: splitItems}, Predicates: x.Predicates})

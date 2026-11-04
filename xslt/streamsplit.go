@@ -1498,6 +1498,11 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 			// copy of climbed views would copy their content.
 			return !vc.items || vc.safe(x.Args[0], f, false)
 		}
+		if docOfArgFns[n] && len(x.Args) == 2 && focusFree(x.Args[1]) {
+			// id('x', $c), unparsed-entity-uri('e', $c): the document of
+			// a variable's node, as copy-of($c) above, not the stream's.
+			return vc.safe(x.Args[0], f, false) && (!vc.items || vc.safe(x.Args[1], f, false))
+		}
 		if burstFnBanned[n] || n == "copy-of" || n == "snapshot" || n == "current" ||
 			n == "has-children" && f != vLeaf || vc.noIdent && identFns[n] {
 			return false
@@ -1528,6 +1533,10 @@ var identFns = map[string]bool{"generate-id": true, "path": true, "root": true, 
 	"document-uri": true, "lang": true, "has-children": true, "id": true, "idref": true,
 	"element-with-id": true, "in-scope-prefixes": true, "namespace-uri-for-prefix": true,
 	"unparsed-entity-uri": true, "unparsed-entity-public-id": true, "deep-equal": true}
+
+// docOfArgFns reach the document of their second argument's node.
+var docOfArgFns = map[string]bool{"id": true, "idref": true, "element-with-id": true,
+	"unparsed-entity-uri": true, "unparsed-entity-public-id": true}
 
 // isCurrentCall reports whether e is a call on fn:current().
 func isCurrentCall(e xpath.Expr) bool {
