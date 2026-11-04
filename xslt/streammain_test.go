@@ -199,6 +199,21 @@ var mainCases = []struct {
 	// past the leaves before it (streamtee_docnode.go; sf-unparsed-entity-05).
 	{`<xsl:mode streamable="yes"/><xsl:template match="/"><out><a><xsl:value-of select="unparsed-entity-uri('pic')"/></a>` +
 		`<b><xsl:value-of select="unparsed-entity-public-id('pic')"/></b><xsl:copy-of select="*"/></out></xsl:template>`, true},
+	// A for-each over the ancestors a path climbs to, its body motionless
+	// on their views, off the cursor (streampop_climb.go; function-5017/5018);
+	// not when the body asks has-children or an accumulator, which only a
+	// match's view answers (viewsBeyond: the accumulator row streams without
+	// it).
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:for-each select="//sub/ancestor-or-self::*">` +
+		`<e n="{name()}" k="{@k}" d="{count(ancestor::*)}" p="{position()}"/></xsl:for-each></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:up" as="node()*" streamability="ascent"><xsl:param name="n" as="node()"/>` +
+		`<xsl:sequence select="$n/ancestor-or-self::rec"/></xsl:function><xsl:template match="/"><o>` +
+		`<xsl:for-each select="doc//sub/p:up(.)"><e k="{@k}" d="{count(ancestor-or-self::rec)}"/></xsl:for-each></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:for-each select="//sub/ancestor::rec">` +
+		`<e k="{@k}" h="{has-children()}"/></xsl:for-each></o></xsl:template>`, false},
+	{`<xsl:accumulator name="n" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>` +
+		`<xsl:mode streamable="yes" use-accumulators="n"/><xsl:template match="/"><o><xsl:for-each select="//sub/ancestor::rec">` +
+		`<e k="{@k}" n="{accumulator-before('n')}"/></xsl:for-each></o></xsl:template>`, false},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

@@ -133,6 +133,9 @@ func inOrderClimb(tail xpath.Expr) bool {
 	if pe, ok := tail.(*xpath.PathExpr); ok {
 		steps = pe.Steps
 	}
+	for len(steps) > 1 && isContextItem(steps[0]) {
+		steps = steps[1:] // ./x is x: an inlined f(.) (function-5017)
+	}
 	if n := len(steps); n > 1 && !isStep(steps[n-1]) {
 		steps = steps[:n-1]
 	}

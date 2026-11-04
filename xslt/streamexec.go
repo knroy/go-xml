@@ -939,7 +939,7 @@ func (c *compiler) noteStreamLoop(n *xdm.Node, instr Instruction, sel *xpath.Com
 			continue
 		}
 		op.instr, op.sel = instr, sel
-		if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" && !c.applyCopies(op, ns) { // streamsplit_l6.go
+		if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" && !c.applyCopies(op, ns) && !c.climbLoop(op, ns) { // streamsplit_l6.go, streampop_climb.go
 			continue
 		}
 		if op.pop == nil && !op.split.bare() {
