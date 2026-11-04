@@ -205,6 +205,11 @@ func TestStreamMergeValidation(t *testing.T) {
 // content), typed values, defaults. A schema the stream cannot validate (keys)
 // takes the tree path; strict with no schema is XTSE1660.
 func TestStreamMainValidation(t *testing.T) {
+	// More count readings than the budget on a stream (a bounded maximum
+	// above the child count is unbounded only to the tree): the tree's.
+	bounded := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType>
+  <xs:sequence maxOccurs="100"><xs:element name="price" maxOccurs="100" type="xs:decimal"/></xs:sequence></xs:complexType></xs:element></xs:schema>`
+	boundedDoc := "<r>" + strings.Repeat("<price>1</price>", 99) + "</r>"
 	keyed := strings.Replace(inSchema, `<xs:element name="list" type="listT"/>`,
 		`<xs:element name="list" type="listT"><xs:unique name="U"><xs:selector xpath="item"/><xs:field xpath="@id"/></xs:unique></xs:element>`, 1)
 	sheet := func(schema, decl, rules string) string {
@@ -305,6 +310,7 @@ func TestStreamMainValidation(t *testing.T) {
 		{inSchema, inDocs["bad-ref"], SourceLax, "XTTE1515", true},
 		{"", inDocs["ok"], SourceStrict, "XTSE1660", false},
 		{"", inDocs["ok"], SourceLax, "", true},
+		{bounded, boundedDoc, SourceStrict, "", false},
 		{keyed, inDocs["ok"], SourceStrict, "", false},
 		{keyed, strings.Replace(inDocs["ok"], `<item ref="a"`, `<item id="b" ref="a"`, 1), SourceStrict, "", false},
 		{keyed, strings.Replace(inDocs["ok"], `<item n="3">`, `<item n="3" id="z">`, -1), SourceStrict, "XTTE1510", false},

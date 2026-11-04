@@ -971,6 +971,36 @@ func (s *streamV) allEnd(w *svAll, el *xdm.Node) {
 	}
 }
 
+// streamReadingsBounded reports whether matchSequence over m cannot reach
+// DefaultMaxMatchStates readings on a stream unless it reaches them on the
+// tree too. A tree walk knows its child count and takes a bounded maximum
+// above it as unbounded (reachableInto), which merges the counts past the
+// minimum; a stream cannot, and keeps them apart. The readings at a position
+// differ only in the counters of its chain (the scopes left are reset), so
+// the number of them is at most the product of what each counter can take:
+// 0..max, or 0..min+1 once merged. A chain with no bounded counter walks
+// the same on both; one with a bounded counter is bounded when even the
+// larger of the two products is within the budget, and then neither walk
+// gives up.
+func streamReadingsBounded(m *contentModel) bool {
+	for _, p := range m.positions {
+		bounded, n := false, 1
+		for _, i := range p.counters {
+			c := m.counters[i]
+			r := c.min + 2
+			if c.max != Unbounded {
+				bounded, r = true, max(r, c.max+1)
+			}
+			// Both at most the budget + 1 before the product: no overflow.
+			n = min(n*min(r, DefaultMaxMatchStates+1), DefaultMaxMatchStates+1)
+		}
+		if bounded && n > DefaultMaxMatchStates {
+			return false
+		}
+	}
+	return true
+}
+
 // streamRefusal says why s cannot be validated on a stream as a tree is,
 // or "". It looks at every element declaration and complex type the schema
 // has, global and local.
@@ -979,6 +1009,7 @@ func (s *streamV) allEnd(w *svAll, el *xdm.Node) {
 // per schema if a profile shows it (a schema may still be extended after
 // compiling, as the conformance harness's mergeInto does).
 func (s *Schema) streamRefusal() string {
+	mv := s.newValidator(nil, ValidateOptions{})
 	seenT := map[Type]bool{}
 	seenP := map[*Particle]bool{}
 	seenD := map[*ElementDecl]bool{}
@@ -1012,6 +1043,12 @@ func (s *Schema) streamRefusal() string {
 			return ""
 		}
 		seenT[t] = true
+		if !isAllGroup(ct.Particle) {
+			if m, err := mv.modelFor(ct); err == nil && !streamReadingsBounded(m) {
+				return fmt.Sprintf("the content model of type %s may hold more than %d count readings on a stream",
+					showName(ct.Name), DefaultMaxMatchStates)
+			}
+		}
 		if w := part(ct.Particle); w != "" {
 			return w
 		}

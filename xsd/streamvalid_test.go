@@ -385,6 +385,11 @@ func TestStreamValidationRefusals(t *testing.T) {
 		{"element default", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r" type="xs:int" default="1"/></xs:schema>`, ""},
 		{"open content", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType>
 			<xs:openContent><xs:any/></xs:openContent><xs:sequence/></xs:complexType></xs:element></xs:schema>`, ""},
+		{"bounded readings", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType>
+			<xs:sequence maxOccurs="100"><xs:element name="a" maxOccurs="100"/></xs:sequence></xs:complexType></xs:element></xs:schema>`,
+			"may hold more than 4096 count readings"},
+		{"bounded readings, few", `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType>
+			<xs:sequence maxOccurs="60"><xs:element name="a" maxOccurs="60"/><xs:element name="b" maxOccurs="unbounded"/></xs:sequence></xs:complexType></xs:element></xs:schema>`, ""},
 		{"plain", svBooks, ""},
 	} {
 		got := xsdstream.Refusal(svLoad(t, r.schema))
