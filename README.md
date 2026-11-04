@@ -187,10 +187,12 @@ true here:
    elements, `xsl:element`, `xsl:copy`, `xsl:choose`, loops, split selects,
    `xsl:apply-templates` into streamable modes, `xsl:for-each-group`
    (adjacent, starting-with, ending-with), `xsl:try`, streamable attribute
-   sets, calls on stylesheet functions whose body is one `xsl:sequence`,
+   sets, calls on stylesheet functions whose body is one `xsl:sequence`
+   (recursive ones too, over values or a match's grounded copy),
    accumulators, `xsl:fork` and `xsl:map`, `xsl:merge` over streamable
-   sources, set operators, climbing paths, kept text nodes, `xsl:message` and
-   `xsl:result-document`, and validated inputs; `TransformOptions.Output` and
+   sources, set operators, climbing paths, kept text nodes, `xsl:message`,
+   `xsl:comment`, `xsl:processing-instruction` and `xsl:result-document`, and
+   validated inputs; `TransformOptions.Output` and
    `SecondaryOutput` write the results as they are made (2,281 W3C cases
    stream; see [known gaps](docs/known-gaps.md)). Otherwise the streaming cases are in
    scope and counted: the stylesheet-level half of streaming, the §19.8
@@ -435,7 +437,7 @@ result, err := sheet.TransformReader(ctx, f, xslt.TransformOptions{
 ```
 
 Nothing outside the rules may read the document for it to stream: no global
-variable reading `.`, no `xsl:global-context-item`, no applicable accumulator
+variable reading `.`, no typed `xsl:global-context-item`, no applicable accumulator
 that is not streamable or that the stream cannot compute. In a streamable
 mode the identity template's `<xsl:apply-templates select="@*|node()"/>` is
 refused with `XTSE3430` (§19.8.8.4 makes the union crawling); write it as

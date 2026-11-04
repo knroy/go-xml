@@ -738,7 +738,20 @@ variable's nodes in either creation order, the held group-by's cap);
 `Output`: `MaxNodes` with `rollback-output="no"`, peak heap with "yes");
 `-run 'TestStreamLiveBuiltIn|TestStreamDispatchAllocs|TestStreamDispatchWarnings'`
 (the built-in rule on the parse's record, allocations per record against the
-tree's, warnings as the tree's).
+tree's, warnings as the tree's). For the completion lanes K1–K5, written and
+not yet run except where marked: `-run
+'TestStreamSheetCalls|TestStreamK2|TestStreamGroundIdentity'` (stylesheet
+functions on values or grounded copies; the split's shapes, conditions and
+value templates, of which the `($v | P)/T` rows ran; identity and set
+operators in a grounded loop body), `-run
+'TestStreamAsReadMarked|TestStreamMinOfContextBelowRoot'` (a harness-validated
+document read with the default validation, `min(.)` below the document node),
+and `-run TestStreamOutLiveHeapFlat` (the live heap under `Output` may grow
+by at most 1 MiB from 10% to 90% of the output; skipped under `-short` and
+`-race`); new rows in `TestStreamUnion`, `TestStreamShapes`,
+`TestStreamWholeFns`, `TestStreamPop` and the core tables, and in
+`TestStreamResultValidation` (ran) for `xsl:copy` with validation of items that
+are never attributes.
 
 
 ## The ratchet

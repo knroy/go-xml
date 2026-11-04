@@ -210,7 +210,8 @@ runs on the view. A parse error after a caught error is still the document's
 error. Calls on stylesheet functions split as their bodies when the call is
 its body exactly (one `xsl:sequence`, focus free, the arguments `.`, a path or
 literals of the parameter types, a result type the body certainly has);
-recursive bodies stay on the tree. `P ! R` of atomic values is the path
+a call it cannot inline, recursive bodies included, runs on values, or on
+each match's grounded copy when its body reads only what the copy has. `P ! R` of atomic values is the path
 `P/R`. Streamable attribute sets run on the view. Accumulators applicable
 to a streamed document are computed as it is read: each rule fires as the
 cursor passes its node's start or end (text, comment and processing-instruction
@@ -249,18 +250,28 @@ Since the gap lanes (G1–G7) the core also takes:
   variable's nodes (`count(P union $v)`, `P except $v`, `$v intersect P`, and
   `P union $v` under any holder: `copy-of`, `sum`, a filter, a map)
   rewritten or unioned by the outer, since a variable never holds a streamed
-  node; `A/T union B/T` with one shared tail of axis steps, and `($v, P)/T` or
-  `insert-before(P, n, $v)/T` as the union of the paths they make;
+  node; `A/T union B/T` with one shared tail of axis steps, and `($v, P)/T`,
+  `insert-before(P, n, $v)/T`, `[A, B]?*/T` or `($v | P)/T` as the union of
+  the paths they make;
 - **path algebra**: `P ! Q` as `P/Q` where that is the map exactly (Q downward
   from child-step matches), `P ! R` with R making nodes or climbing as a
   per-match tail, `tail(P)`, position filters, positional step predicates
-  beyond `[n]`, `F(if (C) then A else B)` with C motionless;
+  beyond `[n]`, `F(if (C) then A else B)` with C motionless, and
+  `(if (C) then A else B) ! R` as the choice lifted over the map; `P ! R` over
+  text, comment or PI matches on each kept leaf, `P ! (* union $v)` (any set
+  operator of the match's nodes and a variable) on each match's grounded
+  copy, and a tail that is a sequence of value paths
+  (`P/(@a/string(), c/string())`);
 - **loop populations**: `xsl:for-each` and `xsl:iterate` over `head`,
   `tail`, `subsequence`, `remove`, `insert-before`, `unordered`,
   `one-or-more`, `($v, P)`, `P/@a`, `copy-of(P)`, `data(P/@a)`,
   `snapshot(P)`, `(P)[position() = L to H]` or a motionless choice; a loop
-  whose select the analysis grounds runs its body as the tree does;
-  `xsl:apply-templates` over windows of a bare path;
+  whose select the analysis grounds runs its body as the tree does, `is`,
+  `<<`, `>>`, `union`, `intersect` and `except` on the grounded copy included;
+  `xsl:apply-templates` over windows of a bare path, and over `(P, $v)`,
+  `insert-before(P, n, $v)` or `if ($c) then () else P` with no
+  `xsl:with-param` or `xsl:sort` (the other items dispatched as the tree
+  dispatches them);
 - **kept leaves and climbing**: text, comment and processing-instruction
   nodes a streamed expression keeps are copies that are the document's nodes
   to identity, order and `generate-id()`, under copies of their ancestors; a
@@ -274,10 +285,14 @@ Since the gap lanes (G1–G7) the core also takes:
   `fold-left`, `fold-right`, `filter`, `for-each`, `distinct-values`,
   `codepoints-to-string` and `snapshot` over a path (its values collected,
   the call made once), function items, `fn:trace(P)` as P, filters over a
-  focus-free base, `outermost()` of climbed nodes;
+  focus-free base, `outermost()` of climbed nodes; `replace()` as `matches()`,
+  the range operator `to`, `for`, `some` and `every` over values whose
+  return reads only its variables, `generate-id()` of the context element in
+  a motionless part, `accumulator-before` in a rule pattern's predicate on an
+  element, and `min(.)`/`max(.)` in a rule below the document node;
 - **instructions**: `xsl:copy` with a consuming select, `xsl:on-empty` and
-  `xsl:on-non-empty`, `validation`/`type` on constructors (on `xsl:copy` only
-  `strip` or `preserve`), `xsl:message` (messages once and in the tree's
+  `xsl:on-non-empty`, `validation`/`type` on constructors (on `xsl:copy` of an
+  attribute only `strip` or `preserve`), `xsl:message` (messages once and in the tree's
   order, through re-runs and fork prongs; errors in its content swallowed as
   XSLT 3.0 says), `xsl:result-document` (see below), `xsl:fallback` of a
   recognised instruction, `xsl:try` over folds that cannot fail, the
@@ -287,7 +302,9 @@ Since the gap lanes (G1–G7) the core also takes:
   variable's items, or the view's own nodes); text value templates with
   motionless parts in a loop body; `group-by` over a streamed population in
   `xsl:fork`, held as copies under the tree's cap and grouped by the tree's
-  code.
+  code; `xsl:comment` and `xsl:processing-instruction` with a consuming
+  select; a consuming separator, name or namespace value template of
+  `xsl:value-of`, `xsl:attribute` or `xsl:element`.
 
 A path
 is child or descendant steps by name, wildcard or kind (`doc/rec`, `//rec`,
@@ -303,7 +320,7 @@ when the transform starts by applying templates to it in a streamable mode
 the rules run as above. It takes the tree path, `xdm.Parse` then `Transform`
 exactly, for an initial template, function or match selection; a mode that
 is not streamable, not verified, or reaches a rule or built-in the core does
-not run; an `xsl:global-context-item`, an applicable accumulator that is not
+not run; an `xsl:global-context-item` with a type, an applicable accumulator that is not
 streamable or that the observer cannot compute,
 `input-type-annotations="strip"`, or a global variable or parameter whose
 value may read the context item (§5.3.3: the global context item is
@@ -317,7 +334,9 @@ one module.
 is built, for `Transform` and `TransformReader`: the builder writes each
 element's finished children and takes them back, so memory holds the open
 path and what is not yet written, and `MaxNodes` counts only that (a live
-count; without `Output` it stays cumulative). `Result.Nodes` and
+count; without `Output` it stays cumulative). The live heap is flat in the
+output's size; a `for-each` over `1 to N` holds its N integers (about 146 B
+each), in tree mode too, which is not the sink's. `Result.Nodes` and
 `Result.Tree()` are nil, and on an error the writer may hold part of the
 result. A nested `fn:transform` does not inherit it. Under `indent="yes"` an
 element whose content may be indented is held as its serialized bytes (its
@@ -370,7 +389,12 @@ Identity constraints (`xs:key`, `xs:unique`, `xs:keyref`) are evaluated on the
 events, keeping only their key tables; element default and fixed values, XSD
 1.1 open content and defaulted attributes in a namespace (with the namespace
 fixup) are as the typed copy has them; a DOCTYPE is read as the copy reads it,
-without the DTD. Refused per schema, and run on the tree: a content model
+without the DTD. A document the conformance harness preloads as validated and a
+stylesheet reads with the default validation streams by re-reading its file
+and repeating the harness's validation (the tree reads the harness's typed
+copy); the harness discards validation errors, so an invalid marked document
+would succeed on the tree and fail on the stream, which no W3C case does.
+Refused per schema, and run on the tree: a content model
 nesting bounded `maxOccurs` whose count readings could pass 4,096 on a stream,
 which does not know the child count the tree's walk uses; and, for the
 conformance harness only, a validated source with a DOCTYPE it has already
@@ -463,8 +487,9 @@ CPU; that is a process-wide setting for the application to choose, which this
 library does not set.
 
 Refused, and run on the tree: a held select past the cap, or whose match is
-the document element; `xsl:apply-templates` over motionless parts,
-insertions, values or a select whose matches may be text, comment or PI
+the document element; `xsl:apply-templates` over motionless parts or
+insertions with `xsl:with-param` or `xsl:sort`, a union with a variable's
+nodes, values or a select whose matches may be text, comment or PI
 nodes, or in a sequence-typed variable; a pattern a view cannot decide
 (positional, reading content, `id()`/`key()`); a for-each over climbed
 ancestors; a set operator with an operand that is not a downward path of the
@@ -479,8 +504,9 @@ pattern a view cannot decide; an `xsl:try` where the stream could meet another
 error first than the tree (two parts of a select that may fail, a loop whose
 select may fail, `xsl:apply-templates` or grouping in its body), a consuming
 catch (no W3C case has one); a call on a stylesheet function that is not its
-body exactly (a conversion that may fail, a recursive body, a node-returning
-category, a global variable, a cache), or in an instruction the core checks on
+body exactly and whose body reads more than values or a grounded copy has (a
+conversion that may fail, a recursion that climbs, `f($e/..)`, a body with
+instructions, a node-returning category, a global variable, a cache), or in an instruction the core checks on
 the view; an applicable streamable accumulator whose rules read more of a node
 than its start tag has, whose values may hold a node of the document, that
 reads another accumulator, or whose rule body is not one `xsl:sequence`;

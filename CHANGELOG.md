@@ -113,6 +113,28 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A streamed apply op's feed and a children filter were made per element | Both are made once per run: two-instruction identity 88 → 76 allocations per record. | [`40d9b34`][40d9b34] |
 | A streamed leaf a rule matched got one runtime for matching and another for its copy | It gets one: 76 → 64 allocations per record. | [`a41d41d`][a41d41d] |
 | A matched streamed node's runtime was copied twice, for its focus and its selection | Once: 64 → 52 allocations per record (the tree's 61), two-instruction identity 1.58× → 1.39× CPU. | [`f34dfa2`][f34dfa2] |
+| An `xsl:try` rolled back under `Output` before the sink began could panic, or lose whitespace written ahead of the mark | A rollback puts back the items of the result's top and document level written after the mark. (untested) | [`a7befda`][a7befda] |
+| A streamed expression calling a recursive or non-inlinable stylesheet function sent the container to the tree | The call runs on values, or on each match's grounded copy, when its body allows. (untested) | [`19593ed`][19593ed] |
+| `[A, B]?*/T` over a streamed path sent the container to the tree | It streams as `(A, B)/T`, the union of the paths. (untested) | [`ae36f0b`][ae36f0b] |
+| A simple map over streamed text, comment or PI nodes sent the container to the tree | R runs on each kept leaf, as a path's tail over leaves does. (untested) | [`94181b7`][94181b7] |
+| `replace()` over the streamed document's text sent the container to the tree | It is read off the stream as `matches()` is. (untested) | [`6ee4b2e`][6ee4b2e] |
+| `($v \| P)/T`, a path over a union of a variable and a streamed path, sent the container to the tree | It is read as `($v union ())/T union P/T`, which streams. | [`95944f3`][95944f3] |
+| `P ! (* union $v)` and the other set operators of a match's nodes and a variable sent the container to the tree | They run per match on the grounded copy, which orders as its original. (untested) | [`c665e0d`][c665e0d] |
+| A for, some or every over values of a streamed path whose return used `\|\|` or an xs constructor sent the container to the tree | A return reading only its variables is evaluated over the values. (untested) | [`9f41f98`][9f41f98] |
+| `(if ($c) then A else B) ! R` over streamed paths sent the container to the tree | The choice is lifted over the map; only the chosen branch streams. (untested) | [`e8246dc`][e8246dc] |
+| A separator, name or namespace value template of `xsl:value-of`, `xsl:attribute` or `xsl:element` reading the stream sent the container to the tree | That part streams as a literal result element's value template does. (untested) | [`4ac277f`][4ac277f] |
+| `generate-id()` of the context element in a streamed rule or loop sent the container to the tree | It reads the view's origin, the tree's id for the node. (untested) | [`4f9aea4`][4f9aea4] |
+| A rule pattern whose predicate reads `accumulator-before` sent the streamed apply to the tree | The predicate reads the observer's value at the start tag. (untested) | [`2f6bca5`][2f6bca5] |
+| A streamed path ending in a sequence of value paths, `P/(@a/string(), c/string())`, sent the container to the tree | The tail is known to make values and runs per match on its copy. (untested) | [`afadaf0`][afadaf0] |
+| The range operator over a streamed operand, `1 to count(.//*)`, sent the container to the tree | The split takes it as it takes arithmetic. (untested) | [`fcf384f`][fcf384f] |
+| A streamed loop body using `is`, `union`, `intersect` or `except` on its match sent the container to the tree | The body runs on a grounded copy, which has the original's identity and order. (untested) | [`a4162b6`][a4162b6] |
+| `xsl:apply-templates` over `(P, $v)`, `insert-before(P, n, $v)` or `if ($c) then () else P` sent the container to the tree | The stream's matches are dispatched as read, the other items as the tree dispatches them. (untested) | [`b75f94e`][b75f94e] |
+| `xsl:copy` with validation strict or lax, or a type, in a streamed container sent it to the tree, even for an element | It streams when the copied item is never an attribute, read from the select or the enclosing loop. | [`aa91721`][aa91721] |
+| An `xsl:global-context-item` sent a streamable mode's principal input to the tree | With no type it reads nothing of the input, so the input streams. (untested) | [`904f322`][904f322] |
+| `xsl:comment` or `xsl:processing-instruction` with a select reading the stream sent the container to the tree | The select is split as `xsl:sequence`'s and read off the cursor. (untested) | [`595bcf2`][595bcf2] |
+| Streamed `Output` looked to grow its heap with output size (300,000 elements, 90 MB peak) | Its live heap is flat in output size; the growth was `1 to N`'s integers, held in tree mode too. A test pins it. (untested) | [`ac8bb00`][ac8bb00] |
+| A document the conformance harness preloads as validated ran on the tree when read with the default validation | It streams, repeating the harness's validation as it reads. (untested) | [`e086524`][e086524] |
+| `min(.)` or `max(.)` in a template rule below the document node ran on the tree | They stream, folded once over the context's values. (untested) | [`9643910`][9643910] |
 | `system-property('xsl:supports-streaming')` answered `no` | It answers `yes`, and `fn:transform` requested-properties match it; `streaming-fallback` is not claimed. | [`de7aab2`][de7aab2] |
 | `\|\|` was unmodelled in the §19.8 analysis, so si-fork-902 and -952 compiled | Modelled per §19.8.8 (`A \|\| A`), withheld in a crawling focus; both now get XTSE3430. | [`1f6576d`][1f6576d] |
 | A streamable function whose body was not one `xsl:sequence` was never checked | Its sequence constructor is assessed (§19.8.5); su-absorbing-205 gets XTSE3430. All 151 W3C XTSE3430 cases now refuse. | [`6e960b7`][6e960b7] |
@@ -2097,6 +2119,28 @@ here so every entry in this file sits under a release.
 [40d9b34]: https://github.com/knroy/go-xml/commit/40d9b34
 [a41d41d]: https://github.com/knroy/go-xml/commit/a41d41d
 [f34dfa2]: https://github.com/knroy/go-xml/commit/f34dfa2
+[a7befda]: https://github.com/knroy/go-xml/commit/a7befda
+[19593ed]: https://github.com/knroy/go-xml/commit/19593ed
+[ae36f0b]: https://github.com/knroy/go-xml/commit/ae36f0b
+[94181b7]: https://github.com/knroy/go-xml/commit/94181b7
+[6ee4b2e]: https://github.com/knroy/go-xml/commit/6ee4b2e
+[95944f3]: https://github.com/knroy/go-xml/commit/95944f3
+[c665e0d]: https://github.com/knroy/go-xml/commit/c665e0d
+[9f41f98]: https://github.com/knroy/go-xml/commit/9f41f98
+[e8246dc]: https://github.com/knroy/go-xml/commit/e8246dc
+[4ac277f]: https://github.com/knroy/go-xml/commit/4ac277f
+[4f9aea4]: https://github.com/knroy/go-xml/commit/4f9aea4
+[2f6bca5]: https://github.com/knroy/go-xml/commit/2f6bca5
+[afadaf0]: https://github.com/knroy/go-xml/commit/afadaf0
+[fcf384f]: https://github.com/knroy/go-xml/commit/fcf384f
+[a4162b6]: https://github.com/knroy/go-xml/commit/a4162b6
+[b75f94e]: https://github.com/knroy/go-xml/commit/b75f94e
+[aa91721]: https://github.com/knroy/go-xml/commit/aa91721
+[904f322]: https://github.com/knroy/go-xml/commit/904f322
+[595bcf2]: https://github.com/knroy/go-xml/commit/595bcf2
+[ac8bb00]: https://github.com/knroy/go-xml/commit/ac8bb00
+[e086524]: https://github.com/knroy/go-xml/commit/e086524
+[9643910]: https://github.com/knroy/go-xml/commit/9643910
 [de7aab2]: https://github.com/knroy/go-xml/commit/de7aab2
 [1f6576d]: https://github.com/knroy/go-xml/commit/1f6576d
 [6e960b7]: https://github.com/knroy/go-xml/commit/6e960b7
