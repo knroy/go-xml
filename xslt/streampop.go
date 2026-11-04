@@ -308,8 +308,10 @@ func (pb *popBuilder) stream(p *streamPop, e xpath.Expr) bool {
 		p.off = true
 	case s.bare() && p.fn != nil:
 		// copy-of(P), snapshot(P): each match grounded, then copied.
-		_, elem := testKinds(s.steps[len(s.steps)-1].test)
-		if !elem || s.leaves {
+		// Only the last step's test says what a match may be: s.leaves is
+		// also set by a // step (its node() may match a leaf as a context).
+		leaf, elem := testKinds(s.steps[len(s.steps)-1].test)
+		if !elem || leaf {
 			return false
 		}
 		p.ground, p.off = true, true
