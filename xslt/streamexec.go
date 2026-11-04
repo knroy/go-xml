@@ -169,6 +169,8 @@ type streamOp struct {
 	// tee, for a variable's map constructor whose entries each consume, is
 	// its plan in place of a split (streamtee_map.go).
 	tee *streamTee
+	// inTry says it is a fork in a streamed xsl:try's body (streamtee_try.go).
+	inTry bool
 }
 
 // streamBuilder builds a plan from the source of a container.
@@ -1205,6 +1207,8 @@ type streamRun struct {
 	// (streamlive.go).
 	applyFeeds map[*streamOp]*burstFeed
 	kidFilters []*xdmstream.Filter
+	// teed says a fork's tee has taken the cursor over (streamtee_try.go).
+	teed bool
 }
 
 // feed returns the feed that drives instr from the cursor, or nil when instr
