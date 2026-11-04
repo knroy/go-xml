@@ -279,15 +279,27 @@ func buildDoc(rt *runtime, c *xdmstream.Cursor) (*xdm.Node, error) {
 // docCopyEval is evalOp for op, whose split copies the document whole
 // (docCopy): the copy is built, and is what the select's items are.
 func (run *streamRun) docCopyEval(rt *runtime, op *streamOp) (xdm.Sequence, error) {
-	if run.used || run.d != 0 {
+	if run.used || (run.d == 0) != op.split.doc {
 		return nil, errStreamPlan
 	}
 	run.used = true
-	doc, err := buildDoc(rt, run.c)
+	var doc *xdm.Node
+	var err error
+	octx := rt.ctx.WithFocus(xdm.NewTree().Root, 1, 1)
+	if run.d > 0 {
+		// copy-of(.) of the context element (streamcopy_l3apply.go).
+		v, verr := run.c.View()
+		if verr != nil {
+			return nil, verr
+		}
+		octx = rt.ctx.WithFocus(v, 1, 1)
+		doc, err = buildElem(rt, run)
+	} else {
+		doc, err = buildDoc(rt, run.c)
+	}
 	if err != nil {
 		return nil, err
 	}
-	octx := rt.ctx.WithFocus(xdm.NewTree().Root, 1, 1)
 	return op.split.outer.Eval(octx.WithVar(splitItems, xdm.One(doc)))
 }
 

@@ -277,3 +277,31 @@ func TestStreamValueOfTextBeside(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamApplyFreshCopies: apply-templates over copies -- copy-of() of a
+// rule's context element, text() ! snapshot(.) -- in a mode that need not be
+// streamable reads the copies off the cursor and applies the templates to
+// them as the tree does (streamcopy_l3apply.go).
+func TestStreamApplyFreshCopies(t *testing.T) {
+	dir := t.TempDir()
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, rule := range []string{
+			`<xsl:template match="rec"><xsl:apply-templates select="copy-of()" mode="change"/></xsl:template>`,
+			`<xsl:template match="rec"><xsl:apply-templates select="copy-of(.)" mode="change"/></xsl:template>`,
+			`<xsl:template match="rec"><xsl:apply-templates select="sub/text() ! snapshot(.)" mode="change"/></xsl:template>`,
+		} {
+			sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:mode streamable="yes" on-no-match="shallow-copy"/>
+<xsl:mode name="change" on-no-match="shallow-copy"/>
+<xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml"><xsl:apply-templates select="."/></xsl:source-document></top></xsl:template>
+` + rule + `
+<xsl:template match="rec[@k = 'a']/sub" mode="change"><s n="{count(ancestor::*)}" b="{ends-with(base-uri(), 'doc.xml')}"><xsl:value-of select="@x"/></s></xsl:template>
+<xsl:template match="text()" mode="change"><t a="{string-join(ancestor::*/name(), '/')}"><xsl:value-of select="."/></t></xsl:template>
+</xsl:stylesheet>`
+			coreCheck(t, sheet, dir, name+": "+rule, true, TransformOptions{})
+		}
+	}
+}

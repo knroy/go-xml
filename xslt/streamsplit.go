@@ -1448,6 +1448,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		if viewLeafCopyOK(x, f) { // streamview_l7.go
 			return true
 		}
+		if (n == "copy-of" || n == "snapshot") && f == vLeaf && (len(x.Args) == 0 || len(x.Args) == 1 && isContextItem(x.Args[0])) {
+			return true // a new copy of the leaf's complete copy and its ancestors' views (streamcopy_l3apply.go)
+		}
 		if (n == "copy-of" || n == "snapshot") && len(x.Args) == 1 && focusFree(x.Args[0]) {
 			// A copy of a variable's value: nothing of the focus; but a
 			// copy of climbed views would copy their content.

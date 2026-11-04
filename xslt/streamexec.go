@@ -170,6 +170,10 @@ type streamOp struct {
 	// pop, for a loop whose select is not a bare path, is its population
 	// (streampop.go); split is then its stream part's.
 	pop *streamPop
+	// treeApply says it is an xsl:apply-templates over fresh copies, its
+	// select read as a select op's, its rules run on the tree
+	// (streamcopy_l3apply.go).
+	treeApply bool
 	// tee, for a variable's map constructor whose entries each consume, is
 	// its plan in place of a split (streamtee_map.go).
 	tee *streamTee
@@ -1283,6 +1287,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 	if op.inGroup && g == nil {
 		return &burstFeed{instr: instr, read: func(func(xdm.Item) error) error { return errStreamPlan },
 			eval: func(*runtime) (xdm.Sequence, error) { return nil, errStreamPlan }}
+	}
+	if op.treeApply {
+		return run.treeApplyFeed(instr, op) // streamcopy_l3apply.go
 	}
 	if op.split != nil && op.split.docCopy {
 		return run.docCopyFeed(instr, rt, op) // streamcopy_l3.go
