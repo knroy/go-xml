@@ -215,6 +215,13 @@ var mainCases = []struct {
 	// (copiesOnly, streamlast_mm2.go; accumulator-048s/049s).
 	{mm2CopyVar("yes"), true},
 	{mm2CopyVar("no"), true},
+	// A rule for text nodes whose pattern reads accumulator-before of the
+	// text: the values the observer stepped at it (streamaccum.go's leaf;
+	// accumulator-055s).
+	{`<xsl:accumulator name="t" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="0"/>` +
+		`<xsl:accumulator-rule match="rec/text()|rec/comment()" select="$value + 1"/></xsl:accumulator>` +
+		`<xsl:mode streamable="yes" on-no-match="shallow-copy" use-accumulators="t"/>` +
+		`<xsl:template match="rec/text()[accumulator-before('t') eq 1]"><f><xsl:value-of select="."/></f></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

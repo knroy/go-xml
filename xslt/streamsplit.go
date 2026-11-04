@@ -1235,6 +1235,9 @@ type viewCheck struct {
 	lookup bool
 	// accum says the expression is an accumulator rule's (streamaccum.go).
 	accum bool
+	// leafAcc admits accumulator-before of a leaf, a pattern's last step
+	// matched live on the cursor (streamaccum.go: the last leaf observed).
+	leafAcc bool
 	// items says the split's $items (or its nth, $value) are views of
 	// elements, read as a focus of kind vElem is (streamleaf.go).
 	items bool
@@ -1479,7 +1482,7 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		}
 		if (n == "accumulator-before" && vc.acc || n == "accumulator-after" && vc.after) && len(x.Args) == 1 {
 			lit, ok := x.Args[0].(*xpath.Literal)
-			return ok && lit.Val != nil && (f == vElem || f == vNone || vc.accum && f == vLeaf) // a rule's leaf: streamaccum_l4.go
+			return ok && lit.Val != nil && (f == vElem || f == vNone || (vc.accum || vc.leafAcc) && f == vLeaf) // a rule's leaf: streamaccum_l4.go
 		}
 		if viewIdentOK(vc, x, f) { // streamview_k2.go
 			return true

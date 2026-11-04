@@ -538,7 +538,7 @@ func patternClassesAt(p *Pattern, el *xdm.Node) (can [numClasses]bool, why strin
 						peek: el != nil && i == len(a.steps)-1 && c[classElem] && !c[classLeaf] && !c[classAttr] && !c[classDoc] && topKids(pr)}).safe(pr, vElem, true) // streamkids_l6.go
 				}
 				if i == len(a.steps)-1 && (c[classLeaf] || c[classAttr]) {
-					ok = ok && (viewCheck{noIdent: c[classLeaf], up: c[classLeaf]}).safe(pr, vLeaf, true)
+					ok = ok && (viewCheck{noIdent: c[classLeaf], up: c[classLeaf], acc: c[classLeaf] && !c[classAttr], leafAcc: true}).safe(pr, vLeaf, true)
 				}
 				if !ok || i == len(a.steps)-1 && c[classDoc] {
 					return can, "pattern " + p.src + ": predicate " + pr.String() + " not motionless on the view"
