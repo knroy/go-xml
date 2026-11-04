@@ -143,8 +143,8 @@ func groundApplyOp(op *streamOp) bool {
 	return op.pop != nil && groundApply(op.pop)
 }
 
-// applyCopies takes, for an apply op whose select the split refused (a
-// nested P in P/copy-of(.): "not within the match"), the population of
+// applyCopies takes, for an apply or loop op whose select the split refused
+// (a nested P in P/copy-of(.): "not within the match"), the population of
 // copies instead; it reports whether it did.
 func (c *compiler) applyCopies(op *streamOp, ns xpath.NamespaceResolver) bool {
 	e := reparse(op.sel, ns)
@@ -155,7 +155,7 @@ func (c *compiler) applyCopies(op *streamOp, ns xpath.NamespaceResolver) bool {
 		return false
 	}
 	pop, s, why := c.popFor(op, ns)
-	if why != "" || pop == nil || !groundApply(pop) || !applyPop(pop, op.instr) {
+	if why != "" || pop == nil || !groundApply(pop) || op.apply != applyNone && !applyPop(pop, op.instr) {
 		return false
 	}
 	op.pop, op.split, op.dead = pop, s, ""
