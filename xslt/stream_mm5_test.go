@@ -36,8 +36,10 @@ func mm5Rows(t *testing.T, doc string, rows []struct{ name, decls string }) {
 const mm5Doc = `<d><rec k="a" v="1">t1</rec><rec k="b" v="1"/><rec k="a" v="2"><v>x</v></rec><x/><rec k="c" v="3"><v>y<s/></v></rec></d>`
 
 // TestStreamAccumMapTyped: an accumulator whose @as is a map of atomics
-// keeps no node of the parse (accumulator-069s): TransformReader streams
-// it, with the tree's result.
+// keeps no node of the parse (accumulator-069s), and a lookup in such a
+// value, accumulator-before('m')(k), reads nothing of the stream
+// (accumulator-077s): TransformReader streams both, with the tree's result
+// or error.
 func TestStreamAccumMapTyped(t *testing.T) {
 	const accs = `<xsl:mode streamable="yes" use-accumulators="#all"/>
 	<xsl:accumulator name="n" as="xs:integer" initial-value="0" streamable="yes">
@@ -47,6 +49,10 @@ func TestStreamAccumMapTyped(t *testing.T) {
 	    return map:put($value, $k, ($value($k), $c))"/></xsl:accumulator>`
 	mm5Rows(t, mm5Doc, []struct{ name, decls string }{
 		{"map size at the end", accs + `<xsl:template match="/"><o><xsl:apply-templates/><t v="{map:size(accumulator-after('m'))}"/></o></xsl:template>`},
+		{"map value read at the end", accs + `<xsl:template match="/"><o><xsl:apply-templates/><t v="{accumulator-after('m')('a')}"/></o></xsl:template>`},
+		{"lookup by an attribute", accs + `<xsl:template match="rec"><r v="{accumulator-before('m')(string(@k))}"/></xsl:template>`},
+		{"a key missing", accs + `<xsl:template match="rec"><r v="{accumulator-before('m')(string(@v))}"/></xsl:template>`},
+		{"lookup error", accs + `<xsl:template match="rec"><r v="{accumulator-before('n')(1)}"/></xsl:template>`},
 	})
 }
 
