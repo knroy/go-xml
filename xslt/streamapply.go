@@ -40,6 +40,7 @@ package xslt
 // run time a failure re-runs the container on the tree (streamexec.go).
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -759,7 +760,7 @@ func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run
 			if !ok || a.Kind() != xdm.KindAttribute {
 				return errStreamPlan // attrApply admits attribute paths only
 			}
-			if err := run.dispatch(disp.withCurrent(a, idx+1, len(attrs)), a, mode, params, tunnels, out); err != nil {
+			if err := run.dispatchAt(focus, a, idx+1, len(attrs), mode, params, tunnels, out); err != nil {
 				return err
 			}
 		}
@@ -775,7 +776,7 @@ func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run
 		if err := rt.ctx.Err(); err != nil {
 			return err
 		}
-		return run.dispatch(disp.withCurrent(node, 1, 1), node, mode, params, tunnels, out)
+		return run.dispatchAt(focus, node, 1, 1, mode, params, tunnels, out)
 	case applyKids:
 		return run.children(rt, out, mode, params, tunnels, focus)
 	}
@@ -792,7 +793,7 @@ func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run
 			return false, err
 		}
 		pos++
-		return run.element(focus.at(v, pos), v, md, mode, params, tunnels, out)
+		return run.element(focus, pos, v, md, mode, params, tunnels, out)
 	}); err != nil {
 		return err
 	}
@@ -832,7 +833,7 @@ func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, par
 	}
 	run.used = true
 	d, c := run.d, run.c
-	f := xdmstream.Filter{Leaves: true, Depth: d}
+	f := run.kidFilter(d)
 	pos, skip := 0, false
 	for {
 		var (
@@ -840,9 +841,9 @@ func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, par
 			err error
 		)
 		if skip {
-			ev, err = c.SkipTag(&f)
+			ev, err = c.SkipTag(f)
 		} else {
-			ev, err = c.NextTag(&f)
+			ev, err = c.NextTag(f)
 		}
 		skip = false
 		switch {
@@ -867,11 +868,21 @@ func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, par
 			}
 			continue
 		}
+		if run.top != nil {
+			read, ok, err := run.liveBuiltIn(focus, pos, ev.Node, d+1, mode, params, tunnels, out)
+			if err != nil {
+				return err
+			}
+			if ok {
+				skip = !read
+				continue
+			}
+		}
 		v, err := c.View()
 		if err != nil {
 			return err
 		}
-		read, err := run.element(focus.at(v, pos), v, d+1, mode, params, tunnels, out)
+		read, err := run.element(focus, pos, v, d+1, mode, params, tunnels, out)
 		if err != nil {
 			return err
 		}
@@ -881,7 +892,7 @@ func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, par
 
 // element dispatches mode to the element at depth md whose view is v, the
 // cursor at its start tag, and reports whether what ran read it to its end.
-func (run *streamRun) element(rt *runtime, v *xdm.Node, md int, mode string, params, tunnels paramValues,
+func (run *streamRun) element(focus focuser, pos int, v *xdm.Node, md int, mode string, params, tunnels paramValues,
 	out *outputBuilder) (bool, error) {
 
 	if run.top == nil {
@@ -902,7 +913,7 @@ func (run *streamRun) element(rt *runtime, v *xdm.Node, md int, mode string, par
 	// it refuses while a group is the context (fuzz seed 92048).
 	d, grp := run.d, run.grp
 	run.d, run.used, run.grp = md, false, nil
-	err := run.dispatch(rt, v, mode, params, tunnels, out)
+	err := run.dispatchAt(focus, v, pos, 0, mode, params, tunnels, out)
 	read := run.used
 	run.d, run.used, run.grp = d, true, grp
 	return read, err
@@ -918,15 +929,26 @@ func (run *streamRun) element(rt *runtime, v *xdm.Node, md int, mode string, par
 func (run *streamRun) leaf(focus focuser, pos int, n *xdm.Node, mode string,
 	params, tunnels paramValues, out *outputBuilder) error {
 
-	rt := focus.at(n, pos)
-	if err := rt.sheet.checkModeTyped(n, mode); err != nil {
+	s := focus.disp.sheet
+	if err := s.checkModeTyped(n, mode); err != nil {
 		return err
 	}
-	t, next, err := rt.sheet.findTemplateFrom(n, mode, rt.ctx, 0)
+	// n is matched in its focus, which the built-in rule's runtime is made
+	// of, or, when no pattern that may match it would read that (bareMatch),
+	// in disp's; a rule's runtime is made once, of the copy's (dispatchAt).
+	var ctx *xpath.Context
+	if !bareMatch(s, n, mode) {
+		ctx = focus.focusCtx(n, pos, 0)
+	}
+	t, next, err := s.findTemplateFrom(n, mode, cmp.Or(ctx, focus.disp.ctx), 0)
 	if err != nil {
 		return err
 	}
 	if t == nil {
+		if ctx == nil {
+			ctx = focus.focusCtx(n, pos, 0)
+		}
+		rt := focus.runtimeIn(ctx)
 		rt.sheet.warnNoMatch(rt, n, mode)
 		return run.builtIn(rt, n, mode, params, tunnels, out)
 	}
@@ -934,15 +956,13 @@ func (run *streamRun) leaf(focus focuser, pos int, n *xdm.Node, mode string,
 	if err != nil {
 		return err
 	}
-	rt = focus.at(c, pos)
-	if err := rt.sheet.warnMultipleMatch(rt, c, mode, t, next, rt.ctx); err != nil {
+	sub := focus.ruleRuntime(withFocusCurrent(focus.disp.ctx, c, pos, 0), c, t, next, mode, params, tunnels)
+	if err := s.warnMultipleMatch(sub, c, mode, t, next, sub.ctx); err != nil {
 		return err
 	}
-	if err := rt.sheet.failMultipleMatch(c, mode, t, next, rt.ctx); err != nil {
+	if err := s.failMultipleMatch(c, mode, t, next, sub.ctx); err != nil {
 		return err
 	}
-	sub := rt.withSelection(t, next, mode, params, tunnels)
-	sub.ctx = withCurrentItem(sub.ctx, c)
 	return run.offCursor(func() error { return runTemplate(sub, t, params, tunnels, out) })
 }
 
@@ -955,11 +975,11 @@ type focuser struct {
 	builtIn bool
 }
 
-func (f focuser) at(n *xdm.Node, pos int) *runtime {
+func (f focuser) at(n *xdm.Node, pos, size int) *runtime {
 	if f.builtIn {
-		return f.disp.builtInFocus(f.mode, n, pos, 0)
+		return f.disp.builtInFocus(f.mode, n, pos, size)
 	}
-	return f.disp.withCurrent(n, pos, 0)
+	return f.disp.withCurrent(n, pos, size)
 }
 
 // onCursor reports whether node is read off the cursor (an element's view,
@@ -1149,7 +1169,7 @@ func (b builtInRun) attrs(out *outputBuilder, one bool) error {
 		if one {
 			pos = 1
 		}
-		if err := b.run.dispatch(b.rt.builtInFocus(b.mode, a, pos, n), a, b.mode, b.params, b.tunnel, out); err != nil {
+		if err := b.run.dispatchAt(focuser{b.rt, b.mode, true}, a, pos, n, b.mode, b.params, b.tunnel, out); err != nil {
 			return err
 		}
 	}
