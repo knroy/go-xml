@@ -267,6 +267,9 @@ func (pb *popBuilder) stream(p *streamPop, e xpath.Expr) bool {
 	if x, ok := snapshotTail(e); ok { // streampop_snapshot.go
 		return pb.snapshot(p, x)
 	}
+	if x, ok := copyOfTail(e); ok { // streamsplit_l6.go
+		return pb.stream(p, x)
+	}
 	if x := rangeWindow(e); x != nil { // streampop_snapshot.go
 		return pb.stream(p, x)
 	}

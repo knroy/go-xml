@@ -108,11 +108,14 @@ func (b *streamBuilder) applyOp(el *xdm.Node, f vfocus) bool {
 // that selects attributes of the context, which its view has. It runs off
 // the cursor.
 func (b *streamBuilder) attrApply(el *xdm.Node, f vfocus) bool {
-	if f == vLeaf && leafEmptySelect(el) {
+	if f == vLeaf && leafEmptySelect(el) || f == vNone && docAttrSelect(el) { // streamsplit_l6.go
 		return b.applyAttrs(el, f) && b.withParams(el, f) // runs on the copy, over nothing
 	}
 	src := el.AttrValue("select")
 	e := parseAt(el, src)
+	if foreignApply(el, e, f) { // streamsplit_l6.go
+		return b.applyAttrs(el, f) && b.withParams(el, f) && b.addApply(el, f, applyForeign)
+	}
 	if f != vElem || e == nil || !endsInAttribute(e) || !(viewCheck{noIdent: b.noIdent}).safe(e, f, true) {
 		return b.refuse("motionless xsl:apply-templates select " + src)
 	}
@@ -224,11 +227,15 @@ func (c *compiler) noteStreamApply(n *xdm.Node, instr Instruction, sel *xpath.Co
 			continue
 		}
 		op.instr, op.sel = instr, sel
+		if a, ok := instr.(*applyTemplatesInstr); op.apply == applyForeign && (!ok || !a.atomicOK || sel == nil) { // streamsplit_l6.go
+			op.dead = "apply-templates over items not of the stream: not an XSLT 3.0 xsl:apply-templates"
+			continue
+		}
 		if op.apply == applySplit {
-			if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" {
+			if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" && !c.applyCopies(op, ns) {
 				continue
 			}
-			if !op.split.bare() {
+			if op.pop == nil && !op.split.bare() {
 				// A window over a bare path (streampop.go): head(), subsequence() ...
 				pop, s, _ := c.popFor(op, ns)
 				if pop == nil || !pop.windowsOnly() && !applyPop(pop, instr) { // streamapply_pop.go
@@ -244,6 +251,9 @@ func (c *compiler) noteStreamApply(n *xdm.Node, instr Instruction, sel *xpath.Co
 
 // readyApply readies an apply op once it has compiled.
 func (op *streamOp) readyApply() string {
+	if groundApplyOp(op) {
+		return op.readyCopies() // streamsplit_l6.go
+	}
 	if s := op.split; op.apply == applySplit {
 		if s.nests && (!s.outermost || s.predFail) {
 			// A rule may read a match whole, and with it the matches inside.
@@ -340,7 +350,7 @@ func (c *compiler) planRule(el *xdm.Node, p *Pattern, from int) *rulePlan {
 		return nil
 	}
 	r := &rulePlan{}
-	r.can, r.pattern = patternClasses(p)
+	r.can, r.pattern = patternClassesAt(p, el)
 	r.keeps = resultKeeps(el)
 	kids := el.ChildElements()
 	for cl := range numClasses {
@@ -421,6 +431,13 @@ func (c *compiler) readyRule(r *rulePlan) {
 // node is matched live, its ancestors open, and so may be named through
 // them as well.
 func patternClasses(p *Pattern) (can [numClasses]bool, why string) {
+	return patternClassesAt(p, nil)
+}
+
+// patternClassesAt is patternClasses for the pattern of el, a template rule
+// (nil: another construct's pattern): there only global variables are in
+// scope, and current() is the node being matched (streamsplit_l6.go).
+func patternClassesAt(p *Pattern, el *xdm.Node) (can [numClasses]bool, why string) {
 	if matchesNoNode(p) { // streampattern_g5.go
 		return can, ""
 	}
@@ -483,7 +500,8 @@ func patternClasses(p *Pattern) (can [numClasses]bool, why string) {
 				}
 				ok := true
 				if i < len(a.steps)-1 || c[classElem] {
-					ok = (viewCheck{acc: patternAccOK(i, len(a.steps), c[classElem], c[classLeaf], c[classAttr])}).safe(pr, vElem, true) // streamview_k2.go
+					ok = (viewCheck{acc: patternAccOK(i, len(a.steps), c[classElem], c[classLeaf], c[classAttr]), // streamview_k2.go
+						globals: el, curOK: el != nil && c[classElem] && !c[classLeaf] && !c[classAttr] && !c[classDoc], cur: vElem}).safe(pr, vElem, true) // streamsplit_l6.go
 				}
 				if i == len(a.steps)-1 && (c[classLeaf] || c[classAttr]) {
 					ok = ok && (viewCheck{noIdent: c[classLeaf], up: c[classLeaf]}).safe(pr, vLeaf, true)
@@ -582,6 +600,9 @@ func (s *Stylesheet) linkMain(m string, rs *rulesPlan) string {
 // link is linkApply from the apply ops of x, or, x nil, linkMain from main.
 func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 	if rs == nil {
+		if x != nil && x.onlyCopies() { // streamsplit_l6.go
+			return s.copiesLinkWhy()
+		}
 		return "apply-templates: no streamable mode"
 	}
 	seen := map[modeClass]bool{}
@@ -612,6 +633,12 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 			why = "a select at the document node may fall back to its tree"
 		}
 		x.eachApply(func(op *streamOp) {
+			if treeApplyOp(op) { // streamsplit_l6.go: copies and foreign items go to the tree's rules
+				if w := s.copiesLinkWhy(); w != "" && why == "" {
+					why = w
+				}
+				return
+			}
 			var modes []string
 			switch i := op.instr.(type) {
 			case *applyTemplatesInstr:
@@ -731,6 +758,9 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 
 // executeStream runs i, an apply op of the plan running, on the cursor.
 func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run *streamRun, op *streamOp) error {
+	if op.apply == applyForeign {
+		return i.executeForeign(rt, out, run) // streamsplit_l6.go
+	}
 	if op.pop != nil && !op.pop.windowsOnly() {
 		return i.executePop(rt, out, run, op) // streamapply_pop.go
 	}

@@ -106,6 +106,9 @@ type streamSplit struct {
 	// ctxItem, the context itself (string(.), copy-of(.)), or nothing.
 	steps   []splitStep
 	ctxItem bool
+	// ctxOut says the context is grounded for an outer whose values are
+	// atomized (groundContextSplit, streamsplit_l6.go).
+	ctxOut bool
 	// group says P starts at the current group (streamgroup.go): its first
 	// step's candidates are the group's members, which a memberSource hands
 	// over, not the children of the context.
@@ -513,6 +516,8 @@ func (s *streamSplit) class() string {
 		return b
 	case s.json != nil:
 		return "output" // the JSON text (streamfn_json.go)
+	case s.ctxOut:
+		return "output" // streamsplit_l6.go
 	case s.ctxItem && !s.atomize:
 		return "subtree"
 	case s.red != "":
@@ -1201,6 +1206,10 @@ type viewCheck struct {
 	// items says the split's $items (or its nth, $value) are views of
 	// elements, read as a focus of kind vElem is (streamleaf.go).
 	items bool
+	// globals, when set, is the element the expression is written on:
+	// key() over a global variable's document is admitted (viewKeyOK,
+	// streamsplit_l6.go).
+	globals *xdm.Node
 }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
@@ -1240,6 +1249,9 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 	case *xpath.BinaryOp:
 		switch x.Op {
 		case "is", "<<", ">>", "union", "intersect", "except":
+			if f == vLeaf && leafAttrSetOp(x) { // streamsplit_l6.go
+				return true
+			}
 			if vc.noIdent {
 				return false
 			}
@@ -1434,6 +1446,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 			return true
 		}
 		if viewLeafCopyOK(x, f) { // streamview_l7.go
+			return true
+		}
+		if viewKeyOK(vc, x, f) { // streamsplit_l6.go
 			return true
 		}
 		if (n == "copy-of" || n == "snapshot") && len(x.Args) == 1 && focusFree(x.Args[0]) {

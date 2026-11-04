@@ -598,7 +598,8 @@ func (b *streamBuilder) loopOp(el *xdm.Node, f vfocus) bool {
 	}
 	// The body is planned in a builder of its own: a refusal there leaves
 	// the grounded strategy, whose rules are the burst path's.
-	op.planned = inner.members(el, body, vElem)
+	// A loop over leaves first (streamsplit_l6.go).
+	op.planned = inner.leafLoop(el, body) || inner.members(el, body, vElem)
 	op.grounded = burstBody(el) || !op.planned && b.groundedSelect(el) // streampop_snapshot.go
 	if !op.planned && !op.grounded {
 		return b.refuse(inner.why)
@@ -706,7 +707,7 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "result-document" {
 			return b.resultDocAttrs(el, f) && b.content(el, f) // streamresult.go
 		}
-		if b.noIdent && (local == "sequence" || local == "variable") && !leafAtomic(el) { // streamcopy_l3leaf.go
+		if b.noIdent && (local == "sequence" || local == "variable") && !leafAtomic(el) && !atomicSelect(el) { // streamcopy_l3leaf.go, streamsplit_l6.go
 			// They could hand the copy on as the node it stands for.
 			return b.refuse("xsl:" + local + " on a copied text, comment or PI node")
 		}
@@ -715,6 +716,9 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		}
 		if local == "for-each" {
 			return b.motionlessLoop(el, f) // streamvariable.go
+		}
+		if local == "iterate" {
+			return b.motionlessIterate(el, f) // streamsplit_l6.go
 		}
 		if local == "copy" && f == vNone && !b.noIdent && streamMotionless[local] {
 			// Of the document node: it reads the document's properties of
@@ -816,7 +820,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 // what f has, and returns nodes of it only where nodeOK.
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := parseAt(el, src)
-	if e == nil || !(viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after}).safe(e, f, nodeOK) {
+	if e == nil || !(viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f}).safe(e, f, nodeOK) {
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
 	}
 	return true
@@ -878,10 +882,10 @@ func (c *compiler) noteStreamLoop(n *xdm.Node, instr Instruction, sel *xpath.Com
 			continue
 		}
 		op.instr, op.sel = instr, sel
-		if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" {
+		if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" && !c.applyCopies(op, ns) { // streamsplit_l6.go
 			continue
 		}
-		if !op.split.bare() {
+		if op.pop == nil && !op.split.bare() {
 			if op.pop, op.split, op.dead = c.popFor(op, ns); op.dead != "" {
 				continue
 			}
@@ -943,6 +947,9 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 		}
 	}
 	s, why := splitStreamIn(e, sel, doc, group, key)
+	if s == nil && simple {
+		s = groundContextSplit(e, sel, doc, group) // streamsplit_l6.go
+	}
 	if s == nil {
 		return nil, "split: " + why
 	}
@@ -1052,6 +1059,11 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 				return why
 			}
 			continue
+		}
+		if !op.planned {
+			if why := groundLastWhy(op.el); why != "" { // streamsplit_l6.go
+				return why
+			}
 		}
 		s := op.split
 		k := op.ctxDepth(minD) + s.minDepth()
