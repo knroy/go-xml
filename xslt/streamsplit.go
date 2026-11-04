@@ -1394,7 +1394,7 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		}
 		if (n == "accumulator-before" && vc.acc || n == "accumulator-after" && vc.after) && len(x.Args) == 1 {
 			lit, ok := x.Args[0].(*xpath.Literal)
-			return ok && lit.Val != nil && (f == vElem || f == vNone)
+			return ok && lit.Val != nil && (f == vElem || f == vNone || vc.accum && f == vLeaf) // a rule's leaf: streamaccum_l4.go
 		}
 		if viewIdentOK(vc, x, f) { // streamview_k2.go
 			return true
