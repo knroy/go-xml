@@ -47,8 +47,13 @@ var unionBodies = []struct {
 	{`<out><xsl:value-of select="(/doc/rec[1]/sub/ancestor::* union /doc/rec[2]/sub/ancestor::*) ! name()" separator=","/></out>`, true},
 	{`<out><xsl:value-of select="(//sub/ancestor-or-self::*/@* union //rec/ancestor-or-self::*/@*)" separator="|"/></out>`, true},
 	{`<out><xsl:value-of select="(/doc/rec/@k | //sub/@k)" separator=","/></out>`, true},
-	// ... a union only: except and intersect do not distribute.
-	{`<out><xsl:value-of select="(//sub/ancestor::* except //rec/ancestor::*) ! name()" separator=","/></out>`, false},
+	// ... a union only: except and intersect do not distribute; each operand
+	// keeps its own climbing tail (L5, streamsplit_climbset.go).
+	{`<out><xsl:value-of select="(//sub/ancestor::* except //rec/ancestor::*) ! name()" separator=","/></out>`, true},
+	{`<out><xsl:value-of select="(/doc/rec[1]/sub/ancestor::* intersect /doc/rec[2]/sub/ancestor::*) ! name()" separator=","/></out>`, true},
+	{`<out><xsl:value-of select="(//sub/ancestor-or-self::*/@* intersect //rec/ancestor-or-self::*/@*)" separator="|"/></out>`, true},
+	{`<out><xsl:value-of select="(//rec/ancestor-or-self::*/@k except //sub/ancestor::*/@k)" separator="|"/></out>`, true},
+	{`<out><xsl:value-of select="count(//sub/ancestor::* intersect //rec/ancestor-or-self::*)"/></out>`, true},
 	// A map reading position() is refused by the split, but held at the
 	// document node (streamhold.go) it streams.
 	{`<out><xsl:value-of select="(//rec | //sub) ! position()" separator=","/></out>`, true},

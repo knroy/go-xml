@@ -31,7 +31,7 @@ import (
 // mapPathOf is pathOf for "P ! R": P's parts with R to map over each match.
 func (w *splitter) mapPathOf(x *xpath.SimpleMap) (splitPathParts, bool) {
 	pp, ok := w.pathOf(x.Left)
-	if !ok || pp.ctxItem || pp.group || !mapSafe(x.Right) || climbsAny(&xpath.PathExpr{Steps: pp.tail}) {
+	if !ok || pp.ctxItem || pp.group || !mapSafe(x.Right) || climbsAny(&xpath.PathExpr{Steps: pp.tail}) || climbBranched(pp) {
 		// A tail climbing to ancestors is the walk's (G4, mapClimb and the
 		// items check): those are shared by matches, which a path
 		// deduplicates and a per-match map would not (G2).

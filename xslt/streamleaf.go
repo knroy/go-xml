@@ -62,6 +62,9 @@ func (s *streamSplit) climbing(tail xpath.Expr, part func(xpath.Expr) *xpath.Com
 // only the nodes no match before gave, and what each gives.
 func (r *splitRun) tailOf(v *xdm.Node) (xdm.Sequence, error) {
 	s := r.s
+	if s.climbSet != nil {
+		return nil, r.climbSetTake(v) // streamsplit_climbset.go
+	}
 	ctx := r.ctx.WithFocus(v, 1, 1)
 	if !s.climb {
 		return s.tail.Eval(ctx)
@@ -157,6 +160,9 @@ func inOrderClimb(tail xpath.Expr) bool {
 // order, each once, and what each gives.
 func (r *splitRun) climbFinish() error {
 	s := r.s
+	if s.climbSet != nil {
+		return r.climbSetFinish() // streamsplit_climbset.go
+	}
 	if !s.climbSort || len(r.held) == 0 {
 		return nil
 	}

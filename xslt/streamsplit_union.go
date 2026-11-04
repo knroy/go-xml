@@ -67,6 +67,8 @@ type splitBranches struct {
 	self uint64    // the branches with no step: the context itself
 	n    uint      // how many branches
 	set  *splitSet // nil: a match ends any branch
+	// climb is each branch's own climbing tail (streamsplit_climbset.go).
+	climb *splitClimbSet
 }
 
 // branchesOf is pp as branches: one, unless it is a set operator's.
@@ -97,8 +99,12 @@ func (w *splitter) setOf(x *xpath.BinaryOp) (splitPathParts, bool) {
 		return pp, false
 	}
 	tail, l, r := sharedTail(x.Op, l, r) // streamsplit_foreign.go
+	// Each operand with its own climbing tail (streamsplit_climbset.go).
+	if cp, ok := climbSetOf(x.Op, l, r); ok {
+		return cp, true
+	}
 	for _, side := range []splitPathParts{l, r} {
-		if side.oi != "" || side.group || len(side.tail) > 0 {
+		if side.oi != "" || side.group || len(side.tail) > 0 || climbBranched(side) {
 			w.refuse(x.Op + " of a path with a tail")
 			return pp, false
 		}
@@ -317,7 +323,7 @@ func (w *splitter) relPath(e xpath.Expr) (splitPathParts, bool) {
 		return splitPathParts{}, false
 	}
 	q, ok := w.pathOf(e)
-	if !ok || q.oi != "" || q.group || len(q.tail) > 0 {
+	if !ok || q.oi != "" || q.group || len(q.tail) > 0 || climbBranched(q) {
 		return q, false
 	}
 	return q, true

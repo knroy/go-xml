@@ -174,6 +174,9 @@ type streamSplit struct {
 	// matches give nothing (streamshapes.go).
 	fresh bool
 	skip  int64
+	// climbSet, for P whose branches climb each its own way
+	// (streamsplit_climbset.go): their tails and the operator.
+	climbSet *climbSetPlan
 }
 
 // splitStream splits e, an expression whose context item is the document
@@ -341,6 +344,9 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 				return "outermost() over a positional descendant step"
 			}
 		}
+	}
+	if climbBranched(p) {
+		return s.climbSetPath(w, p, part) // streamsplit_climbset.go
 	}
 	// A group's members are grounded one at a time: the cursor is left at a
 	// member's end, where the next member is looked for, not at the
@@ -1677,6 +1683,10 @@ type splitRun struct {
 	// climbSort one gave (streamleaf.go).
 	climbed *xdm.Node
 	held    []*xdm.Node
+	// hit is the branches the match at hand ends, and cset what a
+	// climbSet split recorded (streamsplit_climbset.go).
+	hit  uint64
+	cset *climbSetRun
 }
 
 // read is the walk's next event: the cursor's, through the filter f
@@ -1962,6 +1972,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 		if err != nil {
 			return err
 		}
+		r.hit = f.hit
 		quiet := r.silent > 0 || r.done && !s.tailFail
 		if cand.leaf {
 			if match && !quiet {

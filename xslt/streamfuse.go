@@ -69,7 +69,9 @@ func fusableOp(p *streamOp) bool {
 		p.dead != "" || !p.doc || p.sel == nil || len(p.sel.FreeVariables()) > 0 || s == nil {
 		return false
 	}
-	if s.cond != nil || s.kids || s.ctxItem || s.steps == nil || s.group || s.innermost || s.outermost ||
+	// A climbing tail is taken once per node across matches (tailOf), which
+	// matched does not do.
+	if s.cond != nil || s.kids || s.ctxItem || s.steps == nil || s.group || s.innermost || s.outermost || s.climb ||
 		!s.doc || s.mode != matchCount && s.mode != matchView {
 		return false
 	}
