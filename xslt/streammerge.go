@@ -29,12 +29,12 @@ package xslt
 //
 // Refused when the stylesheet compiles (mergeStreams), the merge then
 // running on the tree: a streamed source whose select the split cannot
-// read, or with use-accumulators or sort-before-merge="yes" (which holds
-// the input; a validation is decided per document, streamvalidin.go); an action that may ask for last() -- the tree
-// gives it the number of groups, which a stream knows only at its end --
-// directly or through xsl:call-template or xsl:evaluate, which keep the
-// focus; and an action whose effects a re-run would repeat (xsl:message,
-// xsl:result-document, xsl:assert, fn:trace). At run time: a document the
+// read, or with sort-before-merge="yes" (which holds the input; a
+// validation is decided per document, streamvalidin.go; accumulators are
+// checked at link time, streammerge_accum.go); an action with xsl:evaluate
+// or fn:trace, or with xsl:message or xsl:assert while a key may tell
+// messages (streammerge_l4.go). An action that may ask for last() runs
+// once every group is formed (groupsFirst, streammerge_l4.go). At run time: a document the
 // transformation has read already, a resolver that cannot stream, and the
 // and the items are read by coroutines, which hand xpath's EvalLock back and
 // forth with the merge as a fork's prongs do (streamfork.go).
