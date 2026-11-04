@@ -323,6 +323,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 			return b.applyOp(el, f)
 		case "for-each-group":
 			return b.groupOp(el, f)
+		case "variable":
+			return b.variableOp(el, f) // streamvariable.go
 		}
 		return b.refuse("consuming select of xsl:" + local)
 	}

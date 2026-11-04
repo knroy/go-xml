@@ -77,6 +77,15 @@ var coreBodies = []struct {
 	// sTree only: the document is read through, nothing of it used.
 	{`<out a="x">hello</out>`, true},
 	{`<xsl:variable name="v" select="1"/><out n="{$v + 1}"/>`, true},
+	// A local variable whose select consumes, bound where the sequence
+	// constructor reaches it (J1, streamvariable.go).
+	{`<xsl:variable name="a" select="avg(/doc/rec/@v)"/><out a="{$a}"/>`, true},
+	{`<xsl:variable name="s" select="//sub ! string(@x)"/><out><xsl:value-of select="$s" separator=","/></out>`, true},
+	{`<xsl:variable name="m" as="map(*)" select="map{1: count(//rec)}"/><out n="{$m(1)}"/>`, true},
+	{`<out><xsl:for-each select="doc/rec"><xsl:variable name="n" select="count(sub)"/><e n="{$n}" k="{@k}"/></xsl:for-each></out>`, true},
+	{`<xsl:variable name="u" select="count(//rec)"/><out/>`, true},
+	{`<xsl:variable name="e" select="sum(//rec/@k)"/><out e="{$e}"/>`, true},
+	{`<xsl:variable name="a" select="count(//rec)"/><out><xsl:value-of select="count(//sub)"/></out>`, false},
 	// Select at the document node, under wrappers.
 	{`<out><xsl:value-of select="count(//rec)"/></out>`, true},
 	{`<out><xsl:value-of select="sum(//rec/@v)"/></out>`, true},
