@@ -3,6 +3,7 @@ package xslt
 import (
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // A built-in rule on the parse's own record (lane J4).
@@ -39,7 +40,7 @@ func (run *streamRun) liveBuiltIn(focus focuser, pos int, el *xdm.Node, md int, 
 			return false, false, nil
 		}
 	}
-	rt := focus.at(el, pos)
+	rt := focus.at(el, pos, 0)
 	if err := s.checkModeTyped(el, mode); err != nil {
 		return false, true, err
 	}
@@ -76,4 +77,88 @@ func (run *streamRun) kidFilter(d int) *xdmstream.Filter {
 		run.kidFilters[d] = &xdmstream.Filter{Leaves: true, Depth: d}
 	}
 	return run.kidFilters[d]
+}
+
+// dispatchAt is dispatch for node at position pos of a selection of size
+// size (0: not known), f making its runtime: node is given one, the
+// built-in rule's or its rule's, the focus and the selection in one copy
+// of f's runtime (dispatch's rt and withSelection's copy were two).
+func (run *streamRun) dispatchAt(f focuser, node *xdm.Node, pos, size int, mode string,
+	params, tunnels paramValues, out *outputBuilder) error {
+
+	s := f.disp.sheet
+	if err := s.checkModeTyped(node, mode); err != nil {
+		return err
+	}
+	ctx := f.focusCtx(node, pos, size)
+	t, next, err := s.findTemplateFrom(node, mode, ctx, 0)
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		rt := f.runtimeIn(ctx)
+		s.warnNoMatch(rt, node, mode)
+		return run.builtIn(rt, node, mode, params, tunnels, out)
+	}
+	sub := f.ruleRuntime(ctx, node, t, next, mode, params, tunnels)
+	if err := s.warnMultipleMatch(sub, node, mode, t, next, sub.ctx); err != nil {
+		return err
+	}
+	if err := s.failMultipleMatch(node, mode, t, next, sub.ctx); err != nil {
+		return err
+	}
+	if !onCursor(node) {
+		// Its body was checked to read only what the node has.
+		return run.offCursor(func() error { return runTemplate(sub, t, params, tunnels, out) })
+	}
+	return run.rule(sub, t, node, params, tunnels, out)
+}
+
+// focusCtx is the context of f.at(n, pos, size): f's own when that is f's
+// runtime unchanged (a built-in rule's in a mode with no rules).
+func (f focuser) focusCtx(n *xdm.Node, pos, size int) *xpath.Context {
+	if mr := f.disp.sheet.rules[f.mode]; f.builtIn && mr != nil && mr.empty {
+		return f.disp.ctx
+	}
+	return withFocusCurrent(f.disp.ctx, n, pos, size)
+}
+
+// runtimeIn is f.at's runtime made of its context ctx (focusCtx).
+func (f focuser) runtimeIn(ctx *xpath.Context) *runtime {
+	if ctx == f.disp.ctx {
+		return f.disp
+	}
+	rt := *f.disp
+	rt.ctx = ctx
+	return &rt
+}
+
+// ruleRuntime is the runtime the body of t, selected for node, runs in:
+// f's runtime with ctx, node's focus in it (focusCtx), and t's selection
+// (withSelection), in one copy. A rule's focus is always withCurrent's:
+// under a built-in rule too, as a mode with rules has builtInFocus copy.
+func (f focuser) ruleRuntime(ctx *xpath.Context, node *xdm.Node, t *Template, next int, mode string,
+	params, tunnels paramValues) *runtime {
+
+	sub := f.disp.withSel(selection{template: t, next: next, mode: mode,
+		params: params, tunnels: tunnels, item: node})
+	sub.ctx = ctx
+	return sub
+}
+
+// bareMatch reports whether every rule of mode that may match n has a
+// pattern with no predicate: one that is matched on n's kind, name and
+// ancestors alone, with no context and no current() (Pattern.matches), so
+// the focus it is matched in is not read.
+func bareMatch(s *Stylesheet, n *xdm.Node, mode string) bool {
+	l, ok := s.candidates(n, mode)
+	if !ok {
+		return false
+	}
+	for _, i := range l {
+		if !s.templates[i].Match.predicateFree() {
+			return false
+		}
+	}
+	return true
 }

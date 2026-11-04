@@ -63,12 +63,12 @@ func TestStreamLiveBuiltIn(t *testing.T) {
 
 // TestStreamDispatchAllocs: the streamed two-instruction identity transform
 // (a rule for @*|node(): xsl:copy, apply-templates to @*, then to the
-// children) allocates within 1.1x of the tree's run of it per record: an
-// apply op's feed and a children's filter are made once per run, not per
-// element, and a leaf a rule matches is given one runtime, not one to be
-// matched in and another for its copy. Measured: 64.2 against the tree's
-// 61.1; a runtime more per leaf made it 76.2, a feed and a filter per
-// element 88.2.
+// children) allocates per record at most 0.95x what the tree's run of it
+// does: an apply op's feed and a children's filter are made once per run,
+// not per element, and a node a rule matches is given one runtime, its
+// focus and selection in one copy (dispatchAt). Measured: 52.2 against the
+// tree's 61.1; a runtime to match in besides made it 64.2, and 76.2 with
+// a second per leaf, 88.2 with a feed and a filter per element.
 func TestStreamDispatchAllocs(t *testing.T) {
 	doc := liveOrders(3000)
 	sheet := mainSheet(`<xsl:mode streamable="yes"/><xsl:template match="@*|node()">` +
@@ -102,7 +102,49 @@ func TestStreamDispatchAllocs(t *testing.T) {
 		}
 	})
 	t.Logf("allocations per record: streamed %.1f, tree %.1f", streamed/3000, treeRun/3000)
-	if streamed > 1.1*treeRun {
-		t.Errorf("streamed %.0f allocations, tree %.0f: more than 1.1x", streamed, treeRun)
+	if streamed > 0.95*treeRun {
+		t.Errorf("streamed %.0f allocations, tree %.0f: more than 0.95x", streamed, treeRun)
+	}
+}
+
+// TestStreamDispatchWarnings: the streamed dispatch raises the tree's mode
+// warnings, in its order: no rule for an element (on the parse's record or
+// a view), an attribute or a text node, and two rules for one node.
+func TestStreamDispatchWarnings(t *testing.T) {
+	doc := `<doc a="1"><rec k="a">t<sub/></rec><rec>u</rec></doc>`
+	for _, decls := range []string{
+		`<xsl:mode streamable="yes" on-no-match="shallow-copy" warning-on-no-match="yes"/>`,
+		`<xsl:mode streamable="yes" on-no-match="shallow-copy" warning-on-no-match="yes" warning-on-multiple-match="yes"/>` +
+			`<xsl:template match="rec"><r><xsl:apply-templates select="@*"/><xsl:apply-templates/></r></xsl:template>` +
+			`<xsl:template match="*[@k]"><k/></xsl:template><xsl:template match="text()[. = 'u']"><u/></xsl:template>`,
+	} {
+		sheet := mainSheet(decls)
+		tree, err := xdm.ParseString(sheet, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Compile(tree.Root, CompileOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := streamtrace.Snapshot()
+		st, err := s.TransformReader(context.Background(), strings.NewReader(doc), TransformOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tr := streamtrace.Snapshot().Sub(before); tr.Runs[streamtrace.Main] != 1 {
+			t.Fatalf("%s: not streamed", decls)
+		}
+		d, _ := xdm.Parse(strings.NewReader(doc), xdm.ParseOptions{})
+		want, err := s.Transform(context.Background(), d.Root, TransformOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if g, w := strings.Join(st.Warnings, "\n"), strings.Join(want.Warnings, "\n"); g != w || st.String() != want.String() {
+			t.Errorf("%s:\nstreamed %s\n%s\ntree     %s\n%s", decls, st, g, want, w)
+		}
+		if len(want.Warnings) == 0 {
+			t.Errorf("%s: no warnings", decls)
+		}
 	}
 }
