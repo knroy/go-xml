@@ -19,6 +19,11 @@ var l7Rows = []struct {
 		`<out><xsl:value-of select="accumulator-before('na')"/><xsl:value-of select="count(//rec)"/></out>`, true},
 	{`<xsl:accumulator name="na" initial-value="0" streamable="no"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>`,
 		`<out><xsl:value-of select="count(//rec)"/><xsl:value-of select="accumulator-after('na')"/></out>`, true},
+	// xsl:copy of an attribute of the stream against a type (si-copy-116,
+	// -117): a detached copy is assessed (streamvalid_l7.go).
+	{``, `<o><xsl:copy select="doc/rec[1]/@v" type="xs:decimal"/></o>`, true},
+	{``, `<o><xsl:copy select="doc/rec[1]/@k" type="xs:date"/></o>`, true},
+	{``, `<o><xsl:copy select="/*/*/@v" type="xs:decimal"/></o>`, true},
 }
 
 // l7Analysis are §19.8 verdicts lane L7 models (streamability_l7.go).

@@ -33,7 +33,7 @@ func resultValidation(el *xdm.Node, name xdm.QName) bool {
 		return name.URI == ""
 	case "copy":
 		v := el.AttrValue(name.Local)
-		return name.URI == "" && (name.Local == "validation" && (v == "strip" || v == "preserve") || copiesNoAttribute(el))
+		return name.URI == "" && (name.Local == "validation" && (v == "strip" || v == "preserve") || copiesNoAttribute(el) || name.Local == "type" && copiesAttribute(el)) // streamvalid_l7.go
 	}
 	return false
 }
