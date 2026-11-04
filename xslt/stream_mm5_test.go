@@ -35,6 +35,21 @@ func mm5Rows(t *testing.T, doc string, rows []struct{ name, decls string }) {
 
 const mm5Doc = `<d><rec k="a" v="1">t1</rec><rec k="b" v="1"/><rec k="a" v="2"><v>x</v></rec><x/><rec k="c" v="3"><v>y<s/></v></rec></d>`
 
+// TestStreamAccumMapTyped: an accumulator whose @as is a map of atomics
+// keeps no node of the parse (accumulator-069s): TransformReader streams
+// it, with the tree's result.
+func TestStreamAccumMapTyped(t *testing.T) {
+	const accs = `<xsl:mode streamable="yes" use-accumulators="#all"/>
+	<xsl:accumulator name="n" as="xs:integer" initial-value="0" streamable="yes">
+	  <xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>
+	<xsl:accumulator name="m" as="map(xs:string, xs:integer*)" initial-value="map{}" streamable="yes">
+	  <xsl:accumulator-rule match="rec" select="let $k := string(@k), $c := accumulator-before('n')
+	    return map:put($value, $k, ($value($k), $c))"/></xsl:accumulator>`
+	mm5Rows(t, mm5Doc, []struct{ name, decls string }{
+		{"map size at the end", accs + `<xsl:template match="/"><o><xsl:apply-templates/><t v="{map:size(accumulator-after('m'))}"/></o></xsl:template>`},
+	})
+}
+
 // TestStreamApplyInMapTypedVariable: xsl:apply-templates in a variable
 // typed a sequence of maps (si-fork-812): what rules make is kept, and a
 // built-in rule's node is the type error in both modes.
