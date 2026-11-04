@@ -219,6 +219,12 @@ var mainCases = []struct {
 	// A map of two consuming values: the rule runs on a grounded copy of
 	// its element (streamtee_ground.go; sx-MapExpr-008).
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec"><xsl:variable name="m" select="map{'a': string(sub[1]), 'b': count(sub)}"/><r a="{$m?a}" b="{$m?b}"/></xsl:template>`, true},
+	// A rule on a grounded copy (xsl:fork) that reads accumulators: the
+	// copy carries the document's values, before and after
+	// (streamtee_ground_accum.go; si-fork-816).
+	{`<xsl:accumulator name="n" initial-value="0" streamable="yes"><xsl:accumulator-rule match="sub" select="$value + 1"/></xsl:accumulator>` +
+		`<xsl:mode streamable="yes" use-accumulators="n"/><xsl:template match="rec"><r n="{accumulator-before('n')}"><xsl:fork><xsl:sequence><xsl:value-of select="string(sub[1])"/></xsl:sequence>` +
+		`<xsl:sequence><xsl:for-each select="sub"><s b="{accumulator-before('n')}" a="{accumulator-after('n')}"/></xsl:for-each></xsl:sequence></xsl:fork></r></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

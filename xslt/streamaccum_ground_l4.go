@@ -57,14 +57,25 @@ func groundRecording(c *xdmstream.Cursor, s *streamSplit) (*xdm.Node, error) {
 	if !s.recAccums {
 		return c.Ground()
 	}
-	v, ok := cursorAccums.Load(c)
+	g, ok, err := groundAccums(c)
 	if !ok {
 		return c.Ground()
+	}
+	return g, err
+}
+
+// groundAccums is c.Ground recording the accumulator values of what it
+// grounds; ok false, nothing read, when the run computes no accumulators
+// at c's depth.
+func groundAccums(c *xdmstream.Cursor) (_ *xdm.Node, ok bool, _ error) {
+	v, ok := cursorAccums.Load(c)
+	if !ok {
+		return nil, false, nil
 	}
 	sa := v.(*streamAccums)
 	d := c.At().Depth
 	if d <= 0 || d >= len(sa.frames) {
-		return c.Ground()
+		return nil, false, nil
 	}
 	f := &sa.frames[d]
 	m := &mergeAccums{sa: sa, minD: d, open: []int{0}}
@@ -81,10 +92,10 @@ func groundRecording(c *xdmstream.Cursor, s *streamSplit) (*xdm.Node, error) {
 	g, err := c.Ground()
 	sa.onStep = prev
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
 	if err := m.attach(sa.rt, g, g); err != nil {
-		return nil, err
+		return nil, true, err
 	}
-	return g, nil
+	return g, true, nil
 }

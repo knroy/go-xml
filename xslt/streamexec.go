@@ -110,6 +110,8 @@ type streamExec struct {
 	// groundRule says it is a rule's body that runs on a grounded copy of
 	// its element (streamtee_ground.go).
 	groundRule bool
+	// groundAccums says the copy carries its accumulator values (streamtee_ground_accum.go).
+	groundAccums bool
 	// groundTop says that body may return a node of the copy as it is, an
 	// item of the rule's result (groundTopKeeps).
 	groundTop bool

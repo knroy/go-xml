@@ -1156,7 +1156,7 @@ func (run *streamRun) rule(rt *runtime, t *Template, node *xdm.Node, params, tun
 	}
 	defer rt.leaveFrame(rt.enterFrame())
 	if x.groundRule {
-		return run.groundRule(rt, t, params, tunnels, out) // streamtee_ground.go
+		return run.groundRule(rt, t, params, tunnels, out, x.groundAccums) // streamtee_ground.go
 	}
 	prev := run.x
 	run.x = x
