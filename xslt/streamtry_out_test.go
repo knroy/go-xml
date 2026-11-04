@@ -89,11 +89,19 @@ var tryOutSheets = []struct {
 	{"two-tries", ``, `<xsl:template match="/"><out><xsl:try><a/><b/><xsl:sequence select="error()"/><xsl:catch><c/></xsl:catch></xsl:try><xsl:try><d/><e/><xsl:catch/></xsl:try></out></xsl:template>`, true, ""},
 	{"two-tries-indent", `<xsl:output indent="yes"/>`, `<xsl:template match="/"><out><xsl:try><a><x/></a><b/><xsl:sequence select="error()"/><xsl:catch><c/></xsl:catch></xsl:try><xsl:try><d><y/></d><e/><xsl:catch/></xsl:try></out></xsl:template>`, true, ""},
 	{"per-record", ``, `<xsl:template match="/"><out><xsl:for-each select="//rec"><xsl:try><r k="{@k}"/><s><xsl:value-of select="xs:integer(@v)"/></s><xsl:catch><bad k="{@k}"/></xsl:catch></xsl:try></xsl:for-each></out></xsl:template>`, true, ""},
-	// A document node's content (xsl:document, xsl:copy of the document
-	// node) is not taken: held to the try's end, as before.
+	// xsl:document builds its content in a builder of its own, held as a
+	// tree and appended whole: a try in it is held with it. A document
+	// node's content the sink streams (xsl:copy of the document node, the
+	// built-in rule's) is opened by settle as its next append would.
 	{"document-level", ``, `<xsl:template match="/"><xsl:document><a/><b/><xsl:try><c/><d/><xsl:sequence select="error()"/><xsl:catch><e/></xsl:catch></xsl:try><f/></xsl:document></xsl:template>`, false, ""},
 	{"document-level-ok", ``, `<xsl:template match="/"><xsl:document><a/><b/><xsl:try><c/><xsl:sequence select="1, 2"/><d/><xsl:catch/></xsl:try><f/></xsl:document></xsl:template>`, false, ""},
-	{"copy-document", ``, `<xsl:template match="/"><xsl:copy><a/><xsl:try><c/><d/><xsl:sequence select="error()"/><xsl:catch><e/></xsl:catch></xsl:try><f/></xsl:copy></xsl:template>`, false, ""},
+	{"copy-document", ``, `<xsl:template match="/"><xsl:copy><a/><xsl:try><c/><d/><xsl:sequence select="error()"/><xsl:catch><e/></xsl:catch></xsl:try><f/></xsl:copy></xsl:template>`, true, ""},
+	{"copy-document-ok", ``, `<xsl:template match="/"><xsl:copy><a/><xsl:try><c/>t<xsl:sequence select="1, 2"/><d/><xsl:catch/></xsl:try><f/></xsl:copy></xsl:template>`, true, ""},
+	{"copy-document-first", ``, `<xsl:template match="/"><xsl:copy><xsl:try><c/><d/><xsl:sequence select="error()"/><xsl:catch>t<e/></xsl:catch></xsl:try></xsl:copy></xsl:template>`, true, ""},
+	{"copy-document-element", ``, `<xsl:template match="/"><xsl:copy><xsl:try><all><xsl:for-each select="//rec"><r><xsl:value-of select="xs:integer(@v)"/></r></xsl:for-each></all><xsl:catch><bad/></xsl:catch></xsl:try></xsl:copy></xsl:template>`, true, ""},
+	{"copy-document-attr", ``, `<xsl:template match="/"><xsl:copy><a/><xsl:try><c/><xsl:attribute name="x">1</xsl:attribute><xsl:catch><e/></xsl:catch></xsl:try></xsl:copy></xsl:template>`, true, "XTDE0420"},
+	{"builtin-document", ``, `<xsl:template match="doc"><xsl:try><out><xsl:for-each select="rec"><r><xsl:value-of select="xs:integer(@v)"/></r></xsl:for-each></out><xsl:catch><bad/></xsl:catch></xsl:try></xsl:template>`, true, ""},
+	{"builtin-document-ok", ``, `<xsl:template match="doc"><xsl:try><out><xsl:for-each select="rec"><r><xsl:value-of select="@v"/></r></xsl:for-each></out><x/><xsl:catch><bad/></xsl:catch></xsl:try></xsl:template>`, true, ""},
 	{"held-element", ``, `<xsl:template match="/"><out><xsl:element name="h" namespace="urn:h" inherit-namespaces="no"><a/><xsl:try><c/><d/><xsl:sequence select="error()"/><xsl:catch><e/></xsl:catch></xsl:try></xsl:element></out></xsl:template>`, false, ""},
 	{"html-head", `<xsl:output method="html"/>`, `<xsl:template match="/"><html><head><xsl:try><title>t</title><meta name="a" content="b"/><xsl:catch/></xsl:try></head><body/></html></xsl:template>`, true, ""},
 	{"explicit-method-top", `<xsl:output method="xml"/>`, `<xsl:template match="/"><xsl:try><a/><b/><xsl:sequence select="error()"/><xsl:catch><c/></xsl:catch></xsl:try><xsl:try><d/><e/><xsl:catch/></xsl:try></xsl:template>`, true, ""},

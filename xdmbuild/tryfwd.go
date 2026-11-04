@@ -317,7 +317,8 @@ func settle(t *Builder, m *tryMark) bool {
 	// A sink that has not started begins now if the result so far decides
 	// it, as the next append would: that decision does not change.
 	// One that cannot decide yet (the output method waits for the first
-	// element) is marked before it begins, when t is the top of the result:
+	// element) is marked before it begins, when t is the top of the result
+	// or the content of a document node there:
 	// whatever the try hands on then decides it provisionally, and a
 	// rollback leaves it undecided again for what comes next.
 	s := t.sink
@@ -329,7 +330,7 @@ func settle(t *Builder, m *tryMark) bool {
 		return false
 	}
 	if !s.started && !s.begin() {
-		if s.off || t != s.root {
+		if s.off || t != s.root && (t != s.pending || t.doc != docSeq) {
 			return false
 		}
 	} else if !s.settle(t) {
@@ -358,6 +359,14 @@ func settle(t *Builder, m *tryMark) bool {
 func (s *sink) settle(t *Builder) bool {
 	if t.hold {
 		return false
+	}
+	if t.fr == 0 && t.doc == docSeq {
+		// A document node's content, at the top of the result, not opened
+		// yet: the next append opens it (a document level's Open looks at
+		// nothing that comes) and writes its items, all complete. Done now.
+		if p := s.up(t); p.fr == 0 || s.frames[len(s.frames)-1] != p || !s.open(t, xdm.KindElement, "") {
+			return false
+		}
 	}
 	if t.fr == 0 {
 		// An element with nothing in it yet, the newest child of the
