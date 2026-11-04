@@ -114,3 +114,38 @@ func TestStreamAccumReadsMatchTree(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamTryAccumFailsAtStart: an xsl:try reading an accumulator that
+// can fail only in its initial value streams through TransformReader and
+// catches what the tree catches (accumulator-056s); one whose rules may
+// fail later is left to the tree.
+func TestStreamTryAccumFailsAtStart(t *testing.T) {
+	cases := []struct {
+		initial, rule string
+		stream        bool
+	}{
+		{"0", "$value + 1", true},
+		{"100 div 0", "$value + 1", true},
+		{"0", "($value - 2) + 1", true},
+		{"0", "$value idiv (xs:integer(@v) - 2)", false},
+		{"0", "string-length(@k)", false},
+	}
+	for name, doc := range mainDocs {
+		for ci, c := range cases {
+			sheet := mainSheet(`<xsl:accumulator name="n" as="xs:integer" initial-value="` + c.initial + `" streamable="yes">
+			    <xsl:accumulator-rule match="rec" select="` + c.rule + `"/></xsl:accumulator>
+			  <xsl:mode streamable="yes" use-accumulators="#all" on-no-match="shallow-skip"/>
+			  <xsl:template match="rec"><xsl:try><r n="{accumulator-before('n')}"/>
+			    <xsl:catch><c/></xsl:catch></xsl:try></xsl:template>`)
+			so, st := mainRun(sheet, doc, true, TransformOptions{SourceParseOptions: xdm.ParseOptions{AllowDOCTYPE: true}})
+			to, _ := mainRun(sheet, doc, false, TransformOptions{SourceParseOptions: xdm.ParseOptions{AllowDOCTYPE: true}})
+			where := fmt.Sprintf("doc %s, case %d", name, ci)
+			if so != to {
+				t.Errorf("%s:\nstreamed %s\ntree     %s", where, so, to)
+			}
+			if m := st.Runs[streamtrace.Main]; c.stream != (m != 0) {
+				t.Errorf("%s: %d main runs, want streamed %v", where, m, c.stream)
+			}
+		}
+	}
+}
