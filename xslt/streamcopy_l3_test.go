@@ -197,3 +197,30 @@ func TestStreamDocCopyIDs(t *testing.T) {
 		coreCheck(t, coreSheet(body), dir, body, true, TransformOptions{})
 	}
 }
+
+// TestStreamDocEntities: unparsed-entity-uri and unparsed-entity-public-id
+// of the document node, after an unconditional consumer or with nothing
+// consuming, read the DOCTYPE the stand-in is given (streamcopy_l3doc.go,
+// docEntities).
+func TestStreamDocEntities(t *testing.T) {
+	dir := t.TempDir()
+	docs := map[string]string{
+		"dtd": `<!DOCTYPE doc [<!NOTATION gif SYSTEM "g.txt"><!ENTITY pic PUBLIC "-//P//EN" "pic.gif" NDATA gif>]>` +
+			`<doc><rec k="a"/></doc>`,
+		"flat": coreDocs["flat"],
+		"bad":  coreDocs["bad"],
+	}
+	ent := `<xsl:value-of select="ends-with(unparsed-entity-uri('pic'), 'pic.gif'), unparsed-entity-public-id('pic')"/>`
+	for name, doc := range docs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, body := range []string{
+			`<o><xsl:comment select="head(//rec/@k)"/>` + ent + `</o>`,
+			`<o>` + ent + `</o>`,
+			`<o><xsl:where-populated><xsl:text>1:</xsl:text><xsl:comment select="head(//rec/@k)"/><xsl:text>2:</xsl:text><xsl:comment select="unparsed-entity-uri('pic')"/></xsl:where-populated></o>`,
+		} {
+			coreCheck(t, coreSheet(body), dir, name+": "+body, true, TransformOptions{})
+		}
+	}
+}

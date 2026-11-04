@@ -1201,6 +1201,9 @@ type viewCheck struct {
 	// items says the split's $items (or its nth, $value) are views of
 	// elements, read as a focus of kind vElem is (streamleaf.go).
 	items bool
+	// ents admits unparsed-entity-uri(x) and unparsed-entity-public-id(x)
+	// of the document node's stand-in (streamcopy_l3doc.go, docEntities).
+	ents bool
 }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
@@ -1432,6 +1435,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		}
 		if docURIOK(vc, x, f) { // streamtee_docnode.go
 			return true
+		}
+		if vc.ents && f == vNone && len(x.Args) == 1 && (n == "unparsed-entity-uri" || n == "unparsed-entity-public-id") {
+			return vc.safe(x.Args[0], f, false) // streamcopy_l3doc.go
 		}
 		if viewLeafCopyOK(x, f) { // streamview_l7.go
 			return true

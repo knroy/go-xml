@@ -196,6 +196,9 @@ type streamBuilder struct {
 	// after says accumulator-after of the focus may be read: a consumer
 	// before it in its sequence constructor has read the focus (streamaccum.go).
 	after bool
+	// docRead says a consumer before it in its sequence constructor, an op
+	// itself (run unconditionally), has read the document (streamcopy_l3doc.go).
+	docRead bool
 }
 
 func (b *streamBuilder) refuse(why string) bool {
@@ -236,8 +239,8 @@ func elName(el *xdm.Node) string {
 func (b *streamBuilder) seq(el *xdm.Node, f vfocus) bool {
 	b.kinds[streamtrace.KindSeq]++
 	consumers := 0
-	defer func(after bool) { b.after = after }(b.after)
-	b.after = false
+	defer func(after, read bool) { b.after, b.docRead = after, read }(b.after, b.docRead)
+	b.after, b.docRead = false, false
 	for ch := range el.Children() {
 		switch ch.Kind() {
 		case xdm.KindText:
@@ -286,9 +289,11 @@ func (b *streamBuilder) seq(el *xdm.Node, f vfocus) bool {
 		if consumers++; consumers > 1 {
 			return b.refuse("two consuming instructions in one sequence constructor")
 		}
+		n0 := len(*b.ops)
 		if !b.consumer(ch, f) {
 			return false
 		}
+		b.docRead = f == vNone && len(*b.ops) > n0 && (*b.ops)[n0].el == ch // streamcopy_l3doc.go
 	}
 	return true
 }
@@ -816,7 +821,8 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 // what f has, and returns nodes of it only where nodeOK.
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := parseAt(el, src)
-	if e == nil || !(viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after}).safe(e, f, nodeOK) {
+	vc := viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after}
+	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) { // streamcopy_l3doc.go
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
 	}
 	return true

@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // --- The document node's properties ---------------------------------------------
@@ -100,4 +101,32 @@ func (rt *runtime) streamDocRead(node *xdm.Node) error {
 // isDot reports whether a select is "." itself.
 func isDot(el *xdm.Node) bool {
 	return strings.TrimSpace(el.AttrValue("select")) == "."
+}
+
+// docEntities reports whether e, refused as motionless at the focus f, is
+// motionless once unparsed-entity-uri(x) and unparsed-entity-public-id(x)
+// of the document node (§19.8.9: fn:unparsed-entity-uri(x, /)) are
+// admitted: they read the DOCTYPE, which the stand-in is given as the parse
+// meets the document element (watchDoc). So the expression must be
+// evaluated after the document has been read: after a consumer in its
+// sequence constructor that is an op itself, run whatever happens
+// (b.docRead; one in an xsl:if may not run), or in a container nothing of which
+// consumes at the document node (read through first: readyDocCopy, as a
+// motionless copy of the document node).
+func (b *streamBuilder) docEntities(e xpath.Expr, vc viewCheck, f vfocus, nodeOK bool) bool {
+	if e == nil || f != vNone || b.noIdent {
+		return false
+	}
+	vc.ents = true
+	if !vc.safe(e, f, nodeOK) {
+		return false
+	}
+	if !b.docRead {
+		if b.x.rule {
+			return false // a rule's body is not read through first
+		}
+		b.x.docMotionless = true
+	}
+	b.x.docProps = true
+	return true
 }
