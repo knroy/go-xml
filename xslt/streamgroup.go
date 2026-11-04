@@ -70,6 +70,9 @@ func (b *streamBuilder) groupOp(el *xdm.Node, f vfocus) bool {
 	if b.groundedSelect(el) {
 		return b.groundedGroup(el, f)
 	}
+	if b.heldPopulation(el, f) {
+		return b.heldGroup(el, f) // streamgroup_population.go
+	}
 	for a := range el.Attrs() {
 		n := a.Name()
 		if n.URI != "" {

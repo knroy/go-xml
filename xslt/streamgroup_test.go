@@ -131,6 +131,13 @@ var groupBodies = []struct {
 	{`<out><xsl:for-each-group select="subsequence(/doc/t, 2, 3)" group-adjacent="@d"><g k="{current-grouping-key()}"><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></out>`, true},
 	{`<out><xsl:for-each-group select="subsequence(*/g/t, 2, 2)" group-adjacent="position()"><g n="{count(current-group())}" k="{@k}"/></xsl:for-each-group></out>`, true},
 	{`<out><xsl:for-each-group select="subsequence(/doc/t, 3)" group-ending-with="."><g><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></out>`, true},
+	// A population of attributes, leaves or outermost() matches, held and
+	// grouped by the tree's code (L5, streamgroup_population.go); refused
+	// when the body reaches a template.
+	{`<out><xsl:for-each-group select="/doc/t/@v" group-adjacent="position()"><xsl:if test=". &gt;= 0"><xsl:sequence select="current-group()/string(.)"/></xsl:if></xsl:for-each-group></out>`, true},
+	{`<out><xsl:for-each-group select="/doc/t/@d" group-adjacent="."><g d="{current-grouping-key()}" v="{current-group()/../@v}"/></xsl:for-each-group></out>`, true},
+	{`<out><xsl:for-each-group select="outermost(//t)" group-ending-with="."><g><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></out>`, true},
+	{`<out><xsl:for-each-group select="/doc/t/@d" group-adjacent="."><xsl:apply-templates select="current-group()"/></xsl:for-each-group></out>`, false},
 	// Refused: group-by, sort, a crawling population, a key a view cannot
 	// decide, current-group() read twice.
 	{`<out><xsl:for-each-group select="/doc/t" group-by="@d"><g/></xsl:for-each-group></out>`, false},
