@@ -189,7 +189,7 @@ func (r *splitRun) climbFinish() error {
 // one), as the consuming path P with R for its tail, evaluated on each
 // match's view; it reports whether it did.
 func (w *splitter) mapClimb(x *xpath.SimpleMap, put func(xpath.Expr), use splitUse) bool {
-	if w.pe != nil || w.why != "" || !climbs(x.Right) {
+	if w.pe != nil || w.why != "" || !climbsAny(x.Right) { // name(ancestor::*[1]) too: viewCheck decides
 		return false
 	}
 	pp, ok := w.pathOf(x.Left)
