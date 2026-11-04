@@ -23,7 +23,20 @@ var tryOutSheets = []struct {
 	{"loop-fail-text-catch", ``, `<xsl:template match="/"><out><xsl:try><xsl:for-each select="//rec"><r k="{@k}"><xsl:value-of select="xs:integer(@v)"/></r></xsl:for-each><xsl:catch>caught</xsl:catch></xsl:try></out></xsl:template>`, true, ""},
 	{"loop-fail-empty-catch", ``, `<xsl:template match="/"><out><xsl:try><xsl:for-each select="//rec"><r><xsl:value-of select="xs:integer(@v)"/></r></xsl:for-each><xsl:catch/></xsl:try></out></xsl:template>`, true, ""},
 	{"after-child", ``, `<xsl:template match="/"><out><first/><xsl:try><xsl:for-each select="//rec"><r><xsl:value-of select="xs:integer(@v)"/></r></xsl:for-each><xsl:catch><bad/></xsl:catch></xsl:try><xsl:attribute name="late">1</xsl:attribute></out></xsl:template>`, true, "XTDE0410"},
-	{"after-text", ``, `<xsl:template match="/"><out>text<xsl:try><xsl:for-each select="//rec[position() lt 3]"><r/></xsl:for-each>more<xsl:catch/></xsl:try></out></xsl:template>`, false, ""},
+	// Text just before the try is left unwritten (tryfwd.go settle): what
+	// the try hands on merges with it, and a rollback puts it back.
+	{"after-text", ``, `<xsl:template match="/"><out>text<xsl:try><xsl:for-each select="//rec[position() lt 3]"><r/></xsl:for-each>more<xsl:catch/></xsl:try></out></xsl:template>`, true, ""},
+	{"after-text-fail", ``, `<xsl:template match="/"><out>text<xsl:try><r/><s/><xsl:sequence select="error()"/><xsl:catch>caught<c/></xsl:catch></xsl:try>end</out></xsl:template>`, true, ""},
+	{"after-text-merge", ``, `<xsl:template match="/"><out>text<xsl:try>more<xsl:value-of select="1, 2"/><r/><s/><xsl:catch>caught</xsl:catch></xsl:try></out></xsl:template>`, true, ""},
+	{"after-text-merge-fail", ``, `<xsl:template match="/"><out>text<xsl:try>more<r/>t2<s/><xsl:sequence select="error()"/><xsl:catch>caught<c/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
+	{"after-text-catch-empty", ``, `<xsl:template match="/"><out>text<xsl:try>more<r/><xsl:sequence select="error()"/><xsl:catch/></xsl:try>after<z/></out></xsl:template>`, true, ""},
+	{"after-text-element", ``, `<xsl:template match="/"><out>text<xsl:try><all><xsl:for-each select="//rec"><r><xsl:value-of select="xs:integer(@v)"/></r></xsl:for-each></all><xsl:catch>caught</xsl:catch></xsl:try></out></xsl:template>`, true, ""},
+	{"after-text-cdata", `<xsl:output cdata-section-elements="out"/>`, `<xsl:template match="/"><out>a]]<xsl:try>&gt;b<r/>c<xsl:sequence select="error()"/><xsl:catch>]]&gt;d</xsl:catch></xsl:try>e</out></xsl:template>`, true, ""},
+	{"after-text-cdata-ok", `<xsl:output cdata-section-elements="out"/>`, `<xsl:template match="/"><out>a]]<xsl:try>&gt;b<r/>c<xsl:catch>x</xsl:catch></xsl:try>e</out></xsl:template>`, true, ""},
+	{"after-space-indent", `<xsl:output indent="yes"/>`, `<xsl:template match="/"><out><o/><xsl:text>  </xsl:text><xsl:try><r><n/></r>x<xsl:sequence select="error()"/><xsl:catch><c><d/></c></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
+	{"after-space-indent-text", `<xsl:output indent="yes"/>`, `<xsl:template match="/"><out><o/><xsl:text>  </xsl:text><xsl:try><r><n/></r><xsl:sequence select="error()"/><xsl:catch>t<c><d/></c></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
+	{"after-text-nested", ``, `<xsl:template match="/"><out>t0<xsl:try>t1<xsl:try>t2<a/><xsl:sequence select="error()"/><xsl:catch>c2</xsl:catch></xsl:try>t3<b/><xsl:sequence select="error()"/><xsl:catch>c1</xsl:catch></xsl:try>t4</out></xsl:template>`, true, ""},
+	{"after-text-html", `<xsl:output method="html"/>`, `<xsl:template match="/"><html><body>text<xsl:try><p>a</p><span>s</span><xsl:sequence select="error()"/><xsl:catch> caught <b>b</b></xsl:catch></xsl:try></body></html></xsl:template>`, true, ""},
 	{"text-first", ``, `<xsl:template match="/"><out><a/><xsl:try>t1<xsl:value-of select="1, 2"/><xsl:sequence select="3, 4"/><b/>t2<xsl:catch/></xsl:try>t3<xsl:sequence select="5"/></out></xsl:template>`, true, ""},
 	// The output method is not decided yet: the try decides it provisionally
 	// (xdmbuild/tryfwd.go settle), a rollback leaves it to the catch.

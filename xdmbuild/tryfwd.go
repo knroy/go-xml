@@ -20,11 +20,14 @@ package xdmbuild
 // is complete (settle), so a rollback takes back only what the buffer handed
 // on. Out's newest child is written then but stays in its tree (the sink's
 // anchor), as the sink always keeps a frame's newest child: a later attribute
-// still meets XTDE0410, and the text merge sees what it saw. Settling is not
-// done, and the try's output is held to its end as before, when out's newest
-// child is text (the first item handed on could merge with it), when out is
-// not open and cannot be opened by the first item, when the sink never
-// will start, and when the first item is an attribute, a
+// still meets XTDE0410, and the text merge sees what it saw. A newest child
+// that is text is not written: the first item handed on may merge with it,
+// as at the end of the try, and it is written when the next append comes,
+// provisionally; a rollback puts its value back, unwritten, for the catch's
+// text to merge with. Settling is not done, and the try's output is held to
+// its end as before, when out is not open and cannot be opened by the first
+// item, when the sink never will start, and when the first item is an
+// attribute, a
 // namespace or a function item (appended at the end in tree mode, where it
 // joins out's element or fails).
 //
@@ -52,6 +55,8 @@ package xdmbuild
 // output are appended when the try ends, as in tree mode.
 
 import (
+	"strings"
+
 	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -84,6 +89,11 @@ type tryFwd struct {
 type tryMark struct {
 	s       *sink
 	started bool // the sink had begun: a mark taken before can un-begin it
+	// text is the value of base's newest child when it is text, left
+	// unwritten (sink.settle): what is handed on may merge into it, and a
+	// rollback puts it back as it was, for the catch to merge into.
+	text    string
+	hasText bool
 	frames  int
 	stamp   int64
 	items   int
@@ -292,7 +302,14 @@ func settle(t *Builder, m *tryMark) bool {
 	} else if !s.settle(t) {
 		return false
 	}
-	*m = tryMark{s: s, started: s.started, frames: len(s.frames), stamp: s.stamp, items: s.items, opened: s.opened,
+	var text string
+	hasText := false
+	if t.open != nil {
+		if c := t.open.LastChild(); c != nil && c.Kind() == xdm.KindText && c != s.kept && !s.anchors[c] {
+			text, hasText = strings.Clone(c.Value()), true // the store may compact
+		}
+	}
+	*m = tryMark{s: s, started: s.started, text: text, hasText: hasText, frames: len(s.frames), stamp: s.stamp, items: s.items, opened: s.opened,
 		faults: len(s.faults), pending: s.pending, fwds: m.fwds,
 		base: levelMark{t, len(t.items), t.lastAtomic, *t.refused}}
 	m.w = cw.Mark()
@@ -302,8 +319,9 @@ func settle(t *Builder, m *tryMark) bool {
 
 // settle writes what is complete on the way to t, so that nothing the next
 // append would write is left for it but what is appended after now; t's
-// newest child is written and kept in its tree. false when t is not open
-// and the next append could not open it, or its newest child is text.
+// newest child is written and kept in its tree, unless it is text, which
+// stays unwritten (what comes next may merge into it; tryMark.text). false
+// when t is not open and the next append could not open it.
 func (s *sink) settle(t *Builder) bool {
 	if t.hold {
 		return false
@@ -348,7 +366,7 @@ func (s *sink) settle(t *Builder) bool {
 	}
 	if c := t.open.LastChild(); c != nil && c != s.kept && !s.anchors[c] {
 		if c.Kind() == xdm.KindText {
-			return false
+			return true
 		}
 		s.w.Child(c, s.depths[len(s.depths)-1]+1)
 		s.kept = c
@@ -382,6 +400,9 @@ func (m *tryMark) rollback() int64 {
 	if t.open != nil {
 		for c := t.open.LastChild(); c != nil && !s.anchors[c]; c = t.open.LastChild() {
 			t.open.RemoveLastChild()
+		}
+		if m.hasText {
+			t.open.AppendText(m.text) // written since, merged into, or neither
 		}
 		s.kept = nil
 	} else {
