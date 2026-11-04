@@ -64,7 +64,8 @@ func (s *streamSplit) mapPath(w *splitter, tail, r xpath.Expr, leaf, elem bool, 
 		// R's items may be values: their EBV is not their existence.
 		s.red, w.putRed = "", nil
 	}
-	s.atomize, s.fresh = w.use == useAtomize || splitFolds[s.red], mapFresh(r)
+	s.atomize, s.fresh = w.use == useAtomize || w.use == useString || splitFolds[s.red], mapFresh(r)
+	s.strVal = w.use == useString
 	switch {
 	case leaf && (elem || !(viewCheck{}).safe(tail, vLeaf, splitCounts[s.red])):
 		return "a map over text, comment or PI matches"

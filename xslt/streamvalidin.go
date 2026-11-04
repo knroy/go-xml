@@ -421,9 +421,9 @@ func skipPast(r *bufio.Reader, end string) bool {
 // typedValue reports whether a split that atomizes the element el, a view
 // or the parse's record at its start tag, must take its typed value: el
 // carries a type (only a validated stream types its records) and the split
-// does not want its string value.
+// does not want its string value (a string() tail, or fn:string's argument).
 func typedValue(s *streamSplit, el *xdm.Node) bool {
-	return s.tailText != "string" && el != nil && el.Kind() == xdm.KindElement &&
+	return s.tailText != "string" && !s.strVal && el != nil && el.Kind() == xdm.KindElement &&
 		xdm.TypingOf(el) != (xdm.Typing{})
 }
 

@@ -27,6 +27,7 @@ package xslt
 // tree treats its document node.
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
@@ -116,7 +117,8 @@ func copyStart(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, strip bool)
 		el.SetBaseURI(v.BaseURI())
 	}
 	copyTyping(el, v, strip)
-	copyNamespacesTo(rt, sub, v)
+	var arr [32]nsBinding
+	addBindings(rt, sub, copyOfBindings(v, arr[:0]))
 	for a := range v.Attrs() {
 		if err := sub.AddAttributeWithTyping(a.Name(), a.Value(), copiedTyping(a, strip)); err != nil {
 			return nil, err
@@ -128,6 +130,30 @@ func copyStart(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, strip bool)
 		}
 	}
 	return sub, nil
+}
+
+// copyOfBindings appends to buf v's in-scope bindings in the order the
+// tree's copy-of gives its copy (copyItem: deepCopy, then
+// inheritNamespaces): v's own declarations as written, then the inherited
+// ones, sorted. xsl:copy's sorted order would serialise them otherwise
+// (si-result-document-107).
+func copyOfBindings(v *xdm.Node, buf []nsBinding) []nsBinding {
+	var arr [32]nsBinding
+	all := scopeBindings(v, arr[:0])
+	for p := range v.DeclaredNamespaces() {
+		for _, b := range all {
+			if b.prefix == p { // not xml, nor an undeclaration
+				buf = append(buf, b)
+			}
+		}
+	}
+	own := len(buf)
+	for _, b := range all {
+		if !slices.Contains(buf[:own], b) {
+			buf = append(buf, b)
+		}
+	}
+	return buf
 }
 
 // copiedTyping is the typing a copy of n has: all of n's, or with strip

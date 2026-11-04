@@ -152,6 +152,7 @@ type streamSplit struct {
 	tail     *xpath.Compiled
 	tailText string
 	atomize  bool // the outer, or the fold, atomizes the items
+	strVal   bool // the outer is fn:string: a typed match gives its string value
 	red      string
 	nth      int64
 	fold     *xpath.Compiled // red sum, min, max, avg: red(($acc, $items), ...)
@@ -290,7 +291,8 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 	s.red, s.nth = w.red, w.nth
 	if p.ctxItem {
 		// The context consumed whole: string(.), data(.), copy-of(.).
-		s.ctxItem, s.atomize = true, w.use == useAtomize || splitFolds[s.red]
+		s.ctxItem, s.atomize = true, w.use == useAtomize || w.use == useString || splitFolds[s.red]
+		s.strVal = w.use == useString
 		if s.red != "" && !splitFolds[s.red] {
 			s.red = "" // count(.), exists(.) are motionless; head(.) keeps it
 		}
@@ -427,7 +429,8 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		w.putRed = nil
 	}
 	countOnly := tail == nil && splitCounts[s.red]
-	s.atomize = w.use == useAtomize || splitFolds[s.red]
+	s.atomize = w.use == useAtomize || w.use == useString || splitFolds[s.red]
+	s.strVal = w.use == useString
 	if tf := textTail(tail); tf != "" {
 		s.tailText, tail = tf, nil
 	}
@@ -789,6 +792,7 @@ const (
 	useAtomize                 // as values
 	useCount                   // only how many (count, exists, empty)
 	useEBV                     // as an effective boolean value
+	useString                  // as string values: fn:string's argument, not its typed value
 )
 
 // splitPathParts is a consuming path taken apart.
@@ -930,6 +934,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 			argUse = useCount
 		case x.Name.Local == "boolean" || x.Name.Local == "not":
 			argUse = useEBV
+		}
+		if x.Name.URI == fnNS && x.Name.Local == "string" {
+			argUse = useString // a node's string value, which a typed node's value is not
 		}
 		// A reducer holds the path directly: walk takes its first argument
 		// as the path itself.
@@ -2160,7 +2167,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					// The values of one attribute: off the start tag.
 					var items xdm.Sequence
 					if a := ev.Node.Attr(s.attr.URI, s.attr.Local); a != nil {
-						items = xdm.Atomize(xdm.One(a))
+						items = s.atomized(xdm.One(a))
 						if s.red == "" && len(items) == 1 {
 							// Kept: its own string, not one into the
 							// parse's text block, which it would pin.
@@ -2286,6 +2293,24 @@ func (s *streamSplit) hidden(pf *splitFrame) splitFrame {
 	return f
 }
 
+// atomized is items atomized; for fn:string's argument (strVal), a node is
+// its string value instead: string(@a) of a typed @a="2.00" is "2.00", not
+// the "2" of its xs:decimal.
+func (s *streamSplit) atomized(items xdm.Sequence) xdm.Sequence {
+	if !s.strVal {
+		return xdm.Atomize(items)
+	}
+	out := make(xdm.Sequence, len(items))
+	for k, it := range items {
+		if n, ok := it.(*xdm.Node); ok {
+			out[k] = xdm.NewUntypedAtomic(n.StringValue())
+		} else {
+			out[k] = it
+		}
+	}
+	return out
+}
+
 // textAtomic is the value a match's string value t gives.
 func (s *streamSplit) textAtomic(t string) *xdm.Atomic {
 	if s.tailText == "string" {
@@ -2332,7 +2357,7 @@ func (r *splitRun) leaf(n *xdm.Node, d int) error {
 		}
 		return r.take(xdm.One(n))
 	}
-	return r.take(xdm.Atomize(xdm.One(n)))
+	return r.take(s.atomized(xdm.One(n)))
 }
 
 // ground copies the element the cursor is at and takes it, and the matches
@@ -2463,7 +2488,7 @@ func (r *splitRun) yield(n *xdm.Node) error {
 	case s.tailText != "":
 		return r.take(xdm.One(s.textAtomic(n.StringValue())))
 	case s.atomize:
-		return r.take(xdm.Atomize(xdm.One(n)))
+		return r.take(s.atomized(xdm.One(n)))
 	}
 	return r.take(xdm.One(n))
 }
@@ -2499,7 +2524,7 @@ func (r *splitRun) take(items xdm.Sequence) error {
 	switch s.red {
 	case "":
 		if s.atomize && !s.keepEmpty { // streamcopy_l3text.go
-			items = xdm.Atomize(items)
+			items = s.atomized(items)
 		}
 		if s.counted {
 			items = standIns(len(items))
@@ -2524,7 +2549,7 @@ func (r *splitRun) take(items xdm.Sequence) error {
 			if r.idx++; r.idx == s.nth && it != nil {
 				r.items, r.done = xdm.One(it), true
 				if s.atomize {
-					r.items = xdm.Atomize(r.items)
+					r.items = s.atomized(r.items)
 				}
 				break
 			}

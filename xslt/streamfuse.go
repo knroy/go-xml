@@ -240,7 +240,7 @@ func (p *fusedProng) matched(ev xdmstream.Event) error {
 	if s.attr != nil {
 		var items xdm.Sequence
 		if a := ev.Node.Attr(s.attr.URI, s.attr.Local); a != nil {
-			items = xdm.Atomize(xdm.One(a))
+			items = s.atomized(xdm.One(a))
 			if s.red == "" && len(items) == 1 {
 				// Kept: its own string, not one into the parse's text block.
 				if v, ok := items[0].(*xdm.Atomic); ok && v.Type == xdm.TypeUntypedAtomic {

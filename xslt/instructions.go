@@ -799,7 +799,13 @@ func copyNamespacesTo(rt *runtime, sub *outputBuilder, src *xdm.Node) {
 	// is left out: it is bound implicitly everywhere, so declaring it would
 	// be redundant and is in fact forbidden in the output.
 	var arr [32]nsBinding
-	for _, b := range scopeBindings(src, arr[:0]) {
+	addBindings(rt, sub, scopeBindings(src, arr[:0]))
+}
+
+// addBindings declares bs on the element sub is building, as
+// copyNamespacesTo does.
+func addBindings(rt *runtime, sub *outputBuilder, bs []nsBinding) {
+	for _, b := range bs {
 		p, uri := b.prefix, b.uri
 		// Inherited rather than copied, as for a literal result element. The
 		// two cases AddNamespace does more than add -- XTDE0440, and the
