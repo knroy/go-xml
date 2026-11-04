@@ -10,7 +10,8 @@ import (
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
-// leafLoop plans the body of el, an xsl:for-each whose select gives only
+// leafLoop plans the body of el, an xsl:for-each or xsl:iterate (its
+// parameters and xsl:on-completion checked by loopOp) whose select gives only
 // attributes, text, comment or processing-instruction nodes, or values
 // (leafItems), when every instruction of it reads of each item only what a
 // complete parentless node has (leafBody). Each item the loop is handed is
@@ -28,14 +29,14 @@ func (b *streamBuilder) leafLoop(el *xdm.Node, body []*xdm.Node) bool {
 	return true
 }
 
-// leafBody checks body, the instructions of el, an xsl:for-each over
+// leafBody checks body, the instructions of el, an xsl:for-each or xsl:iterate over
 // leafItems, at focus vLeaf, as a leaf rule's body is checked: a strict
 // builder (every expression checked), noIdent, no upward step. It runs in a
 // builder on a plan of its own: nothing it meets is registered in b's, so a
 // refusal leaves b as it was; a body in which anything would be registered
 // (a consumer, a value template's op) is refused.
 func (b *streamBuilder) leafBody(el *xdm.Node, body []*xdm.Node) bool {
-	if !isXSL(el, "for-each") || !leafItems(parseAt(el, el.AttrValue("select"))) {
+	if !isXSL(el, "for-each") && !isXSL(el, "iterate") || !leafItems(parseAt(el, el.AttrValue("select"))) {
 		return false
 	}
 	for ch := range el.Children() {

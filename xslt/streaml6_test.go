@@ -20,6 +20,9 @@ var l6Bodies = []struct {
 	{`<xsl:variable name="d" as="document-node()*"><xsl:for-each select="doc/rec[@v gt 1]/@v"><xsl:document><xsl:sequence select="data(.)"/></xsl:document></xsl:for-each></xsl:variable><out><xsl:copy-of select="data($d)"/></out>`, true},
 	// The range operator as a loop's population, the body reading each value (streamable-077).
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:for-each select="1 to count(.//*)"><xsl:value-of select="concat(., ' ')"/></xsl:for-each></e></xsl:for-each></out>`, true},
+	// xsl:iterate over attributes and over values (si-iterate-134's shape).
+	{`<out><xsl:iterate select="//rec/@k"><xsl:param name="s" select="''"/><xsl:on-completion><xsl:value-of select="$s"/></xsl:on-completion><xsl:next-iteration><xsl:with-param name="s" select="concat($s, .)"/></xsl:next-iteration></xsl:iterate></out>`, true},
+	{`<out><xsl:iterate select=".//*/name()"><xsl:param name="n" select="0"/><xsl:on-completion><xsl:value-of select="$n"/></xsl:on-completion><xsl:next-iteration><xsl:with-param name="n" select="$n + string-length(.)"/></xsl:next-iteration></xsl:iterate></out>`, true},
 	// A motionless loop over the view's attributes (motionlessLoop, leafBody).
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:for-each select="@*"><n><xsl:value-of select="name(.)"/></n><v><xsl:value-of select="."/></v></xsl:for-each></e></xsl:for-each></out>`, true},
 }
