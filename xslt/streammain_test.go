@@ -199,6 +199,15 @@ var mainCases = []struct {
 	// past the leaves before it (streamtee_docnode.go; sf-unparsed-entity-05).
 	{`<xsl:mode streamable="yes"/><xsl:template match="/"><out><a><xsl:value-of select="unparsed-entity-uri('pic')"/></a>` +
 		`<b><xsl:value-of select="unparsed-entity-public-id('pic')"/></b><xsl:copy-of select="*"/></out></xsl:template>`, true},
+	// A held select at the document node with at most one match never
+	// gives up, so a principal input streams it (streammain_onematch.go;
+	// accumulator-046s/047s); one with many matches still may, and is refused.
+	{`<xsl:mode streamable="yes" on-no-match="shallow-skip"/><xsl:template match="/"><o><xsl:apply-templates select="copy-of(/doc/rec[2])"/></o></xsl:template>` +
+		`<xsl:template match="rec"><r k="{@k}"><xsl:copy-of select="."/></r></xsl:template>`, true},
+	{`<xsl:accumulator name="n" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>` +
+		`<xsl:mode streamable="yes" on-no-match="shallow-skip" use-accumulators="n"/><xsl:template match="/"><o><xsl:apply-templates select="snapshot(/doc/rec[2])"/></o></xsl:template>` +
+		`<xsl:template match="rec"><r n="{accumulator-before('n')}"/></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-skip"/><xsl:template match="/"><o><xsl:apply-templates select="copy-of(/doc/rec)"/></o></xsl:template>`, false},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

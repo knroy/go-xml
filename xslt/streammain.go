@@ -132,7 +132,7 @@ func (s *streamSplit) givesUp() bool {
 	if s.cond != nil {
 		return s.then.givesUp() || s.els.givesUp()
 	}
-	return s.noRoot || s.hold || s.fold != nil && s.red != "sum" && s.red != "avg" && !s.oneTake()
+	return s.noRoot || s.hold && !s.oneMatch() || s.fold != nil && s.red != "sum" && s.red != "avg" && !s.oneTake()
 }
 
 // atTop reports whether what the instruction el writes may be an item of
