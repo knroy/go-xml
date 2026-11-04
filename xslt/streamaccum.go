@@ -558,6 +558,7 @@ func (sa *streamAccums) value(def *accumulatorDef, node *xdm.Node, post bool) (x
 		if err := sa.consume(d); err != nil {
 			return nil, err
 		}
+		f = &sa.frames[d] // consume may have grown sa.frames
 	}
 	if !sa.rd.valid(i, f.afterAt) {
 		return nil, sa.errs[i]

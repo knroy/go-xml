@@ -18,8 +18,10 @@ func TestStreamTryApplyMatchesTree(t *testing.T) {
 		decls  string
 		stream bool
 	}{
+		// Inside <out>: at the top of the principal result the built-in
+		// shallow-copy of a leaf is refused on its own (971e7955).
 		{`<xsl:mode on-no-match="shallow-copy" streamable="yes"/>
-		  <xsl:template match="/"><xsl:try><xsl:apply-templates/><xsl:catch/></xsl:try></xsl:template>`, true},
+		  <xsl:template match="/"><out><xsl:try><xsl:apply-templates/><xsl:catch/></xsl:try></out></xsl:template>`, true},
 		{`<xsl:mode on-no-match="fail" streamable="yes"/>
 		  <xsl:template match="/"><xsl:apply-templates/></xsl:template>
 		  <xsl:template match="*"><xsl:copy><xsl:apply-templates/></xsl:copy></xsl:template>

@@ -278,9 +278,12 @@ func TestStreamForkHostCalls(t *testing.T) {
 // only when the variable is provably a map or an array (mapCalls): a
 // variable may hold a function item that reads the focus or the stream.
 // accumulator-061's shape -- $aa bound to accumulator-after#1, called on a
-// streamed node in a rule -- must give through TransformReader what Parse +
-// Transform gives, with no guard hit (it streamed, and failed with "a context
-// read twice", before the fix). On the core (a
+// streamed node in a rule -- streams (844cd8f5: the call reads nothing of
+// its focus) and gives TransformReader's own tree fallback's answer, with no
+// guard hit (it streamed, and failed with "a context read twice", before the
+// fix). That answer is XTDE3350, the function item saving an absent focus on
+// a streamed input (§10.3.6, be09e991); Transform of a tree gives a value
+// (TestAccumDynamicCallStreamedInput), so the rows are globalItemRow's. On the core (a
 // source-document container; TransformReader refuses map-valued globals by
 // its own rule), a map or array variable's lookup, declared by type, by
 // constructor or by xsl:map, still streams, and a function variable's call
@@ -294,10 +297,10 @@ func TestStreamDynamicCallTargets(t *testing.T) {
 		decls  string
 		stream bool
 	}{
-		{`<xsl:param name="aa" select="accumulator-after#1"/>` + accum +
-			`<xsl:template match="fig"><p n="{accumulator-before('p:n')}"/><xsl:apply-templates/><p><xsl:value-of select="../$aa('p:n')"/></p></xsl:template>`, false},
-		{`<xsl:param name="aa" select="accumulator-before#1"/>` + accum +
-			`<xsl:template match="fig"><p><xsl:value-of select="$aa('p:n')"/></p></xsl:template>`, false},
+		{globalItemRow + `<xsl:param name="aa" select="accumulator-after#1"/>` + accum +
+			`<xsl:template match="fig"><p n="{accumulator-before('p:n')}"/><xsl:apply-templates/><p><xsl:value-of select="../$aa('p:n')"/></p></xsl:template>`, true},
+		{globalItemRow + `<xsl:param name="aa" select="accumulator-before#1"/>` + accum +
+			`<xsl:template match="fig"><p><xsl:value-of select="$aa('p:n')"/></p></xsl:template>`, true},
 		{`<xsl:param name="nm" select="name#1"/><xsl:mode streamable="yes" on-no-match="shallow-skip"/>` +
 			`<xsl:template match="fig"><p n="{$nm(.)}"/></xsl:template>`, false},
 		// A param without a map type may be given a function: refused.
