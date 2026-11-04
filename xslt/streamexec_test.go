@@ -28,6 +28,7 @@ func coreRun(sheet, dir string, core bool, opts TransformOptions) (out, errText 
 		return "", "COMPILE: " + err.Error(), tr
 	}
 	docs, _ := NewFileResolver(dir)
+	docs.AllowDOCTYPE = opts.SourceParseOptions.AllowDOCTYPE // a DTD document's rows
 	opts.InitialTemplate, opts.Documents = "main", docs
 	noBursts = !core
 	res, err := s.Transform(context.Background(), nil, opts)

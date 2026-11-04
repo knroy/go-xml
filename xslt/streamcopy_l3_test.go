@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // TestStreamDocCopyEvents: a copy of the document, or of the document
@@ -37,6 +39,10 @@ func TestStreamDocCopyEvents(t *testing.T) {
 	}
 }
 
+// dtdOpts let the rows' documents declare a DTD (the resolver refuses a
+// DOCTYPE by default).
+var dtdOpts = TransformOptions{SourceParseOptions: xdm.ParseOptions{AllowDOCTYPE: true}}
+
 // TestStreamCopyDocNode: xsl:copy of the document node runs on the core
 // whatever its body reads, or when it reads nothing: the copy has the
 // document's DOCTYPE (its unparsed entities) and base URI, as the tree's
@@ -64,7 +70,7 @@ func TestStreamCopyDocNode(t *testing.T) {
 			`<xsl:variable name="c" as="document-node()"><xsl:copy/></xsl:variable><o>` + ent + `</o>`,
 			`<o><xsl:where-populated><xsl:copy><xsl:if test="false()"><b/></xsl:if></xsl:copy></xsl:where-populated><xsl:on-empty><e/></xsl:on-empty></o>`,
 		} {
-			coreCheck(t, coreSheet(body), dir, name+": "+body, true, TransformOptions{})
+			coreCheck(t, coreSheet(body), dir, name+": "+body, true, dtdOpts)
 		}
 	}
 }
@@ -194,7 +200,7 @@ func TestStreamDocCopyIDs(t *testing.T) {
 		`<xsl:variable name="c" select="copy-of(.)"/>` + probe,
 		`<xsl:variable name="c" as="node()"><xsl:copy-of select="."/></xsl:variable>` + probe,
 	} {
-		coreCheck(t, coreSheet(body), dir, body, true, TransformOptions{})
+		coreCheck(t, coreSheet(body), dir, body, true, dtdOpts)
 	}
 }
 
