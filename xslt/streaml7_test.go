@@ -30,6 +30,11 @@ var l7Rows = []struct {
 	// copy-of() of the attributes a climbing tail reaches (sx-square-array-135;
 	// viewLeafCopyOK).
 	{``, `<out><xsl:value-of select="//sub/ancestor-or-self::*/@*/copy-of()" separator="|"/></out>`, true},
+	// xsl:perform-sort over a grounded consuming select (si-perform-sort-001,
+	// -002; performSortOp); over streamed nodes it stays on the tree.
+	{``, `<out><xsl:perform-sort select="copy-of(doc/rec)"><xsl:sort select="@k"/><xsl:sort select="@v" order="descending"/></xsl:perform-sort></out>`, true},
+	{``, `<out><xsl:perform-sort select="//rec/@k/string()"><xsl:sort select="."/></xsl:perform-sort></out>`, true},
+	{``, `<out><xsl:perform-sort select="doc/rec"><xsl:sort select="@k"/></xsl:perform-sort></out>`, false},
 }
 
 // l7Analysis are §19.8 verdicts lane L7 models (streamability_l7.go).
