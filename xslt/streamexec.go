@@ -1138,7 +1138,9 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 			}
 			continue
 		}
-		if !op.planned {
+		if !op.planned || op.pop != nil && op.pop.off {
+			// Unplanned, or a population's items handed one at a time off
+			// the cursor: either way no context size (streamsplit_l6.go).
 			if why := groundLastWhy(op.el); why != "" { // streamsplit_l6.go
 				return why
 			}
