@@ -24,6 +24,9 @@ var l7Rows = []struct {
 	{``, `<o><xsl:copy select="doc/rec[1]/@v" type="xs:decimal"/></o>`, true},
 	{``, `<o><xsl:copy select="doc/rec[1]/@k" type="xs:date"/></o>`, true},
 	{``, `<o><xsl:copy select="/*/*/@v" type="xs:decimal"/></o>`, true},
+	// A for-each over a union of two paths of child steps at one depth,
+	// its body absorbing "." with || (sx-union-315; disjointDepthPaths).
+	{``, `<out><xsl:for-each select="/doc/rec union /doc/other"><xsl:value-of select=". || '|'"/></xsl:for-each></out>`, true},
 }
 
 // l7Analysis are §19.8 verdicts lane L7 models (streamability_l7.go).
