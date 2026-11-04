@@ -2368,7 +2368,9 @@ func (r *splitRun) fold() error {
 	}
 	// min and max over one type compare one way throughout; over several,
 	// promotion makes the answer depend on the order of the comparisons.
-	if r.s.red != "sum" && r.s.red != "avg" && !sameAtomicType(r.buf, &r.typ) {
+	// The context item's values come in one take, folded once: the tree's
+	// min or max of them (streamsplit_onetake.go).
+	if r.s.red != "sum" && r.s.red != "avg" && !r.s.oneTake() && !sameAtomicType(r.buf, &r.typ) {
 		return errSplitGiveUp
 	}
 	acc, err := r.s.fold.Eval(r.ctx.WithVar(splitAcc, r.acc).WithVar(splitItems, r.buf))
