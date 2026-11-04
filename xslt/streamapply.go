@@ -95,6 +95,10 @@ func (b *streamBuilder) applyOp(el *xdm.Node, f vfocus) bool {
 	if f == vLeaf {
 		return b.refuse("xsl:apply-templates on a node with no content")
 	}
+	if el.Attr("", "select") != nil && foreignApply(el, parseAt(el, el.AttrValue("select")), f) && b.consumingParam(el, f) {
+		// Consuming only in a parameter (streamlast_mm2.go).
+		return b.applyAttrs(el, f) && b.foreignParams(el, f) && b.addForeignApply(el, f)
+	}
 	kind := applyKids
 	if a := el.Attr("", "select"); a != nil {
 		switch e := b.selectOf(el); { // streamfn_frame.go: an inlined body's parameter read as its argument

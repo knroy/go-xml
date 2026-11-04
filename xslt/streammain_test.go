@@ -222,6 +222,12 @@ var mainCases = []struct {
 		`<xsl:accumulator-rule match="rec/text()|rec/comment()" select="$value + 1"/></xsl:accumulator>` +
 		`<xsl:mode streamable="yes" on-no-match="shallow-copy" use-accumulators="t"/>` +
 		`<xsl:template match="rec/text()[accumulator-before('t') eq 1]"><f><xsl:value-of select="."/></f></xsl:template>`, true},
+	// apply-templates over a global tree in a streamed loop, its one
+	// consuming parameter grounded: read off the cursor before the tree's
+	// rules run (foreignParams, streamlast_mm2.go; si-apply-templates-006).
+	// A parameter that is the stream's node stays on the tree.
+	{mm2ForeignParam("copy-of(.)"), true},
+	{mm2ForeignParam("."), false},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
@@ -395,4 +401,12 @@ func mm2CopyVar(copyAcc string) string {
 		`<xsl:template match="sub"><s n="{accumulator-before('a')}"/></xsl:template>` +
 		`<xsl:template match="/"><o><xsl:variable name="v" as="element()*"><xsl:copy-of select="doc/rec[2]" copy-accumulators="` + copyAcc + `"/></xsl:variable>` +
 		`<xsl:apply-templates select="$v"/></o></xsl:template>`
+}
+
+// mm2ForeignParam is a rule "/" applying templates, per rec, to a global
+// tree with a tunnel parameter of select sel (si-apply-templates-006).
+func mm2ForeignParam(sel string) string {
+	return `<xsl:mode streamable="yes"/><xsl:param name="t"><x/></xsl:param>` +
+		`<xsl:template match="/"><o><xsl:for-each select="doc/rec"><xsl:apply-templates select="$t/*"><xsl:with-param name="c" select="` + sel + `" tunnel="yes"/></xsl:apply-templates></xsl:for-each></o></xsl:template>` +
+		`<xsl:template match="x"><xsl:param name="c" tunnel="yes"/><y><xsl:copy-of select="$c"/></y></xsl:template>`
 }

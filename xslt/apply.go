@@ -93,6 +93,12 @@ func (i *applyTemplatesInstr) applySelected(rt *runtime, out *outputBuilder, seq
 	if err != nil {
 		return err
 	}
+	return i.applyWith(rt, out, seq, params, tunnels)
+}
+
+// applyWith dispatches each item of seq, already sorted, with the
+// parameters evaluated: the rest of applySelected.
+func (i *applyTemplatesInstr) applyWith(rt *runtime, out *outputBuilder, seq xdm.Sequence, params, tunnels paramValues) error {
 
 	if err := rt.descend(); err != nil {
 		return err

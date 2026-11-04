@@ -732,10 +732,22 @@ func (i *applyTemplatesInstr) executeForeign(rt *runtime, out *outputBuilder, ru
 		}
 	}
 	off := run.off
+	defer func() { run.off = off }()
 	run.off = true
-	err = i.applySelected(rt, out, seq)
-	run.off = off
-	return err
+	if len(i.sorts) > 0 {
+		if seq, err = applySorts(rt, seq, i.sorts); err != nil {
+			return err
+		}
+	}
+	// A grounded parameter is read off the cursor (foreignParams,
+	// streamlast_mm2.go), before the rules run off it; the others off it.
+	run.off = off || !run.paramOp(i.params)
+	params, tunnels, err := evalParams(rt, i.params)
+	if err != nil {
+		return err
+	}
+	run.off = true
+	return i.applyWith(rt, out, seq, params, tunnels)
 }
 
 // treeApplyOp reports whether op hands its items to the tree's rules: an

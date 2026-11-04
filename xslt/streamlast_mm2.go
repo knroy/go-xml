@@ -12,6 +12,7 @@ package xslt
 import (
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -62,4 +63,68 @@ func copiesOnly(b *xdm.Node) bool {
 		}
 	}
 	return n > 0
+}
+
+// foreignParams checks the xsl:with-params of el, an xsl:apply-templates
+// over items not of the stream (applyForeign): motionless, or one whose
+// value is grounded (§19.8.4.19: copy-of(.), snapshot(...)), read off the
+// cursor as an expression op before the tree's rules run (executeForeign)
+// (si-apply-templates-006). A copy is valid wherever the rules take it.
+func (b *streamBuilder) foreignParams(el *xdm.Node, f vfocus) bool {
+	var op *streamOp
+	for ch := range el.Children() {
+		switch {
+		case ch.Kind() == xdm.KindText && strings.TrimSpace(ch.Value()) == "",
+			ch.Kind() == xdm.KindComment, ch.Kind() == xdm.KindPI:
+			continue
+		case !isXSL(ch, "with-param"):
+			return b.refuse(elName(ch) + " in " + elName(el))
+		}
+		// As withParams checks them: a select refused there plans nothing.
+		if sb := b.strict(); sb.attrs(ch, f) && sb.content(ch, f) {
+			continue
+		}
+		// In a group the parameter would be read at the group's start,
+		// before its members (TestStreamValuesApplyTakesNoParams).
+		if op != nil || b.grp || ch.Attr("", "select") == nil || !b.groundedSelect(ch) { // streamgroup.go
+			return b.refuse("consuming xsl:with-param of " + elName(el) + ": not grounded")
+		}
+		for a := range ch.Attrs() {
+			if n := a.Name(); n.URI == "" && !streamAttrsOK[n.Local] {
+				return b.refuse("attribute " + n.Local + " of xsl:with-param")
+			}
+		}
+		op = &streamOp{x: b.x, el: ch, doc: f == vNone, inGroup: b.grp, key: b.key}
+	}
+	if op != nil {
+		*b.ops = append(*b.ops, op)
+		b.x.exprOps = append(b.x.exprOps, op)
+		b.kinds[streamtrace.KindSelect]++
+	}
+	return true
+}
+
+// consumingParam reports whether one of the xsl:with-params of el reads
+// more than a view has, all of them by a select (whose check plans
+// nothing): an apply foreignParams takes, which withParams refuses.
+func (b *streamBuilder) consumingParam(el *xdm.Node, f vfocus) bool {
+	found := false
+	for _, ch := range el.ChildElements() {
+		if !isXSL(ch, "with-param") || ch.Attr("", "select") == nil {
+			return false
+		}
+		found = found || !b.strict().attrs(ch, f)
+	}
+	return found
+}
+
+// paramOp reports whether one of params is an expression op of run's plan
+// (foreignParams).
+func (run *streamRun) paramOp(params []*Variable) bool {
+	for _, p := range params {
+		if p.Select != nil && run.x.byExpr[p.Select] != nil {
+			return true
+		}
+	}
+	return false
 }
