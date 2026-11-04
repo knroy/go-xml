@@ -114,6 +114,9 @@ type streamExec struct {
 	// properties of the stand-in, and docMotionless that one reads nothing
 	// of the document (streamcopy_l3.go).
 	docProps, docMotionless bool
+	// docEarly says a document-node rule reads the document's unparsed
+	// entities before its consumer (streamtee_docnode.go).
+	docEarly bool
 	// inlines are the calls planned as their functions' bodies, by the
 	// caller's instruction (streamfn_inline.go).
 	inlines map[*xdm.Node]*inlinedCall

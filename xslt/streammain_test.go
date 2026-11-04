@@ -169,6 +169,11 @@ var mainCases = []struct {
 	// (streamtee_ground.go; sf-unparsed-entity-01).
 	{`<xsl:mode streamable="yes"/><xsl:template match="doc"><o u="{unparsed-entity-uri('pic')}"><p><xsl:value-of select="unparsed-entity-public-id('pic')"/></p>` +
 		`<n><xsl:value-of select="count(rec)"/></n></o></xsl:template>`, true},
+	// The same in rule "/" before its consumer, a copy of the document
+	// element into an element: the run moves to the document element first,
+	// past the leaves before it (streamtee_docnode.go; sf-unparsed-entity-05).
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><out><a><xsl:value-of select="unparsed-entity-uri('pic')"/></a>` +
+		`<b><xsl:value-of select="unparsed-entity-public-id('pic')"/></b><xsl:copy-of select="*"/></out></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

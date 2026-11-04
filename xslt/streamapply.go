@@ -1122,6 +1122,11 @@ func (run *streamRun) rule(rt *runtime, t *Template, node *xdm.Node, params, tun
 		if err := run.watchDoc(); err != nil { // streamcopy_l3.go
 			return err
 		}
+		if x.docEarly {
+			if err := run.toRoot(); err != nil { // streamtee_docnode.go
+				return err
+			}
+		}
 	}
 	defer rt.leaveFrame(rt.enterFrame())
 	if x.groundRule {
