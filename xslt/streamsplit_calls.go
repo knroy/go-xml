@@ -42,6 +42,14 @@ type sheetCall struct {
 	values bool // every parameter takes atomic values
 	burst  bool // every body reached is burstSafe over the nodes it is given
 	atomic bool // the declared result type is atomic
+	// climb says a body reached climbs; up that the result may hold
+	// ancestors' copies or their attributes, of kind res (streamfn_climb.go).
+	climb, up bool
+	res       ckind
+	// keep says the call is read as a call, not inlined: its closure was
+	// judged with climbing allowed and recurses, which an inlined body,
+	// its inner calls unmarked, would not let the split read.
+	keep bool
 }
 
 var sheetCalls sync.Map // weak.Pointer[xpath.FuncCall] -> sheetCall
@@ -100,6 +108,7 @@ func judgeSheetCall(x *xpath.FuncCall, fns map[funcKey]*streamFunc) (sheetCall, 
 				break
 			}
 		}
+		climbMark(&sc, f, fns, bodies) // streamfn_climb.go
 	}
 	return sc, sc.values || sc.burst
 }
@@ -231,7 +240,7 @@ func plainParams(fn *xdm.Node) bool {
 // function: marked, and its arguments burstSafe.
 func sheetCallSafe(x *xpath.FuncCall, noPos bool) bool {
 	sc, ok := sheetCallOf(x)
-	return ok && (sc.values || sc.burst) && allBurstSafe(x.Args, noPos)
+	return ok && (sc.values || sc.burst) && !sc.up && allBurstSafe(x.Args, noPos)
 }
 
 // sheetCallAtomic is atomicValued for a call outside the fn namespace.
@@ -294,6 +303,11 @@ func (w *splitter) sheetCall(x *xpath.FuncCall) (done, ok bool) {
 		}
 		if !w.slot(x.Args[k], func(y xpath.Expr) { x.Args[k] = y }, use) {
 			return true, false
+		}
+		if sc.climb && !sc.values && before == nil && w.pe != nil {
+			// The outer would call it once on every match's copy: their
+			// ancestors' copies are not one node each, as the tree's are.
+			return true, w.refuse("function " + x.Name.Local + "() climbing from the matches")
 		}
 		if sc.values || before != nil || w.pe == nil || atomicValued(orig) || inner != nil && w.pe == inner {
 			continue

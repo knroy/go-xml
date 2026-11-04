@@ -130,6 +130,9 @@ type streamSplit struct {
 	// match's nodes are its own, as a simple map gives them.
 	mapClimb              bool
 	climbNodes, climbEach *xpath.Compiled
+	// json says each match, or the context, is written as JSON text off
+	// the cursor, which is the item it gives (streamfn_json.go).
+	json *jsonSplit
 	// predFail and tailFail say a predicate of P, or the tail, may raise an
 	// error: the tree evaluates them all, so the split may not stop early.
 	predFail, tailFail bool
@@ -225,6 +228,11 @@ func splitStreamIn(e xpath.Expr, base *xpath.Compiled, doc, group, key bool) (*s
 	if w.pe != nil {
 		if why := s.path(w, part); why != "" {
 			return nil, why
+		}
+		if w.json != nil {
+			if why := s.jsonAfter(w); why != "" { // streamfn_json.go
+				return nil, why
+			}
 		}
 	}
 	if s.red != "" && w.putRed != nil {
@@ -497,6 +505,8 @@ func (s *streamSplit) class() string {
 			return a
 		}
 		return b
+	case s.json != nil:
+		return "output" // the JSON text (streamfn_json.go)
 	case s.ctxItem && !s.atomize:
 		return "subtree"
 	case s.red != "":
@@ -788,6 +798,8 @@ type splitter struct {
 	// is the tail, a match at a time, its nodes not merged across matches.
 	mapped bool
 	why    string
+	// json says the path found is the node of fn:xml-to-json (streamfn_json.go).
+	json *jsonSplit
 }
 
 // isCurrentGroup reports whether e is a call on fn:current-group().
@@ -855,6 +867,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 		}
 		switch x.Name.URI {
 		case fnNS:
+			if done, ok := w.jsonCall(x, put, use); done { // streamfn_json.go
+				return ok
+			}
 			if !burstConsumers[x.Name.Local] && !splitWholeFns[x.Name.Local] {
 				return w.refuse("function " + x.Name.Local + "()")
 			}
@@ -1829,6 +1844,9 @@ func (s *streamSplit) loopAt(ctx *xpath.Context, c *xdmstream.Cursor, d int, g *
 func (r *splitRun) run(v *xdm.Node, d int) error {
 	s, c := r.s, r.c
 	if s.ctxItem {
+		if s.json != nil {
+			return r.jsonContext(v, d) // streamfn_json.go
+		}
 		if s.atomize && v != nil && typedValue(s, v) { // streamvalidin.go
 			items, err := groundAtomized(c)
 			if err != nil {
@@ -2019,6 +2037,13 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					return err
 				}
 			case matchText:
+				if s.json != nil {
+					decided = true
+					if err := r.jsonMatch(ev); err != nil { // streamfn_json.go
+						return err
+					}
+					break
+				}
 				if typedValue(s, ev.Node) { // streamvalidin.go
 					items, err := groundAtomized(c)
 					if err != nil {
@@ -2174,6 +2199,9 @@ func (s *streamSplit) textAtomic(t string) *xdm.Atomic {
 // which a matchBody loop's body is handed as a match.
 func (r *splitRun) leaf(n *xdm.Node, d int) error {
 	s := r.s
+	if s.json != nil {
+		return errJSONStream // streamfn_json.go: not an element or document node
+	}
 	switch {
 	case s.mode == matchCount || s.red == "nth" && !s.atomize && s.tailText == "" && s.tail == nil && r.idx+1 < s.nth:
 		return r.take(xdm.Sequence{nil})

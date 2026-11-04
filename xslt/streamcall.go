@@ -62,6 +62,7 @@ func (c *compiler) streamFuncs() map[funcKey]*streamFunc {
 // their bodies exactly, and the simple maps that are paths.
 func (c *compiler) inlineCalls(e xpath.Expr) xpath.Expr {
 	markSheetCalls(e, c.streamFuncs()) // streamsplit_calls.go
+	markSheetRefs(e, c.streamFuncs())  // streamfn_refs.go
 	return rewriteCalls(e, c.streamFuncs())
 }
 
@@ -73,7 +74,10 @@ func rewriteCalls(e xpath.Expr, fns map[funcKey]*streamFunc) xpath.Expr {
 		for i := range x.Args {
 			x.Args[i] = re(x.Args[i])
 		}
-		if body := inlineCall(x, fns); body != nil {
+		if c := copiedOuterInner(x); c != nil { // streamfn_refs.go
+			return c
+		}
+		if body := inlineCall(x, fns); body != nil && !climbKeepsCall(x) { // streamfn_climb.go
 			return body
 		}
 		if v := traceValue(x); v != nil {
