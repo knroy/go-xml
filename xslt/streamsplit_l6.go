@@ -203,8 +203,34 @@ func (s *Stylesheet) copiesLinkWhy() string {
 // tree's rules (treeApplyOp), which reaches no streamed rule.
 func (x *streamExec) onlyCopies() bool {
 	ok := true
-	x.eachApply(func(op *streamOp) { ok = ok && treeApplyOp(op) })
+	offs := x.offApplies()
+	x.eachApply(func(op *streamOp) { ok = ok && (treeApplyOp(op) || offs[op]) })
 	return ok
+}
+
+// offApplies are the apply ops of x in the body of a loop that runs off the
+// cursor -- on grounded copies (matchGround), on a population's items off
+// it (pop.off), or a body that was not planned (grounded): there the
+// instruction finds no feed (run.off) and runs the tree's dispatch on the
+// copy (si-iterate-139: apply-templates select="." over snapshot(//a) into
+// a mode that is not streamable). Read once the plan is readied.
+func (x *streamExec) offApplies() map[*streamOp]bool {
+	var offs map[*streamOp]bool
+	var walk func(ops []*streamOp, off bool)
+	walk = func(ops []*streamOp, off bool) {
+		for _, op := range ops {
+			if off && op.apply != applyNone {
+				if offs == nil {
+					offs = map[*streamOp]bool{}
+				}
+				offs[op] = true
+			}
+			in := off || op.loop && (!op.planned || op.split != nil && op.split.mode == matchGround || op.pop != nil && op.pop.off)
+			walk(op.inner, in)
+		}
+	}
+	walk(x.top, false)
+	return offs
 }
 
 // executeCopies runs i, an apply op over copies: the population is read

@@ -639,7 +639,11 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 		if streamed && x.class == classDoc && x.mayGiveUp() && why == "" {
 			why = "a select at the document node may fall back to its tree"
 		}
+		offs := x.offApplies() // streamsplit_l6.go
 		x.eachApply(func(op *streamOp) {
+			if offs[op] {
+				return // in a loop body run off the cursor: the tree's dispatch
+			}
 			if treeApplyOp(op) { // streamsplit_l6.go: copies and foreign items go to the tree's rules
 				if w := s.copiesLinkWhy(); w != "" && why == "" {
 					why = w
