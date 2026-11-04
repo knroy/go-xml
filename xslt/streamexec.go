@@ -294,6 +294,9 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		}
 		return true
 	}
+	if done, ok := b.instrAVTOp(el, f); done { // streamavt_k2.go
+		return ok
+	}
 	local := el.Name().Local
 	switch local {
 	case "try":
