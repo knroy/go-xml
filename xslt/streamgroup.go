@@ -293,7 +293,8 @@ func groupRefusal(instr *forEachGroupInstr) string {
 // population popWalk reads: a path of child steps to elements, predicates
 // decided on the candidate's view.
 func populationRefusal(s *streamSplit) string {
-	if !s.bare() || s.group || s.outermost || s.innermost || s.hasBranches() {
+	_, _, win := groupWindow(s) // streamgroup_window.go
+	if !s.bare() && !win || s.group || s.outermost || s.innermost || s.hasBranches() {
 		return "grouping population is not a path of child steps"
 	}
 	for _, st := range s.steps {
@@ -368,6 +369,7 @@ func (run *streamRun) group(rt *runtime, out *outputBuilder, i *forEachGroupInst
 		w.r = splitRun{s: op.split, ctx: rt.ctx, c: run.c}
 		w.filt = xdmstream.Filter{Accept: op.split.accept, Depth: run.d}
 		w.insts = []*splitInst{op.split.inst(0)}
+		w.from, w.to, w.win = groupWindow(op.split) // streamgroup_window.go
 		g.src, g.walk = w, w
 	}
 	if i.groupAdjacent != nil {
@@ -394,6 +396,11 @@ type popWalk struct {
 	done  bool
 	// predErr is the error a predicate raised, the select's.
 	predErr error
+	// win says only the matches counted from to before to are the
+	// population, seen counting them (streamgroup_window.go).
+	win      bool
+	from, to int64
+	seen     int64
 }
 
 func (p *popWalk) next(read bool) (xdmstream.Event, bool, error) {
@@ -447,6 +454,8 @@ func (p *popWalk) next(read bool) (xdmstream.Event, bool, error) {
 		switch {
 		case !ok:
 			skip = true
+		case j+1 == len(p.s.steps) && p.outside():
+			skip = true // matched, outside the window
 		case j+1 == len(p.s.steps):
 			p.at = true
 			return ev, true, nil

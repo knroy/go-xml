@@ -125,6 +125,12 @@ var groupBodies = []struct {
 	{`<out><xsl:fork><xsl:for-each-group select="/doc/t" group-by="@d"><g k="{current-grouping-key()}"><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></xsl:fork></out>`, true},
 	{`<out><xsl:fork><xsl:for-each-group select="/doc/*" group-by="@k"><g k="{current-grouping-key()}" n="{count(current-group())}"/></xsl:for-each-group></xsl:fork></out>`, true},
 	{`<out><xsl:for-each select="/doc/g"><xsl:fork><xsl:for-each-group select="t" group-by="@d"><g s="{sum(current-group()/@v)}"/></xsl:for-each-group></xsl:fork></xsl:for-each></out>`, true},
+	// A window over the population, subsequence(P, a, b) with integer
+	// literals (L5, streamgroup_window.go): the matches outside it are
+	// passed over, counted across parents.
+	{`<out><xsl:for-each-group select="subsequence(/doc/t, 2, 3)" group-adjacent="@d"><g k="{current-grouping-key()}"><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></out>`, true},
+	{`<out><xsl:for-each-group select="subsequence(*/g/t, 2, 2)" group-adjacent="position()"><g n="{count(current-group())}" k="{@k}"/></xsl:for-each-group></out>`, true},
+	{`<out><xsl:for-each-group select="subsequence(/doc/t, 3)" group-ending-with="."><g><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></out>`, true},
 	// Refused: group-by, sort, a crawling population, a key a view cannot
 	// decide, current-group() read twice.
 	{`<out><xsl:for-each-group select="/doc/t" group-by="@d"><g/></xsl:for-each-group></out>`, false},
