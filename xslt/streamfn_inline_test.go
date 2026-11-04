@@ -41,6 +41,10 @@ func TestStreamInlinedCallsMatchTree(t *testing.T) {
 		`<xsl:when test="self::rec[@k = 'a']"><g k="{@k}" d="{$d}"><xsl:sequence select="p:nestn(tail(current-group()), $d + 1)"/></g></xsl:when>` +
 		`<xsl:otherwise><xsl:apply-templates select="p:nestn(tail(current-group()), $d + 1)" mode="m"/></xsl:otherwise>` +
 		`</xsl:choose></xsl:for-each-group></xsl:function>`
+	decls += `<xsl:function name="p:one" streamability="absorbing"><xsl:param name="n" as="element()"/>` +
+		`<r k="{$n/@k}"><xsl:value-of select="$n/sub/@x"/></r></xsl:function>` +
+		`<xsl:function name="p:chk" streamability="absorbing"><xsl:param name="n" as="node()"/>` +
+		`<in x="{$n!node-name()}" y="{$n!@k}"/><xsl:text>&#10;</xsl:text><xsl:sequence select="$n!*!p:chk(.)"/></xsl:function>`
 	bodies := []struct {
 		body   string
 		stream bool
@@ -57,6 +61,12 @@ func TestStreamInlinedCallsMatchTree(t *testing.T) {
 		{`<o><xsl:copy-of select="p:inner(doc/rec)"/></o>`, false},
 		{`<o><xsl:sequence select="p:nest(doc/rec, 1)"/></o>`, true},
 		{`<o><xsl:sequence select="p:nestn(doc/rec, 1)"/></o>`, true},
+		// Lane L2 round 4: a one-node parameter given a path (a loop with
+		// the tree's cardinality: two recs or none decline to the tree),
+		// and recursion over the stream ($n!*!p:chk(.), su-absorbing-204).
+		{`<o><xsl:sequence select="p:one(doc/rec)"/></o>`, true},
+		{`<o><xsl:sequence select="p:chk(*)"/></o>`, true},
+		{`<o><xsl:copy-of select="doc ! p:chk(.)"/></o>`, true},
 	}
 	n := 0
 	for name, doc := range coreDocs {

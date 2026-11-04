@@ -79,25 +79,36 @@ func (x *streamExec) frameOp(instr Instruction) *streamOp {
 // frame's: the site's frame made and planned the first time, looked up
 // after.
 func (b *streamBuilder) frameCall(el *xdm.Node, ic *inlinedCall, body []*xdm.Node, f vfocus) bool {
-	top := b.x.rootPlan()
-	fx := top.frames[el]
+	fx, why := b.frameFor(el, ic, body, f, b.grp)
 	if fx == nil {
-		fx = newStreamExec()
-		fx.class, fx.modes, fx.rule, fx.frameRoot = top.class, top.modes, top.rule, top
-		if top.frames == nil {
-			top.frames = map[*xdm.Node]*streamExec{}
-		}
-		top.frames[el] = fx
-		fb := &streamBuilder{pl: b.pl, x: fx, ops: &fx.top, kinds: &fx.kinds,
-			noIdent: b.noIdent, grp: b.grp, key: b.key, sub: ic}
-		if !fb.members(ic.fn, body, f) {
-			delete(top.frames, el)
-			return b.refuse("call frame of " + elName(el) + ": " + fb.why)
-		}
+		return b.refuse(why)
 	}
 	ic.frame = fx
 	b.x.inlines[el] = ic
 	return true
+}
+
+// frameFor is the call frame of the site el: made, its body planned at
+// focus f (grp: in a streamed group's body), the first time; looked up
+// after. nil and why when its body does not plan.
+func (b *streamBuilder) frameFor(el *xdm.Node, ic *inlinedCall, body []*xdm.Node, f vfocus, grp bool) (*streamExec, string) {
+	top := b.x.rootPlan()
+	if fx := top.frames[el]; fx != nil {
+		return fx, ""
+	}
+	fx := newStreamExec()
+	fx.class, fx.modes, fx.rule, fx.frameRoot = top.class, top.modes, top.rule, top
+	if top.frames == nil {
+		top.frames = map[*xdm.Node]*streamExec{}
+	}
+	top.frames[el] = fx
+	fb := &streamBuilder{pl: b.pl, x: fx, ops: &fx.top, kinds: &fx.kinds,
+		noIdent: b.noIdent, grp: grp, key: grp && b.key, sub: ic}
+	if !fb.members(ic.fn, body, f) {
+		delete(top.frames, el)
+		return nil, "call frame of " + elName(el) + ": " + fb.why
+	}
+	return fx, ""
 }
 
 // readyFrames readies the frames of x, a root plan, each once.
@@ -194,6 +205,9 @@ func (b *streamBuilder) selectOf(el *xdm.Node) xpath.Expr {
 	if bad {
 		return e
 	}
+	if ic.loop {
+		e2 = dropContextMaps(e2) // streamfn_loop.go
+	}
 	return e2
 }
 
@@ -245,6 +259,13 @@ func ofCurrentGroup(e xpath.Expr) bool {
 		return ofCurrentGroup(x.Base)
 	}
 	return false
+}
+
+// substAllowed is inlineAttr's rule for a body whose first parameter is
+// read as the call's argument: in a select whose split the compile
+// substitutes.
+func substAllowed(el *xdm.Node, name string, _ xpath.Expr) bool {
+	return name == "select" && substSite(el)
 }
 
 // substSite reports whether el's select is one whose split the compile

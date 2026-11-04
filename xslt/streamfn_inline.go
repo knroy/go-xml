@@ -55,6 +55,10 @@ type inlinedCall struct {
 	// frame, for a call on the function from inside its own body, is the
 	// call frame its body runs in (streamfn_frame.go).
 	frame *streamExec
+	// loop says the call's body runs once per match of its loop path, at
+	// the match, the first parameter that match (streamfn_loop.go); one
+	// that exactly one match is the tree's (XPTY0004 otherwise).
+	loop, one bool
 }
 
 // inlineSubst is the compiler's substitution while an inlined body
@@ -77,7 +81,7 @@ func (b *streamBuilder) inlineCallOp(el *xdm.Node, f vfocus) (done, ok bool) {
 	if !isXSL(el, "sequence") && !isXSL(el, "copy-of") && !isXSL(el, "apply-templates") {
 		return false, false
 	}
-	e := parseAt(el, el.AttrValue("select"))
+	e := b.selectOf(el) // streamfn_frame.go: an enclosing body's parameter read as its argument
 	root := documentElementOf(el)
 	if e == nil || root == nil {
 		return false, false
@@ -85,6 +89,9 @@ func (b *streamBuilder) inlineCallOp(el *xdm.Node, f vfocus) (done, ok bool) {
 	x, fn := inlineTarget(e, root)
 	if x == nil {
 		return false, false
+	}
+	if done, ok := b.loopCallOp(el, e, x, fn, f); done { // streamfn_loop.go
+		return true, ok
 	}
 	why := b.inlineCheck(el, e, x, fn, f)
 	if why != "" {
@@ -249,7 +256,7 @@ func (b *streamBuilder) inlineCheck(el *xdm.Node, e xpath.Expr, x *xpath.FuncCal
 	if !streamParamTakes(params[0], p, b.grp, f) && !(rec && groupOfS(el, fn, s) && ofCurrentGroup(p)) {
 		return "the first parameter's type converts " + p.String()
 	}
-	if why := inlineBody(fn, s, !b.grp); why != "" {
+	if why := inlineBody(fn, s, !b.grp, substAllowed); why != "" {
 		return why
 	}
 	return ""
@@ -325,7 +332,7 @@ var focusChanging = map[string]bool{"for-each": true, "for-each-group": true, "i
 // its expressions' own; nothing there reading a focus; and, with clear
 // false (a streamed group's body, whose current group the run keeps),
 // nothing that could read the group the call would have cleared.
-func inlineBody(fn *xdm.Node, s xdm.QName, clear bool) string {
+func inlineBody(fn *xdm.Node, s xdm.QName, clear bool, allowS func(el *xdm.Node, name string, e xpath.Expr) bool) string {
 	why := ""
 	var walk func(el *xdm.Node, inner bool)
 	walk = func(el *xdm.Node, inner bool) {
@@ -350,7 +357,7 @@ func inlineBody(fn *xdm.Node, s xdm.QName, clear bool) string {
 					continue
 				}
 				aInner := own || focusChanging[ch.Name().Local] && ch.Name().URI == xdm.NSXSL && n.Local != "select"
-				if w := inlineAttr(ch, n.Local, a.Value(), s, aInner, clear); w != "" {
+				if w := inlineAttr(ch, n.Local, a.Value(), s, aInner, clear, allowS); w != "" {
 					why = w
 					return
 				}
@@ -363,7 +370,7 @@ func inlineBody(fn *xdm.Node, s xdm.QName, clear bool) string {
 }
 
 // inlineAttr checks one attribute of el in the body.
-func inlineAttr(el *xdm.Node, name, src string, s xdm.QName, inner, clear bool) string {
+func inlineAttr(el *xdm.Node, name, src string, s xdm.QName, inner, clear bool, allowS func(*xdm.Node, string, xpath.Expr) bool) string {
 	xsl := el.Name().URI == xdm.NSXSL
 	var exprs []string
 	switch {
@@ -403,7 +410,7 @@ func inlineAttr(el *xdm.Node, name, src string, s xdm.QName, inner, clear bool) 
 		if !focusFree(e) {
 			return "an expression reading the focus a function body has not: " + src
 		}
-		if mentionsVar(e, s) && !(name == "select" && substSite(el)) { // streamfn_frame.go
+		if mentionsVar(e, s) && !allowS(el, name, e) { // streamfn_frame.go, streamfn_loop.go
 			return "the first parameter outside a select the plan substitutes: " + src
 		}
 		if !clear && readsFunctionContext(e) {
@@ -575,6 +582,9 @@ func (s *inlineSubst) apply(e xpath.Expr) xpath.Expr {
 		e2 := substS(e, ic.param, func() xpath.Expr { return inlineArg(ic) }, &bad)
 		if !bad {
 			e = e2
+			if ic.loop {
+				e = dropContextMaps(e) // streamfn_loop.go
+			}
 		}
 	}
 	return e
@@ -582,6 +592,9 @@ func (s *inlineSubst) apply(e xpath.Expr) xpath.Expr {
 
 // inlineArg is a fresh parse of P, the first argument of ic's call.
 func inlineArg(ic *inlinedCall) xpath.Expr {
+	if ic.loop {
+		return &xpath.ContextItem{} // each match, the body's focus (streamfn_loop.go)
+	}
 	e := parseAt(ic.call, ic.call.AttrValue("select"))
 	root := documentElementOf(ic.call)
 	if e == nil || root == nil {
@@ -650,6 +663,14 @@ func (c *compiler) inlineInstrFor(n *xdm.Node, orig Instruction, sel *xpath.Comp
 	for k := 1; k < len(x.Args); k++ {
 		in.args[k] = part(x.Args[k])
 	}
+	var loopPath xpath.Expr
+	if ic.loop {
+		if sm, ok := e.(*xpath.SimpleMap); ok && sm.Right == xpath.Expr(x) {
+			loopPath, e = sm.Left, x // Q ! f(.): the map's value is the loop's
+		} else {
+			loopPath = x.Args[0]
+		}
+	}
 	post := replaceCall(e, x)
 	if post == nil {
 		return fail("the call is not found again")
@@ -679,6 +700,12 @@ func (c *compiler) inlineInstrFor(n *xdm.Node, orig Instruction, sel *xpath.Comp
 		in.apply = o
 	default:
 		return fail("caller")
+	}
+	if ic.loop {
+		if why := c.loopOps(n, in, part(loopPath), ns, plans); why != "" { // streamfn_loop.go
+			return fail(why)
+		}
+		in.loop, in.one = true, ic.one
 	}
 	if len(frames) > 0 {
 		// A recursive call: its frame's body, compiled once per call site
@@ -712,6 +739,8 @@ type inlineCallInstr struct {
 	copyOf  *copyOfInstr
 	apply   *applyTemplatesInstr // the call's value applied to, off the cursor
 	code    *frameCode           // a recursive call's: its frame's body
+	loop    bool                 // the body once per match of the loop path (streamfn_loop.go)
+	one     bool                 // and exactly one match
 	plans   map[*streamExec]bool
 	name    xdm.QName
 	params  []*Variable
@@ -748,10 +777,19 @@ func (i *inlineCallInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		vals[k] = v
 	}
-	res, err := i.run(rt, vals, body)
+	if i.loop {
+		return i.executeLoop(rt, out, f, vals, body) // streamfn_loop.go
+	}
+	res, err := i.run(rt, vals, body, nil, false)
 	if err != nil {
 		return err
 	}
+	return i.output(rt, out, f, res)
+}
+
+// output writes post's value over res, the call's, as the caller's
+// instruction does.
+func (i *inlineCallInstr) output(rt *runtime, out *outputBuilder, f *burstFeed, res xdm.Sequence) error {
 	v, err := i.post.Eval(rt.ctx.WithVar(inlineR, res))
 	if err != nil {
 		return err
@@ -784,14 +822,18 @@ func (i *inlineCallInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 // run is userFunction.call over the inlined body, the streaming parameter
 // left unbound.
-func (i *inlineCallInstr) run(rt *runtime, vals []xdm.Sequence, body []Instruction) (xdm.Sequence, error) {
+func (i *inlineCallInstr) run(rt *runtime, vals []xdm.Sequence, body []Instruction, s0 xdm.Sequence, bind0 bool) (xdm.Sequence, error) {
 	defer rt.leaveFrame(rt.enterFrame())
 	sub := rt.globalBindings()
 	for k, p := range i.params {
-		if k == 0 {
+		if k == 0 && !bind0 {
 			continue
 		}
-		v, err := p.asType.convertAsLazy(vals[k], func() string {
+		val := vals[k]
+		if k == 0 {
+			val = s0
+		}
+		v, err := p.asType.convertAsLazy(val, func() string {
 			return "parameter $" + p.Name.Lexical() + " of " + i.name.Lexical()
 		}, funcParamCode(rt.sheet))
 		if err != nil {

@@ -180,6 +180,9 @@ type streamOp struct {
 	// pop, for a loop whose select is not a bare path, is its population
 	// (streampop.go); split is then its stream part's.
 	pop *streamPop
+	// frame, for a loop that is a recursive call's (streamfn_loop.go), is
+	// the call frame its body is planned in.
+	frame *streamExec
 	// tee, for a variable's map constructor whose entries each consume, is
 	// its plan in place of a split (streamtee_map.go).
 	tee *streamTee
@@ -1089,6 +1092,12 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 		}
 		s := op.split
 		k := op.ctxDepth(minD) + s.minDepth()
+		if op.frame != nil {
+			if why := x.readyFrameLoop(op, kinds); why != "" { // streamfn_loop.go
+				return why
+			}
+			continue
+		}
 		if why, ok := x.readyPop(op, op.ctxDepth(minD), k, kinds); ok {
 			if why != "" {
 				return why
