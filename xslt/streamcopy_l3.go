@@ -40,11 +40,13 @@ import (
 // depth d >= 1, the element whose start tag the cursor has just returned,
 // read to its end tag; at d == 0, the document's children, read to its end.
 // doc, when set, is called with the view of the document element, at its
-// start tag.
-func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, doc func(v *xdm.Node)) error {
+// start tag. strip says the copy keeps, of each node's typing, only what
+// validation="strip" keeps (is-id, is-idrefs: a DTD's ID attributes);
+// otherwise it keeps all of it, as AppendCopy does.
+func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, strip bool, doc func(v *xdm.Node)) error {
 	stack := []*outputBuilder{out}
 	if d > 0 {
-		sub, err := copyStart(rt, out, c)
+		sub, err := copyStart(rt, out, c, strip)
 		if err != nil {
 			return err
 		}
@@ -77,7 +79,7 @@ func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, doc
 				}
 				doc(v)
 			}
-			sub, err := copyStart(rt, top, c)
+			sub, err := copyStart(rt, top, c, strip)
 			if err != nil {
 				return err
 			}
@@ -103,22 +105,57 @@ func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, doc
 // copyStart opens, in out, the copy of the element whose start tag the
 // cursor is at, as xsl:copy of an element opens it (copyInstr), with its
 // attributes; the builder of its content is returned.
-func copyStart(rt *runtime, out *outputBuilder, c *xdmstream.Cursor) (*outputBuilder, error) {
+func copyStart(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, strip bool) (*outputBuilder, error) {
 	v, err := c.View()
 	if err != nil {
 		return nil, err
 	}
 	sub := out.StartElement(v.Name())
-	if out.Open() == nil && sub.Open().BaseURI() == "" {
-		sub.Open().SetBaseURI(v.BaseURI())
+	el := sub.Open()
+	if out.Open() == nil && el.BaseURI() == "" {
+		el.SetBaseURI(v.BaseURI())
 	}
+	copyTyping(el, v, strip)
 	copyNamespacesTo(rt, sub, v)
 	for a := range v.Attrs() {
-		if err := sub.AddAttribute(a.Name(), a.Value()); err != nil {
+		if err := sub.AddAttributeWithTyping(a.Name(), a.Value(), copiedTyping(a, strip)); err != nil {
 			return nil, err
+		}
+		if !strip && a.TypeEnv() != nil {
+			if ca := el.Attr(a.Name().URI, a.Name().Local); ca != nil {
+				ca.SetTypeEnv(a.TypeEnv())
+			}
 		}
 	}
 	return sub, nil
+}
+
+// copiedTyping is the typing a copy of n has: all of n's, or with strip
+// what stripping keeps (CopyTypingStrippedFrom).
+func copiedTyping(n *xdm.Node, strip bool) xdm.Typing {
+	t := xdm.TypingOf(n)
+	if strip {
+		return xdm.Typing{IsID: t.IsID, IsIDREFS: t.IsIDREFS}
+	}
+	return t
+}
+
+// copyTyping gives el, the copy of v, its typing (copiedTyping) and, unless
+// strip, its type environment.
+func copyTyping(el, v *xdm.Node, strip bool) {
+	if t := copiedTyping(v, strip); t != (xdm.Typing{}) {
+		el.ApplyTyping(t)
+	}
+	if !strip && v.TypeEnv() != nil {
+		el.SetTypeEnv(v.TypeEnv())
+	}
+}
+
+// stripsTyping reports whether instr, an eventCopier, keeps only what
+// validation="strip" keeps of the copies' typing.
+func stripsTyping(instr Instruction) bool {
+	i, ok := instr.(*copyOfInstr)
+	return ok && i.validation.mode == validateStrip
 }
 
 // eventCopier reports whether instr, the instruction of a select op, makes
@@ -224,7 +261,7 @@ func docString(c *xdmstream.Cursor) (string, error) {
 // URI, no document URI.
 func buildDoc(rt *runtime, c *xdmstream.Cursor) (*xdm.Node, error) {
 	b, root := xdmbuild.InPlaceDocument(xsltPolicy{nodes: rt.nodeBudget()})
-	err := copyEvents(rt, b, c, 0, func(v *xdm.Node) {
+	err := copyEvents(rt, b, c, 0, false, func(v *xdm.Node) {
 		top := v
 		for top.Parent() != nil {
 			top = top.Parent()
@@ -268,7 +305,7 @@ func (run *streamRun) docCopyFeed(instr Instruction, rt *runtime, op *streamOp) 
 					return errStreamPlan
 				}
 				run.used = true
-				return copyEvents(rt, out, run.c, 0, nil)
+				return copyEvents(rt, out, run.c, 0, stripsTyping(op.instr), nil)
 			}
 			seq, err := run.docCopyEval(rt, op)
 			if err != nil {
@@ -337,7 +374,7 @@ func (run *streamRun) copiesReadOut(rt *runtime, op *streamOp, g *groupAt, read 
 			if _, ok := op.instr.(*sequenceInstr); ok && out.Open() == nil {
 				return errSplitGiveUp // the node itself, not a copy, at the top
 			}
-			return copyEvents(rt, out, run.c, 1, nil)
+			return copyEvents(rt, out, run.c, 1, stripsTyping(op.instr), nil)
 		}
 		if err := s.runChecks(rt.ctx); err != nil {
 			return err

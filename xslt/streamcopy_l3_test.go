@@ -173,3 +173,27 @@ func TestStreamApplyLeafMatches(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamDocCopyIDs: a copy of the document or of the document element
+// made off the cursor keeps what the tree's copy keeps of the DTD's typing
+// -- is-id under validation="strip", all of it otherwise -- so id() over the
+// copy finds what the tree's finds (streamcopy_l3.go, copiedTyping).
+func TestStreamDocCopyIDs(t *testing.T) {
+	dir := t.TempDir()
+	doc := `<!DOCTYPE doc [<!ATTLIST rec id ID #IMPLIED ref IDREFS #IMPLIED>]>` +
+		`<doc><rec id="x1" ref="x2"/><rec id="x2"><sub/></rec></doc>`
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	probe := `<o><xsl:value-of select="count(id('x1 x2', $c)), count(idref('x2', $c)), name(id('x2', $c))"/></o>`
+	for _, body := range []string{
+		`<xsl:variable name="c"><e><xsl:copy-of select="."/></e></xsl:variable>` + probe,
+		`<xsl:variable name="c"><e><xsl:sequence select="."/></e></xsl:variable>` + probe,
+		`<xsl:variable name="c"><e><xsl:copy-of select="*"/></e></xsl:variable>` + probe,
+		`<xsl:variable name="c"><e><xsl:copy-of select="." validation="preserve"/></e></xsl:variable>` + probe,
+		`<xsl:variable name="c" select="copy-of(.)"/>` + probe,
+		`<xsl:variable name="c" as="node()"><xsl:copy-of select="."/></xsl:variable>` + probe,
+	} {
+		coreCheck(t, coreSheet(body), dir, body, true, TransformOptions{})
+	}
+}
