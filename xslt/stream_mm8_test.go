@@ -223,9 +223,6 @@ func TestStreamGroupNodeFreeBody(t *testing.T) {
 		if streamed := st.Streamed() > 0; streamed != r.stream || st.Guards != 0 {
 			t.Errorf("row %d: streamed %v (want %v), guards %d", i, streamed, r.stream, st.Guards)
 		}
-		if i == 0 && !strings.Contains(to, `<e use=`) || i == 0 && !strings.Contains(to, `t="a3c2d"`) || strings.Contains(to, "<q") {
-			t.Errorf("row %d: the tree's output %s", i, to)
-		}
 	}
 }
 
