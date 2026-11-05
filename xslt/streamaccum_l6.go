@@ -8,10 +8,16 @@ package xslt
 // (copy-accumulators: §18.2.10, accumulatorOrigin), a node of a grounded
 // match, whose values the observer's frames no longer hold. While such a
 // population is read, the observer keeps every node's values by ordinal
-// (kept); a read finds them there. Memory: one value pair per accumulator
-// for each node read in that span, which the tree's walk keeps for every node
-// of the document (accumulatorValuesFor's tables) on top of the tree:
-// never above the tree mode (accumulator-046s, -047s).
+// (kept); a read finds them there. At the span's end (release) they are let
+// go: the copies are dispatched and written by then, and a read of one
+// after it (none in the package's tests or the XSLT 3.0 suite, measured in
+// fix round S) finds no kept value, so the frames answer: the node's own
+// while its depth's frame holds it, errAccumOffStream (a rerun) after, never
+// another node's. Memory: one value pair per accumulator for each node read
+// in a span, while it lasts, which the tree's walk keeps for every node of
+// the document (accumulatorValuesFor's tables) on top of the tree: never
+// above the tree mode (accumulator-046s, -047s). Kept for the whole run, they grew with the
+// document (round R: 62.5 MB at 40k records, the tree 79 MB).
 
 import "github.com/knroy/go-xml/v2/xdm"
 
@@ -50,6 +56,14 @@ func (sa *streamAccums) keptLeaf(ord uint64) (before, after []xdm.Sequence) {
 	k := &keptAccums{before: make([]xdm.Sequence, len(sa.defs)), after: make([]xdm.Sequence, len(sa.defs))}
 	sa.kept[ord] = k
 	return k.before, k.after
+}
+
+// release ends a span (keep): at the outermost span's end the kept values
+// are let go.
+func (sa *streamAccums) release() {
+	if sa.keep--; sa.keep == 0 {
+		sa.kept = nil
+	}
 }
 
 // keptValue is the kept value of accumulator i at node (post: after), when

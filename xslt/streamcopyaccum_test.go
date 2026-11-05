@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"context"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -101,5 +102,48 @@ func TestStreamCopyAccumulatorValues(t *testing.T) {
 			t.Errorf("%s: did not stream", r.name)
 		}
 		t.Logf("%s: streamed %v: %s", r.name, streamed, tree)
+	}
+}
+
+// TestStreamCopyAccumulatorsReleased: apply-templates over snapshot(.) per
+// record keeps each node's accumulator values while the copies are read
+// and dispatched (streamaccum_l6.go), and lets them go once no copy can
+// read them. Kept for the whole run they grew with the document (fix round
+// R's open item: 62.5 MB at 40k records, the tree 79 MB); let go, the run
+// holds a few MB (the copies' tables between sweeps), the tree its document.
+func TestStreamCopyAccumulatorsReleased(t *testing.T) {
+	if testing.Short() {
+		t.Skip("memory test")
+	}
+	tr, err := xdm.ParseString(`<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xpath-default-namespace="urn:orders">`+
+		`<xsl:accumulator name="n" initial-value="0" streamable="yes"><xsl:accumulator-rule match="order" select="$value + 1"/></xsl:accumulator>`+
+		`<xsl:mode streamable="yes" use-accumulators="n"/><xsl:mode name="c" use-accumulators="n"/>`+
+		`<xsl:template match="/orders"><o><xsl:apply-templates select="order"/></o></xsl:template>`+
+		`<xsl:template match="order"><xsl:apply-templates select="snapshot(.)" mode="c"/></xsl:template>`+
+		`<xsl:template match="order" mode="c"><r n="{accumulator-before('n')}" a="{accumulator-after('n')}" i="{item/accumulator-after('n')}"/></xsl:template>`+
+		`</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Compile(tr.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := liveOrders(40000)
+	stream := peakLive(t, s, doc)
+	var m goruntime.MemStats
+	goruntime.GC()
+	goruntime.ReadMemStats(&m)
+	w := &liveWriter{base: m.HeapAlloc}
+	src, err := xdm.ParseString(doc, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Transform(context.Background(), src.Root, TransformOptions{Output: w}); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("peak live %.1f MB streamed, %.1f MB on the tree", float64(stream)/1e6, float64(w.peak)/1e6)
+	if stream > w.peak*2/5 {
+		t.Errorf("peak live %d bytes streamed, %d on the tree (bound 40%%)", stream, w.peak)
 	}
 }
