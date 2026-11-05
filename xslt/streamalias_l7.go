@@ -735,6 +735,9 @@ func (a *aliasFlow) call(x *xpath.FuncCall, en aenv) abits {
 		}
 		return v
 	}
+	if aliasAtomic(x) { // streamalias_atomic.go
+		return 0
+	}
 	if x.Name.URI != fnNS {
 		return v
 	}
