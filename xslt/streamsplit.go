@@ -449,6 +449,11 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 	default:
 		tail = &xpath.PathExpr{Steps: p.tail}
 	}
+	if focusPosTail(p.tail) {
+		// P/position(), P ! last(): the tail runs per match, where the
+		// focus is the match alone, not P's sequence.
+		return "tail " + tail.String() + ": position() or last() of the path's focus"
+	}
 	if p.mapR != nil {
 		return s.mapPath(w, mapTail(tail, p.mapR), p.mapR, leaf, elem, last.Axis, part)
 	}
@@ -1230,6 +1235,18 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 	}
 	pp.tail = list[k:]
 	return pp, true
+}
+
+// focusPosTail reports whether a tail may call position() or last() on the
+// focus P gives it: anywhere in an element of it that is not a step (a
+// step's predicates have a focus of their own).
+func focusPosTail(tail []xpath.Expr) bool {
+	for _, e := range tail {
+		if _, ok := e.(*xpath.Step); !ok && callsPosition(e) {
+			return true
+		}
+	}
+	return false
 }
 
 // downward reports whether st is a step P can take: child or descendant by a
