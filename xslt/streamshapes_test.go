@@ -54,6 +54,13 @@ var shapeBodies = []struct {
 	{`<o><xsl:apply-templates select="tail(/doc/rec)" mode="m"/></o>`, true},
 	// G2's loop population (streampop.go): tail() a window over the matches.
 	{`<o><xsl:for-each select="tail(//rec)"><xsl:value-of select="@k"/></xsl:for-each></o>`, true},
+	// tail(P), P cut at a step whose predicate is not motionless on a view
+	// (castable as): the split's matches are the cut's, not P's, so its
+	// first is not the one tail() leaves out; the tree runs it (F9, fuzz
+	// seeds 34820, 71752). The first rows' predicates drop the first raw rec.
+	{`<o><xsl:for-each select="tail(/doc/rec[ancestor::*/@id][@v castable as xs:double][@v != 1])"><e p="{position()}" k="{@k}"/></xsl:for-each></o>`, false},
+	{`<o><xsl:for-each select="tail(doc/rec[@v castable as xs:double]/*[1])"><e p="{position()}" n="{name()}"/></xsl:for-each></o>`, false},
+	{`<o><xsl:value-of select="count(tail(/doc/rec[ancestor::*/@id][@v castable as xs:double][@v != 1]))"/></o>`, false},
 	// F(if (C) then A else B), C motionless: the choice hoisted.
 	{`<o><xsl:value-of select="count(if ($c) then () else //rec)"/></o>`, true},
 	{`<o><xsl:value-of select="sum(if (not($c)) then //rec/@v else //sub/@x)"/></o>`, true},
