@@ -351,7 +351,8 @@ func (b *streamBuilder) consumingChoose(el *xdm.Node, f vfocus) (done, ok bool) 
 // attributes being ones nothing reads; nil otherwise.
 func (b *streamBuilder) testOp(el *xdm.Node, f vfocus) *streamOp {
 	src := el.AttrValue("test")
-	if e := parseAt(el, src); e == nil || (viewCheck{pos: true, noIdent: b.noIdent, key: b.key, acc: !b.noIdent && !b.grp, after: b.after}).safe(e, f, true) {
+	vc := viewCheck{pos: true, noIdent: b.noIdent, key: b.key, acc: !b.noIdent && !b.grp, after: b.after}
+	if e := parseAt(el, src); e == nil || vc.safe(e, f, true) || b.inlinedSafe(el, src, vc, f, true) { // streamlast_mm2.go
 		return nil
 	}
 	for a := range el.Attrs() {

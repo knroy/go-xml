@@ -175,3 +175,100 @@ func headOnly(op *streamOp) bool {
 	return p != nil && p.cond == nil && len(p.wins) == 1 && p.wins[0].kind == "head" &&
 		p.fn == nil && p.post == nil && !p.ground && !p.off && !p.values
 }
+
+// inlinedSafe reports whether src, written on el, reads only what focus f
+// has once its calls on stylesheet functions are read as their bodies
+// (rewriteCalls, streamcall.go: only where the body is the call exactly),
+// when the plan knows the functions in force (streamPlan.funcs). The tree's
+// code then evaluates the calls, reading what the bodies read (function-5003:
+// xsl:if test="sf:inspection(.)", the body $node instance of document-node()).
+func (b *streamBuilder) inlinedSafe(el *xdm.Node, src string, vc viewCheck, f vfocus, nodeOK bool) bool {
+	if b.pl.funcs == nil {
+		return false
+	}
+	e := parseAt(el, src)
+	if e == nil || !callsSheetFn(e) {
+		return false
+	}
+	vc.peek = false
+	return vc.safe(rewriteCalls(e, b.pl.funcs), f, nodeOK)
+}
+
+// callsSheetFn reports whether e calls a stylesheet function.
+func callsSheetFn(e xpath.Expr) bool {
+	found := false
+	exprWalk(reflect.ValueOf(&e).Elem(), func(v reflect.Value) {
+		if x, ok := v.Interface().(*xpath.FuncCall); ok && stylesheetFn(x.Name) {
+			found = true
+		}
+	})
+	return found
+}
+
+// firstAnd reads a predicate [position() = N and P], P reading neither
+// position() nor last(), as [N][boolean(P)]: both keep the Nth candidate
+// when P holds of it (function-5013). Whether P is evaluated on the others,
+// and so whether an error of it there is raised, the "and" leaves to the
+// processor (XPath 3.1 §3.8).
+func firstAnd(preds []xpath.Expr) []xpath.Expr {
+	var out []xpath.Expr
+	for i, pr := range preds {
+		b, ok := pr.(*xpath.BinaryOp)
+		if !ok || b.Op != "and" || readsPosition(b.Right) {
+			if out != nil {
+				out = append(out, pr)
+			}
+			continue
+		}
+		n := positionEq(b.Left)
+		if n == nil {
+			if out != nil {
+				out = append(out, pr)
+			}
+			continue
+		}
+		if out == nil {
+			out = append([]xpath.Expr(nil), preds[:i]...)
+		}
+		out = append(out, n, fnCall("boolean", b.Right))
+	}
+	if out == nil {
+		return preds
+	}
+	return out
+}
+
+// positionEq is the integer literal N of position() = N (or eq, either
+// way round), or nil.
+func positionEq(e xpath.Expr) xpath.Expr {
+	b, ok := e.(*xpath.BinaryOp)
+	if !ok || b.Op != "=" && b.Op != "eq" {
+		return nil
+	}
+	l, r := b.Left, b.Right
+	if isPositionCall(r) {
+		l, r = r, l
+	}
+	if !isPositionCall(l) {
+		return nil
+	}
+	if _, ok := positionAt(r); !ok {
+		return nil
+	}
+	return r
+}
+
+// isPositionCall reports whether e is fn:position().
+func isPositionCall(e xpath.Expr) bool {
+	f, ok := e.(*xpath.FuncCall)
+	return ok && f.Name.URI == fnNS && f.Name.Local == "position" && len(f.Args) == 0
+}
+
+// stepPredCalls inlines the calls in st's predicates (rewriteCalls), each
+// at the predicate's own focus, the candidate (function-5013:
+// p[2][sf:inspection(.) = false()]).
+func stepPredCalls(st *xpath.Step, re func(xpath.Expr) xpath.Expr) {
+	for i := range st.Predicates {
+		st.Predicates[i] = re(st.Predicates[i])
+	}
+}

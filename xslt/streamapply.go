@@ -80,7 +80,7 @@ var classNames = [numClasses]string{"element", "document node", "text, comment o
 
 // strict is b with no records: every expression is checked.
 func (b *streamBuilder) strict() *streamBuilder {
-	return &streamBuilder{pl: &streamPlan{recs: map[any]*planRec{}}, x: b.x, ops: b.ops,
+	return &streamBuilder{pl: &streamPlan{recs: map[any]*planRec{}, funcs: b.pl.funcs}, x: b.x, ops: b.ops,
 		kinds: b.kinds, noIdent: b.noIdent, up: b.up, key: b.key}
 }
 
@@ -348,7 +348,7 @@ func (c *compiler) rulesPlanFor(el *xdm.Node) *rulesPlan {
 	} else if modes := streamableModeNames(root); len(modes) > 0 && el.Root() == c.sheet.source && !c.streamMayAlias(true) { // streamalias_l7.go
 		t := newDeclTrust(root, false)
 		if !t.shared {
-			t.plan = &streamPlan{recs: map[any]*planRec{}, sites: map[planSite][]planRoot{}}
+			t.plan = &streamPlan{recs: map[any]*planRec{}, sites: map[planSite][]planRoot{}, funcs: collectStreamFuncs(root)}
 			names := make([]string, 0, len(modes))
 			for m := range modes {
 				names = append(names, m)

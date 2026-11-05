@@ -233,6 +233,12 @@ var mainCases = []struct {
 	// (currentFilter, streamlast_mm2.go); copy-of() is copy-of(.)
 	// (si-iterate-036).
 	{mm2IterateMax("@v ge current()/@v"), true},
+	// A call on an inspection function of the document node in xsl:if, and
+	// in a path's predicates beside position() = 1: read as the body
+	// (inlinedSafe, stepPredCalls, firstAnd: streamlast_mm2.go;
+	// function-5003, -5013).
+	{mm2Inspect + `<xsl:template match="/"><xsl:if test="p:i(.)"><o><xsl:copy-of select="doc/rec[1]/sub"/></o></xsl:if></xsl:template>`, true},
+	{mm2Inspect + `<xsl:template match="/"><o><xsl:copy-of select="doc/rec[position() = 1 and p:i(.) = false()]/sub[p:i(.) = false()]"/></o></xsl:template>`, true},
 	// A predicate of a node() or text() step reading its parent's attribute:
 	// a leaf's open ancestors, as views (sf-xml-to-json-005).
 	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:copy-of select="descendant::node()[../@k = 'a']"/></o></xsl:template>`, true},
@@ -427,3 +433,8 @@ func mm2IterateMax(pred string) string {
 		`<xsl:on-completion><xsl:copy-of select="$h"/></xsl:on-completion><xsl:variable name="this" select="copy-of()"/>` +
 		`<xsl:next-iteration><xsl:with-param name="h" select="if (empty($h[` + pred + `])) then $this else $h"/></xsl:next-iteration></xsl:iterate></o></xsl:template>`
 }
+
+// mm2Inspect declares p:i, an inspection function: is its node a document
+// node (function-5003).
+const mm2Inspect = `<xsl:mode streamable="yes"/><xsl:function name="p:i" as="xs:boolean" streamability="inspection">` +
+	`<xsl:param name="n" as="node()"/><xsl:sequence select="$n instance of document-node()"/></xsl:function>`

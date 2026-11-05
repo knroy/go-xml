@@ -319,6 +319,7 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		if p.br != nil {
 			break // branched checked them all
 		}
+		st.Predicates = firstAnd(st.Predicates) // streamlast_mm2.go
 		if !stepPredsOK(st) {
 			cut = i
 			break

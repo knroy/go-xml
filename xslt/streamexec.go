@@ -875,7 +875,7 @@ func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bo
 	e := b.loopRead(parseAt(el, src)) // streamfn_loop.go
 	peek := b.kidsAt(el, e, f)        // streamkids_l6.go
 	vc := viewCheck{pos: true, last: b.last, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek}
-	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) { // streamcopy_l3doc.go
+	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) && !b.inlinedSafe(el, src, vc, f, nodeOK) { // streamcopy_l3doc.go, streamlast_mm2.go
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
 	}
 	if peek {
