@@ -298,6 +298,11 @@ var mainCases = []struct {
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="rec"><xsl:copy><xsl:perform-sort select="copy-of(sub)"><xsl:sort select="@x" order="descending"/></xsl:perform-sort></xsl:copy></xsl:template>`, true},
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="doc"><o><xsl:perform-sort select="snapshot(rec)"><xsl:sort select="@k" order="descending"/></xsl:perform-sort></o></xsl:template>`, true},
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="doc"><o><xsl:perform-sort select="copy-of(.//sub)"><xsl:sort select="@x"/></xsl:perform-sort></o></xsl:template>`, false},
+	// An unclassified function given a copy of the document at "/": the
+	// split's document built off the cursor (streamcopy_whole.go;
+	// function-5001); the body is not inlined, never assessed.
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:u" streamability="unclassified"><xsl:param name="n"/><xsl:copy-of select="$n/*/rec[1]"/></xsl:function>` +
+		`<xsl:template match="/"><o><xsl:copy-of select="p:u(copy-of(.))"/></o></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

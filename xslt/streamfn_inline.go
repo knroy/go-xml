@@ -104,6 +104,12 @@ func (b *streamBuilder) inlineCallOp(el *xdm.Node, f vfocus) (done, ok bool) {
 		return true, b.refuse("call on " + x.Name.Local + "(): " + why)
 	}
 	params, body := splitFunction(fn)
+	if b.sub == nil && b.pl.rec(body[0]) == nil {
+		// The trusting walk never assessed the body (an unclassified
+		// function is judged by its declaration): not inlined, the split
+		// reads the call (streamcopy_whole.go: f(copy-of(.)) at "/").
+		return false, false
+	}
 	q, _ := paramName(params[0])
 	ic := &inlinedCall{call: el, fn: fn, param: q, nParam: len(params), clear: !b.grp}
 	if b.x.inlines == nil {
