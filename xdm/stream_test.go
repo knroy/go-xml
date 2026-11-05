@@ -58,9 +58,9 @@ func TestDriveKeepsOnlyTheSpine(t *testing.T) {
 		for _, blk := range tree.text.blocks {
 			bytes += len(blk)
 		}
-		// Left behind: the document node, and the few bytes stored in the
-		// block that was current at the spine's marks (rewind closes it).
-		if tree.n > 1 || bytes > 64 {
+		// Left behind: the document node, the shared whitespace, and what
+		// the block values go on being appended to holds: at most one block.
+		if tree.n > 1 || bytes > textBlock+spaceHome {
 			t.Fatalf("k=%d: the parse kept %d records and %d text bytes %q", k, tree.n, bytes, tree.text.blocks)
 		}
 	}

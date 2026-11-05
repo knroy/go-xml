@@ -525,9 +525,9 @@ func (b *burster) rewind(t *Tree, spaces *spaceTable, names *nameCache) {
 	t.text.rewind(m.text)
 	rewindNames(t, m.names, names)
 	t.rewindFrames(m.frames, m.frameData)
-	// The whitespace table remembers ranges in the store, and some of them
-	// were just released. Its map is not rebuilt for the next burst.
-	*spaces = spaceTable{noMap: true}
+	// The whitespace table remembers ranges in the store, some of which may
+	// have just been released.
+	spaces.forget(m.text.blocks)
 }
 
 // take delivers the burst el: a large one, or one grounded for now, at
@@ -809,22 +809,31 @@ type textMark struct{ blocks int }
 
 func (s *textStore) mark() textMark { return textMark{len(s.blocks)} }
 
-// rewind forgets every value stored since m. A burst's tree shares the
-// blocks those values are in, so they are released rather than reused: the
-// block that was current at m is closed to further values, and the blocks
-// made since are dropped from the store -- the burst trees that read them
-// keep them alive as long as they need them.
+// rewind forgets every value stored since m. A burst's tree, and any string
+// read from the store, shares the bytes those values are in, so they are
+// released rather than reused: the blocks made since m are dropped from the
+// store -- the burst trees that read them keep them alive as long as they
+// need them -- except the current one, which takes the number after m's and
+// goes on taking values past its length. Bytes are only ever appended, so
+// nothing already read changes, and block sizes go on growing as they would.
 func (s *textStore) rewind(m textMark) {
+	var cur []byte
+	if int(s.cur) > m.blocks {
+		cur = s.blocks[s.cur-1]
+	}
 	for i := m.blocks; i < len(s.blocks); i++ {
 		s.blocks[i] = nil
 	}
 	s.blocks = s.blocks[:m.blocks]
-	s.cur, s.size = 0, 0
+	if cur != nil {
+		s.newBlock(cur)
+		s.cur = int32(len(s.blocks))
+	}
 	// The shared whitespace values and any borrowed blocks may lie in the
 	// blocks just dropped. The values share registers come from the DTD,
 	// stored before any mark.
 	if s.aux != nil {
-		s.aux.ws = spaceTable{}
+		s.aux.ws.forget(m.blocks)
 		s.aux.lent, s.aux.last = nil, nil
 	}
 }

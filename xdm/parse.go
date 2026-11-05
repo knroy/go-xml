@@ -454,6 +454,12 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 				}
 			prologTold:
 				if bs != nil && ps.cur == tree.Root {
+					if ps.spaces.home == 0 {
+						// Before the first mark: no rewind releases it.
+						tree.text.newBlock(make([]byte, 0, spaceHome))
+						ps.spaces.home = int32(len(tree.text.blocks))
+						ps.spaces.hi = max(ps.spaces.hi, ps.spaces.home)
+					}
 					bs.marks = append(bs.marks[:0], markOf(tree))
 					bs.v11 = dec.IsVersion11()
 					// Known from here, as an Observer of the parse may read.
@@ -1129,8 +1135,13 @@ type spaceTable struct {
 	byLen *[maxSpaceLen + 1][2]uint32 // made past few, so a small tree does not pay for it
 	few   [spaceFew][2]uint32         // the first distinct values, until byLen is made
 	nFew  uint8
-	// noMap keeps m unmade: ParseBursts empties the table at every burst.
+	// noMap keeps m unmade: ParseBursts empties the table at a burst when
+	// its values are not all in home.
 	noMap bool
+	// home is the block the shared values are stored in while it has room,
+	// + 1 (0: none): ParseBursts makes it before its first mark, so that no
+	// rewind releases them. hi is the highest block any value is in, + 1.
+	home, hi int32
 }
 
 const (
@@ -1138,6 +1149,37 @@ const (
 	maxSpaceLen   = 128
 	spaceFew      = 4 // distinct values shared before the length table is made
 )
+
+// spaceHome is the size of a spaceTable's home block.
+const spaceHome = 4 << 10
+
+// store stores b, a value the table is to share.
+func (t *spaceTable) store(s *textStore, b []byte) (uint32, uint32) {
+	if t.home != 0 {
+		k := t.home - 1
+		if blk := s.blocks[k]; cap(blk)-len(blk) >= len(b) {
+			s.blocks[k] = append(blk, b...)
+			return uint32(k)<<textShift | uint32(len(blk)), uint32(len(b))
+		}
+	}
+	off, n := s.addBytes(b, 0)
+	t.hi = max(t.hi, int32(off>>textShift)+1)
+	return off, n
+}
+
+// forget empties the table if any of its values is in a block from the
+// block numbered from on, which a rewind is releasing. Its home stays if it
+// is before from.
+func (t *spaceTable) forget(from int) {
+	if int(t.hi) <= from {
+		return
+	}
+	home := t.home
+	if int(home) > from {
+		home = 0
+	}
+	*t = spaceTable{noMap: true, home: home, hi: home}
+}
 
 func (t *spaceTable) text(s *textStore, b []byte) (uint32, uint32) {
 	if len(b) > maxSpaceLen || !onlySpace(b) {
@@ -1150,7 +1192,7 @@ func (t *spaceTable) text(s *textStore, b []byte) (uint32, uint32) {
 			}
 		}
 		if t.nFew < spaceFew {
-			off, n := s.addBytes(b, 0)
+			off, n := t.store(s, b)
 			t.few[t.nFew] = [2]uint32{off, n}
 			t.nFew++
 			return off, n
@@ -1164,7 +1206,7 @@ func (t *spaceTable) text(s *textStore, b []byte) (uint32, uint32) {
 		t.byLen[len(b)] = r
 		return r[0], r[1]
 	}
-	off, n := s.addBytes(b, 0)
+	off, n := t.store(s, b)
 	r := [2]uint32{off, n}
 	t.byLen[len(b)] = r
 	if len(t.m) < maxSpaceTable && !t.noMap {
