@@ -215,6 +215,9 @@ func (s *Stylesheet) transformStream(ctx context.Context, r io.Reader, opts Tran
 	root := xdm.NewTree().Root
 	main := &mainInput{c: xdmstream.Open(r, po), root: root}
 	defer main.c.Close()
+	if ctx != nil {
+		main.c.Cancel(ctx.Err)
+	}
 	main.root.SetBaseURI(po.BaseURI)
 	main.root.SetDocumentURI(po.DocumentURI)
 	if m, err := s.initialModeOf(opts); err == nil && s.mainBuilds[m] {

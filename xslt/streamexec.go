@@ -1675,6 +1675,9 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	case err == nil && !kept && !keepsStreamNode(held.Sequence()):
 		return true, appendSequence(held.Sequence(), out)
 	}
+	if cerr := rt.ctx.Err(); cerr != nil {
+		return true, cerr // cancelled: no rerun on the tree
+	}
 	if err == nil {
 		// Not a failure: the tree has the nodes this result must hold.
 		streamtrace.Fallback()
@@ -1852,6 +1855,7 @@ func (r *FileResolver) streamDocAs(ctx *xpath.Context, uri, base string, docURI 
 		cr := &countedReader{r: src}
 		c := xdmstream.Open(cr, opts)
 		defer c.Close()
+		c.Cancel(ctx.Err)
 		if err := fn(c); err != nil {
 			return err
 		}

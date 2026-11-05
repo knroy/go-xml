@@ -2,8 +2,10 @@ package xslt
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -729,5 +731,71 @@ func TestTransformMaxDepth(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "recursion exceeded") {
 		t.Errorf("error %q does not name the recursion limit", err)
+	}
+}
+
+// endlessDoc is <r> then <e>x</e> without end.
+type endlessDoc struct{ started bool }
+
+func (e *endlessDoc) Read(p []byte) (int, error) {
+	n := 0
+	if !e.started {
+		e.started = true
+		n = copy(p, "<r>")
+	}
+	for n+8 <= len(p) {
+		n += copy(p[n:], "<e>x</e>")
+	}
+	return n, nil
+}
+
+// The built-in rules, and the streamed loops that read on without a rule
+// running, stop at a cancelled context with its error: on the tree, and over
+// an endless stream once it is being read (audit A4-F2, A2-5).
+func TestCancelledBuiltInRulesAndStreams(t *testing.T) {
+	const head = `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">`
+	sheets := map[string]string{
+		"identity":   `<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`,
+		"skip":       `<xsl:mode streamable="yes" on-no-match="shallow-skip"/>`,
+		"textonly":   `<xsl:mode streamable="yes" on-no-match="text-only-copy"/>`,
+		"string":     `<xsl:mode streamable="yes"/><xsl:template match="/"><xsl:value-of select="string(.)"/></xsl:template>`,
+		"first":      `<xsl:mode streamable="yes"/><xsl:template match="/"><xsl:value-of select="head(r/e)"/></xsl:template>`,
+		"motionless": `<xsl:mode streamable="yes"/><xsl:template match="/">hi</xsl:template>`,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	tree, _ := xdm.ParseString("<r>"+strings.Repeat("<e>x</e>", 100)+"</r>", xdm.ParseOptions{})
+	for name, body := range sheets {
+		st, err := xdm.ParseString(head+body+`</xsl:stylesheet>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Compile(st.Root, CompileOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts := TransformOptions{Output: io.Discard, MaxNodes: -1, MaxBytes: -1, MaxItems: -1}
+		opts.SourceParseOptions = xdm.ParseOptions{MaxBytes: -1, MaxNodes: -1}
+		if name == "identity" || name == "skip" || name == "textonly" {
+			if _, err := s.Transform(ctx, tree.Root, opts); err != context.Canceled {
+				t.Errorf("%s, tree: err = %v, want context.Canceled", name, err)
+			}
+		}
+		// Cancelled once the stream is being read, not before it starts.
+		sctx, scancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer scancel()
+		done := make(chan error, 1)
+		go func() {
+			_, err := s.TransformReader(sctx, &endlessDoc{}, opts)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err != context.DeadlineExceeded {
+				t.Errorf("%s, streamed: err = %v, want context.DeadlineExceeded", name, err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatalf("%s, streamed: still reading an endless document under a cancelled context", name)
+		}
 	}
 }
