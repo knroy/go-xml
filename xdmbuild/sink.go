@@ -75,6 +75,32 @@ func init() {
 			r.released = true
 		}
 	}
+	xdmsink.Text = func(out any) func([]byte) {
+		b := out.(*Builder)
+		s := b.sink
+		if s == nil || s.off || s.cps > 0 || b.fwd != nil || !s.started && !s.begin() {
+			return nil
+		}
+		tw, ok := s.w.(xdmsink.TextWriter)
+		if !ok || !tw.TextOK() {
+			return nil
+		}
+		// before opens the builders from b up to its framed ancestor, which
+		// a TextWriter always does but for a held one.
+		x := b
+		for ; x != nil && x.fr == 0; x = s.up(x) {
+			if x.hold {
+				return nil
+			}
+		}
+		if x == nil {
+			return nil
+		}
+		b.lastAtomic = false
+		s.before(b, xdm.KindText, "")
+		top, doc := b == s.root, b != s.root && b.open == nil
+		return func(p []byte) { tw.WriteText(p, top, doc) }
+	}
 	xdmsink.Hold = func(b any) {
 		if r := b.(*Builder); r.sink != nil {
 			r.hold = true

@@ -67,6 +67,10 @@ type burstFeed struct {
 	// offBody, for an xsl:for-each-group whose population eval builds, says
 	// its grouping and body run off the stream (streamgroup_pruned.go).
 	offBody bool
+	// jsonOut, for an xsl:value-of whose select is xml-to-json(.) alone,
+	// writes the JSON text into out as it is made (streamfn_json.go); done
+	// false when out cannot take it, nothing done.
+	jsonOut func(rt *runtime, out *outputBuilder) (done bool, err error)
 	// size, set by a sized feed's read before it hands its first item, is
 	// the context size of an xsl:for-each or xsl:iterate it drives
 	// (streamgroup_copies_mm7.go).
