@@ -4,10 +4,7 @@
 // xdm types: this package cannot import xdm, which imports it.
 package xdmburst
 
-import (
-	"errors"
-	"io"
-)
+import "io"
 
 // Step is one step of a burst pattern: an element name test, reached from
 // the step before it (or the document node) as a child or, with Descendant,
@@ -46,8 +43,14 @@ const (
 )
 
 // ErrPause, from Leaf or End under Steps, stops the parse after the event:
-// the step returns, and the next goes on from there.
-var ErrPause = errors.New("xdmburst: pause")
+// the step returns, and the next goes on from there. Its type is a pointer,
+// not error, so that the parse's err == ErrPause at every event compares two
+// words in line rather than calling the runtime's interface equality.
+var ErrPause = &pauseError{"xdmburst: pause"}
+
+type pauseError struct{ s string }
+
+func (e *pauseError) Error() string { return e.s }
 
 // Client is told what a stream parse (Drive) meets. Its nodes are
 // *xdm.Node in the parse's own tree, whose records are reused once the
