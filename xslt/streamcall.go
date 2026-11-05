@@ -94,10 +94,14 @@ func rewriteCalls(e xpath.Expr, fns map[funcKey]*streamFunc) xpath.Expr {
 		}
 	case *xpath.PathExpr:
 		for i := range x.Steps {
-			if _, ok := x.Steps[i].(*xpath.Step); !ok {
+			if st, ok := x.Steps[i].(*xpath.Step); !ok {
 				x.Steps[i] = re(x.Steps[i])
+			} else {
+				stepPredCalls(st, re) // streamlast_mm2.go
 			}
 		}
+	case *xpath.Step:
+		stepPredCalls(x, re) // streamlast_mm2.go
 	case *xpath.FilterExpr:
 		x.Base = re(x.Base)
 	case *xpath.BinaryOp:
@@ -285,6 +289,8 @@ func resultFits(e xpath.Expr, as string) bool {
 // when it is not known.
 func atomicTypeOf(e xpath.Expr) string {
 	switch x := e.(type) {
+	case *xpath.InstanceOfExpr:
+		return "xs:boolean"
 	case *xpath.Literal:
 		switch x.Val.Type {
 		case xdm.TypeString:

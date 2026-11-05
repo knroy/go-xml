@@ -350,6 +350,13 @@ type streamAccums struct {
 	// copies of grounded matches dispatched once read (streamaccum_l6.go).
 	kept map[uint64]*keptAccums
 	keep int
+	// leaf holds the values of the last leaf observed, leafAt the steps
+	// they were computed at, leafNode its parse's node (nil once an
+	// element's event is observed): a pattern matching it live on the
+	// cursor reads them (run.leaf).
+	leaf, leafBuf keptAccums
+	leafNode      *xdm.Node
+	leafAt        [2]uint64
 }
 
 type accumFrame struct {
@@ -456,6 +463,12 @@ func (sa *streamAccums) observe(n *xdm.Node, d int, end bool, ord uint64) {
 		f.closed, f.afterAt, sa.ended = true, sa.rd.phase, true
 	case n.Kind() != xdm.KindElement:
 		kb, ka := sa.keptLeaf(ord) // streamaccum_l6.go: nil unless kept
+		if kb == nil {
+			if sa.leafBuf.before == nil {
+				sa.leafBuf = keptAccums{make([]xdm.Sequence, len(sa.defs)), make([]xdm.Sequence, len(sa.defs))}
+			}
+			kb, ka = sa.leafBuf.before, sa.leafBuf.after
+		}
 		sa.step(n, false, kb, nil, 0)
 		if sa.onStep != nil {
 			sa.onStep(n, d, false, ord, sa.cur)
@@ -464,6 +477,7 @@ func (sa *streamAccums) observe(n *xdm.Node, d int, end bool, ord uint64) {
 		if sa.onStep != nil {
 			sa.onStep(n, d, true, ord, sa.cur)
 		}
+		sa.leafNode, sa.leafAt, sa.leaf = n, [2]uint64{sa.rd.phase - 1, sa.rd.phase}, keptAccums{kb, ka}
 	case !end:
 		f := sa.frame(d)
 		f.ord, f.closed = ord, false
@@ -479,6 +493,9 @@ func (sa *streamAccums) observe(n *xdm.Node, d int, end bool, ord uint64) {
 		if sa.onStep != nil {
 			sa.onStep(n, d, true, ord, sa.cur)
 		}
+	}
+	if n == nil || n.Kind() == xdm.KindElement {
+		sa.leafNode = nil
 	}
 	sa.keepObserved(n, d, end, ord) // streamaccum_l6.go
 }
@@ -528,7 +545,7 @@ func (sa *streamAccums) stepOne(i int) {
 func (rt *runtime) streamAccumsOf(node *xdm.Node) (*streamAccums, error) {
 	for i := len(rt.streamAccums) - 1; i >= 0; i-- {
 		sa := rt.streamAccums[i]
-		if node == sa.root || node == sa.rd.n && node != nil {
+		if node == sa.root || node == sa.rd.n && node != nil || node == sa.leafNode && node != nil {
 			return sa, nil
 		}
 		if _, ok := sa.run.c.Ordinal(node); ok {
@@ -561,6 +578,20 @@ func (sa *streamAccums) value(def *accumulatorDef, node *xdm.Node, post bool) (x
 		if v, ok := sa.keptValue(i, node, post); ok { // streamaccum_l6.go
 			return v, nil
 		}
+	}
+	if node != sa.root && node.Kind() != xdm.KindElement {
+		// The leaf a pattern matches live on the cursor: the last observed.
+		if node != sa.leafNode {
+			return nil, errAccumOffStream
+		}
+		v, at := sa.leaf.before, sa.leafAt[0]
+		if post {
+			v, at = sa.leaf.after, sa.leafAt[1]
+		}
+		if !sa.rd.valid(i, at) {
+			return nil, sa.errs[i]
+		}
+		return v[i], nil
 	}
 	d, ord := 0, uint64(0)
 	if node != sa.root {

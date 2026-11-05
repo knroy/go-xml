@@ -64,5 +64,5 @@ func (b *streamBuilder) motionlessLoop(el *xdm.Node, f vfocus) bool {
 	if b.leafBody(el, el.ChildElements()) { // streamsplit_l6.go
 		return true
 	}
-	return b.content(el, vElem)
+	return b.loopContent(el) // streamlast_mm2.go
 }

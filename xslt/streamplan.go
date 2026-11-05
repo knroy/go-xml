@@ -39,6 +39,10 @@ type streamPlan struct {
 	recs    map[any]*planRec
 	sites   map[planSite][]planRoot
 	frames  []planFrame
+	// funcs are the module's functions, when they are the ones in force
+	// (declTrust.local): a motionless check may read a call as its body
+	// (inlinedSafe, streamlast_mm2.go).
+	funcs map[funcKey]*streamFunc
 }
 
 // planRec is what the analysis computed for one construct.
@@ -115,6 +119,9 @@ func buildStreamPlan(sd *xdm.Node, shared bool, xmods ...*xdm.Node) *streamPlan 
 	t := newDeclTrust(documentElementOf(sd), shared)
 	t.xmods = xmods // streamtrust_xmod_l7.go
 	t.plan = &streamPlan{recs: map[any]*planRec{}, sites: map[planSite][]planRoot{}}
+	if t.local() {
+		t.plan.funcs = collectStreamFuncs(documentElementOf(sd))
+	}
 	p, known, unverified := sequenceConstructorVerdict(sd, postureStriding, t.sets, t.funcs, t)
 	t.plan.verdict = planRec{props: p, known: known, unverified: unverified}
 	return t.plan

@@ -285,6 +285,67 @@ var mainCases = []struct {
 	// tree's DTD is the document's (sf-unparsed-entity-02).
 	{`<xsl:mode streamable="yes"/><xsl:template match="doc"><o><xsl:value-of select="unparsed-entity-uri('pic'), unparsed-entity-public-id('pic')"/></o></xsl:template>`, true},
 	{`<xsl:mode streamable="yes"/><xsl:template match="doc"><o><xsl:for-each select="rec"><r u="{unparsed-entity-uri('pic')}" k="{@k}"/></xsl:for-each></o></xsl:template>`, true},
+	// last() in a motionless for-each over the ancestors' views is the loop's
+	// (streamlast_mm2.go; streamable-137).
+	{`<xsl:mode streamable="yes"/><xsl:template match="*"><p><xsl:for-each select="ancestor-or-self::node()"><xsl:value-of select="name()"/>` +
+		`<xsl:if test="position() != last()">/</xsl:if></xsl:for-each></p><xsl:apply-templates/></xsl:template>`, true},
+	// xsl:next-match in a rule for a text node: the next rule, or the
+	// built-in, on the complete node (leafNext, streamlast_mm2.go;
+	// streamable-138); at the top of the result it stays on the tree.
+	{`<xsl:mode streamable="yes"/><xsl:template match="text()" priority="2"><t><xsl:next-match/></t></xsl:template>` +
+		`<xsl:template match="text()"><xsl:value-of select="concat(name(..), ':', .)"/></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="text()"><t><xsl:next-match/></t></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="text()"><xsl:next-match/></xsl:template>`, false},
+	// apply-templates, in the streamable mode, over a variable whose content is
+	// copies: tree rules on new trees, accumulators copied or recomputed
+	// (copiesOnly, streamlast_mm2.go; accumulator-048s/049s).
+	{mm2CopyVar("yes"), true},
+	{mm2CopyVar("no"), true},
+	// A rule for text nodes whose pattern reads accumulator-before of the
+	// text: the values the observer stepped at it (streamaccum.go's leaf;
+	// accumulator-055s).
+	{`<xsl:accumulator name="t" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="0"/>` +
+		`<xsl:accumulator-rule match="rec/text()|rec/comment()" select="$value + 1"/></xsl:accumulator>` +
+		`<xsl:mode streamable="yes" on-no-match="shallow-copy" use-accumulators="t"/>` +
+		`<xsl:template match="rec/text()[accumulator-before('t') eq 1]"><f><xsl:value-of select="."/></f></xsl:template>`, true},
+	// apply-templates over a global tree in a streamed loop, its one
+	// consuming parameter grounded: read off the cursor before the tree's
+	// rules run (foreignParams, streamlast_mm2.go; si-apply-templates-006).
+	// A parameter that is the stream's node stays on the tree.
+	{mm2ForeignParam("copy-of(.)"), true},
+	{mm2ForeignParam("."), false},
+	// xsl:iterate carrying copies, filtered by current()'s attribute: the
+	// filter reads its items as it likes and current() on the view
+	// (currentFilter, streamlast_mm2.go); copy-of() is copy-of(.)
+	// (si-iterate-036).
+	{mm2IterateMax("@v ge current()/@v"), true},
+	// A call on an inspection function of the document node in xsl:if, and
+	// in a path's predicates beside position() = 1: read as the body
+	// (inlinedSafe, stepPredCalls, firstAnd: streamlast_mm2.go;
+	// function-5003, -5013).
+	{mm2Inspect + `<xsl:template match="/"><xsl:if test="p:i(.)"><o><xsl:copy-of select="doc/rec[1]/sub"/></o></xsl:if></xsl:template>`, true},
+	{mm2Inspect + `<xsl:template match="/"><o><xsl:copy-of select="doc/rec[position() = 1 and p:i(.) = false()]/sub[p:i(.) = false()]"/></o></xsl:template>`, true},
+	// A predicate reading the outermost ancestor through an ascent function
+	// (flatSteps, streamlast_mm2.go; function-5007), or directly by
+	// position among the ancestors.
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:a" as="node()*" streamability="ascent"><xsl:param name="n" as="node()"/>` +
+		`<xsl:sequence select="$n/ancestor-or-self::*[last()]"/></xsl:function>` +
+		`<xsl:template match="/"><o><xsl:copy-of select="*/rec[1][p:a(.)/local-name() = 'doc']/sub"/></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:copy-of select="*/rec[ancestor::*[last()]/local-name() = 'doc']/sub"/></o></xsl:template>`, true},
+	// last() in a filter of values made of the context item's string: the
+	// outer has them all (lastPreds, streamlast_mm2.go; streamable-130).
+	{`<xsl:mode streamable="yes" on-no-match="shallow-skip"/><xsl:template match="rec"><t><xsl:value-of select="tokenize(., '\s+')[position() * 2 gt last()]"/></t></xsl:template>`, true},
+	// apply-templates to an array holding snapshots of the stream: the array
+	// made over the copies once collected (arrayOfCopies, streamlast_mm2.go;
+	// sx-square-array-019).
+	{`<xsl:mode streamable="yes"/><xsl:mode name="m" streamable="yes" on-no-match="deep-skip"/>` +
+		`<xsl:template match="/"><o><xsl:apply-templates select="[doc/rec[1]/*/snapshot(), 'x']" mode="a"/></o></xsl:template>` +
+		`<xsl:template match=".[. instance of array(*)]" mode="a"><in n="{count(?*)}"><xsl:apply-templates select="?*" mode="m"/></in></xsl:template>` +
+		`<xsl:template match="*" mode="m"><v><xsl:value-of select="name(..), ."/></v></xsl:template>`, true},
+	// A predicate of a node() or text() step reading its parent's attribute:
+	// a leaf's open ancestors, as views (sf-xml-to-json-005).
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:copy-of select="descendant::node()[../@k = 'a']"/></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:value-of select="count(//text()[ancestor::*/@k = 'b'])"/></o></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
@@ -449,3 +510,34 @@ func TestStreamMainMemory(t *testing.T) {
 		}
 	}
 }
+
+// mm2CopyVar is a rule "/" applying templates, in its own streamable mode,
+// to copies of the stream held by a variable (accumulator-048s).
+func mm2CopyVar(copyAcc string) string {
+	return `<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="sub|rec" select="$value + 1"/></xsl:accumulator>` +
+		`<xsl:mode streamable="yes" on-no-match="shallow-skip" use-accumulators="a"/>` +
+		`<xsl:template match="sub"><s n="{accumulator-before('a')}"/></xsl:template>` +
+		`<xsl:template match="/"><o><xsl:variable name="v" as="element()*"><xsl:copy-of select="doc/rec[2]" copy-accumulators="` + copyAcc + `"/></xsl:variable>` +
+		`<xsl:apply-templates select="$v"/></o></xsl:template>`
+}
+
+// mm2ForeignParam is a rule "/" applying templates, per rec, to a global
+// tree with a tunnel parameter of select sel (si-apply-templates-006).
+func mm2ForeignParam(sel string) string {
+	return `<xsl:mode streamable="yes"/><xsl:param name="t"><x/></xsl:param>` +
+		`<xsl:template match="/"><o><xsl:for-each select="doc/rec"><xsl:apply-templates select="$t/*"><xsl:with-param name="c" select="` + sel + `" tunnel="yes"/></xsl:apply-templates></xsl:for-each></o></xsl:template>` +
+		`<xsl:template match="x"><xsl:param name="c" tunnel="yes"/><y><xsl:copy-of select="$c"/></y></xsl:template>`
+}
+
+// mm2IterateMax is a rule "/" iterating over doc/rec, keeping a copy of the
+// last rec for which no kept one matches pred (si-iterate-036).
+func mm2IterateMax(pred string) string {
+	return `<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:iterate select="doc/rec"><xsl:param name="h" as="element(rec)*"/>` +
+		`<xsl:on-completion><xsl:copy-of select="$h"/></xsl:on-completion><xsl:variable name="this" select="copy-of()"/>` +
+		`<xsl:next-iteration><xsl:with-param name="h" select="if (empty($h[` + pred + `])) then $this else $h"/></xsl:next-iteration></xsl:iterate></o></xsl:template>`
+}
+
+// mm2Inspect declares p:i, an inspection function: is its node a document
+// node (function-5003).
+const mm2Inspect = `<xsl:mode streamable="yes"/><xsl:function name="p:i" as="xs:boolean" streamability="inspection">` +
+	`<xsl:param name="n" as="node()"/><xsl:sequence select="$n instance of document-node()"/></xsl:function>`

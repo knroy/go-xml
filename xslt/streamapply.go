@@ -80,7 +80,7 @@ var classNames = [numClasses]string{"element", "document node", "text, comment o
 
 // strict is b with no records: every expression is checked.
 func (b *streamBuilder) strict() *streamBuilder {
-	return &streamBuilder{pl: &streamPlan{recs: map[any]*planRec{}}, x: b.x, ops: b.ops,
+	return &streamBuilder{pl: &streamPlan{recs: map[any]*planRec{}, funcs: b.pl.funcs}, x: b.x, ops: b.ops,
 		kinds: b.kinds, noIdent: b.noIdent, up: b.up, key: b.key}
 }
 
@@ -94,6 +94,10 @@ func (b *streamBuilder) applyOp(el *xdm.Node, f vfocus) bool {
 	}
 	if f == vLeaf {
 		return b.refuse("xsl:apply-templates on a node with no content")
+	}
+	if el.Attr("", "select") != nil && foreignApply(el, parseAt(el, el.AttrValue("select")), f) && b.consumingParam(el, f) {
+		// Consuming only in a parameter (streamlast_mm2.go).
+		return b.applyAttrs(el, f) && b.foreignParams(el, f) && b.addForeignApply(el, f)
 	}
 	kind := applyKids
 	if a := el.Attr("", "select"); a != nil {
@@ -345,7 +349,7 @@ func (c *compiler) rulesPlanFor(el *xdm.Node) *rulesPlan {
 	} else if modes := streamableModeNames(root); len(modes) > 0 && el.Root() == c.sheet.source && !c.streamMayAlias(true) { // streamalias_l7.go
 		t := newDeclTrust(root, false)
 		if !t.shared {
-			t.plan = &streamPlan{recs: map[any]*planRec{}, sites: map[planSite][]planRoot{}}
+			t.plan = &streamPlan{recs: map[any]*planRec{}, sites: map[planSite][]planRoot{}, funcs: collectStreamFuncs(root)}
 			names := make([]string, 0, len(modes))
 			for m := range modes {
 				names = append(names, m)
@@ -546,7 +550,7 @@ func patternClassesAt(p *Pattern, el *xdm.Node) (can [numClasses]bool, why strin
 						peek: el != nil && i == len(a.steps)-1 && c[classElem] && !c[classLeaf] && !c[classAttr] && !c[classDoc] && topKids(pr)}).safe(pr, vElem, true) // streamkids_l6.go
 				}
 				if i == len(a.steps)-1 && (c[classLeaf] || c[classAttr]) {
-					ok = ok && (viewCheck{noIdent: c[classLeaf], up: c[classLeaf]}).safe(pr, vLeaf, true)
+					ok = ok && (viewCheck{noIdent: c[classLeaf], up: c[classLeaf], acc: c[classLeaf] && !c[classAttr], leafAcc: true}).safe(pr, vLeaf, true)
 				}
 				if !ok || i == len(a.steps)-1 && c[classDoc] {
 					return can, "pattern " + p.src + ": predicate " + pr.String() + " not motionless on the view"

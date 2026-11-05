@@ -88,6 +88,7 @@ type splitPred struct {
 	at   int64
 	e    *xpath.Compiled
 	kids bool // e reads $splitKids
+	up   bool // e reads a leaf's ancestors: its focus is Cursor.Leaf's copy
 	// pe, with e nil, is a positional test other than a literal, of the
 	// position counted as for at (positionPred, streamsplit_union.go).
 	pe *xpath.Compiled
@@ -325,6 +326,7 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		if p.br != nil {
 			break // branched checked them all
 		}
+		st.Predicates = firstAnd(st.Predicates) // streamlast_mm2.go
 		if !stepPredsOK(st) {
 			cut = i
 			break
@@ -366,11 +368,20 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 			}
 			vc := viewCheck{kids: true, key: w.key}
 			// safe first: it rewrites has-children(.) to boolean($kids).
-			if elem && !vc.safe(pr, vElem, true) || leaf && !vc.safe(pr, vLeaf, true) || !booleanShaped(pr) {
+			// A leaf's open ancestors are read as views (up), on its copy
+			// under theirs (Cursor.Leaf), as a pattern's are.
+			ok := !elem || vc.safe(pr, vElem, true)
+			up := false
+			if ok && leaf && !vc.safe(pr, vLeaf, true) {
+				lc := vc
+				lc.up = true
+				ok, up = lc.safe(pr, vLeaf, true), true
+			}
+			if !ok || !booleanShaped(pr) {
 				return "predicate " + pr.String() + ": not motionless or positional"
 			}
 			c := part(pr)
-			ss.preds = append(ss.preds, splitPred{e: c, kids: readsKids(c)})
+			ss.preds = append(ss.preds, splitPred{e: c, kids: readsKids(c), up: up})
 			if !splitCannotFail(pr) {
 				s.predFail = true
 			}
@@ -925,8 +936,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 			}
 			return w.refuse("function " + x.Name.Local + "()")
 		}
-		if len(x.Args) == 0 && !w.doc && splitFocusAtomizers[x.Name.Local] && x.Name.URI == fnNS {
-			// string() is string(.): the context's own content.
+		if len(x.Args) == 0 && !w.doc && (splitFocusAtomizers[x.Name.Local] || x.Name.Local == "copy-of" || x.Name.Local == "snapshot") && x.Name.URI == fnNS {
+			// string() is string(.): the context's own content; copy-of()
+			// is copy-of(.) (si-iterate-036).
 			x.Args = []xpath.Expr{&xpath.ContextItem{}}
 		}
 		if focusDependent[keyOf(x.Name, len(x.Args))] && !splitViewFns[w.focus][x.Name.Local] {
@@ -1013,10 +1025,19 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 			}
 		}
 		// The predicates see each item, positioned in the whole sequence.
+		last := false
 		if !allBurstSafe(x.Predicates, false) {
-			return w.refuse("filter " + e.String())
+			if last = lastPreds(x.Predicates); !last { // streamlast_mm2.go
+				return w.refuse("filter " + e.String())
+			}
 		}
-		return w.slot(x.Base, func(y xpath.Expr) { x.Base = y }, useKeep)
+		if !w.slot(x.Base, func(y xpath.Expr) { x.Base = y }, useKeep) {
+			return false
+		}
+		if last && (!w.path.ctxItem || w.red != "") {
+			return w.refuse("filter " + e.String() + ": last() of items not all at hand")
+		}
+		return true
 	case *xpath.SimpleMap:
 		if !burstSafe(x.Right, false) && w.mapClimb(x, put, use) {
 			return true
@@ -1233,13 +1254,18 @@ const (
 // admitted as a node of kind cur (an accumulator rule's matched node).
 type viewCheck struct {
 	kids, pos, noIdent, key bool
-	acc, after, up, curOK   bool
-	cur                     vfocus
+	// last admits fn:last() of the focus (streamBuilder.last).
+	last                  bool
+	acc, after, up, curOK bool
+	cur                   vfocus
 	// lookup admits $value(k): a lookup in an accumulator's value, a map or
 	// an array by its declared type, which atomizes k.
 	lookup bool
 	// accum says the expression is an accumulator rule's (streamaccum.go).
 	accum bool
+	// leafAcc admits accumulator-before of a leaf, a pattern's last step
+	// matched live on the cursor (streamaccum.go: the last leaf observed).
+	leafAcc bool
 	// items says the split's $items (or its nth, $value) are views of
 	// elements, read as a focus of kind vElem is (streamleaf.go).
 	items bool
@@ -1283,7 +1309,7 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		}
 		return vc.path(x.Steps, f, nodeOK)
 	case *xpath.FilterExpr:
-		if freeFilter(x) { // streamsplit_fns.go
+		if freeFilter(x) || f != vNone && callsCurrent(x) && currentFilter(vc, x, f) { // streamsplit_fns.go, streamlast_mm2.go
 			return true
 		}
 		if atomicValued(x.Base) {
@@ -1411,6 +1437,7 @@ func (vc viewCheck) bound(bs []xpath.Binding, f vfocus) bool {
 // down. A path ending in elements returns view nodes, which may not be
 // atomized (nodeOK).
 func (vc viewCheck) path(steps []xpath.Expr, f vfocus, nodeOK bool) bool {
+	steps = flatSteps(steps) // streamlast_mm2.go
 	cur, doc := f, false
 	for i, s := range steps {
 		st, ok := s.(*xpath.Step)
@@ -1447,11 +1474,13 @@ func (vc viewCheck) path(steps []xpath.Expr, f vfocus, nodeOK bool) bool {
 			return false
 		}
 		for _, p := range st.Predicates {
-			pf := cur
+			pf, pc := cur, vc
 			if st.Axis == xpath.AxisParent || st.Axis == xpath.AxisAncestor || st.Axis == xpath.AxisAncestorOrSelf {
-				pf = vElem
+				// The step's positions are among the ancestors, all of
+				// which the view has (function-5007: ancestor-or-self::*[last()]).
+				pf, pc.pos, pc.last = vElem, true, true
 			}
-			if !vc.safe(p, pf, true) {
+			if !pc.safe(p, pf, true) {
 				return false
 			}
 		}
@@ -1492,7 +1521,7 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 				return true
 			}
 		}
-		if n == "position" && vc.pos && len(x.Args) == 0 || n == "current-grouping-key" && vc.key && len(x.Args) == 0 {
+		if n == "position" && vc.pos && len(x.Args) == 0 || n == "last" && vc.last && len(x.Args) == 0 || n == "current-grouping-key" && vc.key && len(x.Args) == 0 {
 			return true
 		}
 		if n == "current" && vc.curOK && len(x.Args) == 0 {
@@ -1500,7 +1529,7 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		}
 		if (n == "accumulator-before" && vc.acc || n == "accumulator-after" && vc.after) && len(x.Args) == 1 {
 			lit, ok := x.Args[0].(*xpath.Literal)
-			return ok && lit.Val != nil && (f == vElem || f == vNone || vc.accum && f == vLeaf) // a rule's leaf: streamaccum_l4.go
+			return ok && lit.Val != nil && (f == vElem || f == vNone || (vc.accum || vc.leafAcc) && f == vLeaf) // a rule's leaf: streamaccum_l4.go
 		}
 		if viewIdentOK(vc, x, f) { // streamview_k2.go
 			return true
@@ -1748,6 +1777,13 @@ func (a *splitAt) preds(st *splitStep, in *splitInst) (bool, error) {
 				return false, nil
 			}
 			continue
+		}
+		if p.up && a.leaf && !a.stable && a.focus == nil {
+			l, err := a.r.c.Leaf()
+			if err != nil {
+				return false, err
+			}
+			a.focus = l
 		}
 		n, err := a.node()
 		if err != nil {

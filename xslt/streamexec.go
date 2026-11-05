@@ -234,6 +234,10 @@ type streamBuilder struct {
 	// docRead says a consumer before it in its sequence constructor, an op
 	// itself (run unconditionally), has read the document (streamcopy_l3doc.go).
 	docRead bool
+	// last says fn:last() is the focus's: the instructions are a motionless
+	// xsl:for-each's body, whose select the tree evaluates whole before the
+	// body runs (streamlast_mm2.go).
+	last bool
 	// sub is the inlined call whose body is being planned at this level
 	// (streamfn_inline.go): its first parameter reads as the call's argument.
 	sub *inlinedCall
@@ -768,6 +772,9 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "iterate" {
 			return b.motionlessIterate(el, f) // streamsplit_l6.go
 		}
+		if done, ok := b.leafNext(el, f); done { // streamlast_mm2.go
+			return ok
+		}
 		if local == "copy" && f == vNone && !b.noIdent && streamMotionless[local] {
 			// Of the document node: it reads the document's properties of
 			// the stand-in once the rest has been read (streamcopy_l3.go).
@@ -869,8 +876,8 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := b.loopRead(parseAt(el, src)) // streamfn_loop.go
 	peek := b.kidsAt(el, e, f)        // streamkids_l6.go
-	vc := viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek}
-	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) { // streamcopy_l3doc.go
+	vc := viewCheck{pos: true, last: b.last, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek}
+	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) && !b.inlinedSafe(el, src, vc, f, nodeOK) { // streamcopy_l3doc.go, streamlast_mm2.go
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
 	}
 	if peek {
@@ -1170,9 +1177,10 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 			// A motionless body reads its match's view only: matches below
 			// it are found as the content goes by.
 			s.mode = matchView
-		case op.planned && (!s.nests || s.outermost && !s.predFail) && x.readyOps(op.inner, k, &op.kinds) == "":
-			// Matches cannot nest, or those inside an outermost one are not
-			// results and no predicate's error is to be raised there.
+		case op.planned && (!s.nests || (s.outermost || headOnly(op)) && !s.predFail) && x.readyOps(op.inner, k, &op.kinds) == "":
+			// Matches cannot nest, or those inside an outermost one (or the
+			// one head() takes: streamlast_mm2.go) are not results and no
+			// predicate's error is to be raised there.
 			s.mode = matchBody
 		case op.grounded && k >= 1:
 			// The body reads its match's content as it likes, on a copy
