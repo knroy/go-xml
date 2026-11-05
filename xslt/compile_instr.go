@@ -2239,7 +2239,7 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 			pos++
 			live.begin(rt, out)
-			if err := step(pos, it, 0); err != errStopIterate {
+			if err := step(pos, it, feed.size); err != errStopIterate { // a sized feed's, or 0
 				if err == nil {
 					live.end(rt, out, carried)
 				}
