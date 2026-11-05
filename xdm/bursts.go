@@ -2,6 +2,7 @@ package xdm
 
 import (
 	"io"
+	"sort"
 
 	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/internal/xdmclone"
@@ -49,7 +50,7 @@ func parseBursts(r io.Reader, opts ParseOptions, steps []xdmburst.Step, fn func(
 	if len(steps) == 0 || len(steps) > xdmburst.MaxSteps {
 		panic("xdm: ParseBursts needs a path of 1 to 63 names")
 	}
-	opts.bursts = &burster{c: &patternClient{steps: steps, states: []uint64{1}}, fn: fn, gens: []uint64{0}}
+	opts.bursts = &burster{c: &patternClient{steps: steps, states: []uint64{1}}, fn: fn, gens: ordsOf(0)}
 	_, err := parse(r, "", opts)
 	return err
 }
@@ -97,10 +98,10 @@ type burster struct {
 	// marks[d] is the tree's state once the spine element at depth d (0:
 	// the document node) had stored its attributes. Everything stored after
 	// it belongs to content that is dropped.
-	marks []burstMark
+	marks markStack
 	// gens[d] tells the spine element at depth d from the others that have
 	// been there: gen counts the elements the client was asked about.
-	gens []uint64
+	gens ordStack
 	gen  uint64
 	// batch holds the small bursts not yet delivered (burstBatch), or is nil.
 	batch *burstBatch
@@ -117,7 +118,7 @@ type burster struct {
 	// (streamview.go). ords[d] is the ordinal of the spine element at depth
 	// d, beside gens; discarded counts the records the parse has taken back,
 	// so that record i of its tree is the original numbered i + discarded.
-	ords      []uint64
+	ords      *ordStack
 	discarded uint64
 	origin    *streamOrigin
 	// cur is the element start is asking the client about, at depth curD,
@@ -150,6 +151,111 @@ type burstMark struct {
 
 func markOf(t *Tree) burstMark {
 	return burstMark{t.text.mark(), len(t.names), len(t.frames), len(t.frameData)}
+}
+
+// The per-depth state of the spine is held in runs, so that a deep document
+// does not cost a word or more per open element beside its record: the
+// marks of nested elements are mostly equal, and their gens and ordinals
+// step evenly.
+
+// markStack is a stack of marks, one per depth, held as runs of equal ones.
+type markStack struct {
+	runs []markRun
+	n    int
+}
+
+// markRun is the mark of the depths from at to the next run's.
+type markRun struct {
+	at int
+	m  burstMark
+}
+
+func (s *markStack) len() int { return s.n }
+
+func (s *markStack) push(m burstMark) {
+	if k := len(s.runs); k == 0 || s.runs[k-1].m != m {
+		s.runs = append(s.runs, markRun{s.n, m})
+	}
+	s.n++
+}
+
+func (s *markStack) pop() {
+	s.n--
+	if k := len(s.runs); s.runs[k-1].at == s.n {
+		s.runs = s.runs[:k-1]
+	}
+}
+
+func (s *markStack) top() burstMark { return s.runs[len(s.runs)-1].m }
+
+// reset leaves m alone on the stack.
+func (s *markStack) reset(m burstMark) {
+	s.runs, s.n = s.runs[:0], 0
+	s.push(m)
+}
+
+// ordStack is a stack of numbers, one per depth, held as runs in
+// arithmetic progression.
+type ordStack struct {
+	runs []ordRun
+	n    int
+}
+
+// ordRun holds the depths from at to the next run's: v, v+step, ...
+type ordRun struct {
+	at      int
+	v, step uint64
+}
+
+// ordsOf is a stack holding vs.
+func ordsOf(vs ...uint64) ordStack {
+	var s ordStack
+	for _, v := range vs {
+		s.push(v)
+	}
+	return s
+}
+
+func (s *ordStack) len() int { return s.n }
+
+func (s *ordStack) push(v uint64) {
+	if k := len(s.runs); k > 0 {
+		r := &s.runs[k-1]
+		switch i := uint64(s.n - r.at); {
+		case i == 1:
+			r.step = v - r.v
+			s.n++
+			return
+		case v == r.v+i*r.step:
+			s.n++
+			return
+		}
+	}
+	s.runs = append(s.runs, ordRun{s.n, v, 0})
+	s.n++
+}
+
+// at is the number at depth i.
+func (s *ordStack) at(i int) uint64 {
+	k := len(s.runs) - 1
+	if s.runs[k].at > i {
+		k = sort.Search(k, func(j int) bool { return s.runs[j+1].at > i })
+	}
+	r := s.runs[k]
+	return r.v + uint64(i-r.at)*r.step
+}
+
+// truncate keeps the numbers below depth n.
+func (s *ordStack) truncate(n int) {
+	if n >= s.n {
+		return
+	}
+	s.n = n
+	k := len(s.runs)
+	for k > 0 && s.runs[k-1].at >= n {
+		k--
+	}
+	s.runs = s.runs[:k]
 }
 
 // streamClient is what a burster asks and tells (see burster). Its nodes
@@ -287,10 +393,10 @@ func (b *burster) started(el *Node, d int, act xdmburst.Action) {
 // keep puts el, just opened at depth d, on the spine.
 func (b *burster) keep(el *Node, d int) {
 	b.spine = d
-	b.marks = append(b.marks, markOf(el.tree))
-	b.gens = append(b.gens, b.gen)
+	b.marks.push(markOf(el.tree))
+	b.gens.push(b.gen)
 	if b.ords != nil {
-		b.ords = append(b.ords, b.ordOf(el))
+		b.ords.push(b.ordOf(el))
 	}
 }
 
@@ -331,10 +437,10 @@ func (b *burster) end(el *Node, d int, spaces *spaceTable, names *nameCache) err
 	case b.drop == 0 && d == b.spine && d > 0:
 		kept = true
 		b.spine--
-		b.marks = b.marks[:len(b.marks)-1]
-		b.gens = b.gens[:len(b.gens)-1]
+		b.marks.pop()
+		b.gens.truncate(b.gens.len() - 1)
 		if b.ords != nil {
-			b.ords = b.ords[:len(b.ords)-1]
+			b.ords.truncate(b.ords.len() - 1)
 		}
 		if b.quiet != 0 {
 			if d > b.quiet {
@@ -403,7 +509,7 @@ func (b *burster) trimLeaves(cur *Node, d int, spaces *spaceTable, names *nameCa
 			b.watched = n.self
 		}
 	}
-	if b.drop != 0 || d != b.spine || d == 0 && (!b.leaves || len(b.marks) == 0) {
+	if b.drop != 0 || d != b.spine || d == 0 && (!b.leaves || b.marks.len() == 0) {
 		return nil
 	}
 	if b.leaves && b.quiet == 0 {
@@ -422,7 +528,7 @@ func (b *burster) trimRest(cur *Node, spaces *spaceTable, names *nameCache) erro
 	for last := cur.LastChild(); last != nil && last.isLeaf(); last = cur.LastChild() {
 		b.discardLast(cur, spaces, names)
 	}
-	if b.batch != nil && textSince(cur.tree, b.marks[len(b.marks)-1].text.blocks) >= burstFrozen {
+	if b.batch != nil && textSince(cur.tree, b.marks.top().text.blocks) >= burstFrozen {
 		if err := b.flush(); err != nil {
 			return err
 		}
@@ -521,7 +627,7 @@ func (b *burster) discardLast(p *Node, spaces *spaceTable, names *nameCache) {
 // rewind takes back what the parse's tree t stored since the deepest
 // spine element's mark.
 func (b *burster) rewind(t *Tree, spaces *spaceTable, names *nameCache) {
-	m := b.marks[len(b.marks)-1]
+	m := b.marks.top()
 	t.text.rewind(m.text)
 	rewindNames(t, m.names, names)
 	t.rewindFrames(m.frames, m.frameData)
@@ -547,7 +653,7 @@ func (b *burster) take(el *Node) error {
 		return b.fn(g)
 	}
 	b.add(el)
-	if bt := b.batch; int(bt.t.n) >= max(burstBatchRecords, 4*len(b.gens)) ||
+	if bt := b.batch; int(bt.t.n) >= max(burstBatchRecords, 4*b.gens.len()) ||
 		textSince(t, bt.blocks) >= burstBatchText {
 		return b.flush()
 	}
@@ -617,9 +723,9 @@ func (b *burster) add(el *Node) {
 		}
 		bt.path, bt.gens = append(bt.path, 0), append(bt.gens, 0)
 	}
-	d := len(b.gens) - 1 // el's parent
+	d := b.gens.len() - 1 // el's parent
 	k := 1
-	for k < len(bt.path) && k <= d && bt.gens[k] == b.gens[k] {
+	for k < len(bt.path) && k <= d && bt.gens[k] == b.gens.at(k) {
 		k++
 	}
 	bt.closeTo(k)
@@ -632,11 +738,11 @@ func (b *burster) add(el *Node) {
 		j := bt.appendUnder(t, s.self, s.self+1+s.attrCount())
 		e := bt.t.rec(j)
 		if bt.o != nil {
-			bt.o.add(j, b.ords[k])
+			bt.o.add(j, b.ords.at(k))
 			e.flags |= fShallow // its content is not all here
 		}
 		e.end, e.v1 = openEnd, noIdx
-		bt.path, bt.gens = append(bt.path, j), append(bt.gens, b.gens[k])
+		bt.path, bt.gens = append(bt.path, j), append(bt.gens, b.gens.at(k))
 		b.spineCopies += 1 + int(s.attrCount())
 		k++
 	}
@@ -789,7 +895,7 @@ func (b *burster) deliver(el *Node) *Node {
 		o := c.tree.setOrigin(b.stream(t))
 		o.add(0, 0)
 		for d, i := range t.open[1:] {
-			o.add(i, b.ords[d+1])
+			o.add(i, b.ords.at(d+1))
 		}
 		o.add(el.self, b.ordOf(el))
 		for p := c.Parent(); p != nil; p = p.Parent() {

@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +86,53 @@ func TestDeepCopyOfScopes(t *testing.T) {
 		}
 		if got := streamedRun(t, sheet, doc, TransformOptions{}); got != want {
 			t.Errorf("%s:\n got %s\nwant %s", body, got, want)
+		}
+	}
+}
+
+// TestDeepStreamHoldsNoMoreThanTree: a streamed run kept, per open element,
+// besides the parse's record, a mark, a gen and two ordinals in the parse,
+// and an entry of the select's walk (112 bytes for count(//a)): a document a
+// million deep held 2.7 times the tree. Those are runs now, one for a whole
+// stretch of evenly nested elements. What the streamed run allocates must
+// stay within a tenth of what the tree's parse and run allocate: both are
+// then the parse's records, give or take what the process has cached (it was
+// five times the tree's for string(.), three for count(//a)).
+func TestDeepStreamHoldsNoMoreThanTree(t *testing.T) {
+	const d = 200000
+	var opts TransformOptions
+	opts.SourceParseOptions.MaxDepth = 2 * d
+	opts.MaxNodes, opts.MaxBytes = -1, -1
+	doc := deepDoc(d)
+	for _, body := range []string{
+		`<xsl:template match="/"><xsl:value-of select="string(.)"/></xsl:template>`,
+		`<xsl:template match="/"><xsl:value-of select="count(//a)"/></xsl:template>`,
+	} {
+		sheet := outSheet(t, `<xsl:mode streamable="yes"/>`, body)
+		alloc := func(main bool) (string, uint64) {
+			var m goruntime.MemStats
+			goruntime.ReadMemStats(&m)
+			before := m.TotalAlloc
+			var out string
+			if main {
+				out = streamedRun(t, sheet, doc, opts)
+			} else {
+				var err error
+				if out, err = outRun(sheet, doc, false, false, opts); err != nil {
+					t.Fatal(err)
+				}
+			}
+			goruntime.ReadMemStats(&m)
+			return out, m.TotalAlloc - before
+		}
+		want, tree := alloc(false)
+		got, stream := alloc(true)
+		t.Logf("%s: stream %d KB, tree %d KB", body, stream>>10, tree>>10)
+		if got != want {
+			t.Errorf("%s: streamed %q, tree %q", body, got, want)
+		}
+		if stream > tree+tree/10 {
+			t.Errorf("%s: the streamed run allocated %d KB at depth %d, the tree's %d KB", body, stream>>10, d, tree>>10)
 		}
 	}
 }
