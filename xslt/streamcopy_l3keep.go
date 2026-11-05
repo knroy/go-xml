@@ -19,7 +19,6 @@ package xslt
 
 import (
 	"reflect"
-	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -58,14 +57,10 @@ func prunedMembers(el *xdm.Node) *memberKeep {
 			w.ok = false
 			return
 		}
-		for a := range n.Attrs() {
-			if l := a.Name().Local; l == "use-attribute-sets" || xsl && strings.HasPrefix(l, "_") {
-				w.ok = false // an attribute set's body, or a shadow attribute's expression, is not read here
-				return
-			}
-		}
-		if !nodeExprs(n, func(a *xdm.Node, e xpath.Expr) bool {
-			if n != el || a.Name().Local != "select" { // the population is read off the cursor
+		if !nodeExprs(n, func(a *xdm.Node, e xpath.Expr, pattern bool) bool {
+			if pattern {
+				w.ok = false // a pattern reads its node by rules of its own
+			} else if n != el || a.Name().Local != "select" { // the population is read off the cursor
 				w.expr(e, true)
 			}
 			return w.ok

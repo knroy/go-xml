@@ -234,7 +234,9 @@ func copyFreeBody(el *xdm.Node) bool {
 			ok = false // it could hand a member on as the node itself
 			return
 		}
-		if !nodeExprs(n, func(_ *xdm.Node, e xpath.Expr) bool { return copyFreeExpr(e) }) {
+		if !nodeExprs(n, func(_ *xdm.Node, e xpath.Expr, pattern bool) bool {
+			return copyFreeExpr(e) && (!pattern || copyFreePattern(e))
+		}) {
 			ok = false
 			return
 		}
@@ -247,17 +249,32 @@ func copyFreeBody(el *xdm.Node) bool {
 }
 
 // nodeExprs calls fn on each expression n, an element of a stylesheet,
-// holds in its attributes -- an XSLT instruction's expression attributes
-// (exprAttrs), and attribute value templates -- with the attribute; it
-// reports false when one cannot be parsed or fn returns false.
-func nodeExprs(n *xdm.Node, fn func(a *xdm.Node, e xpath.Expr) bool) bool {
+// holds in its attributes, with the attribute: an XSLT instruction's
+// expression and pattern attributes (exprAttrs, patternAttrs; pattern says
+// which), and the attribute value templates of an instruction's attributes
+// and of a literal result element's own (in no namespace or a namespace not
+// XSLT's). It reports false when one cannot be parsed, when fn returns
+// false, and when n evaluates expressions held elsewhere or not yet written:
+// an attribute set it uses, a shadow attribute (_select), whose expression
+// is made at compile time.
+func nodeExprs(n *xdm.Node, fn func(a *xdm.Node, e xpath.Expr, pattern bool) bool) bool {
 	xsl := n.Name().URI == xdm.NSXSL
 	for a := range n.Attrs() {
-		if a.Name().URI != "" && !(xsl && a.Name().URI == xdm.NSXSL) {
-			continue
+		uri, local := a.Name().URI, a.Name().Local
+		if xsl && uri != "" {
+			continue // an extension attribute: no expression of XSLT's
+		}
+		if xsl || uri == xdm.NSXSL { // an XSLT attribute
+			if local == "use-attribute-sets" || strings.HasPrefix(local, "_") {
+				return false
+			}
+			if !xsl {
+				continue // xsl:version, xsl:use-when (static) and the like on a literal result element
+			}
 		}
 		var srcs []string
-		if xsl && exprAttrs[a.Name().Local] {
+		pattern := xsl && patternAttrs[local]
+		if xsl && (exprAttrs[local] || pattern) {
 			srcs = []string{a.Value()}
 		} else if strings.ContainsAny(a.Value(), "{}") {
 			exprs, valid := avtExpressions(a.Value())
@@ -267,7 +284,7 @@ func nodeExprs(n *xdm.Node, fn func(a *xdm.Node, e xpath.Expr) bool) bool {
 			srcs = exprs
 		}
 		for _, src := range srcs {
-			if e := parseAt(n, src); e == nil || !fn(a, e) {
+			if e := parseAt(n, src); e == nil || !fn(a, e, pattern) {
 				return false
 			}
 		}
@@ -277,7 +294,21 @@ func nodeExprs(n *xdm.Node, fn func(a *xdm.Node, e xpath.Expr) bool) bool {
 
 // exprAttrs are the attributes of XSLT instructions that hold an expression.
 var exprAttrs = map[string]bool{"select": true, "test": true, "group-by": true, "group-adjacent": true,
-	"use-when": true, "value": true, "count": true, "from": true, "start-at": true, "key": true}
+	"use-when": true, "value": true, "count": true, "from": true, "start-at": true, "key": true,
+	"for-each-item": true, "for-each-source": true}
+
+// copyFreePattern reports whether a pattern, whose predicates copyFreeExpr
+// passed, tests a node only by its own name, kind and content: one step, no
+// position among siblings. A step before it would test the node's parent,
+// which a copy does not have.
+func copyFreePattern(e xpath.Expr) bool {
+	p, ok := e.(*xpath.PathExpr)
+	if !ok || p.Root || len(p.Steps) != 1 || positionalPattern(e) {
+		return false
+	}
+	_, ok = p.Steps[0].(*xpath.Step)
+	return ok
+}
 
 // copyFreeExpr reports whether e reads nothing of a member that its copy
 // does not have: no axis out of a node but down and to its attributes, no
