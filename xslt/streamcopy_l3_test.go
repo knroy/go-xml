@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -324,7 +325,13 @@ func TestStreamApplyFreshCopies(t *testing.T) {
 // off the cursor (streamcopy_l3group.go).
 func TestStreamGroupByEventCopies(t *testing.T) {
 	dir := t.TempDir()
+	docs := map[string]string{"nsbase": `<doc xmlns:p="urn:p" xml:base="http://x/a/"><rec k="a" v="1" xmlns:r="urn:r">` +
+		`<p:sub xmlns="urn:d" xmlns:q="urn:q" q:y="1" xml:base="b/"><!--c--><?pi x?>t<e xmlns="">u</e></p:sub></rec>` +
+		`<rec k="b" v="2" xmlns:p="urn:p2"><p:sub p:z="2"/></rec><rec k="a" v="3" xml:base="../c/"><sub/></rec></doc>`}
 	for name, doc := range coreDocs {
+		docs[name] = doc
+	}
+	for name, doc := range docs {
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -335,6 +342,7 @@ func TestStreamGroupByEventCopies(t *testing.T) {
 			{`<g p="{position()}" k="{current-grouping-key()}"><xsl:value-of select="sum(current-group()/@v[. castable as xs:double])"/></g>`, true},
 			{`<xsl:variable name="m" select="map { 'x' : current-group()/sub/@x/string(), 'n' : count(current-group()) }"/><g n="{$m?n}"><xsl:value-of select="$m?x" separator=","/></g>`, true},
 			{`<g k="{current-grouping-key()}"><xsl:copy-of select="current-group()/sub"/></g>`, true},
+			{`<g k="{current-grouping-key()}"><xsl:copy-of select="current-group()"/></g>`, true},
 			// Two consuming operands (current-group() is consuming, §19.8.9.4):
 			// roaming and free-ranging by §19.8.1's general rules, a verdict
 			// the core does not trust.
@@ -382,5 +390,42 @@ func TestStreamForkGroupByMaxNodes(t *testing.T) {
 				t.Errorf("MaxNodes %d, %s: streamed %d, guards %d", max, body, st.Streamed(), st.Guards)
 			}
 		}
+	}
+}
+
+// TestStreamForkGroupByCopiesAllocate: the members a group-by in xsl:fork
+// copies off the cursor are written straight into one tree's records, no
+// builder or view per node (A2-7): the run allocates about what the tree's
+// parse and grouping do, where a builder per node allocated 2.3 times that.
+func TestStreamForkGroupByCopiesAllocate(t *testing.T) {
+	var d strings.Builder
+	d.WriteString("<doc>\n")
+	for i := 0; i < 20000; i++ {
+		fmt.Fprintf(&d, `<rec n="%d" k="%c" v="%d"><a>alpha %d</a><b x="%d">bravo %d</b><sub><c>%d</c><c>%d</c></sub></rec>`+"\n",
+			i, 'a'+i/10%4, i%97, i, i%7, i, i%13, i%17)
+	}
+	d.WriteString("</doc>")
+	sheet := mainSheet(`<xsl:mode streamable="yes"/><xsl:template match="/doc"><o><xsl:fork>` +
+		`<xsl:for-each-group select="rec" group-by="@k"><g k="{current-grouping-key()}" s="{sum(current-group()/@v)}"/>` +
+		`</xsl:for-each-group></xsl:fork></o></xsl:template>`)
+	run := func(stream bool) (string, uint64) {
+		var m0, m1 goruntime.MemStats
+		goruntime.GC()
+		goruntime.ReadMemStats(&m0)
+		out, tr := mainRun(sheet, d.String(), stream, TransformOptions{})
+		goruntime.ReadMemStats(&m1)
+		if stream && (tr.Streamed() == 0 || tr.Guards != 0) {
+			t.Fatalf("streamed %d, guards %d", tr.Streamed(), tr.Guards)
+		}
+		return out, m1.TotalAlloc - m0.TotalAlloc
+	}
+	so, sa := run(true)
+	to, ta := run(false)
+	if so != to {
+		t.Fatalf("stream %.200s\ntree   %.200s", so, to)
+	}
+	t.Logf("allocated: stream %d, tree %d (%.2fx)", sa, ta, float64(sa)/float64(ta))
+	if float64(sa) > 1.3*float64(ta) {
+		t.Errorf("stream allocates %.2fx the tree's bytes (%d vs %d)", float64(sa)/float64(ta), sa, ta)
 	}
 }
