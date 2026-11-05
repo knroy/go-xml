@@ -112,7 +112,8 @@ func copyFreeBody(el *xdm.Node) bool {
 			ok = false
 			return
 		}
-		if xsl && n.Name().Local == "sequence" && n.Attr("", "select") != nil && !leafAtomic(n) {
+		if xsl && n.Name().Local == "sequence" && n.Attr("", "select") != nil && !leafAtomic(n) &&
+			!nodeFreeSelect(n) { // streamcopy_nodefree.go
 			ok = false // it could hand a member on as the node itself
 			return
 		}

@@ -396,6 +396,7 @@ func (c *compiler) planRule(el *xdm.Node, p *Pattern, from int) *rulePlan {
 		}
 		x := newStreamExec()
 		x.class, x.modes, x.rule = cl, templateModeNames(el), true
+		x.schema = c.sheet.schema // streamsplit_schema.go
 		b := &streamBuilder{pl: rs.pl, x: x, ops: &x.top, kinds: &x.kinds, noIdent: cl == classLeaf, up: cl == classLeaf}
 		f := vElem
 		switch cl {
@@ -456,7 +457,9 @@ func (c *compiler) readyRule(r *rulePlan, el *xdm.Node) {
 		if x == nil {
 			continue
 		}
-		if why := x.ready(); why != "" {
+		why := x.ready()
+		c.sheet.noteSchemaFolds(x) // streamsplit_schema.go
+		if why != "" {
 			// Several consumers found as the plan readies (a split's): the
 			// rule may run on a grounded copy, as one its body refused.
 			if gx := groundRuleExec(el, nodeClass(cl), why); gx != nil && !x.groundRule { // streamtee_ground.go
@@ -490,7 +493,11 @@ func patternClassesAt(p *Pattern, el *xdm.Node) (can [numClasses]bool, why strin
 		return [numClasses]bool{true, true, true, true}, "" // streamgroup.go
 	}
 	if len(p.general) > 0 {
-		return can, "pattern " + p.src + ": an XSLT 3.0 form"
+		q := streamSetOpAlts(p) // streampattern_setops.go
+		if q == nil {
+			return can, "pattern " + p.src + ": an XSLT 3.0 form"
+		}
+		p = q
 	}
 	for _, a := range p.alts {
 		if a.call != nil {
@@ -667,6 +674,7 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 	pkgOK := map[string]bool{} // modes named by apply ops written in a frame package
 	var why string
 	streamed := x == nil // a principal input: no tree to fall back to
+	leafTop, forkTop := false, false
 	visit := func(x *streamExec, top topKind) {
 		if visited[visitKey{x, top}] {
 			return
@@ -716,6 +724,7 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 			case atTop(op.el):
 				t = top
 			}
+			forkTop = forkTop || t == mainTop && inFork(op.el) // streammain_leaftop.go
 			for _, m := range modes {
 				if rs.pkgApply(op) { // streampkgframe_l7.go
 					pkgOK[m] = true
@@ -755,7 +764,10 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 		// tree's; SecondaryResult.Nodes holds the copy, not the source's.
 		if k.top != notTop && (copies && k.class != classDoc && (k.class != classElem || nm == "deep-copy")) &&
 			(k.top == mainTop || k.class != classLeaf) {
-			return label() + ": the built-in " + nm + " would put a node of the stream at the top of the result"
+			if !streamed || k.top != mainTop || k.class != classLeaf || forkTop {
+				return label() + ": the built-in " + nm + " would put a node of the stream at the top of the result"
+			}
+			leafTop = true // streammain_leaftop.go: the source's own leaf, from the document built
 		}
 		if k.class == classElem || k.class == classDoc {
 			// Inside the copy a shallow-copy makes, its descent is not at
@@ -807,6 +819,9 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 				why = s.kidsLinkWhy(k.mode)
 			}
 		}
+	}
+	if why == "" && leafTop {
+		why = s.noteMainBuild(main.mode) // streammain_leaftop.go
 	}
 	return why
 }
@@ -1177,11 +1192,16 @@ func (run *streamRun) rule(rt *runtime, t *Template, node *xdm.Node, params, tun
 // the source's, so the result is the tree's to make (kept, executeStream).
 func (run *streamRun) keep(out *outputBuilder, n *xdm.Node) {
 	if out.Open() == nil {
-		if out == run.held {
+		k := n.Kind()
+		leaf := k != xdm.KindElement && k != xdm.KindAttribute && k != xdm.KindDocument
+		if leaf {
+			c := xdm.Copy(n)
+			if run.build == nil || !run.build.note(run.c, n, c) { // streammain_leaftop.go
+				run.kept = run.kept || out == run.held
+			}
+			n = c
+		} else if out == run.held {
 			run.kept = true
-		}
-		if k := n.Kind(); k != xdm.KindElement && k != xdm.KindAttribute && k != xdm.KindDocument {
-			n = xdm.Copy(n)
 		}
 	}
 	out.AppendNode(n)

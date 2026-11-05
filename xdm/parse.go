@@ -456,6 +456,11 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 				if bs != nil && ps.cur == tree.Root {
 					bs.marks = append(bs.marks[:0], markOf(tree))
 					bs.v11 = dec.IsVersion11()
+					// Known from here, as an Observer of the parse may read.
+					tree.XMLVersion = "1.0"
+					if bs.v11 {
+						tree.XMLVersion = "1.1"
+					}
 				}
 				el, decls := buildElement(t, ps.cur, &ps.ns, names)
 				if off := encodeOffset(start, trackPos); off != 0 {

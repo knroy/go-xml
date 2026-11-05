@@ -111,6 +111,11 @@ type streamValidation struct {
 // strips says the caller strips the validated document's annotations when
 // the stylesheet asks (xsl:source-document does; the tree's merge does not).
 func (spec validationSpec) streamedValidation(rt *runtime, br burstResolver, href, base string, strips bool) (sv *streamValidation, ok bool) {
+	defer func() {
+		if ok && !rt.sheet.schemaFoldStreams(sv) { // streamsplit_schema.go
+			sv, ok = nil, false
+		}
+	}()
 	if spec.isDefault() {
 		return asRead(rt, br, href, base, strips) // streamvalidin_asread.go
 	}
@@ -455,6 +460,8 @@ func (s *Stylesheet) sourceValidationStreams(mode SourceValidation) bool {
 	switch {
 	case mode == 0:
 		return true
+	case mode == SourceLax && len(s.schemaFolds) > 0:
+		return false // streamsplit_schema.go
 	case s.schema == nil:
 		return mode == SourceLax // lax without a schema assesses nothing
 	}

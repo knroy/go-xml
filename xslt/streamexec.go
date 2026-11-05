@@ -67,6 +67,7 @@ import (
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // traceRerun, when set, is told of the failure behind each re-run.
@@ -138,6 +139,11 @@ type streamExec struct {
 	frameRoot *streamExec
 	planning  map[*xdm.Node]bool
 	code      *frameCode
+	// schema is the stylesheet's, for a rule's body: what a min or max
+	// below the document node folds may be typed by it (streamsplit_schema.go),
+	// whose element names are schemaFold's.
+	schema     *xsd.Schema
+	schemaFold map[xdm.QName]bool
 }
 
 func newStreamExec() *streamExec {
@@ -772,6 +778,12 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "message" {
 			return b.messageOp(el, f, false) // streammessage.go
 		}
+		if local == "evaluate" {
+			return b.evaluateMotionless(el, f) // streamevaluate.go
+		}
+		if local == "analyze-string" {
+			return b.analyzeMotionless(el, f) // streamevaluate.go
+		}
 		if local == "for-each" {
 			return b.motionlessLoop(el, f) // streamvariable.go
 		}
@@ -881,7 +893,10 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 // what f has, and returns nodes of it only where nodeOK.
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := b.loopRead(parseAt(el, src)) // streamfn_loop.go
-	peek := b.kidsAt(el, e, f)        // streamkids_l6.go
+	if b.parentAccum(e, f) {          // streamevaluate.go
+		return true
+	}
+	peek := b.kidsAt(el, e, f) // streamkids_l6.go
 	vc := viewCheck{pos: true, last: b.last, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek, whole: b.x.wholeAt(el)}
 	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) && !b.inlinedSafe(el, src, vc, f, nodeOK) { // streamcopy_l3doc.go, streamlast_mm2.go
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
@@ -1263,6 +1278,9 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 		return ""
 	}
 	s.copiedOut = copies // streamfn_copies.go: what the instruction outputs is copied
+	if (s.red == "min" || s.red == "max") && (minD > 0 || s.group) && x.schema != nil {
+		s.typedFold = s.schemaOne(x.schema, x.schemaNames()) // streamsplit_schema.go
+	}
 	// streamexec_whole.go
 	if wholeMatch(x, s, minD) {
 		return ""
@@ -1333,7 +1351,7 @@ func (s *streamSplit) memory(minD int) string {
 		s.holdAt() // streamhold.go: held, capped at the tree's records
 	case (c == "nodes" || c == "subtree") && minD < 2 && !(s.dynCopies && s.itemsOnlyCopied()): // streamdyncall_mm7.go
 		return "collects grounded copies (" + c + ") of the document element"
-	case (s.red == "min" || s.red == "max") && (minD > 0 || s.group) && !s.oneTake(): // streamsplit_onetake.go
+	case (s.red == "min" || s.red == "max") && (minD > 0 || s.group) && !s.oneTake() && !s.typedFold: // streamsplit_onetake.go, streamsplit_schema.go
 		return s.red + "() below the document node cannot fall back to the tree"
 	}
 	return ""
@@ -1386,6 +1404,9 @@ type streamRun struct {
 	teed bool
 	// typed says the document is validated as it is read (streamcopy_l3.go).
 	typed bool
+	// build, for a principal input, is its document built as it is read
+	// (streammain_leaftop.go).
+	build *mainBuild
 }
 
 // feed returns the feed that drives instr from the cursor, or nil when instr
@@ -1569,7 +1590,8 @@ func (x *streamExec) count() {
 // executeStream runs i on its core plan when its resolver can stream the
 // document, and reports whether it did (DESIGN section 2.1, rule 4).
 func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, href string) (bool, error) {
-	if noBursts || streamtrace.Off() || validSourceDocumentURI(href) != nil || strings.ContainsRune(href, '#') ||
+	_, frag := i.fragmentStreams(rt, href) // streamfrag.go
+	if noBursts || streamtrace.Off() || validSourceDocumentURI(href) != nil || strings.ContainsRune(href, '#') && !frag ||
 		rt.sheet.dynParamSupplied(rt.opts) { // streamtee_dyncall.go
 		return false, nil
 	}
@@ -1739,6 +1761,18 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		}
 		acc := run.observeAccumsOf(rt, i.accums, true, false, i.pkg) // streamtrust_pkguse.go
 		defer acc.stop()
+		if frag, ok := i.fragmentStreams(rt, href); ok { // streamfrag.go
+			if vin != nil {
+				return errStreamPlan // a typed document: its IDs are the validation's
+			}
+			if err := run.fragment(rt, i, out, frag); err != nil {
+				return err
+			}
+			if err := valid(); err != nil {
+				return err
+			}
+			return acc.finish()
+		}
 		// The body's focus is the document node, which the stream does not
 		// build: the plan reads of it only what an empty one has.
 		sub := rt.withCurrent(run.root, 1, 1).clearCurrentRule()

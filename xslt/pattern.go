@@ -162,6 +162,7 @@ func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
 			if gerr == nil && g != nil &&
 				(patternsAllow30(ns) || variablePatternAllowed(alt) ||
 					predicatePatternAllowed(alt)) {
+				g.step = generalStep(g) // streampattern_setops.go
 				p.general = append(p.general, g)
 				continue
 			}
@@ -475,7 +476,7 @@ func (p *Pattern) matches(node *xdm.Node, ctx *xpath.Context, recovered *error) 
 		ctx = withoutOutputURI(ctx)
 	}
 	for _, g := range p.general {
-		ok, err := g.matches(node, ctx)
+		ok, err := g.matchNode(node, ctx) // streampattern_setops.go
 		if err != nil {
 			if recoverPatternError(err) {
 				if recovered != nil && *recovered == nil {

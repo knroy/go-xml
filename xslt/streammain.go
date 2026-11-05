@@ -190,7 +190,8 @@ func (s *Stylesheet) streamsMain(opts TransformOptions) bool {
 		return false
 	}
 	m, err := s.initialModeOf(opts)
-	return err == nil && s.mainStreams[m] && !s.dynParamSupplied(&opts) // streamtee_dyncall.go
+	return err == nil && s.mainStreams[m] && !s.dynParamSupplied(&opts) && // streamtee_dyncall.go
+		s.mainBuildStreams(m, opts) // streammain_leaftop.go
 }
 
 // mainInput is a principal input TransformReader streams: the cursor over
@@ -202,6 +203,8 @@ type mainInput struct {
 	acc  *streamAccums // its accumulators (streamaccum.go)
 	// typed says it is validated as it is read (streamcopy_l3.go).
 	typed bool
+	// build is its document, built as it is read (streammain_leaftop.go).
+	build *mainBuild
 }
 
 // transformStream is TransformReader streaming r.
@@ -211,6 +214,9 @@ func (s *Stylesheet) transformStream(ctx context.Context, r io.Reader, opts Tran
 	defer main.c.Close()
 	main.root.SetBaseURI(po.BaseURI)
 	main.root.SetDocumentURI(po.DocumentURI)
+	if m, err := s.initialModeOf(opts); err == nil && s.mainBuilds[m] {
+		main.build = buildMain(main, len(s.strip) > 0) // streammain_leaftop.go
+	}
 	if len(s.strip) > 0 {
 		main.c.StripWhitespace(s.whitespaceStripper(0))
 	}
@@ -282,7 +288,7 @@ func (m *mainInput) run(rt *runtime, mode string, params, tunnels paramValues, o
 	streamtrace.Node(streamtrace.KindApply, 1)
 	x := newStreamExec()
 	x.class = classDoc
-	run := &streamRun{x: x, c: m.c, root: m.root, held: out, typed: m.typed}
+	run := &streamRun{x: x, c: m.c, root: m.root, held: out, typed: m.typed, build: m.build}
 	noteInitialAccumulators(rt, mode, m.root)
 	m.acc = run.observeAccums(rt, rt.treeAccums[m.root], false)
 	defer m.acc.stop()
@@ -290,6 +296,9 @@ func (m *mainInput) run(rt *runtime, mode string, params, tunnels paramValues, o
 	sub.bursts = &burstFeed{run: run}
 	if err := run.dispatch(&sub, m.root, mode, params, tunnels, out); err != nil {
 		return err
+	}
+	if m.build != nil {
+		m.build.swap(out.Sequence()) // streammain_leaftop.go
 	}
 	if run.kept || keepsStreamNode(out.Sequence()) {
 		return errMainKept

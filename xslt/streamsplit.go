@@ -204,6 +204,9 @@ type streamSplit struct {
 	// cursor; docText that it is the document's string value, read off it
 	// (streamcopy_l3.go).
 	docCopy, docText bool
+	// typedFold says a min or max below the document node folds values of
+	// one type, by the schema (streamsplit_schema.go).
+	typedFold bool
 }
 
 // splitStream splits e, an expression whose context item is the document
@@ -1566,6 +1569,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 			// tag (sf-unparsed-entity-02).
 			return vc.safe(x.Args[0], f, false)
 		}
+		if accumResolveQNameOK(vc, x, f) { // streamaccum_own.go
+			return vc.safe(x.Args[0], f, false)
+		}
 		if viewLeafCopyOK(x, f) { // streamview_l7.go
 			return true
 		}
@@ -2223,7 +2229,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 			case matchText:
 				if s.json != nil {
 					decided = true
-					if err := r.jsonMatch(ev); err != nil { // streamfn_json.go
+					if err := r.jsonMatch(ev, f); err != nil { // streamfn_json.go
 						return err
 					}
 					break

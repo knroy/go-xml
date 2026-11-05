@@ -21,8 +21,11 @@ package xslt
 // values, its indent entry true() or false(): it is then known at compile
 // time and cannot fail (the tree decodes it before reading the node). The
 // outer is zero-or-one($items): a path with a second match fails there,
-// and the tree raises its XPTY0004. A match that may be a leaf, a path whose
-// matches may nest or that has a tail, are refused.
+// and the tree raises its XPTY0004. A match that may be a leaf, or a path
+// that has a tail, is refused. Matches that may nest are matched below the
+// first one too, as the writer reads its events (jsonWriter.m): a second
+// match there ends the run with errJSONStream, and the tree raises its
+// XPTY0004 (or whatever error it meets first).
 
 import (
 	"errors"
@@ -122,11 +125,18 @@ func (s *streamSplit) jsonAfter(w *splitter) string {
 	}
 	if s.tail != nil || s.tailText != "" || s.red != "" || s.outermost || s.innermost || s.group ||
 		s.skip != 0 || s.hasBranches() || w.kids || s.mode != matchText && s.mode != matchGround ||
-		s.nests && !s.jsonOne() {
+		s.nests && !s.jsonElems() && !s.jsonOne() {
 		return "xml-to-json() of matches not each read once at its start tag"
 	}
 	s.mode, s.later, s.keepLeaves, s.leafOnly = matchText, false, false, false
 	return ""
+}
+
+// jsonElems reports whether P's last step matches elements only: the writer
+// then has only start tags to match below a match (jsonWriter.nested).
+func (s *streamSplit) jsonElems() bool {
+	leaf, elem := testKinds(s.steps[len(s.steps)-1].test)
+	return elem && !leaf
 }
 
 // jsonOne reports whether P is one step with a positional [1]: one match
@@ -183,10 +193,10 @@ func (r *splitRun) jsonContext(v *xdm.Node, d int) error {
 	}
 }
 
-// jsonMatch writes a match, at its start tag ev: the first; a later one is
-// skipped, and an empty string stands for it, which the outer's
+// jsonMatch writes a match, at its start tag ev, its frame f: the first; a
+// later one is skipped, and an empty string stands for it, which the outer's
 // zero-or-one refuses.
-func (r *splitRun) jsonMatch(ev xdmstream.Event) error {
+func (r *splitRun) jsonMatch(ev xdmstream.Event, f splitFrame) error {
 	if len(r.items) > 0 {
 		if err := r.c.Skip(); err != nil {
 			return err
@@ -199,17 +209,39 @@ func (r *splitRun) jsonMatch(ev xdmstream.Event) error {
 	}
 	ev.Node = v // the predicates may have read the cursor since
 	jw := &jsonWriter{c: r.c, indent: r.s.json.indent}
+	if r.s.nests && !r.s.jsonOne() {
+		jw.m, jw.frames = r, []splitFrame{f}
+	}
 	if err := jw.element(ev, 0); err != nil {
 		return err
 	}
 	return r.take(xdm.One(xdm.NewString(jw.b.String())))
 }
 
-// jsonWriter writes the JSON text of elements read off c.
+// jsonWriter writes the JSON text of elements read off c. With m, each
+// element it reads is matched against the split's path as walk would match
+// it, frames the open elements' (the written match's first).
 type jsonWriter struct {
 	c      *xdmstream.Cursor
 	b      strings.Builder
 	indent bool
+	m      *splitRun
+	frames []splitFrame
+}
+
+// nested matches the member at start tag ev against the path, under the
+// innermost open element: a match is a second one, and the run ends.
+func (jw *jsonWriter) nested(ev xdmstream.Event) error {
+	at := splitAt{r: jw.m, n: ev.Node}
+	f, match, err := jw.m.s.enter(&jw.frames[len(jw.frames)-1], &at)
+	if err != nil {
+		return err
+	}
+	if match {
+		return errJSONStream // the tree's zero-or-one raises XPTY0004
+	}
+	jw.frames = append(jw.frames, f)
+	return nil
 }
 
 // element writes the element whose start tag ev is, at JSON depth jd, and
@@ -346,8 +378,16 @@ func (jw *jsonWriter) container(isMap bool, d, jd int) error {
 					return errJSONStream
 				}
 			}
+			if jw.m != nil {
+				if err := jw.nested(ev); err != nil {
+					return err
+				}
+			}
 			if err := jw.element(ev, jd+1); err != nil {
 				return err
+			}
+			if jw.m != nil {
+				jw.frames = jw.frames[:len(jw.frames)-1]
 			}
 		}
 	}

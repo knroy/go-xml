@@ -55,6 +55,9 @@ type sourceDocumentInstr struct {
 	// stream is the plan for running the body without building the
 	// document, when it qualifies; see streamexec.go.
 	stream *streamExec
+	// fragOK says the body may run on a copy of a fragment's element
+	// (streamfrag.go).
+	fragOK bool
 }
 
 func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
@@ -111,6 +114,7 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	}
 	instr := &sourceDocumentInstr{href: href, validation: spec, body: body,
 		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI, stream: core, pkg: compilePackage}
+	instr.fragOK = core != nil && fragmentBody(n) // streamfrag.go
 	if link {
 		// Its apply ops reach rules that may not have compiled yet.
 		c.streamLinks = append(c.streamLinks, streamLink{n, instr})
