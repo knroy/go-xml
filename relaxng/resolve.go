@@ -118,7 +118,7 @@ func (r *FileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 		}
 		rel, err := filepath.Rel(root, abs)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return nil, fmt.Errorf("relaxng: schema URI %q resolves outside root %q", href, root)
+			return nil, fmt.Errorf("relaxng: schema URI %q resolves outside root", href)
 		}
 		rt, err := os.OpenRoot(root)
 		if err != nil {

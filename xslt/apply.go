@@ -501,6 +501,11 @@ func runTemplateBody(rt *runtime, t *Template,
 	// into it — which is what makes current-merge-group() in a called template
 	// the XTDE3480 that merge-087 and merge-088 require.
 	sub := rt.clearMergeContext()
+	// The body's context carries its template depth, so that a stylesheet
+	// function it calls, and a template that function applies, continue
+	// the count (runtimeFrom). An xsl:apply-templates's rule has it already
+	// (withCurrent); call-template and next-match make the copy here.
+	sub = sub.withDepth()
 	if t.baseURI != "" {
 		if c := sub.ctx.WithStaticBaseURI(t.baseURI); c != sub.ctx {
 			n := *sub
@@ -840,10 +845,12 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	// the current captured substrings.
 	sub = sub.clearFunctionContext()
 
-	if err := sub.descend(); err != nil {
-		return nil, err
-	}
-	defer sub.ascend()
+	// The body runs at its caller's template depth (runtimeFrom), adding
+	// none: a nest of calls is bounded by the XPath call depth, whose
+	// XPDY0001 it raises (FuncCall.Eval), as an inlined streamed call is
+	// (streamfn_inline.go). Adding one here made a template applied
+	// through a function count two levels where one applied directly
+	// counts one.
 
 	// A stylesheet function's body builds a temporary tree, which is
 	// temporary output state for XTDE1480.

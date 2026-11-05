@@ -393,7 +393,7 @@ func (rt *runtime) withFocus(item xdm.Item, pos, size int) *runtime {
 func (rt *runtime) withCurrent(item xdm.Item, pos, size int) *runtime {
 	n := *rt
 	if item != nil {
-		n.ctx = withFocusCurrent(rt.ctx, item, pos, size)
+		n.ctx = withFocusCurrent(rt.ctx, item, pos, size, rt.depth)
 	} else {
 		n.ctx = rt.ctx.WithFocus(item, pos, size)
 	}

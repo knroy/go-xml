@@ -28,15 +28,16 @@ func runtimeOf(ctx *xpath.Context) *runtime {
 	return nil
 }
 
-// hostWithCurrent returns h with item bound as fn:current().
-func hostWithCurrent(h *xpathleaf.Host, item xdm.Item) *xpathleaf.Host {
+// hostWithCurrent returns h with item bound as fn:current(), at template
+// depth depth (see runtimeFrom).
+func hostWithCurrent(h *xpathleaf.Host, item xdm.Item, depth int) *xpathleaf.Host {
 	// The host and the one-item sequence in one allocation.
 	n := &struct {
 		h    xpathleaf.Host
 		item [1]xdm.Item
 	}{}
 	n.item[0] = item
-	n.h.Current, n.h.CurrentSet = n.item[:], true
+	n.h.Current, n.h.CurrentSet, n.h.Depth = n.item[:], true, depth
 	if h != nil {
 		n.h.Runtime, n.h.Absent, n.h.Unbound = h.Runtime, h.Absent, h.Unbound
 	}
@@ -54,13 +55,43 @@ func withCurrentItem(ctx *xpath.Context, item xdm.Item) *xpath.Context {
 			}
 		}
 	}
-	return xpathleaf.WithHost(ctx, hostWithCurrent(hostOf(ctx), item)).(*xpath.Context)
+	h := hostOf(ctx)
+	return xpathleaf.WithHost(ctx, hostWithCurrent(h, item, hostDepth(h))).(*xpath.Context)
 }
 
-// withFocusCurrent sets the focus and fn:current() in one copy of ctx.
-func withFocusCurrent(ctx *xpath.Context, item xdm.Item, pos, size int) *xpath.Context {
+// withFocusCurrent sets the focus and fn:current() in one copy of ctx, at
+// template depth depth: the dispatching runtime's, so that a rule's pattern
+// and body see the depth the rule runs at (runTemplateBody).
+func withFocusCurrent(ctx *xpath.Context, item xdm.Item, pos, size, depth int) *xpath.Context {
 	return xpathleaf.WithFocusHost(ctx, item, pos, size,
-		hostWithCurrent(hostOf(ctx), item)).(*xpath.Context)
+		hostWithCurrent(hostOf(ctx), item, depth)).(*xpath.Context)
+}
+
+// hostDepth is h's template depth, 0 without a host.
+func hostDepth(h *xpathleaf.Host) int {
+	if h == nil {
+		return 0
+	}
+	return h.Depth
+}
+
+// withDepth returns rt, or a copy of it whose context carries its template
+// depth: the runtime, the context and the host in one allocation, since
+// call-template makes one per call.
+func (rt *runtime) withDepth() *runtime {
+	h := hostOf(rt.ctx)
+	if h == nil || h.Depth == rt.depth {
+		return rt
+	}
+	p := &struct {
+		n runtime
+		c xpath.Context
+		h xpathleaf.Host
+	}{n: *rt, c: *rt.ctx, h: *h}
+	p.h.Depth = rt.depth
+	xpathleaf.SetHost(&p.c, &p.h)
+	p.n.ctx = &p.c
+	return &p.n
 }
 
 // bindRuntime returns a copy of ctx carrying rt as its transform runtime.

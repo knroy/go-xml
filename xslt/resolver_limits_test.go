@@ -186,13 +186,13 @@ func TestResolverMaxBytesUnrootedFallback(t *testing.T) {
 	dir := t.TempDir()
 	path := writeSized(t, dir, "loose.txt", 64)
 	r := &FileResolver{MaxBytes: 63}
-	if _, err := r.readConfined(path); err == nil {
+	if _, err := r.readConfined(path, path); err == nil {
 		t.Fatal("unrooted read accepted an oversized file")
 	} else if !strings.Contains(err.Error(), "limit") {
 		t.Fatalf("error %q does not name the limit", err)
 	}
 	r.MaxBytes = 64
-	data, err := r.readConfined(path)
+	data, err := r.readConfined(path, path)
 	if err != nil {
 		t.Fatal(err)
 	}

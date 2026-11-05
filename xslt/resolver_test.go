@@ -124,6 +124,70 @@ func TestFileResolverOutsideErrorNamesOnlyTheHref(t *testing.T) {
 	}
 }
 
+// TestFileResolverReadErrorsNameOnlyTheHref: a parse error, a byte-limit
+// refusal and an undecodable text name the href as written, not the
+// resolved path, so they do not tell a stylesheet where the roots lie (R5,
+// after A4-F3). The last case is a streamed xsl:source-document, which
+// reports what the tree load of the document reports.
+func TestFileResolverReadErrorsNameOnlyTheHref(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"bad.xml": `<a><b></a>`, "big.xml": `<a>0123456789012345678901234567890</a>`,
+		"bin.txt": "\xff\xfeA",
+	} {
+		if err := os.WriteFile(filepath.Join(root, "sub", name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := NewFileResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.UnparsedText = true
+	base := fileuri.Of(filepath.Join(root, "s.xsl"))
+	check := func(what, href string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: no error", what)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, strconv.Quote(href)) {
+			t.Errorf("%s: %q does not name %q", what, msg, href)
+		}
+		for _, leak := range append([]string{root, filepath.ToSlash(root)}, r.Roots...) {
+			if strings.Contains(msg, leak) {
+				t.Errorf("%s: %q names the root %s", what, msg, leak)
+			}
+		}
+	}
+	_, err = r.ResolveDocument("sub/bad.xml", base)
+	check("parse", "sub/bad.xml", err)
+	_, err = r.ResolveText("sub/bin.txt", base, "")
+	check("text", "sub/bin.txt", err)
+	r.MaxBytes = 20
+	_, err = r.ResolveDocument("sub/big.xml", base)
+	check("doc limit", "sub/big.xml", err)
+	_, _, err = r.ResolveInclude("sub/big.xml", base, "")
+	check("include limit", "sub/big.xml", err)
+
+	sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:template name="xsl:initial-template"><xsl:source-document streamable="yes" href="sub/big.xml"><xsl:value-of select="count(//*)"/></xsl:source-document></xsl:template></xsl:stylesheet>`
+	tree, err := xdm.ParseString(sheet, xdm.ParseOptions{BaseURI: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Compile(tree.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Transform(context.Background(), nil, TransformOptions{
+		InitialTemplate: "{http://www.w3.org/1999/XSL/Transform}initial-template", Documents: r})
+	check("streamed limit", "sub/big.xml", err)
+}
+
 func TestFileResolverCachesForNodeIdentity(t *testing.T) {
 	// fn:doc must return the same node for the same URI within an execution,
 	// so "doc('x') is doc('x')" holds.

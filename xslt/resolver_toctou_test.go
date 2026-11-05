@@ -36,7 +36,7 @@ func TestReadConfinedRefusesSwappedSymlink(t *testing.T) {
 	r := &FileResolver{Roots: []string{root}}
 
 	// The honest path reads what it should.
-	if data, err := r.readConfined(inside); err != nil {
+	if data, err := r.readConfined(inside, inside); err != nil {
 		t.Fatalf("reading a file inside the root: %v", err)
 	} else if !strings.Contains(string(data), "<ok/>") {
 		t.Fatalf("got %q", data)
@@ -50,7 +50,7 @@ func TestReadConfinedRefusesSwappedSymlink(t *testing.T) {
 	if err := os.Symlink(secret, inside); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	data, err := r.readConfined(inside)
+	data, err := r.readConfined(inside, inside)
 	if err == nil && strings.Contains(string(data), "secret") {
 		t.Fatal("followed a symlink out of the root; containment is advisory")
 	}

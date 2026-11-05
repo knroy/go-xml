@@ -41,6 +41,10 @@ type Host struct {
 	// Unbound holds host-defined bits of context components this context is
 	// known to have cleared (XSLT: grouping, merge, regex captures).
 	Unbound uint8
+	// Depth is the host's recursion depth where this context was made (XSLT:
+	// the template depth), so that a host function called from it continues
+	// the count rather than restarting from where Runtime was bound.
+	Depth int
 }
 
 // Package xpath sets these in its init. ctx is a *xpath.Context; WithHost and

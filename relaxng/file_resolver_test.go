@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -61,6 +62,11 @@ func TestFileResolverConfinesSchemesPathsAndBytes(t *testing.T) {
 		t.Errorf("an existing file outside Root was refused by %v, want the "+
 			"confinement check; if this is an open error the confinement is "+
 			"not what refused it", err)
+	}
+	// It names the href and not Root, as xslt.FileResolver's refusal does
+	// (A4-F3, R5).
+	if want := "relaxng: schema URI " + strconv.Quote(outside) + " resolves outside root"; err.Error() != want {
+		t.Errorf("refusal = %q, want %q", err, want)
 	}
 	r.MaxBytes = 4
 	_, err = r.ResolveSchema(inside)

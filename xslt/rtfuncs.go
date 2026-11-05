@@ -35,9 +35,14 @@ func runtimeFrom(ctx *xpath.Context) (*runtime, bool) {
 	// focus, not the one captured when the transform started. What is known
 	// cleared about ctx rides on it, so a stylesheet function called from
 	// another does not clear the grouping, merge and regex components again.
+	// The template depth is the caller's too, which the context carries
+	// (runTemplateBody): the runtime's is where it was bound, so a template
+	// applied inside a stylesheet function started counting afresh, and a
+	// recursion through one was bounded only by the XPath call depth.
 	n := *rt
 	n.ctx = ctx
 	n.absent = h.Unbound
+	n.depth = max(n.depth, h.Depth)
 	return &n, true
 }
 
@@ -1241,7 +1246,7 @@ func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]*x
 		// sets the context item but not the current-node variable the
 		// function reads, so the use expression saw whatever current() meant
 		// where the index happened to be built.
-		vals, err := def.use.Eval(withFocusCurrent(ctx, n, 1, 1))
+		vals, err := def.use.Eval(withFocusCurrent(ctx, n, 1, 1, hostDepth(hostOf(ctx))))
 		if err != nil {
 			return nil, err
 		}

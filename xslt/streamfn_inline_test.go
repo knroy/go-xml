@@ -149,3 +149,31 @@ func TestStreamInlinedRecursionLimit(t *testing.T) {
 		t.Errorf("unbounded:\nstream %.200s\ntree   %.200s", so, to)
 	}
 }
+
+// TestTemplateDepthThroughFunction: a template applied inside a stylesheet
+// function continues its caller's template depth, so a recursion through
+// the function meets MaxDepth at the depth a direct one does, with the same
+// error, in both modes (R5). It used to restart at the function's runtime
+// and stop one level later on the XPath call depth's XPDY0001.
+func TestTemplateDepthThroughFunction(t *testing.T) {
+	for _, body := range []string{
+		`<xsl:template match="e"><x><xsl:apply-templates select="*"/></x></xsl:template>`,
+		`<xsl:template match="e"><x><xsl:sequence select="p:a(.)"/></x></xsl:template>` +
+			`<xsl:function name="p:a" streamability="absorbing"><xsl:param name="n" as="element()"/>` +
+			`<xsl:apply-templates select="$n/*"/></xsl:function>`,
+	} {
+		sheet := mainSheet(`<xsl:mode streamable="yes"/>` + body)
+		for _, n := range []int{49, 50} {
+			doc := strings.Repeat("<e>", n) + strings.Repeat("</e>", n)
+			opts := TransformOptions{MaxDepth: 50}
+			so, st := mainRun(sheet, doc, true, opts)
+			to, _ := mainRun(sheet, doc, false, opts)
+			if so != to || st.Streamed() == 0 {
+				t.Errorf("%d levels, streamed %d:\nstream %.200s\ntree   %.200s", n, st.Streamed(), so, to)
+			}
+			if failed := strings.Contains(to, "template recursion exceeded 50 levels"); failed != (n == 50) {
+				t.Errorf("%d levels of %.60s: %.200s", n, body, to)
+			}
+		}
+	}
+}

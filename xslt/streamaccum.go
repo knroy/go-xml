@@ -414,7 +414,7 @@ func (run *streamRun) observeAccumsOf(rt *runtime, set *modeAccumulators, stream
 	for i, def := range sa.defs {
 		sa.at[def] = i
 		// accumulatorValuesFor's start: the initial value, at the document node.
-		cur, err := def.initial.Eval(withFocusCurrent(sa.ctx, sa.root, 1, 1))
+		cur, err := def.initial.Eval(withFocusCurrent(sa.ctx, sa.root, 1, 1, hostDepth(hostOf(sa.ctx))))
 		if err != nil {
 			err = fmt.Errorf("evaluating xsl:accumulator %s initial-value: %w", def.name.Lexical(), err)
 		} else {

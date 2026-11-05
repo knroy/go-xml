@@ -2213,6 +2213,14 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 					for _, j := range nx.from.byDecl {
 						k := nx.from.slots[j]
 						p, v := i.params[k], nx.vals[j]
+						// A value passed back as itself ($p for $p) is the
+						// one converted when it was carried in, and its
+						// conversion again is the identity: skipped, since
+						// it walked every item on every turn (20 000
+						// strings over 20 000 turns took 16 s).
+						if len(v) > 0 && len(v) == len(carried[k]) && &v[0] == &carried[k][0] {
+							continue
+						}
 						conv, err := p.asType.convertAsLazy(v, func() string {
 							return "parameter $" + p.Name.Lexical() + " of xsl:iterate"
 						}, "XTTE0590")

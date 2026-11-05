@@ -211,7 +211,9 @@ type mainInput struct {
 func (s *Stylesheet) transformStream(ctx context.Context, r io.Reader, opts TransformOptions) (*Result, error) {
 	po := opts.SourceParseOptions
 	// The stand-in's tree first: the document node orders before the
-	// copies out of the cursor, whose tree id Open reserves next.
+	// copies out of the cursor, whose tree id Open reserves next. No main
+	// run can observe the order yet (TestMainStandInOrderNotObservable says
+	// why); the source-document case that can is in streaml7_test.go.
 	root := xdm.NewTree().Root
 	main := &mainInput{c: xdmstream.Open(r, po), root: root}
 	defer main.c.Close()

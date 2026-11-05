@@ -1842,9 +1842,9 @@ func (r *FileResolver) streamDocAs(ctx *xpath.Context, uri, base string, docURI 
 	if !docURI {
 		opts.DocumentURI = ""
 	}
-	return r.openConfined(path, func(f *os.File) error {
+	return r.openConfined(path, uri, func(f *os.File) error {
 		max, lim := r.byteLimit()
-		tooBig := fmt.Errorf("%s exceeds the %d byte limit", path, max)
+		tooBig := fmt.Errorf("%q exceeds the %d byte limit", uri, max)
 		var src io.Reader = f
 		if max >= 0 {
 			if fi, err := f.Stat(); err == nil && fi.Size() > max {
