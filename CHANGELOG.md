@@ -251,7 +251,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A streamed `tail(*)` or `tail(/*)` copied at the document node wrote the document element | The root copy skips it, as `tail()` does. | [`5c09c9d`][5c09c9d] |
 | A streamed source-document inside another dropped the outer run's accumulator observer, re-running its rules on the tree | The rules' runtime no longer replaces the transform-wide list. | [`23da903`][23da903] |
 | Under `Output`, a nested `xsl:try`'s rollback could lose the catch's text when a node reused a taken-back child's slot | The rollback trusts that child only while the sink holds it. | [`76bc90b`][76bc90b] |
-| F9: `TestStreamFuzz` seeds 34820 and 71752 (OUTPUT) differ from the tree | F9: to be filled by the integrator. | (F9) |
+| A streamed `tail(P)` over a path cut at a predicate the stream cannot check skipped the cut's first match, not P's: nothing was written | Such a `tail()` is refused; the tree runs it. | [`537885e`][537885e] |
 | A `separator="\|"`, or `is` over `doc()` nodes alone, kept a whole stylesheet on the tree | The alias guard follows the parsed expressions as a flow, refusing only where a stream's node may meet a load's. | [`90b29d9`][90b29d9] |
 | An `xsl:evaluate` given a stream's node was not counted by the alias guard | It is an identity use of both kinds (§10.4.2). | [`2de588e`][2de588e] |
 | `last()` in a streamed rule's for-each over its ancestors sent the mode to the tree | A motionless loop's `last()` is its select's size, known before the body. | [`305b99d`][305b99d] |
@@ -2451,6 +2451,7 @@ here so every entry in this file sits under a release.
 [9315ac0]: https://github.com/knroy/go-xml/commit/9315ac0
 [4f1dad9]: https://github.com/knroy/go-xml/commit/4f1dad9
 [5c09c9d]: https://github.com/knroy/go-xml/commit/5c09c9d
+[537885e]: https://github.com/knroy/go-xml/commit/537885e
 [23da903]: https://github.com/knroy/go-xml/commit/23da903
 [76bc90b]: https://github.com/knroy/go-xml/commit/76bc90b
 [90b29d9]: https://github.com/knroy/go-xml/commit/90b29d9

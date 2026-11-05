@@ -701,7 +701,8 @@ round L the first run (seed 91) found 9 seeds over four causes, fixed in round
 F (F8); at 1d789fec, after rounds F and M, `TestStreamFuzzMain`,
 `TestStreamFuzzMerge`, `TestStreamOutFuzz`, `TestStreamFuzzG6` and
 `TestSecondaryOutputFuzz` give 0 differences and `TestStreamFuzz` 2 (seeds
-34820 and 71752, both OUTPUT; lane F9 is fixing them).
+34820 and 71752, both OUTPUT), fixed by F9 (537885e3): after it `TestStreamFuzz`
+gives 0 differences in 100,000 cases (seed 91).
 
 `TestStreamFuzzMain` applies each case of the modes grammar to its document
 in an initial mode through `TransformReader` and through `xdm.Parse` +
