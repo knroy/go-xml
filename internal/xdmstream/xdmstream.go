@@ -87,6 +87,9 @@ type Cursor struct {
 	later []func(*xdm.Node) error
 	err   error
 	obs   []Observer
+	// watchOn turns the parse's watch on, which the first observer needs
+	// (xdmburst.Watching); nil before the parse is started.
+	watchOn func()
 	// view builds the view of the start tag the parse is stopped at, and
 	// viewed is the one built for ev.
 	view   func() any
@@ -235,7 +238,12 @@ func (c *Cursor) Close() {
 func (c *Cursor) At() Event { return c.ev }
 
 // Observe adds o to the cursor's observers, from the next element on.
-func (c *Cursor) Observe(o Observer) { c.obs = append(c.obs, o) }
+func (c *Cursor) Observe(o Observer) {
+	c.obs = append(c.obs, o)
+	if c.watchOn != nil {
+		c.watchOn()
+	}
+}
 
 // Ordinal returns the ordinal of n when n is an element copied out of this
 // cursor's document (a view, or a node of a copy Ground or GroundLater
@@ -584,6 +592,13 @@ func (k *client) Later(g any) error {
 func (k *client) Viewer(view func() any) { k.c.view = view }
 
 func (k *client) LeafViewer(view func(n any, d int) any) { k.c.leafView = view }
+
+func (k *client) Watcher(on func()) {
+	k.c.watchOn = on
+	if len(k.c.obs) > 0 {
+		on()
+	}
+}
 
 func (k *client) Flusher(flush func() error) { k.c.flush = flush }
 

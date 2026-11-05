@@ -57,7 +57,7 @@ func driver(c xdmburst.Client) *burster {
 	// An element's ordinal is taken at its start: records under it may be
 	// taken back before its end, which shifts what ordOf would say then.
 	var open ordStack
-	b.watch = func(n *Node, d int, end bool) {
+	watch := func(n *Node, d int, end bool) {
 		switch {
 		case end:
 			c.Watch(n, d, true, open.at(d))
@@ -71,6 +71,27 @@ func driver(c xdmburst.Client) *burster {
 		default:
 			c.Watch(n, d, false, b.ordOf(n))
 		}
+	}
+	if w, ok := c.(xdmburst.Watching); ok {
+		// Off until the client asks, at a pause or before the first event:
+		// the elements open then are the spine (ords) and, at a start tag,
+		// the element paused at, whose ordinals their ends are told with.
+		w.Watcher(func() {
+			if b.watch != nil {
+				return
+			}
+			open = ordStack{runs: append([]ordRun(nil), b.ords.runs...), n: b.ords.n}
+			if b.paused == pausedStart {
+				open.truncate(b.pd)
+				for open.len() < b.pd {
+					open.push(0)
+				}
+				open.push(b.ordOf(b.pel))
+			}
+			b.watch = watch
+		})
+	} else {
+		b.watch = watch
 	}
 	if i, ok := c.(xdmburst.Identified); ok {
 		b.origin = &streamOrigin{id: i.TreeID()}

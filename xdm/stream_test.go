@@ -250,3 +250,25 @@ func TestDriveDropsLeavesInPlace(t *testing.T) {
 		}
 	}
 }
+
+// quietWatch is keepAll with a watch it never turns on (xdmburst.Watching).
+type quietWatch struct {
+	keepAll
+	watched int
+}
+
+func (c *quietWatch) Watcher(func())               {}
+func (c *quietWatch) Watch(any, int, bool, uint64) { c.watched++ }
+
+// A client whose watch is off is not called for every node: a stream with no
+// observer paid a call and an ordinal per node for nothing.
+func TestDriveWatchOffCostsNothing(t *testing.T) {
+	src := "<a>" + strings.Repeat("<r i='1'>t<!--c--><s/></r>\n", 100) + "</a>"
+	c := &quietWatch{}
+	if _, err := parse(strings.NewReader(src), "", ParseOptions{bursts: driver(c)}); err != nil {
+		t.Fatal(err)
+	}
+	if c.watched != 0 || c.leaves == 0 {
+		t.Fatalf("watch called %d times with the watch off (%d leaves told)", c.watched, c.leaves)
+	}
+}

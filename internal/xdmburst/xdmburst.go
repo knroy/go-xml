@@ -144,6 +144,15 @@ type Flushing interface {
 	Flusher(flush func() error)
 }
 
+// Watching is a Client whose Watch has nothing to do until it says so: Drive
+// hands it, before the first event, the function that turns the watch on,
+// and Watch is not called before that (a parse with no observer then pays
+// nothing per node). It may be called before the first event, or while the
+// parse is paused.
+type Watching interface {
+	Watcher(on func())
+}
+
 // NewTreeID reserves the next tree id, the order a tree made now takes among
 // the others. Set by xdm's init.
 var NewTreeID func() int64
