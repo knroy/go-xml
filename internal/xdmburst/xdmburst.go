@@ -141,6 +141,18 @@ type Flushing interface {
 	Flusher(flush func() error)
 }
 
+// NewTreeID reserves the next tree id, the order a tree made now takes among
+// the others. Set by xdm's init.
+var NewTreeID func() int64
+
+// Identified is a Client whose stream has an id reserved when the stream
+// started (NewTreeID): what is copied out of it orders among other trees
+// where a tree-mode parse made at that moment would, not where the first
+// copy happens to be made.
+type Identified interface {
+	TreeID() int64
+}
+
 // Originating is a Client that can tell its own copies: Drive hands it,
 // before the first event, the function that returns the ordinal of n (a
 // *xdm.Node) when n is an element copied out of this very stream -- a view,

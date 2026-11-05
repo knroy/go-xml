@@ -45,8 +45,9 @@ import (
 // viewBatchRecords is the size a view batch is replaced at.
 const viewBatchRecords = 4096
 
-// streamOrigin is one stream: its id, which is its parse tree's (every tree
-// copied out of it orders among other trees where the parse's would), and
+// streamOrigin is one stream: its id, the one its client reserved when the
+// stream started (xdmburst.Identified) or else its parse tree's (every tree
+// copied out of it orders among other trees where that tree would), and
 // the canonical node of each ordinal Identity was asked for.
 type streamOrigin struct {
 	id    int64
