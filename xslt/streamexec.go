@@ -209,8 +209,10 @@ type streamOp struct {
 	// (streamcopy_l3apply.go).
 	treeApply bool
 	// eventPop says a held grouping population is copied off the cursor as
-	// events, into one fragment (streamcopy_l3group.go).
+	// events, into one fragment (streamcopy_l3group.go); keep, when set,
+	// is what of each member the copies keep (streamcopy_l3keep.go).
 	eventPop bool
+	keep     *memberKeep
 	// pruned says a grouping population is copied off the cursor into a
 	// pruned copy of the document (streamgroup_pruned.go).
 	pruned *prunedPop

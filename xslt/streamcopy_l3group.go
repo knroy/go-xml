@@ -45,6 +45,7 @@ func eventPopulation(op *streamOp) bool {
 		return false
 	}
 	s.mode, s.rawBody, op.eventPop = matchBody, true, true
+	op.keep = prunedMembers(op.el) // streamcopy_l3keep.go
 	return true
 }
 
@@ -75,7 +76,7 @@ func (run *streamRun) eventPopEval(rt *runtime, op *streamOp) (xdm.Sequence, err
 			doc = xdm.NewFragment().NewRoot(xdm.KindDocument, xdm.QName{}, "")
 			doc.SetBaseURI(run.c.At().Node.BaseURI())
 		}
-		m, err := copyMember(rt, doc, run.c, md, &buf)
+		m, err := copyMember(rt, doc, run.c, md, op.keep, &buf)
 		if err != nil {
 			return false, err
 		}
@@ -90,18 +91,20 @@ func (run *streamRun) eventPopEval(rt *runtime, op *streamOp) (xdm.Sequence, err
 
 // copyMember copies the element whose start tag c is at, depth d, as the
 // last child of doc, read off the parse's own nodes (Event.Node) as its
-// events pass, as copy-of copies a node (copyItem: xdm.Copy, then inheritNamespaces): each
-// node's name, base URI, typing, declared namespaces as written, attributes
-// and content, and on the copy's root the bindings it inherited, sorted. It
-// is written straight into doc's records: no builder, no view per node.
-// buf is scratch for the namespace pairs.
-func copyMember(rt *runtime, doc *xdm.Node, c *xdmstream.Cursor, d int, buf *[]string) (*xdm.Node, error) {
+// events pass, as copy-of copies a node (copyItem: xdm.Copy, then
+// inheritNamespaces): each node's name, base URI, typing, declared
+// namespaces as written, attributes and content, and on the copy's root the
+// bindings it inherited, sorted. It is written straight into doc's records:
+// no builder, no view per node. With keep, the root keeps only those
+// attributes and children, the others skipped on the cursor unread. buf is
+// scratch for the namespace pairs.
+func copyMember(rt *runtime, doc *xdm.Node, c *xdmstream.Cursor, d int, keep *memberKeep, buf *[]string) (*xdm.Node, error) {
 	if err := rt.ctx.Err(); err != nil {
 		return nil, err
 	}
 	src := c.At().Node
 	root := doc.AppendElementInheriting(src.Name())
-	shallowMember(root, src, buf)
+	shallowMember(root, src, keep, buf)
 	var arr [32]nsBinding
 	pairs := (*buf)[:0]
 	for _, b := range scopeBindings(src, arr[:0]) {
@@ -111,6 +114,9 @@ func copyMember(rt *runtime, doc *xdm.Node, c *xdmstream.Cursor, d int, buf *[]s
 	}
 	root.AddNamespaces(pairs...)
 	*buf = pairs
+	if keep != nil && len(keep.kids) == 0 {
+		return root, c.Skip()
+	}
 	cur := root
 	var text *xdm.Node // the text node last appended to cur, if nothing followed it
 	for {
@@ -118,13 +124,25 @@ func copyMember(rt *runtime, doc *xdm.Node, c *xdmstream.Cursor, d int, buf *[]s
 		if err != nil {
 			return nil, err
 		}
+		if keep != nil && ev.Depth == d+1 && ev.Kind != xdmstream.EndElement {
+			text = nil
+			if ev.Kind != xdmstream.StartElement {
+				continue // a leaf of the member's own: not read
+			}
+			if !hasName(keep.kids, ev.Node.Name()) {
+				if err := c.Skip(); err != nil {
+					return nil, err
+				}
+				continue
+			}
+		}
 		switch ev.Kind {
 		case xdmstream.StartElement:
 			if err := rt.ctx.Err(); err != nil {
 				return nil, err
 			}
 			cur, text = cur.AppendElementInheriting(ev.Node.Name()), nil
-			shallowMember(cur, ev.Node, buf)
+			shallowMember(cur, ev.Node, nil, buf)
 		case xdmstream.EndElement:
 			if ev.Depth == d {
 				return root, nil
@@ -150,8 +168,9 @@ func copyMember(rt *runtime, doc *xdm.Node, c *xdmstream.Cursor, d int, buf *[]s
 
 // shallowMember gives el, a copy of src just made, what xdm.Copy gives a
 // copied element besides its content: src's base URI, typing, declared
-// namespaces and attributes, with their typing.
-func shallowMember(el, src *xdm.Node, buf *[]string) {
+// namespaces and attributes (with keep, only the ones it names), with their
+// typing.
+func shallowMember(el, src *xdm.Node, keep *memberKeep, buf *[]string) {
 	el.SetBaseURI(src.BaseURI())
 	copyTyping(el, src, false)
 	pairs := (*buf)[:0]
@@ -161,6 +180,9 @@ func shallowMember(el, src *xdm.Node, buf *[]string) {
 	el.AddNamespaces(pairs...)
 	*buf = pairs
 	for a := range src.Attrs() {
+		if keep != nil && !hasName(keep.attrs, a.Name()) {
+			continue
+		}
 		ca := el.AppendAttr(a.Name(), a.Value())
 		ca.CopyTypingFrom(a)
 		if a.TypeEnv() != nil {
@@ -212,27 +234,9 @@ func copyFreeBody(el *xdm.Node) bool {
 			ok = false // it could hand a member on as the node itself
 			return
 		}
-		for a := range n.Attrs() {
-			if a.Name().URI != "" && !(xsl && a.Name().URI == xdm.NSXSL) {
-				continue
-			}
-			var srcs []string
-			if xsl && exprAttrs[a.Name().Local] {
-				srcs = []string{a.Value()}
-			} else if strings.ContainsAny(a.Value(), "{}") {
-				exprs, valid := avtExpressions(a.Value())
-				if !valid {
-					ok = false
-					return
-				}
-				srcs = exprs
-			}
-			for _, src := range srcs {
-				if e := parseAt(n, src); e == nil || !copyFreeExpr(e) {
-					ok = false
-					return
-				}
-			}
+		if !nodeExprs(n, func(_ *xdm.Node, e xpath.Expr) bool { return copyFreeExpr(e) }) {
+			ok = false
+			return
 		}
 		for ch := range n.Children() {
 			check(ch)
@@ -240,6 +244,35 @@ func copyFreeBody(el *xdm.Node) bool {
 	}
 	check(el)
 	return ok
+}
+
+// nodeExprs calls fn on each expression n, an element of a stylesheet,
+// holds in its attributes -- an XSLT instruction's expression attributes
+// (exprAttrs), and attribute value templates -- with the attribute; it
+// reports false when one cannot be parsed or fn returns false.
+func nodeExprs(n *xdm.Node, fn func(a *xdm.Node, e xpath.Expr) bool) bool {
+	xsl := n.Name().URI == xdm.NSXSL
+	for a := range n.Attrs() {
+		if a.Name().URI != "" && !(xsl && a.Name().URI == xdm.NSXSL) {
+			continue
+		}
+		var srcs []string
+		if xsl && exprAttrs[a.Name().Local] {
+			srcs = []string{a.Value()}
+		} else if strings.ContainsAny(a.Value(), "{}") {
+			exprs, valid := avtExpressions(a.Value())
+			if !valid {
+				return false
+			}
+			srcs = exprs
+		}
+		for _, src := range srcs {
+			if e := parseAt(n, src); e == nil || !fn(a, e) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // exprAttrs are the attributes of XSLT instructions that hold an expression.

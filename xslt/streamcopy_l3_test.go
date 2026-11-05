@@ -429,3 +429,141 @@ func TestStreamForkGroupByCopiesAllocate(t *testing.T) {
 		t.Errorf("stream allocates %.2fx the tree's bytes (%d vs %d)", float64(sa)/float64(ta), sa, ta)
 	}
 }
+
+// TestStreamForkGroupByMemberReads: what of each member a group-by in
+// xsl:fork copies is what the key, the body and its sorts read through the
+// context item and current-group(), by attribute and child name; any read
+// that cannot be named copies members whole (nil) (A3-5).
+func TestStreamForkGroupByMemberReads(t *testing.T) {
+	for _, c := range []struct {
+		by, body    string
+		attrs, kids string // comma-separated local names; "-" for whole members
+	}{
+		{`@k`, `<g n="{count(current-group())}" e="{exists(current-group())}{empty(current-group())}"/>`, "k", ""},
+		{`string(@k)`, `<g k="{current-grouping-key()}" p="{position()}/{last()}"/>`, "k", ""},
+		{`@k`, `<g s="{sum(current-group()/@v)}" m="{max(current-group()/a)}"/>`, "k,v", "a"},
+		{`@k, @v`, `<g j="{string-join(current-group()/a/b, ',')}" n="{name()}{local-name()}" f="{@w}"/>`, "k,v,w", "a"},
+		{`a`, `<xsl:sort select="@s"/><xsl:copy-of select="current-group()/b[@x = 1]"/>`, "s", "a,b"},
+		{`./@k`, `<xsl:value-of select="sub/c ! string(.)"/>`, "k", "sub"},
+		{`@k`, `<g s="{sum(current-group()/@v[. castable as xs:double])}"/>`, "k,v", ""},
+		{`@k`, `<xsl:copy-of select="current-group()"/>`, "-", ""},
+		{`@k`, `<g n="{count(current-group()/a)}"/>`, "k", "a"},
+		{`@k`, `<g s="{string(.)}"/>`, "-", ""},
+		{`@k`, `<g s="{string()}"/>`, "-", ""},
+		{`@k`, `<g s="{.}"/>`, "-", ""},
+		{`@k`, `<g s="{current()/@v}"/>`, "-", ""},
+		{`@k`, `<g s="{count(@*)}"/>`, "-", ""},
+		{`@k`, `<g s="{count(*)}"/>`, "-", ""},
+		{`@k`, `<g s="{count(text())}"/>`, "-", ""},
+		{`@k`, `<g s="{count(.//c)}"/>`, "-", ""},
+		{`@k`, `<g s="{count(current-group()[1]/a)}"/>`, "-", ""},
+		{`@k`, `<g s="{sum(current-group() ! @v)}"/>`, "-", ""},
+		{`@k`, `<xsl:variable name="m" select="current-group()"/><g n="{count($m)}"/>`, "-", ""},
+		{`@k`, `<xsl:copy/>`, "-", ""},
+		{`@k`, `<g xsl:use-attribute-sets="s"/>`, "-", ""},
+		{`@k`, `<xsl:for-each-group select="current-group()/a" group-adjacent="."><g/></xsl:for-each-group>`, "-", ""},
+		{`@k`, `<xsl:for-each select="1 to 2"><g n="{.}"/></xsl:for-each>`, "-", ""},
+		{`*:k`, `<g/>`, "-", ""},
+	} {
+		sheet := mainSheet(`<xsl:template match="/doc"><xsl:for-each-group select="rec" group-by="` + c.by + `">` +
+			c.body + `</xsl:for-each-group></xsl:template>`)
+		tree, err := xdm.ParseString(sheet, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		el := tree.Root.FirstChild().FirstChild().FirstChild()
+		if !copyFreeBody(el) {
+			t.Fatalf("%s %s: not copy-free", c.by, c.body)
+		}
+		got, want := "-", c.attrs+"|"+c.kids
+		if k := prunedMembers(el); k != nil {
+			var as, ks []string
+			for _, q := range k.attrs {
+				as = append(as, q.Local)
+			}
+			for _, q := range k.kids {
+				ks = append(ks, q.Local)
+			}
+			got = strings.Join(as, ",") + "|" + strings.Join(ks, ",")
+		}
+		if c.attrs == "-" {
+			want = "-"
+		}
+		if got != want {
+			t.Errorf("group-by=%q %s: keeps %s, want %s", c.by, c.body, got, want)
+		}
+	}
+	// A pattern is not read: a sorted group-starting-with keeps members whole.
+	tree, err := xdm.ParseString(mainSheet(`<xsl:template match="/doc"><xsl:for-each-group select="rec" group-starting-with="rec[@k]">`+
+		`<xsl:sort select="@s"/><g/></xsl:for-each-group></xsl:template>`), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k := prunedMembers(tree.Root.FirstChild().FirstChild().FirstChild()); k != nil {
+		t.Errorf("group-starting-with keeps %v, want whole members", k)
+	}
+}
+
+// TestStreamForkGroupByPrunedMembers: a group-by in xsl:fork whose key and
+// body read members only by attribute and child name holds copies of only
+// those (A3-5): the tree's own grouping runs over them, so values, the
+// order of keys and bodies, and the errors either raises are the tree's,
+// and a count-only body over bulky members allocates a fraction of the
+// tree's bytes.
+func TestStreamForkGroupByPrunedMembers(t *testing.T) {
+	doc := `<doc><rec k="1" v="2" w="a"><a>x<b>1</b></a><b x="1">y</b><!--c-->t</rec><rec k="2" v="x"><a>z</a></rec>` +
+		`<rec k="1" v="3"><b x="2"/></rec><rec k="02" v="4" w="b"/></doc>`
+	bad := strings.Replace(doc, `k="02"`, `k="z"`, 1)
+	for _, by := range []string{`@k`, `xs:integer(@k)`} {
+		for _, body := range []string{
+			`<g k="{current-grouping-key()}" n="{count(current-group())}"/>`,
+			`<g e="{exists(current-group())}"/>`,
+			`<g s="{sum(current-group()/@v)}"/>`,
+			`<g m="{max(current-group()/@v ! number())}"/>`,
+			`<g j="{string-join(current-group()/a, ',')}"/>`,
+			`<g><xsl:copy-of select="current-group()/b"/></g>`,
+			`<xsl:if test="count(current-group()) gt 1"><g n="{name()}" p="{position()}"/></xsl:if>`,
+		} {
+			sheet := mainSheet(`<xsl:mode streamable="yes"/><xsl:template match="/doc"><o><xsl:fork>` +
+				`<xsl:for-each-group select="rec" group-by="` + by + `">` + body + `</xsl:for-each-group></xsl:fork></o></xsl:template>`)
+			for _, d := range []string{doc, bad} {
+				so, st := mainRun(sheet, d, true, TransformOptions{})
+				to, _ := mainRun(sheet, d, false, TransformOptions{})
+				if so != to {
+					t.Errorf("group-by=%q %s on %.60s:\nstream %.300s\ntree   %.300s", by, body, d[50:], so, to)
+				}
+				if st.Streamed() == 0 || st.Guards != 0 {
+					t.Errorf("group-by=%q %s: streamed %d, guards %d", by, body, st.Streamed(), st.Guards)
+				}
+			}
+		}
+	}
+
+	var d strings.Builder
+	d.WriteString("<doc>\n")
+	for i := 0; i < 20000; i++ {
+		fmt.Fprintf(&d, `<rec k="%c"><a>alpha %d</a><b x="%d">bravo text %d</b><sub><c>%d</c><c>%d</c><c>%d</c></sub></rec>`+"\n",
+			'a'+i/10%4, i, i%7, i, i%13, i%17, i)
+	}
+	d.WriteString("</doc>")
+	sheet := mainSheet(`<xsl:mode streamable="yes"/><xsl:template match="/doc"><o><xsl:fork>` +
+		`<xsl:for-each-group select="rec" group-by="@k"><g k="{current-grouping-key()}" n="{count(current-group())}"/>` +
+		`</xsl:for-each-group></xsl:fork></o></xsl:template>`)
+	run := func(stream bool) (string, uint64) {
+		var m0, m1 goruntime.MemStats
+		goruntime.GC()
+		goruntime.ReadMemStats(&m0)
+		out, _ := mainRun(sheet, d.String(), stream, TransformOptions{})
+		goruntime.ReadMemStats(&m1)
+		return out, m1.TotalAlloc - m0.TotalAlloc
+	}
+	so, sa := run(true)
+	to, ta := run(false)
+	if so != to {
+		t.Fatalf("stream %.200s\ntree   %.200s", so, to)
+	}
+	t.Logf("count-only body allocated: stream %d, tree %d (%.2fx)", sa, ta, float64(sa)/float64(ta))
+	if float64(sa) > 0.6*float64(ta) {
+		t.Errorf("a count-only body allocates %.2fx the tree's bytes (%d vs %d)", float64(sa)/float64(ta), sa, ta)
+	}
+}
