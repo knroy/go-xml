@@ -140,11 +140,14 @@ func TestStreamL7UsePackageTrust(t *testing.T) {
 		<xsl:function name="f:pick" as="node()?" streamability="filter" visibility="public">
 			<xsl:param name="n" as="node()"/><xsl:sequence select="$n[@k = $cat]"/>
 		</xsl:function>
+		<xsl:template name="use-base" visibility="public">
+			<xsl:source-document streamable="yes" href="DOC" use-accumulators="ac"><a v="{accumulator-after('ac')}"/></xsl:source-document>
+		</xsl:template>
 	</xsl:package>`
 	const top = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:f="urn:f" name="urn:top" package-version="1.0.0" version="3.0">
 		<xsl:use-package name="urn:base" package-version="1.0.0">USE</xsl:use-package>
 		<xsl:accumulator name="ac" initial-value="0" streamable="yes"><xsl:accumulator-rule match="*" select="$value - 1"/></xsl:accumulator>
-		<xsl:template name="main" visibility="public">
+		<xsl:template name="main" visibility="public">PRE
 			<xsl:source-document streamable="yes" href="doc.xml" use-accumulators="ac">BODY</xsl:source-document>
 		</xsl:template>
 	</xsl:package>`
@@ -152,15 +155,22 @@ func TestStreamL7UsePackageTrust(t *testing.T) {
 	// function the module overrides, inlined in this package's scope.
 	over := `<xsl:override><xsl:function name="f:pick" as="node()?" streamability="filter" visibility="public">` +
 		`<xsl:param name="n" as="node()"/><xsl:sequence select="$n[not(@k = $cat)]"/></xsl:function></xsl:override>`
-	for i, c := range []struct{ use, body string }{
-		{``, `<b><c n="{count(//*)}"/><a v="{accumulator-after('ac')}"/></b>`},
-		{over, `<b><xsl:value-of select="doc/rec ! f:pick(.) / sub/@x"/></b>`},
+	for i, c := range []struct {
+		use, body, pre string
+		runs           int64 // core runs wanted; 0: at least one
+	}{
+		{``, `<b><c n="{count(//*)}"/><a v="{accumulator-after('ac')}"/></b>`, ``, 0},
+		{over, `<b><xsl:value-of select="doc/rec ! f:pick(.) / sub/@x"/></b>`, ``, 0},
 		// su-filter-101: the used package's own f:pick, run as itself
 		// (streampkgfn_l7.go), its $cat the package's.
-		{``, `<b><xsl:value-of select="doc/rec ! f:pick(.) / sub/@x"/></b>`},
+		{``, `<b><xsl:value-of select="doc/rec ! f:pick(.) / sub/@x"/></b>`, ``, 0},
+		// override-misc-007's use-base: the used package's own container
+		// reads the package's own ac, not the top's (streamtrust_pkguse.go).
+		{``, `<b><a v="{accumulator-after('ac')}"/></b>`, `<xsl:call-template name="use-base"/>`, 2},
 	} {
-		src := strings.Replace(strings.Replace(top, "USE", c.use, 1), "BODY", c.body, 1)
+		src := strings.Replace(strings.Replace(strings.Replace(top, "USE", c.use, 1), "BODY", c.body, 1), "PRE", c.pre, 1)
 		dir := t.TempDir()
+		base := strings.Replace(base, "DOC", fileURIOf(filepath.Join(dir, "doc.xml")), 1)
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["flat"]), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -188,8 +198,8 @@ func TestStreamL7UsePackageTrust(t *testing.T) {
 		if so != to {
 			t.Errorf("case %d: core %q\ntree %q", i, so, to)
 		}
-		if st.Runs[streamtrace.Core] == 0 {
-			t.Errorf("case %d: not on the core", i)
+		if n := st.Runs[streamtrace.Core]; n == 0 || c.runs != 0 && n != c.runs {
+			t.Errorf("case %d: %d runs on the core, want %d", i, n, c.runs)
 		}
 	}
 }

@@ -42,6 +42,9 @@ type sourceDocumentInstr struct {
 	// to the document this instruction reads. Nil means the attribute was
 	// absent, which leaves the tree unrestricted.
 	accums *modeAccumulators
+	// pkg is the package the instruction is in (compilePackage), whose
+	// accumulators a streamed run computes (streamtrust_pkguse.go).
+	pkg int
 	// baseURI is the base URI of the xsl:source-document element itself,
 	// which is the stylesheet module's own unless an xml:base on the element
 	// or an ancestor overrides it. 18.1 resolves @href "as for the doc
@@ -73,7 +76,7 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	if isYes(n.AttrValue("streamable")) {
 		// A module other than the principal one, or a principal that pulls
 		// in others, is not the whole stylesheet (streamtrust.go).
-		shared := n.Root() != c.sheet.source
+		shared := n.Root() != c.sheet.source && !c.inOwnPkg(n) // streamtrust_pkguse.go
 		var why string
 		var xm []*xdm.Node
 		if !shared {
@@ -107,7 +110,7 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 		}
 	}
 	instr := &sourceDocumentInstr{href: href, validation: spec, body: body,
-		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI, stream: core}
+		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI, stream: core, pkg: compilePackage}
 	if link {
 		// Its apply ops reach rules that may not have compiled yet.
 		c.streamLinks = append(c.streamLinks, streamLink{n, instr})

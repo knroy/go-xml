@@ -941,7 +941,7 @@ func (c *compiler) noteStreamLoop(n *xdm.Node, instr Instruction, sel *xpath.Com
 			continue
 		}
 		op.instr, op.sel = instr, sel
-		if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" && !c.applyCopies(op, ns) { // streamsplit_l6.go
+		if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" && !c.applyCopies(op, ns) && !c.climbLoop(op, ns) { // streamsplit_l6.go, streampop_climb.go
 			continue
 		}
 		if op.pop == nil && !op.split.bare() {
@@ -1708,7 +1708,7 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 				return err
 			}
 		}
-		acc := run.observeAccums(rt, i.accums, true)
+		acc := run.observeAccumsOf(rt, i.accums, true, false, i.pkg) // streamtrust_pkguse.go
 		defer acc.stop()
 		// The body's focus is the document node, which the stream does not
 		// build: the plan reads of it only what an empty one has.

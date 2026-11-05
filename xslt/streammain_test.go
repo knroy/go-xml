@@ -244,6 +244,47 @@ var mainCases = []struct {
 		`<xsl:template match="*[not(parent::*)]" mode="c"><e n="{name()}" p="{position()}" l="{last()}" b="{base-uri()}"><xsl:copy-of select="@*, node()"/></e></xsl:template>`, true},
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:mode name="c" on-no-match="shallow-copy"/>` +
 		`<xsl:template match="rec"><xsl:copy><xsl:for-each-group select="*" group-adjacent="node-name()"><xsl:apply-templates select="current-group()!(copy-of(), .)" mode="c"/></xsl:for-each-group></xsl:copy></xsl:template>`, false},
+	// A for-each over the ancestors a path climbs to, its body motionless
+	// on their views, off the cursor (streampop_climb.go; function-5017/5018);
+	// not when the body asks has-children or an accumulator, which only a
+	// match's view answers (viewsBeyond: the accumulator row streams without
+	// it).
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:for-each select="//sub/ancestor-or-self::*">` +
+		`<e n="{name()}" k="{@k}" d="{count(ancestor::*)}" p="{position()}"/></xsl:for-each></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:up" as="node()*" streamability="ascent"><xsl:param name="n" as="node()"/>` +
+		`<xsl:sequence select="$n/ancestor-or-self::rec"/></xsl:function><xsl:template match="/"><o>` +
+		`<xsl:for-each select="doc//sub/p:up(.)"><e k="{@k}" d="{count(ancestor-or-self::rec)}"/></xsl:for-each></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:for-each select="//sub/ancestor::rec">` +
+		`<e k="{@k}" h="{has-children()}"/></xsl:for-each></o></xsl:template>`, false},
+	{`<xsl:accumulator name="n" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>` +
+		`<xsl:mode streamable="yes" use-accumulators="n"/><xsl:template match="/"><o><xsl:for-each select="//sub/ancestor::rec">` +
+		`<e k="{@k}" n="{accumulator-before('n')}"/></xsl:for-each></o></xsl:template>`, false},
+	// An accumulator rule whose value is a sequence constructor, at a text
+	// node: its context has no children, as for a select (streamtrust.go
+	// accumulatorOK; accumulator-036s).
+	{`<xsl:accumulator name="t" initial-value="0" as="xs:integer" streamable="yes"><xsl:accumulator-rule match="sub/text()">` +
+		`<xsl:sequence select="$value + string-length(.)"/></xsl:accumulator-rule></xsl:accumulator>` +
+		`<xsl:mode streamable="yes" use-accumulators="t"/><xsl:template match="doc"><o><n><xsl:value-of select="count(.//sub)"/></n>` +
+		`<t><xsl:value-of select="accumulator-after('t')"/></t></o></xsl:template>`, true},
+	// A call at the document node on an absorbing function of the module
+	// whose body is an instruction, inlined (streampkgframe_l7.go
+	// pkgDocParam; function-5002).
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:abs" streamability="absorbing"><xsl:param name="n" as="node()"/>` +
+		`<xsl:copy-of select="$n/*/rec[1]/sub"/></xsl:function><xsl:template match="/"><o><xsl:copy-of select="p:abs(.)"/></o></xsl:template>`, true},
+	// A call on a function whose body is instructions, given only a copy of
+	// the match (streamsplit_copies.go): in a loop's select over snapshot(.);
+	// in a tail over copy-of(.) (function-5011); not given the node itself.
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:f"><xsl:param name="n"/><r k="{$n/@k}" up="{name($n/..)}">` +
+		`<xsl:value-of select="count($n/sub)"/></r></xsl:function>` +
+		`<xsl:template match="/*"><o><xsl:for-each select="rec"><xsl:sequence select="p:f(snapshot(.))"/></xsl:for-each></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:g" as="node()"><xsl:param name="n"/><new><xsl:copy-of select="$n/sub"/></new></xsl:function>` +
+		`<xsl:template match="/"><o><xsl:copy-of select="(*/rec/p:g(copy-of(.))[self::new]/sub)[1]"/></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:f"><xsl:param name="n"/><r k="{$n/@k}" up="{name($n/..)}"/></xsl:function>` +
+		`<xsl:template match="/*"><o><xsl:for-each select="rec"><xsl:sequence select="p:f(.)"/></xsl:for-each></o></xsl:template>`, false},
+	// unparsed-entity-uri#1 and -public-id#1 at an element's view: its
+	// tree's DTD is the document's (sf-unparsed-entity-02).
+	{`<xsl:mode streamable="yes"/><xsl:template match="doc"><o><xsl:value-of select="unparsed-entity-uri('pic'), unparsed-entity-public-id('pic')"/></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="doc"><o><xsl:for-each select="rec"><r u="{unparsed-entity-uri('pic')}" k="{@k}"/></xsl:for-each></o></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

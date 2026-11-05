@@ -216,6 +216,13 @@ func splitStream(e xpath.Expr, base *xpath.Compiled, doc bool) (*streamSplit, st
 // is the group's members; with key, current-grouping-key() is a value
 // known at the focus, as a motionless operand.
 func splitStreamIn(e xpath.Expr, base *xpath.Compiled, doc, group, key bool) (*streamSplit, string) {
+	return splitStreamAt(e, base, doc, group, key, false)
+}
+
+// splitStreamAt is splitStreamIn; with views, a path whose items are the
+// views of ancestors it climbed to is returned as it is, for a loop whose
+// body reads only those views (streampop_climb.go).
+func splitStreamAt(e xpath.Expr, base *xpath.Compiled, doc, group, key, views bool) (*streamSplit, string) {
 	part := func(x xpath.Expr) *xpath.Compiled { return xpathleaf.WithExpr(base, x).(*xpath.Compiled) }
 	focus := vElem
 	if doc {
@@ -226,11 +233,11 @@ func splitStreamIn(e xpath.Expr, base *xpath.Compiled, doc, group, key bool) (*s
 	if x, ok := e.(*xpath.IfExpr); ok {
 		vc := viewCheck{kids: true, key: key}
 		if vc.safe(x.Cond, focus, true) && !(vc.safe(x.Then, focus, false) && vc.safe(x.Else, focus, false)) {
-			t, why := splitStreamIn(x.Then, base, doc, group, key)
+			t, why := splitStreamAt(x.Then, base, doc, group, key, views)
 			if t == nil {
 				return nil, why
 			}
-			f, why := splitStreamIn(x.Else, base, doc, group, key)
+			f, why := splitStreamAt(x.Else, base, doc, group, key, views)
 			if f == nil {
 				return nil, why
 			}
@@ -272,7 +279,7 @@ func splitStreamIn(e xpath.Expr, base *xpath.Compiled, doc, group, key bool) (*s
 			return nil, "current-group() outside the consuming path: " + root.String()
 		}
 	}
-	if s.climbElems && (s.red == "" || s.red == "nth") && !(viewCheck{items: true}).safe(root, focus, false) {
+	if s.climbElems && (s.red == "" || s.red == "nth") && !(views && isVarRef(root, splitItems)) && !(viewCheck{items: true}).safe(root, focus, false) {
 		return nil, "ancestors climbed to read beyond their views: " + root.String()
 	}
 	s.kids = readsKids(s.outer)
@@ -1504,8 +1511,11 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		if accumDocURIOK(vc, x) { // streamaccum_l4.go
 			return true
 		}
-		if vc.ents && f == vNone && len(x.Args) == 1 && (n == "unparsed-entity-uri" || n == "unparsed-entity-public-id") {
-			return vc.safe(x.Args[0], f, false) // streamcopy_l3doc.go
+		if (vc.ents && f == vNone || f == vElem) && len(x.Args) == 1 && (n == "unparsed-entity-uri" || n == "unparsed-entity-public-id") {
+			// streamcopy_l3doc.go; at an element's view, its tree's DTD is
+			// the document's (xdm newViews), read before the first start
+			// tag (sf-unparsed-entity-02).
+			return vc.safe(x.Args[0], f, false)
 		}
 		if viewLeafCopyOK(x, f) { // streamview_l7.go
 			return true

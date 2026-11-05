@@ -104,7 +104,7 @@ func observeMergeAccums(rt *runtime, run *streamRun, src *mergeSource, minD int)
 	if src.accums == nil {
 		return nil
 	}
-	sa := run.observeAccumsOf(rt, src.accums, false, true)
+	sa := run.observeAccumsOf(rt, src.accums, false, true, 0)
 	if sa == nil {
 		return nil
 	}

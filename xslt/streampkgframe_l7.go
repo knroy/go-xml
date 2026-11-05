@@ -37,8 +37,8 @@ package xslt
 //     verifies such a mode only for apply ops written in the package
 //     (link: pkgOK), so a top-level apply into a package mode is unchanged.
 //   - The frame's call may be at the document node ("." as a node()
-//     parameter): inlineCheck admits it for an accepted package function
-//     only.
+//     parameter): inlineCheck admits it (pkgDocParam), as it does for a
+//     function of the caller's own module.
 // At run time the frame is L2's inlineCallInstr: the body's value collected
 // into a temporary builder, converted by the function's declared type as
 // userFunction.call does ("XTTE0780" family via convertAsLazy), and only then
@@ -160,21 +160,6 @@ func keyOfFn(f *streamFunc) funcKey {
 		return funcKey{}
 	}
 	return keyOf(q, f.arity())
-}
-
-// isPkgFrameFn reports whether fn is an accepted frame function of a frame
-// package (not a wrapper: wrappers are rewritten away by pkgTarget).
-func isPkgFrameFn(fn *xdm.Node) bool {
-	st := pkgFrameOf(documentElementOf(fn))
-	if st == nil {
-		return false
-	}
-	for _, f := range st.frames {
-		if f.body == fn && sheetBody(fn) == nil {
-			return true
-		}
-	}
-	return false
 }
 
 // pkgTarget is inlineTarget's fallback for a call, in an expression of the
@@ -553,12 +538,13 @@ func (rp *rulesPlan) pkgApply(op *streamOp) bool {
 	return rp != nil && rp.pkgRoots[documentElementOf(op.el)]
 }
 
-// pkgDocParam is inlineCheck's admission of a frame function's call at the
-// document node: the first argument "." (the document node), its parameter
-// typed node() or item() (any occurrence) or untyped, which take the
-// document node unconverted.
+// pkgDocParam is inlineCheck's admission of a call at the document node, on
+// a frame function or a function of the caller's own module (lane MM3:
+// function-5002's sf:absorbing(.) at "/"): the first argument "." (the
+// document node), its parameter typed node() or item() (any occurrence) or
+// untyped, which take the document node unconverted.
 func pkgDocParam(fn, param *xdm.Node, a xpath.Expr, f vfocus) bool {
-	if f != vNone || !isPkgFrameFn(fn) {
+	if f != vNone {
 		return false
 	}
 	if _, ctx := a.(*xpath.ContextItem); !ctx {
