@@ -165,3 +165,13 @@ func (run *streamRun) paramOp(params []*Variable) bool {
 	}
 	return false
 }
+
+// headOnly reports whether op's population is head(P), the window
+// alone: its first match is the one item, so a match inside it is not a
+// result, as one inside an outermost match is not (si-lre-118: for-each
+// select="head(//X)").
+func headOnly(op *streamOp) bool {
+	p := op.pop
+	return p != nil && p.cond == nil && len(p.wins) == 1 && p.wins[0].kind == "head" &&
+		p.fn == nil && p.post == nil && !p.ground && !p.off && !p.values
+}

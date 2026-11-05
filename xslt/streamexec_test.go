@@ -97,6 +97,12 @@ var coreBodies = []struct {
 	// ... a body reading more than a view has: refused (it would re-run).
 	{`<out><xsl:for-each select="//sub"><s><xsl:for-each select="ancestor::*"><xsl:value-of select="has-children()"/></xsl:for-each></s></xsl:for-each></out>`, false},
 	{`<out><xsl:for-each select="doc/rec"><r><xsl:for-each select="@*"><a c="{has-children(..)}"/></xsl:for-each></r></xsl:for-each></out>`, false},
+	// A loop over head() of a descendant path whose body reads the match's
+	// content: a match inside the first is no item (headOnly,
+	// streamlast_mm2.go; si-lre-118).
+	// The body's validation keeps it from a grounded copy.
+	{`<out><xsl:for-each select="head(//rec)"><xsl:element name="r" validation="strip"><xsl:copy-of select="*"/></xsl:element></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="head(//*[@k])"><r xsl:validation="strip"><xsl:copy-of select="node()"/></r></xsl:for-each></out>`, true},
 	// Select at the document node, under wrappers.
 	{`<out><xsl:value-of select="count(//rec)"/></out>`, true},
 	// xsl:comment and xsl:processing-instruction with a consuming select

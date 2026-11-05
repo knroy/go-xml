@@ -1175,9 +1175,10 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 			// A motionless body reads its match's view only: matches below
 			// it are found as the content goes by.
 			s.mode = matchView
-		case op.planned && (!s.nests || s.outermost && !s.predFail) && x.readyOps(op.inner, k, &op.kinds) == "":
-			// Matches cannot nest, or those inside an outermost one are not
-			// results and no predicate's error is to be raised there.
+		case op.planned && (!s.nests || (s.outermost || headOnly(op)) && !s.predFail) && x.readyOps(op.inner, k, &op.kinds) == "":
+			// Matches cannot nest, or those inside an outermost one (or the
+			// one head() takes: streamlast_mm2.go) are not results and no
+			// predicate's error is to be raised there.
 			s.mode = matchBody
 		case op.grounded && k >= 1:
 			// The body reads its match's content as it likes, on a copy
