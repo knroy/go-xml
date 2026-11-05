@@ -318,6 +318,9 @@ func (i *mergeInstr) executeStream(rt *runtime, out *outputBuilder) (bool, error
 	if err == nil {
 		return true, nil
 	}
+	if cerr := rt.ctx.Err(); cerr != nil {
+		return true, cerr // cancelled: no rerun on the tree
+	}
 	streamtrace.Rerun()
 	if traceRerun != nil {
 		traceRerun(err)

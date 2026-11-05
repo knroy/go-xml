@@ -411,3 +411,57 @@ func TestStreamCoreLimits(t *testing.T) {
 		}
 	}
 }
+
+// A streamed xsl:source-document or xsl:merge that fails because the
+// context was cancelled returns the context's error: it is not run again on
+// a tree, which would parse the whole document first (audit A2-4). The
+// context is cancelled from inside the stream, by environment-variable().
+func TestCancelledStreamIsNotRerun(t *testing.T) {
+	dir := t.TempDir()
+	var doc strings.Builder
+	doc.WriteString("<doc>")
+	for i := range 20000 {
+		fmt.Fprintf(&doc, `<rec v="%06d"/>`, i)
+	}
+	doc.WriteString("</doc>")
+	if err := os.WriteFile(filepath.Join(dir, "d.xml"), []byte(doc.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bodies := map[string]string{
+		"source-document": `<xsl:source-document streamable="yes" href="d.xml">` +
+			`<xsl:for-each select="doc/rec"><xsl:value-of select="environment-variable('x')"/></xsl:for-each></xsl:source-document>`,
+		"merge": `<xsl:merge><xsl:merge-source for-each-source="'d.xml'" streamable="yes" select="doc/rec">` +
+			`<xsl:merge-key select="string(@v)"/></xsl:merge-source>` +
+			`<xsl:merge-action><xsl:value-of select="environment-variable('x')"/></xsl:merge-action></xsl:merge>`,
+	}
+	for name, body := range bodies {
+		docs, err := NewFileResolver(dir) // a tree rerun would cache the document
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+			`<xsl:template name="main">` + body + `</xsl:template></xsl:stylesheet>`
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Compile(tree.Root, CompileOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		before := streamtrace.Snapshot()
+		_, err = s.Transform(ctx, nil, TransformOptions{InitialTemplate: "main", Documents: docs, Environment: cancelEnv(cancel)})
+		tr := streamtrace.Snapshot().Sub(before)
+		cancel()
+		if err != context.Canceled || tr.Reruns != 0 {
+			t.Errorf("%s: err = %v, reruns %d; want context.Canceled, no rerun", name, err, tr.Reruns)
+		}
+	}
+}
+
+// cancelEnv cancels at the first environment-variable() call.
+type cancelEnv func()
+
+func (c cancelEnv) LookupEnvironment(string) (string, bool) { c(); return "", false }
+func (c cancelEnv) EnvironmentNames() []string              { return nil }

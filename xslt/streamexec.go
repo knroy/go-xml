@@ -1675,6 +1675,9 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	case err == nil && !kept && !keepsStreamNode(held.Sequence()):
 		return true, appendSequence(held.Sequence(), out)
 	}
+	if cerr := rt.ctx.Err(); cerr != nil {
+		return true, cerr // cancelled: no rerun on the tree
+	}
 	if err == nil {
 		// Not a failure: the tree has the nodes this result must hold.
 		streamtrace.Fallback()
