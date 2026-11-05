@@ -882,7 +882,7 @@ func (w *splitter) refuse(why string) bool {
 // slot checks an operand consumed as use: motionless, it is evaluated with
 // the outer; otherwise it must hold the consuming path.
 func (w *splitter) slot(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
-	if (viewCheck{kids: true, key: w.key}).safe(e, w.focus, use == useCount || use == useEBV) {
+	if !(w.group && readsGroup(e)) && (viewCheck{kids: true, key: w.key}).safe(e, w.focus, use == useCount || use == useEBV) { // streamgroup_copies_mm7.go
 		return true
 	}
 	return w.walk(e, put, use)

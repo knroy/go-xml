@@ -83,12 +83,12 @@ func (b *streamBuilder) foreignParams(el *xdm.Node, f vfocus) bool {
 			return b.refuse(elName(ch) + " in " + elName(el))
 		}
 		// As withParams checks them: a select refused there plans nothing.
-		if sb := b.strict(); sb.attrs(ch, f) && sb.content(ch, f) {
+		if sb := b.strict(); !b.groupParam(ch) && sb.attrs(ch, f) && sb.content(ch, f) {
 			continue
 		}
-		// In a group the parameter would be read at the group's start,
-		// before its members (TestStreamValuesApplyTakesNoParams).
-		if op != nil || b.grp || ch.Attr("", "select") == nil || !b.groundedSelect(ch) { // streamgroup.go
+		// In a group only one reading the group's members, which its split
+		// takes from the group (groupParam, streamgroup_copies_mm7.go).
+		if op != nil || b.grp && !b.groupParam(ch) || ch.Attr("", "select") == nil || !b.groundedSelect(ch) { // streamgroup.go
 			return b.refuse("consuming xsl:with-param of " + elName(el) + ": not grounded")
 		}
 		for a := range ch.Attrs() {
@@ -150,7 +150,7 @@ func (b *streamBuilder) consumingParam(el *xdm.Node, f vfocus) bool {
 		if !isXSL(ch, "with-param") || ch.Attr("", "select") == nil {
 			return false
 		}
-		found = found || !b.strict().attrs(ch, f)
+		found = found || !b.strict().attrs(ch, f) || b.groupParam(ch)
 	}
 	return found
 }

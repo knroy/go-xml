@@ -1308,6 +1308,9 @@ func (s *streamSplit) memory(minD int) string {
 	switch c := s.class(); {
 	case c == "nodes" && s.fresh:
 		// The tail's own nodes, not copies of the stream (streamshapes.go).
+	case c == "nodes" && s.group && s.itemsOnlyCopied():
+		// Copied whole (copy-of(current-group())): the tree holds those
+		// copies too, beside its document (streamgroup_copies_mm7.go).
 	case (c == "nodes" || c == "subtree") && s.group:
 		// A group's members may be all of the document element's children.
 		return "collects grounded copies (" + c + ") of the current group"
