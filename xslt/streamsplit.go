@@ -100,6 +100,10 @@ type streamSplit struct {
 	// recAccums says each match is grounded with its accumulator values
 	// recorded, for xsl:copy-of copy-accumulators="yes" (streamaccum_ground_l4.go).
 	recAccums bool
+	// rawBody hands a matchBody match to body as the parse's own node
+	// (Event.Node, valid until the cursor moves), not a view: for a body
+	// that only copies it off the cursor (copyMember, streamcopy_l3group.go).
+	rawBody bool
 
 	// cond, when set, makes this a choice: then or els runs as cond, on the
 	// context's view, says. Nothing else is set.
@@ -2384,9 +2388,11 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					return err
 				}
 			case matchBody:
-				v, err := c.View()
-				if err != nil {
-					return err
+				v := ev.Node
+				if !s.rawBody {
+					if v, err = c.View(); err != nil {
+						return err
+					}
 				}
 				if decided, err = r.body(v, ev.Depth); err != nil {
 					return err
