@@ -52,6 +52,9 @@ type generalPattern struct {
 	// prio is the default priority section 6.4 gives the form.
 	prio float64
 	src  string
+	// step is the one step equivalent to (L except R)[q] or (L intersect
+	// R)[q], or nil: a node of a stream is matched by it (streampattern_setops.go).
+	step *patternAlt
 }
 
 // compileGeneralPattern compiles a pattern the step grammar rejected, when it

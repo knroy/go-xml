@@ -343,7 +343,7 @@ func patternExprFreeRangingIn(e xpath.Expr, at *xdm.Node, matchedAllowsChildren 
 		// "a | b" and "a union b": a union of patterns is motionless only if
 		// every alternative is. The operator is the only binary form that
 		// can appear at the top level of a pattern.
-		if x.Op != "|" && x.Op != "union" {
+		if x.Op != "|" && x.Op != "union" && !patternSetOp(x.Op) { // streampattern_setops.go
 			return false, false
 		}
 		lf, lk := patternExprFreeRanging(x.Left, at)
@@ -400,7 +400,7 @@ func patternExprFreeRangingIn(e xpath.Expr, at *xdm.Node, matchedAllowsChildren 
 		// absorbing and hence not motionless, which is precisely why
 		// streamable-142 marks its rule "NOT MOTIONLESS".
 		if _, ok := x.Base.(*xpath.ContextItem); !ok {
-			return false, false
+			return parenPatternFreeRanging(x, at, matchedAllowsChildren) // streampattern_setops.go
 		}
 		return patternPredicatesFreeRanging(x.Predicates, true, matchedAllowsChildren)
 

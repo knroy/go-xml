@@ -493,7 +493,11 @@ func patternClassesAt(p *Pattern, el *xdm.Node) (can [numClasses]bool, why strin
 		return [numClasses]bool{true, true, true, true}, "" // streamgroup.go
 	}
 	if len(p.general) > 0 {
-		return can, "pattern " + p.src + ": an XSLT 3.0 form"
+		q := streamSetOpAlts(p) // streampattern_setops.go
+		if q == nil {
+			return can, "pattern " + p.src + ": an XSLT 3.0 form"
+		}
+		p = q
 	}
 	for _, a := range p.alts {
 		if a.call != nil {
