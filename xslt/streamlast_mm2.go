@@ -272,3 +272,16 @@ func stepPredCalls(st *xpath.Step, re func(xpath.Expr) xpath.Expr) {
 		st.Predicates[i] = re(st.Predicates[i])
 	}
 }
+
+// flatSteps splices the steps of a relative path that is itself a step:
+// E1/(E2/E3) is E1/E2/E3, the shape an inlined call leaves
+// (./ancestor-or-self::*[last()]/local-name(), function-5007).
+func flatSteps(steps []xpath.Expr) []xpath.Expr {
+	for i, s := range steps {
+		if pe, ok := s.(*xpath.PathExpr); ok && !pe.Root && len(pe.Steps) > 0 {
+			out := append(append(append([]xpath.Expr(nil), steps[:i]...), pe.Steps...), steps[i+1:]...)
+			return flatSteps(out)
+		}
+	}
+	return steps
+}

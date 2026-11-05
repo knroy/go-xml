@@ -1405,6 +1405,7 @@ func (vc viewCheck) bound(bs []xpath.Binding, f vfocus) bool {
 // down. A path ending in elements returns view nodes, which may not be
 // atomized (nodeOK).
 func (vc viewCheck) path(steps []xpath.Expr, f vfocus, nodeOK bool) bool {
+	steps = flatSteps(steps) // streamlast_mm2.go
 	cur, doc := f, false
 	for i, s := range steps {
 		st, ok := s.(*xpath.Step)
@@ -1441,11 +1442,13 @@ func (vc viewCheck) path(steps []xpath.Expr, f vfocus, nodeOK bool) bool {
 			return false
 		}
 		for _, p := range st.Predicates {
-			pf := cur
+			pf, pc := cur, vc
 			if st.Axis == xpath.AxisParent || st.Axis == xpath.AxisAncestor || st.Axis == xpath.AxisAncestorOrSelf {
-				pf = vElem
+				// The step's positions are among the ancestors, all of
+				// which the view has (function-5007: ancestor-or-self::*[last()]).
+				pf, pc.pos, pc.last = vElem, true, true
 			}
-			if !vc.safe(p, pf, true) {
+			if !pc.safe(p, pf, true) {
 				return false
 			}
 		}

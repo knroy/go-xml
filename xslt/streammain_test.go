@@ -239,6 +239,13 @@ var mainCases = []struct {
 	// function-5003, -5013).
 	{mm2Inspect + `<xsl:template match="/"><xsl:if test="p:i(.)"><o><xsl:copy-of select="doc/rec[1]/sub"/></o></xsl:if></xsl:template>`, true},
 	{mm2Inspect + `<xsl:template match="/"><o><xsl:copy-of select="doc/rec[position() = 1 and p:i(.) = false()]/sub[p:i(.) = false()]"/></o></xsl:template>`, true},
+	// A predicate reading the outermost ancestor through an ascent function
+	// (flatSteps, streamlast_mm2.go; function-5007), or directly by
+	// position among the ancestors.
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:a" as="node()*" streamability="ascent"><xsl:param name="n" as="node()"/>` +
+		`<xsl:sequence select="$n/ancestor-or-self::*[last()]"/></xsl:function>` +
+		`<xsl:template match="/"><o><xsl:copy-of select="*/rec[1][p:a(.)/local-name() = 'doc']/sub"/></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:copy-of select="*/rec[ancestor::*[last()]/local-name() = 'doc']/sub"/></o></xsl:template>`, true},
 	// A predicate of a node() or text() step reading its parent's attribute:
 	// a leaf's open ancestors, as views (sf-xml-to-json-005).
 	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:copy-of select="descendant::node()[../@k = 'a']"/></o></xsl:template>`, true},
