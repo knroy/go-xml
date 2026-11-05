@@ -225,3 +225,53 @@ func TestStreamGroupNodeFreeBody(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamSourceDocumentFragment: xsl:source-document href="doc.xml#id"
+// (docbook-003) streams to the element with that ID and runs the body on its
+// grounded copy (streamfrag.go), with the tree's output and errors; with no
+// such element its context is the document node, run on the tree. A body
+// that could tell the copy from the element stays on the tree.
+func TestStreamSourceDocumentFragment(t *testing.T) {
+	docs := map[string]string{
+		"xmlid": `<r xmlns="urn:r" xmlns:p="urn:p" xml:base="http://b/"><s xml:id="a"><t>1</t></s><s xml:id="k" p:x="2"><t>k1</t><u/></s><s xml:id="k">dup</s></r>`,
+		"dtd":   `<!DOCTYPE r [<!ATTLIST s id ID #IMPLIED>]><r><s id="j">no</s><s id="k"><t>d</t></s></r>`,
+		"none":  `<r><s id="k">not an ID</s></r>`,
+		"late":  `<r><s xml:id="k"><t>x</t></s><bad></r>`,
+		"inner": `<r><s xml:id="z"><s xml:id="k"><t>in</t></s></s></r>`,
+	}
+	bodies := []struct {
+		body   string
+		stream bool
+	}{
+		{`<xsl:copy-of select="."/>`, true},
+		// The document node's plan refuses it (two consuming operands): a
+		// fragment run needs one, for the instruction to stream at all.
+		{`<o n="{count(*)}"><xsl:value-of select="t"/><xsl:copy-of select="@*"/></o>`, false},
+		{`<o><xsl:copy-of select="t"/></o>`, true},
+		{`<xsl:copy><xsl:copy-of select="*/name()"/></xsl:copy>`, true},
+		{`<o><xsl:value-of select="name(..)"/></o>`, false},
+		{`<xsl:sequence select="."/>`, false},
+		{`<o><xsl:value-of select="exists(/r)"/></o>`, false},
+	}
+	for name, doc := range docs {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for bi, b := range bodies {
+			sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml#k">` + b.body +
+				`</xsl:source-document></top></xsl:template></xsl:stylesheet>`
+			opts := TransformOptions{SourceParseOptions: xdm.ParseOptions{AllowDOCTYPE: true}}
+			so, se, st := coreRun(sheet, dir, true, opts)
+			to, te, _ := coreRun(sheet, dir, false, opts)
+			if so != to || se != te {
+				t.Errorf("%s body %d:\ncore %q %q\ntree %q %q", name, bi, so, se, to, te)
+			}
+			want := b.stream && name != "none" && name != "late"
+			if streamed := st.Runs[0] > 0 && st.Reruns == 0; streamed != want || st.Guards != 0 {
+				t.Errorf("%s body %d: streamed %v (want %v), runs %v re-runs %d guards %d", name, bi, streamed, want, st.Runs, st.Reruns, st.Guards)
+			}
+		}
+	}
+}

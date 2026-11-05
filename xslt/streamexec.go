@@ -1560,7 +1560,8 @@ func (x *streamExec) count() {
 // executeStream runs i on its core plan when its resolver can stream the
 // document, and reports whether it did (DESIGN section 2.1, rule 4).
 func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, href string) (bool, error) {
-	if noBursts || streamtrace.Off() || validSourceDocumentURI(href) != nil || strings.ContainsRune(href, '#') ||
+	_, frag := i.fragmentStreams(rt, href) // streamfrag.go
+	if noBursts || streamtrace.Off() || validSourceDocumentURI(href) != nil || strings.ContainsRune(href, '#') && !frag ||
 		rt.sheet.dynParamSupplied(rt.opts) { // streamtee_dyncall.go
 		return false, nil
 	}
@@ -1730,6 +1731,18 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		}
 		acc := run.observeAccumsOf(rt, i.accums, true, false, i.pkg) // streamtrust_pkguse.go
 		defer acc.stop()
+		if frag, ok := i.fragmentStreams(rt, href); ok { // streamfrag.go
+			if vin != nil {
+				return errStreamPlan // a typed document: its IDs are the validation's
+			}
+			if err := run.fragment(rt, i, out, frag); err != nil {
+				return err
+			}
+			if err := valid(); err != nil {
+				return err
+			}
+			return acc.finish()
+		}
 		// The body's focus is the document node, which the stream does not
 		// build: the plan reads of it only what an empty one has.
 		sub := rt.withCurrent(run.root, 1, 1).clearCurrentRule()
