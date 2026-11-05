@@ -285,6 +285,13 @@ var mainCases = []struct {
 	// tree's DTD is the document's (sf-unparsed-entity-02).
 	{`<xsl:mode streamable="yes"/><xsl:template match="doc"><o><xsl:value-of select="unparsed-entity-uri('pic'), unparsed-entity-public-id('pic')"/></o></xsl:template>`, true},
 	{`<xsl:mode streamable="yes"/><xsl:template match="doc"><o><xsl:for-each select="rec"><r u="{unparsed-entity-uri('pic')}" k="{@k}"/></xsl:for-each></o></xsl:template>`, true},
+	// A function given a snapshot of the match, which may be the document
+	// element: one grounded copy, the tree's records (streamexec_whole.go;
+	// sf-unparsed-entity-03, -04).
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:f"><xsl:param name="d"/><r n="{count($d//rec)}" u="{unparsed-entity-uri('pic', $d)}" up="{name($d/..)}"/></xsl:function>` +
+		`<xsl:template match="doc"><o><xsl:sequence select="p:f(snapshot(.))"/></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:f"><xsl:param name="d"/><xsl:value-of select="$d/rec/@k, unparsed-entity-public-id('pic', $d)"/></xsl:function>` +
+		`<xsl:template match="doc"><o><xsl:value-of select="p:f(snapshot(.))"/></o></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

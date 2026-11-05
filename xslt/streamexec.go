@@ -1244,6 +1244,10 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 		return ""
 	}
 	s.copiedOut = copies // streamfn_copies.go: what the instruction outputs is copied
+	// streamexec_whole.go
+	if wholeMatch(x, s, minD) {
+		return ""
+	}
 	if why := s.memory(minD); why != "" {
 		return elName(op.el) + " " + why + ": " + op.sel.Source()
 	}
