@@ -55,6 +55,11 @@ var accumReadDecls = []struct {
 	     <xsl:variable name="e" as="item()*"><xsl:evaluate xpath="'string(' || @v || ')'" with-params="map{}"/></xsl:variable>
 	     <xsl:sequence select="($value, $e, string(count(accumulator-before('a'))))"/>
 	   </xsl:accumulator-rule></xsl:accumulator>`, true},
+	// Refused: an xsl:evaluate given the node (lane MM1): what it evaluates
+	// is not known until run time (§10.4.2) and may compare it with doc()'s.
+	{`<xsl:param name="x" select="'string(.)'"/>
+	 <xsl:accumulator name="a" as="xs:string*" initial-value="()" streamable="yes">
+	   <xsl:accumulator-rule match="rec"><xsl:evaluate xpath="$x" context-item="."/></xsl:accumulator-rule></xsl:accumulator>`, false},
 	// Refused: two accumulators reading each other; a read beside the
 	// node; -after in a start rule; a variable holding the node.
 	{`<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes">
