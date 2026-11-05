@@ -345,6 +345,11 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		if p.oi != "" {
 			return p.oi + "() of a path with a consuming predicate"
 		}
+		if p.skip > 0 {
+			// tail(Q) leaves out Q's first match, not the first match of
+			// the steps before the cut, whose tail gives Q's matches.
+			return "tail() of a path with a consuming predicate"
+		}
 		rest := make([]xpath.Expr, 0, len(p.steps)-cut+len(p.tail))
 		for _, st := range p.steps[cut:] {
 			rest = append(rest, st)
