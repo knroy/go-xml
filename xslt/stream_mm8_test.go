@@ -187,3 +187,41 @@ func TestStreamSchemaTypedMax(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamGroupNodeFreeBody: a group-by over the document element's
+// children whose body returns arrays, maps or simple maps of atomic values
+// (si-fork-815) holds its members as copies (streamcopy_l3group.go), which
+// no result can hand on as nodes (streamcopy_nodefree.go): it streams, with
+// the tree's output and Result.Nodes. A body returning the members does not.
+func TestStreamGroupNodeFreeBody(t *testing.T) {
+	doc := `<a><n>1</n><t v="1.5" d="x"/><t v="2" d="y"/><t v="-3" d="x"/><t v="0.25" d="z"/></a>`
+	rule := func(body string) string {
+		return `<xsl:mode streamable="yes"/><xsl:output method="json"/>` +
+			`<xsl:template match="/"><xsl:apply-templates select="a"/></xsl:template>` +
+			`<xsl:template match="a"><xsl:sequence select="array { p:g(.) }"/></xsl:template>` +
+			`<xsl:function name="p:g" as="item()*" streamability="absorbing"><xsl:param name="in" as="element()"/>` +
+			`<xsl:fork><xsl:for-each-group select="$in/t" group-by="@d">` + body + `</xsl:for-each-group></xsl:fork></xsl:function>`
+	}
+	rows := []struct {
+		body   string
+		stream bool
+	}{
+		{`<xsl:sequence select="array { current-group()!@v!xs:decimal(.) }"/>`, true},
+		{`<xsl:sequence select="map { 'k': current-grouping-key(), 'n': count(current-group()) }"/>`, true},
+		{`<xsl:sequence select="[ sum(current-group()/@v), current-group()!string(@v) ]"/>`, true},
+		{`<xsl:sequence select="array { current-group() }"/>`, false},
+	}
+	for i, r := range rows {
+		sheet := mainSheet(rule(r.body))
+		so, st := mainRun(sheet, doc, true, TransformOptions{})
+		to, _ := mainRun(sheet, doc, false, TransformOptions{})
+		so, _, _ = strings.Cut(so, "\n") // the shape prints an array's address
+		to, _, _ = strings.Cut(to, "\n")
+		if so != to {
+			t.Errorf("row %d:\nstream %s\ntree   %s", i, so, to)
+		}
+		if streamed := st.Streamed() > 0; streamed != r.stream || st.Guards != 0 {
+			t.Errorf("row %d: streamed %v (want %v), guards %d", i, streamed, r.stream, st.Guards)
+		}
+	}
+}
