@@ -1070,6 +1070,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 			put(u)
 			return w.walk(u, put, use)
 		}
+		if done, ok := w.snapshotHead(e); done { // streamsnapshot_mm7.go
+			return ok
+		}
 		return w.refuse("path " + e.String())
 	}
 	return w.refuse("expression " + e.String())

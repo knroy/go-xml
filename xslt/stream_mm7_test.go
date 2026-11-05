@@ -1,6 +1,11 @@
 package xslt
 
-import "testing"
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // TestStreamGroupCopiesParam: a parameter copy-of(current-group()) of an
 // xsl:apply-templates over a tree not of the stream, in a streamed group,
@@ -37,4 +42,27 @@ func TestStreamLoopCopiesSized(t *testing.T) {
 		{"an error after last()", mode + `<xsl:template match="/"><o><xsl:for-each select="d/rec/copy-of()">` +
 			`<i l="{last()}" v="{xs:integer(@k)}"/></xsl:for-each></o></xsl:template>`},
 	})
+}
+
+// TestStreamSnapshotClimb: a path from snapshots of the stream's matches
+// climbs into the snapshots' own ancestors, copied with their attributes
+// and namespaces (sf-snapshot-0101c): the split grounds the matches, the
+// outer makes the snapshots and runs the steps on the tree's code.
+func TestStreamSnapshotClimb(t *testing.T) {
+	dir := t.TempDir()
+	doc := `<b:r xmlns:b="urn:b" xmlns:g="urn:g" g:id="R"><x a="1"><g:id c="s">one</g:id><y/></x><g:id c="t">two<z/></g:id><x><x><g:id/></x></x></b:r>`
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i, body := range []string{
+		`<xsl:sequence select="snapshot(//*:id)/self::*:id/ancestor::node()[last()]"/>`,
+		`<xsl:sequence select="snapshot(//*:id)/ancestor::*[1]"/>`,
+		`<n><xsl:value-of select="count(snapshot(//*:id)/ancestor-or-self::node())"/></n>`,
+		`<xsl:copy-of select="snapshot(/*/*)/../@*"/>`,
+		`<xsl:sequence select="snapshot(//x)/parent::*[@a = 1]"/>`,
+		`<n><xsl:value-of select="snapshot(//*:id)/ancestor::node()[last()] ! (document-uri(.), base-uri(.))"/></n>`,
+		`<n><xsl:value-of select="count(snapshot(//*:id)/ancestor::*/namespace::*)"/></n>`,
+	} {
+		coreCheck(t, coreSheet(body), dir, fmt.Sprint("row ", i), true, TransformOptions{})
+	}
 }
