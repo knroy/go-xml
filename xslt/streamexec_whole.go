@@ -5,6 +5,8 @@ package xslt
 // that one copy, which costs what the tree costs and saves nothing.
 
 import (
+	"slices"
+
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -21,8 +23,8 @@ func wholeMatch(x *streamExec, s *streamSplit, minD int) bool {
 
 // noteWholeVar records el, a local xsl:variable read at the document node,
 // in x.whole when its select is copy-of or snapshot of ".", "/" or "/E" (E
-// a child step without predicates) and nothing else in the module binds its
-// name: the split is docCopySplit's or wholeDocSplit's, so the variable
+// a child step without predicates) and nothing in its scope binds its name
+// again (wholeAt reads it only in that scope): the split is docCopySplit's or wholeDocSplit's, so the variable
 // holds a document built off the cursor, or a copy made of one, where the
 // tree holds its own copy. Either is a tree apart from the stream, read
 // whole (wholeRead).
@@ -47,14 +49,16 @@ func (x *streamExec) noteWholeVar(op *streamOp) {
 		return
 	}
 	others := false
-	walkElements(documentElementOf(el), func(n *xdm.Node) bool {
-		if n != el && (isXSL(n, "variable") || isXSL(n, "param")) {
-			if nq, err := resolveQNameAttr(n, n.AttrValue("name")); err != nil || nq == q {
-				others = true
+	for _, sib := range followingElements(el) {
+		walkElements(sib, func(n *xdm.Node) bool {
+			if isXSL(n, "variable") || isXSL(n, "param") {
+				if nq, err := resolveQNameAttr(n, n.AttrValue("name")); err != nil || nq == q {
+					others = true
+				}
 			}
-		}
-		return !others
-	})
+			return !others
+		})
+	}
 	if others {
 		return
 	}
@@ -62,6 +66,37 @@ func (x *streamExec) noteWholeVar(op *streamOp) {
 		x.whole = map[xdm.QName]*streamOp{}
 	}
 	x.whole[q] = op
+}
+
+// followingElements are el's following sibling elements: its scope.
+func followingElements(el *xdm.Node) []*xdm.Node {
+	var out []*xdm.Node
+	seen := false
+	for _, ch := range el.Parent().ChildElements() {
+		if seen {
+			out = append(out, ch)
+		}
+		seen = seen || ch == el
+	}
+	return out
+}
+
+// wholeAt is x.whole narrowed to the variables in scope at el: el is, or
+// is inside, a following sibling of the variable's element.
+func (x *streamExec) wholeAt(el *xdm.Node) map[xdm.QName]*streamOp {
+	var in map[xdm.QName]*streamOp
+	for q, op := range x.whole {
+		for a := el; a != nil && a.Kind() == xdm.KindElement; a = a.Parent() {
+			if a.Parent() == op.el.Parent() && a != op.el && slices.Contains(followingElements(op.el), a) {
+				if in == nil {
+					in = map[xdm.QName]*streamOp{}
+				}
+				in[q] = op
+				break
+			}
+		}
+	}
+	return in
 }
 
 // readyWhole checks that each variable of x.whole is read as noteWholeVar

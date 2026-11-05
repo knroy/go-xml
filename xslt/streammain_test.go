@@ -303,6 +303,11 @@ var mainCases = []struct {
 	// function-5001); the body is not inlined, never assessed.
 	{`<xsl:mode streamable="yes"/><xsl:function name="p:u" streamability="unclassified"><xsl:param name="n"/><xsl:copy-of select="$n/*/rec[1]"/></xsl:function>` +
 		`<xsl:template match="/"><o><xsl:copy-of select="p:u(copy-of(.))"/></o></xsl:template>`, true},
+	// A snapshot of the document element in a variable, read as a tree in
+	// its scope; another template binding the name is out of it
+	// (streamexec_whole.go; sf-snapshot-0101b).
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><xsl:variable name="w" select="snapshot(/*)"/><o p="{exists($w/..)}" n="{name($w)}{count($w/../node())}"/></xsl:template>` +
+		`<xsl:template name="t"><xsl:variable name="w" select="1"/><xsl:value-of select="$w"/></xsl:template>`, true},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
