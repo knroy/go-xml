@@ -942,6 +942,17 @@ func (n *Node) BaseURI() string {
 	}
 }
 
+// baseUnder is n's BaseURI given its parent's, parentBase.
+func (n *Node) baseUnder(parentBase string) string {
+	if n.flags&fBase != 0 {
+		return n.tree.bases[n.self]
+	}
+	if n.kind != uint8(KindElement) || n.flags&fSide != 0 {
+		return ""
+	}
+	return parentBase
+}
+
 // inheritedBase is the base URI n has when it has none of its own.
 func (n *Node) inheritedBase() string {
 	if n.kind != uint8(KindElement) || n.parent == noIdx || n.flags&fSide != 0 {
