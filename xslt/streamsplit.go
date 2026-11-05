@@ -2203,7 +2203,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 			case matchText:
 				if s.json != nil {
 					decided = true
-					if err := r.jsonMatch(ev); err != nil { // streamfn_json.go
+					if err := r.jsonMatch(ev, f); err != nil { // streamfn_json.go
 						return err
 					}
 					break
