@@ -3,8 +3,10 @@ package xslt
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
+	"weak"
 
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -671,7 +673,7 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	// value its original had, not with what the rules would compute over the
 	// copy's own tree.
 	node = rt.accumulatorOrigin(node)
-	if h := rt.accumHeld[node]; h != nil { // streammerge_accum.go
+	if h, _ := rt.accumHeld.get(node); h != nil { // streammerge_accum.go
 		return h.value(def, lex, post)
 	}
 	// A node of a streamed document is answered by the run's observer
@@ -763,15 +765,16 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 // The correspondence is recorded for the whole subtree at once: a copy is deep
 // and the copies of the descendants have to answer as their originals did too.
 func (rt *runtime) noteCopiedAccumulators(orig, copy *xdm.Node) {
-	if rt.accumOrigin == nil {
+	if rt.accumOrigin == nil || copy == nil {
 		return
 	}
+	tbl := rt.accumOrigin.at(copy.Root())
 	var pair func(a, b *xdm.Node)
 	pair = func(a, b *xdm.Node) {
 		if a == nil || b == nil {
 			return
 		}
-		rt.accumOrigin[b] = a
+		tbl[b.Index()] = a
 		for ac, bc := a.FirstChild(), b.FirstChild(); ac != nil && bc != nil; ac, bc = ac.NextSibling(), bc.NextSibling() {
 			pair(ac, bc)
 		}
@@ -791,11 +794,51 @@ func (rt *runtime) noteCopiedAccumulators(orig, copy *xdm.Node) {
 // resolve, so the table would only hold every copied node, and its original,
 // alive until the transform ends. That was 830 MB of peak heap for a streamed
 // 10 MB input taking copy-of(.) of each record.
-func newAccumOrigin(s *Stylesheet) map[*xdm.Node]*xdm.Node {
+func newAccumOrigin(s *Stylesheet) *copyTable[*xdm.Node] {
 	if len(s.accumulators) == 0 {
 		return nil
 	}
-	return map[*xdm.Node]*xdm.Node{}
+	return &copyTable[*xdm.Node]{}
+}
+
+// copyTable maps the nodes of copies to what they answer accumulators with
+// (accumOrigin, accumHeld). A copy's entries are held weakly, under the root
+// of its tree: they live while some node of that tree does, so a copy the
+// stylesheet drops frees its entries and what they hold -- its original, or
+// the values recorded for it. Keyed by the node, the table kept every copy
+// and its original until the transform ended: 1.4-1.6x the tree's memory for
+// a stream taking a copy per record (audit A2-2). Entries are by Index,
+// which is stable while the tree is; dead roots are swept as the table grows.
+type copyTable[V any] struct {
+	m       map[weak.Pointer[xdm.Node]]map[int]V
+	sweepAt int
+}
+
+// at is the table of the tree whose root is root, made if need be.
+func (t *copyTable[V]) at(root *xdm.Node) map[int]V {
+	k := weak.Make(root)
+	if e := t.m[k]; e != nil {
+		return e
+	}
+	if len(t.m) >= t.sweepAt {
+		maps.DeleteFunc(t.m, func(k weak.Pointer[xdm.Node], _ map[int]V) bool { return k.Value() == nil })
+		t.sweepAt = 2*len(t.m) + 64
+	}
+	if t.m == nil {
+		t.m = map[weak.Pointer[xdm.Node]]map[int]V{}
+	}
+	e := map[int]V{}
+	t.m[k] = e
+	return e
+}
+
+// get is n's entry.
+func (t *copyTable[V]) get(n *xdm.Node) (v V, ok bool) {
+	if t == nil || len(t.m) == 0 || n.Index() < 0 {
+		return v, false
+	}
+	v, ok = t.m[weak.Make(n.Root())][n.Index()]
+	return v, ok
 }
 
 // accumulatorOrigin follows a node back to the node it was copied from, or
@@ -817,7 +860,7 @@ func (rt *runtime) accumulatorOrigin(n *xdm.Node) *xdm.Node {
 	seen := map[*xdm.Node]bool{}
 	for !seen[n] {
 		seen[n] = true
-		orig, ok := rt.accumOrigin[n]
+		orig, ok := rt.accumOrigin.get(n)
 		if !ok {
 			return n
 		}

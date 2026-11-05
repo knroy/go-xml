@@ -84,8 +84,9 @@ type transformState struct {
 	noGlobal bool
 
 	// accumHeld holds the accumulator values of the snapshots of streamed
-	// merge items (streammerge_accum.go), made on first use.
-	accumHeld map[*xdm.Node]*heldAccum
+	// merge items (streammerge_accum.go) and of copies of streamed nodes
+	// (streamaccum_ground_l4.go), each while the copy lives (copyTable).
+	accumHeld copyTable[*heldAccum]
 
 	// readerRoot is the principal input's document node when it was
 	// supplied to TransformReader (accumdyn_l4.go), else nil.
@@ -238,9 +239,9 @@ type transformState struct {
 	//
 	// It is nil when no package of the stylesheet declares an accumulator:
 	// accumulator-before and -after then fail XTDE3340 before they could
-	// consult it, and every entry would pin a copy and its original for the
-	// rest of the transform. See newAccumOrigin.
-	accumOrigin map[*xdm.Node]*xdm.Node
+	// consult it. An entry lives while its copy does (copyTable). See
+	// newAccumOrigin.
+	accumOrigin *copyTable[*xdm.Node]
 
 	// treeAccums records, per document root, which accumulators 18.2.2 makes
 	// applicable to that tree. Only a document read by an

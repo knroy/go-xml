@@ -23,7 +23,7 @@ type keptAccums struct {
 // keepObserved records, while keeping, the values of the element at hand:
 // before at its start, after at its end.
 func (sa *streamAccums) keepObserved(n *xdm.Node, d int, end bool, ord uint64) {
-	if sa.keep == 0 || n == nil || n.Kind() != xdm.KindElement {
+	if sa.keep == 0 || len(sa.defs) == 0 || n == nil || n.Kind() != xdm.KindElement {
 		return
 	}
 	f := &sa.frames[d]
@@ -41,7 +41,7 @@ func (sa *streamAccums) keepObserved(n *xdm.Node, d int, end bool, ord uint64) {
 
 // keptLeaf returns, while keeping, the slices a leaf's values go into.
 func (sa *streamAccums) keptLeaf(ord uint64) (before, after []xdm.Sequence) {
-	if sa.keep == 0 {
+	if sa.keep == 0 || len(sa.defs) == 0 { // none applicable: nothing to read
 		return nil, nil
 	}
 	if sa.kept == nil {

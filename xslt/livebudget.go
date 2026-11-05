@@ -20,8 +20,6 @@ package xslt
 //     namespace, and no text merged into the last text node (outSig). Output
 //     is held for good, and anything written may refer to what it built;
 //   - it forced no global variable, whose value outlives it;
-//   - the runtime records no copies (accumOrigin, made only for a stylesheet
-//     with accumulators), since that map keeps every copy alive;
 //   - what xsl:next-iteration carries on is nodes and atomic values only,
 //     which are measured: each distinct tree in full (treeSize) and each
 //     value's string. A map, an array or a function item could hold
@@ -63,7 +61,6 @@ const (
 
 // liveLoop is one streamed loop's accounting across its items.
 type liveLoop struct {
-	on bool
 	// nodes and bytes are the part of the counters that stands for the
 	// iteration parameters being carried.
 	nodes, bytes int64
@@ -101,14 +98,11 @@ func signature(out *outputBuilder) outSig {
 
 // liveLoop starts the accounting of a streamed loop writing to out.
 func (rt *runtime) liveLoop() *liveLoop {
-	return &liveLoop{on: rt.accumOrigin == nil}
+	return &liveLoop{}
 }
 
 // begin marks the start of an item.
 func (l *liveLoop) begin(rt *runtime, out *outputBuilder) {
-	if !l.on {
-		return
-	}
 	l.n0, l.b0 = xpathleaf.Charged(rt.ctx)
 	l.forced, l.sig = rt.globalsForced, signature(out)
 }
@@ -116,9 +110,6 @@ func (l *liveLoop) begin(rt *runtime, out *outputBuilder) {
 // end hands back what the item that began at the last begin built and does
 // not hold, carried being the iteration parameters it leaves for the next.
 func (l *liveLoop) end(rt *runtime, out *outputBuilder, carried []xdm.Sequence) {
-	if !l.on {
-		return
-	}
 	n1, b1 := xpathleaf.Charged(rt.ctx)
 	cn, cb, ok := carriedSize(carried)
 	if !ok || n1 < l.n0 || b1 < l.b0 || rt.globalsForced != l.forced || signature(out) != l.sig {
