@@ -772,6 +772,12 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "message" {
 			return b.messageOp(el, f, false) // streammessage.go
 		}
+		if local == "evaluate" {
+			return b.evaluateMotionless(el, f) // streamevaluate.go
+		}
+		if local == "analyze-string" {
+			return b.analyzeMotionless(el, f) // streamevaluate.go
+		}
 		if local == "for-each" {
 			return b.motionlessLoop(el, f) // streamvariable.go
 		}
@@ -881,7 +887,10 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 // what f has, and returns nodes of it only where nodeOK.
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := b.loopRead(parseAt(el, src)) // streamfn_loop.go
-	peek := b.kidsAt(el, e, f)        // streamkids_l6.go
+	if b.parentAccum(e, f) {          // streamevaluate.go
+		return true
+	}
+	peek := b.kidsAt(el, e, f) // streamkids_l6.go
 	vc := viewCheck{pos: true, last: b.last, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek}
 	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) && !b.inlinedSafe(el, src, vc, f, nodeOK) { // streamcopy_l3doc.go, streamlast_mm2.go
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)

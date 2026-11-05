@@ -223,6 +223,9 @@ func TestStreamGroupNodeFreeBody(t *testing.T) {
 		if streamed := st.Streamed() > 0; streamed != r.stream || st.Guards != 0 {
 			t.Errorf("row %d: streamed %v (want %v), guards %d", i, streamed, r.stream, st.Guards)
 		}
+		if i == 0 && !strings.Contains(to, `<e use=`) || i == 0 && !strings.Contains(to, `t="a3c2d"`) || strings.Contains(to, "<q") {
+			t.Errorf("row %d: the tree's output %s", i, to)
+		}
 	}
 }
 
@@ -272,6 +275,62 @@ func TestStreamSourceDocumentFragment(t *testing.T) {
 			if streamed := st.Runs[0] > 0 && st.Reruns == 0; streamed != want || st.Guards != 0 {
 				t.Errorf("%s body %d: streamed %v (want %v), runs %v re-runs %d guards %d", name, bi, streamed, want, st.Runs, st.Reruns, st.Guards)
 			}
+		}
+	}
+}
+
+// TestStreamEvaluatePreprocessor: evaluate-046's shape streams a principal
+// input: an accumulator whose rule evaluates an attribute with its own value
+// as parameters and keys it by resolve-QName(@name, .); a rule matching
+// "A | (* except B)[q]" that evaluates an attribute with that value; an
+// attribute rule passing ../accumulator-before() to an xsl:evaluate inside
+// xsl:analyze-string. The output is the tree's; an xsl:evaluate given a node
+// of the stream (context-item, a parameter) does not stream.
+func TestStreamEvaluatePreprocessor(t *testing.T) {
+	doc := `<r xmlns:p="urn:p"><v name="p:a" s="yes" sel="2"/><v name="p:b" s="yes" sel="$p:a + 1"/>` +
+		`<e use="$p:b gt 2"><k/></e><q use="$p:a = 9"><k/></q><x/><w _t="a{$p:b}c{1+1}d"/></r>`
+	sheet := func(ev string) string {
+		return mainSheet(`<xsl:mode streamable="yes" on-no-match="shallow-copy" use-accumulators="sv"/>
+<xsl:accumulator name="sv" as="map(xs:QName, item()*)" initial-value="map{}" streamable="yes" xmlns:map="http://www.w3.org/2005/xpath-functions/map">
+ <xsl:accumulator-rule match="v[@s='yes']" phase="end">
+  <xsl:variable name="sel" as="item()*"><xsl:evaluate xpath="@sel" with-params="accumulator-before('sv')"/></xsl:variable>
+  <xsl:sequence select="map:put($value, resolve-QName(@name, .), $sel)"/>
+ </xsl:accumulator-rule>
+</xsl:accumulator>
+<xsl:template match="e[@use] | (* except e)[@use]">
+ <xsl:variable name="use" as="xs:boolean">` + ev + `</xsl:variable>
+ <xsl:if test="$use"><xsl:next-match/></xsl:if>
+</xsl:template>
+<xsl:template match="*/@*[starts-with(local-name(), '_')]">
+ <xsl:variable name="params" select="../accumulator-before('sv')"/>
+ <xsl:attribute name="{substring(local-name(), 2)}">
+  <xsl:analyze-string select="." regex="\{{([^{{}}]+)\}}">
+   <xsl:matching-substring><xsl:evaluate xpath="regex-group(1)" with-params="$params"/></xsl:matching-substring>
+   <xsl:non-matching-substring><xsl:value-of select="."/></xsl:non-matching-substring>
+  </xsl:analyze-string>
+ </xsl:attribute>
+</xsl:template>`)
+	}
+	rows := []struct {
+		ev     string
+		stream bool
+	}{
+		{`<xsl:evaluate xpath="@use" with-params="accumulator-before('sv')"/>`, true},
+		{`<xsl:evaluate xpath="'exists(.)'" context-item="." with-params="accumulator-before('sv')"/>`, false},
+		{`<xsl:evaluate xpath="'exists($Q{}n)'" with-params="map{QName('', 'n'): .}"/>`, false},
+	}
+	for i, r := range rows {
+		s := sheet(r.ev)
+		so, st := mainRun(s, doc, true, TransformOptions{})
+		to, _ := mainRun(s, doc, false, TransformOptions{})
+		if so != to {
+			t.Errorf("row %d:\nstream %s\ntree   %s", i, so, to)
+		}
+		if streamed := st.Streamed() > 0; streamed != r.stream || st.Guards != 0 {
+			t.Errorf("row %d: streamed %v (want %v), guards %d", i, streamed, r.stream, st.Guards)
+		}
+		if i == 0 && !strings.Contains(to, `<e use=`) || i == 0 && !strings.Contains(to, `t="a3c2d"`) || strings.Contains(to, "<q") {
+			t.Errorf("row %d: the tree's output %s", i, to)
 		}
 	}
 }
