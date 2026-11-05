@@ -272,3 +272,27 @@ func TestDriveWatchOffCostsNothing(t *testing.T) {
 		t.Fatalf("watch called %d times with the watch off (%d leaves told)", c.watched, c.leaves)
 	}
 }
+
+// A leaf in a kept element, the one thing told before the next tag, is told
+// (with no watch on) and taken back without the walk that finds a run of leaves (tellFrom), and
+// a tag that completes no leaf does not call trimLeaves at all: the common
+// case paid for the general one at every event.
+func TestDriveLeafTakesTheShortWay(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<a>")
+	for i := range 1000 {
+		fmt.Fprintf(&b, "<r i='%d'><s>t%d</s><!--c--><e/><?p x?></r>", i, i)
+	}
+	b.WriteString("</a>")
+	c := &quietWatch{}
+	bs := driver(c)
+	if _, err := parse(strings.NewReader(b.String()), "", ParseOptions{bursts: bs}); err != nil {
+		t.Fatal(err)
+	}
+	// Per r: the ends of s, the comment, e and the PI's end tag (r's) each
+	// follow a leaf or a tag; trimLeaves is called after the three leaves,
+	// and once at the document's end.
+	if c.leaves != 3*1000 || bs.leafWalks != 0 || bs.trims != 3*1000+1 {
+		t.Fatalf("%d leaves told, %d by the walk, %d trimLeaves calls", c.leaves, bs.leafWalks, bs.trims)
+	}
+}

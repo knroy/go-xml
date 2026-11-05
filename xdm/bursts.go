@@ -143,6 +143,10 @@ type burster struct {
 	// leafDrops counts the leaves dropLeaf took back, for the test that
 	// keeps them off RemoveLastChild's general path.
 	leafDrops int
+	// trims counts the calls of trimLeaves, and leafWalks the leaves told
+	// by its general walk (tellFrom), for the test that keeps the common
+	// case off both.
+	trims, leafWalks int
 }
 
 // burstMark is how much of the text store, the name table and the frame
@@ -350,6 +354,9 @@ const (
 	pausedStart
 	pausedEnd
 	pausedLeaf
+	// pausedLeafOne: at the one leaf trimLeaves met (pel, inside pcur),
+	// which nothing follows: resume only takes it back.
+	pausedLeafOne
 )
 
 // resume finishes what the pause of the parse interrupted, act deciding the
@@ -362,6 +369,8 @@ func (b *burster) resume(act xdmburst.Action) error {
 		b.started(b.pel, b.pd, act)
 	case pausedEnd:
 		return b.ended(b.pel, b.pd, b.pspaces, b.pnames)
+	case pausedLeafOne:
+		return b.trimRest(b.pcur, b.pspaces, b.pnames)
 	case pausedLeaf:
 		if err := b.tellFrom(b.pel.tree, b.pel.self+1, b.pd); err != nil {
 			return err
@@ -489,6 +498,7 @@ func (b *burster) ended(el *Node, d int, spaces *spaceTable, names *nameCache) e
 // cur's mark is all garbage now, and once a child of cur opens it cannot be
 // taken back until cur closes, so it is not let grow past burstFrozen.
 func (b *burster) trimLeaves(cur *Node, d int, spaces *spaceTable, names *nameCache) error {
+	b.trims++
 	if b.watch != nil && (b.drop != 0 || b.quiet != 0 && d == b.spine) {
 		// Inside an element built whole or discarded the client is told
 		// nothing, the watch is: of the leaves completed at the end of
@@ -516,6 +526,21 @@ func (b *burster) trimLeaves(cur *Node, d int, spaces *spaceTable, names *nameCa
 		return nil
 	}
 	if b.leaves && b.quiet == 0 {
+		// The common case first: one leaf, the tree's last record, with no
+		// leaf before it, told with no watch to tell, and on the client's
+		// pause taken back with nothing more to tell (pausedLeafOne).
+		if t, i := cur.tree, cur.v1; i != noIdx && i+1 == t.n && b.watch == nil {
+			if n := t.rec(i); n.isLeaf() && (n.prev == noIdx || !t.rec(n.prev).isLeaf()) {
+				if err := b.c.leaf(n, d+1); err != nil {
+					if err == errPause {
+						b.paused, b.pel, b.pd = pausedLeafOne, n, d
+						b.pcur, b.pspaces, b.pnames = cur, spaces, names
+					}
+					return err
+				}
+				return b.trimRest(cur, spaces, names)
+			}
+		}
 		if err := b.tellLeaves(cur, d); err != nil {
 			if err == errPause {
 				b.prologPause, b.pcur, b.pspaces, b.pnames = false, cur, spaces, names
@@ -564,6 +589,7 @@ func (b *burster) tellLeaves(cur *Node, d int) error {
 func (b *burster) tellFrom(t *Tree, i uint32, d int) error {
 	for ; i < t.n; i++ {
 		n := t.rec(i)
+		b.leafWalks++
 		if b.watch != nil {
 			b.watch(n, d+1, false)
 		}
@@ -668,8 +694,13 @@ func dropLeaf(p *Node) bool {
 // spine element's mark.
 func (b *burster) rewind(t *Tree, spaces *spaceTable, names *nameCache) {
 	m := b.marks.top()
-	t.text.rewind(m.text)
-	if len(t.names) > m.names+burstSlack { // rewindNames' own test, without the call
+	// Each call is made only when it has something to do (their own first
+	// tests, without the calls): after most leaves none has.
+	if s := &t.text; len(s.blocks) > m.text.blocks+1 ||
+		len(s.blocks) == m.text.blocks+1 && int(s.cur) != len(s.blocks) || s.aux != nil {
+		s.rewind(m.text)
+	}
+	if len(t.names) > m.names+burstSlack {
 		rewindNames(t, m.names, names)
 	}
 	if len(t.frames) > m.frames+burstSlack {
@@ -677,7 +708,9 @@ func (b *burster) rewind(t *Tree, spaces *spaceTable, names *nameCache) {
 	}
 	// The whitespace table remembers ranges in the store, some of which may
 	// have just been released.
-	spaces.forget(m.text.blocks)
+	if int(spaces.hi) > m.text.blocks {
+		spaces.forget(m.text.blocks)
+	}
 }
 
 // take delivers the burst el: a large one, or one grounded for now, at
