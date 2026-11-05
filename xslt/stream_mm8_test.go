@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -330,4 +331,75 @@ func TestStreamEvaluatePreprocessor(t *testing.T) {
 			t.Errorf("row %d: the tree's output %s", i, to)
 		}
 	}
+}
+
+// TestStreamMainLeafTopUnderOutput: under TransformOptions.Output,
+// Result.Nodes is nil, so a mode whose rules may keep a leaf at the top of
+// the principal result streams without building its document (A2-6): the
+// tree's bytes, and the allocations of the same identity without a rule
+// for "/", not a second tree's.
+func TestStreamMainLeafTopUnderOutput(t *testing.T) {
+	const ident = `<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`
+	const root = `<xsl:template match="/"><xsl:apply-templates/></xsl:template>`
+	compile := func(decls string) *Stylesheet {
+		tree, err := xdm.ParseString(mainSheet(decls), xdm.ParseOptions{BaseURI: "file:///s/s.xsl"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Compile(tree.Root, CompileOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	s := compile(ident + root)
+	doc := `<?a x?><!--c1--><r><s>t</s><!--in--></r><!--c2--><?b?>`
+	var sb, tb strings.Builder
+	if _, err := s.TransformReader(context.Background(), readOnly{strings.NewReader(doc)}, TransformOptions{Output: &sb}); err != nil {
+		t.Fatal(err)
+	}
+	src, err := xdm.ParseString(doc, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Transform(context.Background(), src.Root, TransformOptions{Output: &tb}); err != nil {
+		t.Fatal(err)
+	}
+	if sb.String() != tb.String() {
+		t.Errorf("stream %q\ntree   %q", sb.String(), tb.String())
+	}
+	big := liveOrders(20000)
+	plain, withRoot := peakLive(t, compile(ident), big), peakLive(t, s, big)
+	t.Logf("peak live %d bytes without the rule for /, %d with it", plain, withRoot)
+	if withRoot > plain+4<<20 { // the document built: about 10 MB
+		t.Errorf("a rule for / took the identity under Output from %d to %d bytes live", plain, withRoot)
+	}
+}
+
+// peakLive is the most heap s's streamed run over doc holds live above the
+// heap before it, sampled with a collection every 64 KB written to Output.
+func peakLive(t *testing.T, s *Stylesheet, doc string) uint64 {
+	var m goruntime.MemStats
+	goruntime.GC()
+	goruntime.ReadMemStats(&m)
+	w := &liveWriter{base: m.HeapAlloc}
+	if _, err := s.TransformReader(context.Background(), strings.NewReader(doc), TransformOptions{Output: w}); err != nil {
+		t.Fatal(err)
+	}
+	return w.peak
+}
+
+type liveWriter struct{ n, base, peak uint64 }
+
+func (w *liveWriter) Write(p []byte) (int, error) {
+	if w.n += uint64(len(p)); w.n >= 64<<10 {
+		w.n = 0
+		var m goruntime.MemStats
+		goruntime.GC()
+		goruntime.ReadMemStats(&m)
+		if m.HeapAlloc > w.base {
+			w.peak = max(w.peak, m.HeapAlloc-w.base)
+		}
+	}
+	return len(p), nil
 }
