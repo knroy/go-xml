@@ -175,3 +175,36 @@ func TestMergeSourceStreamableFalseIsAcceptedWithForEachSource(t *testing.T) {
 		t.Errorf("for-each-item merge: got %s, want %s", got, want)
 	}
 }
+
+// TestMergeSourceURIChecked: an href of for-each-source that is not a URI
+// reference is refused before retrieval with xsl:source-document's FODC0005
+// (validSourceDocumentURI), streamed or not, not as a document that could
+// not be retrieved (A4-F6).
+func TestMergeSourceURIChecked(t *testing.T) {
+	for _, href := range []string{`..\outside\A`, `A%zz`} {
+		for _, streamable := range []string{"yes", "no"} {
+			sheet := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+<xsl:param name="h"/>
+<xsl:template match="/"><out><xsl:merge>
+  <xsl:merge-source for-each-source="$h" select="log/e" streamable="` + streamable + `"><xsl:merge-key select="@t"/></xsl:merge-source>
+  <xsl:merge-action><xsl:copy-of select="current-merge-group()"/></xsl:merge-action>
+</xsl:merge></out></xsl:template></xsl:stylesheet>`
+			doc, err := xdm.ParseString(sheet, xdm.ParseOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			st, err := Compile(doc.Root, CompileOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			src, _ := xdm.ParseString(`<r/>`, xdm.ParseOptions{})
+			_, err = st.Transform(context.Background(), src.Root, TransformOptions{
+				Documents: mergeDocs{"A": `<log><e t="1"/></log>`},
+				Params:    map[string]xdm.Sequence{"h": {xdm.NewString(href)}},
+			})
+			if err == nil || !strings.HasPrefix(err.Error(), "FODC0005") {
+				t.Errorf("%q streamable=%s: %v, want FODC0005", href, streamable, err)
+			}
+		}
+	}
+}

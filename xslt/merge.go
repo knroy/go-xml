@@ -1080,6 +1080,9 @@ func (s *mergeSource) sourceURIStrings(rt *runtime) ([]string, error) {
 // the resolver caches its trees, so validating in place would change what a
 // later fn:doc of the same URI sees.
 func (s *mergeSource) load(rt *runtime, href string) (*xdm.Node, error) {
+	if err := validSourceDocumentURI(href); err != nil {
+		return nil, err // FODC0005, as xsl:source-document reports it
+	}
 	docs := rt.ctx.Env().Docs
 	if docs == nil {
 		return nil, fmt.Errorf(
