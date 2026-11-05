@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,167 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,182 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -703,6 +703,45 @@ F (F8); at 1d789fec, after rounds F and M, `TestStreamFuzzMain`,
 `TestSecondaryOutputFuzz` give 0 differences and `TestStreamFuzz` 2 (seeds
 34820 and 71752, both OUTPUT), fixed by F9 (537885e3): after it `TestStreamFuzz`
 gives 0 differences in 100,000 cases (seed 91).
+
+Audit round A (at 32e31c6f) ran four lanes against the streaming branch, each
+with reproducers through the public API kept outside the tree (`zz_*` probe
+files, not committed). A1, streaming correctness: hand-written differentials
+of streamed against tree runs over the rounds' new shapes, `git bisect run` to
+find each fault's commit, and `TestStreamFuzz` and `TestStreamFuzzMain` at
+100,000 cases on three new seeds (1000001, 2000001, 3000001): 2, 1 and 1
+differences, all one fault (A1-F1), and 0 for `TestStreamFuzzMain`. A2,
+memory: a harness sampling peak heap, live heap and RSS of 42 strategies at
+10 to 500 MB against the tree, every row checked to have streamed and to give
+the tree's output, with goroutines and the heap after return. A3, profiling:
+benchmarks against v2.1.1 (n=10, interleaved) and CPU and allocation profiles
+of five streamed workloads over 111 MB of XMark. A4, security: 26 href forms
+over four instructions with real and symlinked roots, DTD and entity
+expansion, every resource limit with and without `Output`, recursion depth,
+and a 600 s native fuzz of `TransformReader` (6.94M executions, 0 failures).
+It found 4 silent wrong results, 9 P1 and 12 P2 items; fix round R (R1 to R6)
+closed 17, and [known-gaps.md](known-gaps.md) records what is open. After R1
+`TestStreamFuzz` gives 0 differences at all three new seeds, 100,000 cases
+each. The six differential fuzzers at 100,000 cases (seed 91): pending the
+final run at ce880ea0.
+
+Round R added fifteen regression tests:
+`TestStreamTailFocusPosition`, `TestStreamIterateLast`
+(`xslt/streamtailfocus_test.go`; A1-F1, A1-F4); rows in `l7Rows`
+(`xslt/streaml7_test.go`; A1-F2, A1-F3); `TestStreamCopyAccumulatorValues`
+(`xslt/streamcopyaccum_test.go`) and `TestCopyOriginReleasedWithCopy`
+(`xslt/copyorigin_test.go`; A2-1, A2-2); `TestLiveCarriedTreeMeasuredOnce`
+(`xslt/livebudget_test.go`), `TestCancelledBuiltInRulesAndStreams`
+(`xslt/transform_test.go`) and `TestCancelledStreamIsNotRerun`
+(`xslt/streamexec_test.go`; A4-F1, A4-F2, A2-5, A2-4);
+`TestStreamForkGroupByMaxNodes` (`xslt/streamcopy_l3_test.go`),
+`TestStreamMainLeafTopUnderOutput` (`xslt/stream_mm8_test.go`),
+`TestStreamInlinedRecursionLimit` (`xslt/streamfn_inline_test.go`),
+`TestMergeSourceURIChecked` (`xslt/mergestreamable_test.go`) and
+`TestFileResolverOutsideErrorNamesOnlyTheHref` (`xslt/resolver_test.go`;
+A2-3, A2-6, A4-F5, A4-F6, A4-F3); `TestCrossModulesWalkedOnce`
+(`xslt/streamxmod_memo_test.go`), `TestRewindKeepsWhatWasRead` and
+`TestDrainStoresTextOnce` (`internal/xdmstream/rewind_test.go`; A3-1, A3-2).
 
 `TestStreamFuzzMain` applies each case of the modes grammar to its document
 in an initial mode through `TransformReader` and through `xdm.Parse` +

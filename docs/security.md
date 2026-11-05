@@ -1611,8 +1611,9 @@ never asked for and a refusal that never happened.
 
 Each still performs the earlier `EvalSymlinks` and prefix comparison, and that
 is deliberate: it is the **diagnosis**, not the enforcement. It decides which
-root a path belongs to, produces the error that names the permitted
-directories, and — in `xsd` — distinguishes a location the configuration
+root a path belongs to, produces the refusal (in `xslt` since 2f825daf
+naming only the href as written, so it does not reveal whether a file outside
+the roots exists, and matching `errors.Is(err, fs.ErrPermission)`), and — in `xsd` — distinguishes a location the configuration
 refused from one that was simply not there, which §4.2.1 requires, since an
 unresolvable `xs:include` may be dropped but a refused one must surface. The
 final path component is deliberately *not* pre-resolved. Resolving it would

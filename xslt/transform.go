@@ -455,34 +455,37 @@ const (
 // parse got there: the rest of the document is read first.
 //
 // The document is streamed (section 6.6.4 of XSLT 3.0: an initial mode
-// declared streamable, with a streamed initial match selection) when every
-// one of these holds, which is decided when the stylesheet compiles, for each
-// of its modes, except for the invocation itself:
+// declared streamable, with a streamed initial match selection) when the
+// plan made for each mode as the stylesheet compiles (planMainStreams)
+// takes the initial mode, and the invocation allows it. The invocation must
+// apply templates to the document in that mode (no InitialTemplate,
+// InitialFunction or InitialMatchSelection), and SourceValidation must be
+// one the stream can make. The plan refuses a mode:
 //
-//   - the transform starts by applying templates to the document, in the
-//     initial mode (no InitialTemplate, InitialFunction or
-//     InitialMatchSelection), and that mode is declared streamable="yes";
-//   - the rules that mode, and every mode it reaches, can apply to the
-//     nodes of the document are guaranteed streamable (section 19), and each
-//     is one this engine runs on a stream (see docs/known-gaps.md for what
-//     it does not yet: grouping, accumulators, xsl:fork, xsl:try, streamable
-//     functions, xsl:result-document);
-//   - nothing reads the document outside those rules: no
-//     xsl:global-context-item, no global variable or parameter whose value
-//     depends on the context item (section 5.3.3 makes the global context
-//     item a grounded one), no accumulator, no input-type-annotations="strip";
-//   - the result keeps no node of the document itself: no built-in rule
-//     copies a node of it to the top of the principal result, where
-//     Result.Nodes would hold the document's own node, or to the top of an
-//     xsl:result-document's body (SecondaryResult.Nodes), where no
-//     xsl:sequence is either;
-//   - the stylesheet is a single module, as for a streamed
-//     xsl:source-document.
+//   - for an xsl:global-context-item with a type, or
+//     input-type-annotations="strip" (mainRefusal); a global variable or
+//     parameter is not refused, because the global context item is absent
+//     for a streamable initial mode (section 2.3.2), streamed or not, and
+//     reading it raises XPDY0002;
+//   - for an accumulator applicable in the mode that is not streamable, or
+//     whose rules the stream cannot compute as it reads (mainAccumRefusal;
+//     see docs/known-gaps.md for what that is);
+//   - unless every rule the mode, and every mode it reaches, can apply to the
+//     document's nodes is guaranteed streamable (section 19), verified across
+//     the stylesheet's modules, and planned for the stream; nothing in it
+//     may reach a node of the stream another way (streamMayAlias), or
+//     need the tree a streamed xsl:source-document falls back to: a
+//     select at the document node that may fall back to its tree, or a node
+//     of the document at the top of the principal result or of an
+//     xsl:result-document's body, where Result.Nodes or
+//     SecondaryResult.Nodes would hold the document's own node (linkMain).
 //
 // Otherwise the document is parsed into a tree and Transform runs on it.
 // Streaming, the memory a transform takes is that of its result and of what
-// its rules hold, never more than Transform's on the tree; its CPU is of the
-// same order (see docs/known-gaps.md).
+// its rules hold, below Transform's on the tree but for the exceptions
+// docs/known-gaps.md measures (a very deep document, a group-by in
+// xsl:fork). Its CPU is 1.3 to 2 times that of Parse + Transform, measured
+// over a 111 MB document (docs/known-gaps.md).
 //
 // r is read to its end, and not closed. The base URI and document URI of
 // the document are those of SourceParseOptions (BaseURI, DocumentURI), as

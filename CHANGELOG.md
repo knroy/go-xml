@@ -30,6 +30,24 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| `(P/position()) ! R` streamed position 1 for every item (the tail ran on each match's copy) | A path tail reading `position()` or `last()` of P's focus is refused for streaming. | [`1f0c721`][1f0c721] |
+| An `xsl:iterate` over copies reading `last()` failed (XPDY0002) or re-ran on the tree | It is sized as a for-each over `copy-of(P)` is, or refused when the plan is made. | [`f4a7e22`][f4a7e22] |
+| Copies of a streamed match ordered after a document the body loaded first (`union`, `<<`, `>>`) | The stream's tree id is fixed when its cursor opens. | [`0824c9c`][0824c9c] |
+| A path's dedupe, `outermost()` over a stream node or `doc()` of its URI streamed wrong counts (since v2.2.0, [`3f185fe`][3f185fe]) | The alias guard counts them as uses. | [`a31a4fe`][a31a4fe] |
+| Accumulators read on `copy-of(.)` of a streamed match or document answered with the copy's own values | The copy records its original's values and answers with them (§18.2.10). | [`9155044`][9155044] |
+| With an accumulator declared, every streamed copy and its original were kept to the end: 1.4–1.6× the tree | A copy's record lives as long as the copy; loops hand temporaries back. | [`19b9185`][19b9185] |
+| A streamed `xsl:iterate` carrying a large tree re-walked it after every item: 39 s against the tree's 0.1 s at 0.9 MB | A carried tree is measured once, an unchanged value not at all, after the cheap checks. | [`18670ae`][18670ae] |
+| Streamed reads (a string value, an idle split loop, the drain) ignored a cancelled context, so an endless stream ran on | The cursor fails its next read with the context's error. | [`68b9320`][68b9320] |
+| Cancelling a streamed `xsl:source-document` or `xsl:merge` re-ran it on the tree, building the whole document first | A cancelled stream returns the context's error, with no re-run. | [`383ed3d`][383ed3d] |
+| A `group-by` in `xsl:fork` under `TransformReader` charged its event copies to `MaxNodes`, failing where the tree succeeds | They are built outside the result budget. | [`368b6c0`][368b6c0] |
+| Under `Output`, an identity with a rule for `/` built the whole document (28 MB against 1.5 MB) | With `Result.Nodes` unused a kept leaf's copy serves, and nothing is built. | [`0201119`][0201119] |
+| Streamed recursion through an inlined function failed as template recursion, where the tree raises XPDY0001 | The call is bounded by the XPath call depth, as the tree's is. | [`b2f4cb9`][b2f4cb9] |
+| Compiling a multi-module stylesheet walked every module once per module (DocBook +37% time, +102% allocations) | The cross-module walk is memoised per module set. | [`9ac0f40`][9ac0f40] |
+| A stream parse started a 64-byte text block and rebuilt its whitespace table after every element | Both carry over rewinds: a drain 9% faster, 3.3M allocations down to 2.9k. | [`edd4923`][edd4923] |
+| Tree mode too: built-in template rules ignored a cancelled context, so an identity ran to completion | They check it per node and return the context's error. | [`68b9320`][68b9320] |
+| Tree mode too: a `FileResolver` refusal named the resolved path and roots, revealing whether outside files exist | It names the href as written, and is `fs.ErrPermission`. | [`2f825da`][2f825da] |
+| Tree mode too: an `xsl:merge` `for-each-source` href that is not a URI (a backslash, a bad `%`-escape) raised FODC0002 | It raises FODC0005, as `xsl:source-document` does. | [`acc5556`][acc5556] |
+| Tree mode too: with an accumulator declared, every `copy-of()`/`snapshot()` copy was kept to the transform's end | A dropped copy is freed; output unchanged. | [`19b9185`][19b9185] |
 | `xdm.ParseBursts` built an element off its path whole before dropping it | It now drops it as it parses, holding only the open path. | [`d1a98a8`][d1a98a8] |
 | Streamed loop errors could come in a different order from tree mode | The burst loops are gone; the core re-runs on the tree after any error. | [`d1a98a8`][d1a98a8] |
 | A consuming attribute value template or an `xsl:sequence` of nodes sent a streamed container to the tree | One consuming value-template part per element, and `xsl:sequence` in element content, stream as copy-of does. | [`fe1eb18`][fe1eb18] |
@@ -2203,6 +2221,22 @@ here so every entry in this file sits under a release.
 [48b1a38]: https://github.com/knroy/go-xml/commit/48b1a38
 [3157566]: https://github.com/knroy/go-xml/commit/3157566
 [4944511]: https://github.com/knroy/go-xml/commit/4944511
+[1f0c721]: https://github.com/knroy/go-xml/commit/1f0c721
+[f4a7e22]: https://github.com/knroy/go-xml/commit/f4a7e22
+[0824c9c]: https://github.com/knroy/go-xml/commit/0824c9c
+[a31a4fe]: https://github.com/knroy/go-xml/commit/a31a4fe
+[9155044]: https://github.com/knroy/go-xml/commit/9155044
+[19b9185]: https://github.com/knroy/go-xml/commit/19b9185
+[18670ae]: https://github.com/knroy/go-xml/commit/18670ae
+[68b9320]: https://github.com/knroy/go-xml/commit/68b9320
+[383ed3d]: https://github.com/knroy/go-xml/commit/383ed3d
+[368b6c0]: https://github.com/knroy/go-xml/commit/368b6c0
+[0201119]: https://github.com/knroy/go-xml/commit/0201119
+[b2f4cb9]: https://github.com/knroy/go-xml/commit/b2f4cb9
+[9ac0f40]: https://github.com/knroy/go-xml/commit/9ac0f40
+[edd4923]: https://github.com/knroy/go-xml/commit/edd4923
+[2f825da]: https://github.com/knroy/go-xml/commit/2f825da
+[acc5556]: https://github.com/knroy/go-xml/commit/acc5556
 [df9677e]: https://github.com/knroy/go-xml/commit/df9677e
 [fd31bb3]: https://github.com/knroy/go-xml/commit/fd31bb3
 [382983c]: https://github.com/knroy/go-xml/commit/382983c
