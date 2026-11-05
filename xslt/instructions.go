@@ -737,14 +737,18 @@ func undeclareInherited(el *xdm.Node) {
 // scope built per element: a literal result element usually needs nothing, and
 // the map cost an allocation per element for it. Read live, a binding added
 // here is seen by the next test without being recorded twice.
-func fixupNamespaces(el *xdm.Node) {
+func fixupNamespaces(el *xdm.Node) { fixupNamespacesIn(nil, el) }
+
+// fixupNamespacesIn is fixupNamespaces, its lookups reading the frames from
+// f (nsscope.go): el's parent's body is running, el's own is done.
+func fixupNamespacesIn(f *nsFrame, el *xdm.Node) {
 	need := func(prefix, uri string) {
-		if uri == "" || uri == xdm.NSXML || scopeURI(el, prefix) == uri {
+		if uri == "" || uri == xdm.NSXML || scopeIn(f, el, prefix) == uri {
 			return
 		}
 		el.AddNamespace(prefix, uri)
 	}
-	if el.Name().URI == "" && el.Name().Prefix == "" && scopeURI(el, "") != "" {
+	if el.Name().URI == "" && el.Name().Prefix == "" && scopeIn(f, el, "") != "" {
 		// An unprefixed name in no namespace UNDECLARES the default
 		// namespace when one is in scope: without the undeclaration the name
 		// would read as being in whatever the parent declares. This is the
@@ -845,10 +849,30 @@ func parentSupplies(rt *runtime, el *xdm.Node, prefix, uri string) bool {
 }
 
 // suppliedAt is parentSupplies for a child about to be attached to parent.
+//
+// The walk up reads the frames of the elements whose bodies are running
+// (nsscope.go), so a child finds its parent's answer.
 func suppliedAt(rt *runtime, parent *xdm.Node, prefix, uri string) bool {
-	for cur := parent; cur != nil && cur.Kind() == xdm.KindElement; cur = cur.Parent() {
-		if fixupMayBind(cur, prefix) {
-			return false
+	if rt.ns == nil {
+		for cur := parent; cur != nil && cur.Kind() == xdm.KindElement; cur = cur.Parent() {
+			if fixupMayBindIn(nil, cur, prefix) {
+				return false
+			}
+			found, last := false, ""
+			for p, u := range cur.DeclaredNamespaces() {
+				if p == prefix {
+					found, last = true, u
+				}
+			}
+			if found {
+				return last == uri && !rt.blocking[cur]
+			}
+		}
+		return false
+	}
+	r := lookUp(rt.ns, parent, lookSupply, prefix, true, func(cur *xdm.Node, f *nsFrame) (nsLook, bool) {
+		if fixupMayBindIn(f, cur, prefix) {
+			return nsLook{fix: true}, true
 		}
 		found, last := false, ""
 		for p, u := range cur.DeclaredNamespaces() {
@@ -857,28 +881,35 @@ func suppliedAt(rt *runtime, parent *xdm.Node, prefix, uri string) bool {
 			}
 		}
 		if found {
-			return last == uri && !rt.blocking[cur]
+			return nsLook{found: true, uri: last, blocked: rt.blocking[cur]}, true
 		}
-	}
-	return false
+		return nsLook{}, false
+	})
+	return r.found && r.uri == uri && !r.blocked
 }
 
-// fixupMayBind reports whether fixupNamespaces, run on el now, would add a
-// namespace node for prefix.
-func fixupMayBind(el *xdm.Node, prefix string) bool {
+// fixupMayBindIn reports whether fixupNamespaces, run on el now, would add a
+// namespace node for prefix; scope lookups read the frames from f.
+func fixupMayBindIn(f *nsFrame, el *xdm.Node, prefix string) bool {
 	if el.Name().Prefix != prefix {
 		return false
 	}
 	if el.Name().URI == "" {
-		return prefix == "" && scopeURI(el, "") != ""
+		return prefix == "" && scopeIn(f, el, "") != ""
 	}
-	return el.Name().URI != xdm.NSXML && scopeURI(el, prefix) != el.Name().URI
+	return el.Name().URI != xdm.NSXML && scopeIn(f, el, prefix) != el.Name().URI
 }
 
 // execBlocking runs the body of a new element, applying
 // inherit-namespaces="no" to it afterwards when noInherit is set. The element
 // is recorded in rt.blocking while its body runs; see parentSupplies.
-func execBlocking(rt *runtime, noInherit bool, body []Instruction, sub *outputBuilder) error {
+//
+// While it runs, a deep result has a frame for the element (nsscope.go):
+// src, for a shallow copy, is its source element, with its bindings shared
+// or local (srcBindings).
+func execBlocking(rt *runtime, noInherit bool, body []Instruction, sub *outputBuilder,
+	src *xdm.Node, shared, local []nsBinding) error {
+	defer leaveNS(rt, enterNS(rt, sub.Open(), src, shared, local))
 	if !noInherit {
 		return execSequence(body, rt, sub)
 	}
@@ -988,18 +1019,19 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// same path any other attribute takes.
 			sub.Open().SetBaseURI(node.BaseURI())
 		}
-		if !i.noNamespaces {
-			// Section 11.9.1 copies "the namespace nodes of the element",
-			// which is every binding in scope on it rather than only those it
-			// declares itself. A copied element whose prefix was declared on
-			// an ancestor otherwise lost the declaration it needs.
-			copyNamespacesTo(rt, sub, node)
-		}
+		// Section 11.9.1 copies "the namespace nodes of the element",
+		// which is every binding in scope on it rather than only those it
+		// declares itself. A copied element whose prefix was declared on
+		// an ancestor otherwise lost the declaration it needs. They are
+		// worked out from the parent's when the copy running is the
+		// parent's (nsscope.go).
+		var buf [32]nsBinding
+		shared, local := copyShallowScope(rt, sub, node, !i.noNamespaces, buf[:0])
 		if err := applyAttributeSets(rt, i.attrSets, sub); err != nil {
 			return err
 		}
 		holdOpen(sub, i.noInherit, i.validation)
-		if err := execBlocking(rt, i.noInherit, i.body, sub); err != nil {
+		if err := execBlocking(rt, i.noInherit, i.body, sub, node, shared, local); err != nil {
 			return err
 		}
 		if i.noNamespaces {
@@ -1015,7 +1047,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// xsl:element already repairs its result this way; xsl:copy did
 			// not, because with copy-namespaces="yes" the copied nodes cover
 			// every name and there was nothing left to repair.
-			fixupNamespaces(sub.Open())
+			fixupNamespacesIn(rt.ns, sub.Open())
 		}
 		// The copy is assessed once it is complete, since validity is a
 		// property of the whole element and its content.
@@ -1295,7 +1327,7 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 	}
 	holdOpen(sub, i.noInherit, i.validation)
-	if err := execBlocking(rt, i.noInherit, i.body, sub); err != nil {
+	if err := execBlocking(rt, i.noInherit, i.body, sub, nil, nil, nil); err != nil {
 		return err
 	}
 	// §5.8.3: an element in a namespace must carry a namespace node for it.
@@ -1304,7 +1336,7 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// then cannot resolve the prefix in an xsi:type value against the tree.
 	// The serialiser wrote the declaration anyway, so nothing about the
 	// output changed; only the namespace axis was short.
-	fixupNamespaces(sub.Open())
+	fixupNamespacesIn(rt.ns, sub.Open())
 	// Assessed once the element is complete, since validity is a property of
 	// its content as well as its name.
 	return i.validation.assessOpen(rt, sub)
@@ -1363,7 +1395,7 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return err
 	}
 	holdOpen(sub, i.noInherit, i.validation)
-	if err := execBlocking(rt, i.noInherit, i.body, sub); err != nil {
+	if err := execBlocking(rt, i.noInherit, i.body, sub, nil, nil, nil); err != nil {
 		return err
 	}
 	// The element is complete only now, so validity is assessed here rather

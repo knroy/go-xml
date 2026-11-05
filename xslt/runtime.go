@@ -30,6 +30,10 @@ type runtime struct {
 	// bursts; see streamburst.go.
 	bursts *burstFeed
 
+	// depth bounds apply-templates recursion, which the spec does not bound
+	// and which a stylesheet with a cycle would otherwise run forever.
+	depth int
+
 	// absent records which groups of context components clearMergeContext,
 	// withoutGroupingScope, clearRegexGroups and withOutputURI have already
 	// bound to absent in ctx (or that nothing has bound yet), so that the clears every template and function call runs can
@@ -38,10 +42,6 @@ type runtime struct {
 	// variables is rebound, and the zero value claims nothing: code that
 	// gives a runtime a context not derived from its own must zero it.
 	absent uint8
-
-	// depth bounds apply-templates recursion, which the spec does not bound
-	// and which a stylesheet with a cycle would otherwise run forever.
-	depth int
 
 	// temporary marks that the runtime is building a temporary tree — the
 	// content of a variable, a function's body, or a grouping key — rather
@@ -69,6 +69,10 @@ type runtime struct {
 	// focus and variable change makes does not carry it; nil is the zero
 	// selection (see selected).
 	sel *selection
+
+	// ns is the innermost result element whose body is running in a deep
+	// result, with what namespace lookups found for it (nsscope.go).
+	ns *nsFrame
 }
 
 // transformState holds the fields of a runtime that are set once, when the

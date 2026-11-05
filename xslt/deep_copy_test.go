@@ -136,3 +136,114 @@ func TestDeepStreamHoldsNoMoreThanTree(t *testing.T) {
 		}
 	}
 }
+
+// deepNSDoc is d nested elements, the outermost declaring a default
+// namespace and two prefixes when ns; flatNSDoc is as many nodes, shallow.
+func deepNSDoc(d int, ns bool) string {
+	if !ns {
+		return deepDoc(d)
+	}
+	return `<a xmlns="urn:d" xmlns:p="urn:p" xmlns:q="urn:q">` + strings.Repeat("<a>", d-1) + "x" + strings.Repeat("</a>", d)
+}
+
+func flatNSDoc(d int, ns bool) string {
+	if !ns {
+		return flatDoc(d)
+	}
+	return `<r xmlns="urn:d" xmlns:p="urn:p" xmlns:q="urn:q">` + strings.Repeat("<a>x</a>", d-1) + "</r>"
+}
+
+// TestDeepShallowCopyIsLinear: xsl:copy and the shallow-copy built-in rule
+// asked each copied element for its in-scope namespaces, a walk up its
+// ancestors, and asked of each binding whether the result parent supplies
+// it, a walk up the result whose every step could walk up again for the
+// default namespace: an identity transform 50 000 deep took 7 s, and 5 000
+// deep under a default namespace 99 s. Each element now reads its parent's
+// answers (nsscope.go). A deep copy must cost about what a flat one of as
+// many nodes does, in both modes.
+func TestDeepShallowCopyIsLinear(t *testing.T) {
+	sheets := map[string]string{
+		"built-in": `<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`,
+		"xsl:copy": `<xsl:mode streamable="yes"/><xsl:template match="*"><xsl:copy><xsl:apply-templates/></xsl:copy></xsl:template>`,
+	}
+	for name, decls := range sheets {
+		sheet := outSheet(t, decls, ``)
+		for _, c := range []struct {
+			d  int
+			ns bool
+		}{{50000, false}, {3000, true}} {
+			var opts TransformOptions
+			opts.MaxDepth = 2 * c.d
+			opts.SourceParseOptions.MaxDepth = 2 * c.d
+			opts.MaxNodes, opts.MaxBytes = -1, -1
+			run := func(doc string, main bool) (string, time.Duration) {
+				t0 := time.Now()
+				out, err := outRun(sheet, doc, main, false, opts)
+				if err != nil {
+					t.Fatalf("%s main %v: %v", name, main, err)
+				}
+				return out, time.Since(t0)
+			}
+			var outs [2]string
+			for i, main := range []bool{false, true} {
+				_, flat := run(flatNSDoc(c.d, c.ns), main)
+				var deep time.Duration
+				outs[i], deep = run(deepNSDoc(c.d, c.ns), main)
+				if deep > 20*flat && deep > time.Second {
+					t.Errorf("%s main %v ns %v: a copy %d deep took %v, a flat one of as many nodes %v", name, main, c.ns, c.d, deep, flat)
+				}
+			}
+			if outs[0] != outs[1] {
+				t.Errorf("%s ns %v: the streamed copy differs from the tree's", name, c.ns)
+			}
+		}
+	}
+}
+
+// TestShallowCopyNamespaceRows: what the copies' namespaces are, which the
+// frames of nsscope.go must leave as they were: redeclared prefixes, the
+// default namespace undeclared and redeclared, copy-namespaces="no",
+// inherit-namespaces="no", and literal result elements rebinding a prefix
+// between the copies. The rows were taken before the frames were added;
+// they must hold with a frame for every element as with none.
+func TestShallowCopyNamespaceRows(t *testing.T) {
+	defer func(d int) { nsFrameDepth = d }(nsFrameDepth)
+	for _, nsFrameDepth = range []int{0, 1000} {
+		shallowCopyNamespaceRows(t)
+	}
+}
+
+func shallowCopyNamespaceRows(t *testing.T) {
+	const doc = `<a xmlns="urn:d" xmlns:p="urn:p"><b xmlns:p="urn:p2"><p:c><d xmlns=""><e xmlns="urn:e"><p:f xmlns:q="urn:q"><g/></p:f></e></d></p:c><h/></b><p:i/></a>`
+	const decl = `<?xml version="1.0" encoding="UTF-8"?>`
+	rows := []struct{ body, want string }{
+		{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`, "<a xmlns=\"urn:d\" xmlns:p=\"urn:p\"><b xmlns:p=\"urn:p2\"><p:c><d xmlns=\"\"><e xmlns=\"urn:e\"><p:f xmlns:q=\"urn:q\"><g/></p:f></e></d></p:c><h/></b><p:i/></a>"},
+		{`<xsl:mode streamable="yes"/><xsl:template match="*"><xsl:copy><xsl:apply-templates/></xsl:copy></xsl:template>`, "<a xmlns=\"urn:d\" xmlns:p=\"urn:p\"><b xmlns:p=\"urn:p2\"><p:c><d xmlns=\"\"><e xmlns=\"urn:e\"><p:f xmlns:q=\"urn:q\"><g/></p:f></e></d></p:c><h/></b><p:i/></a>"},
+		{`<xsl:mode streamable="yes"/><xsl:template match="*"><xsl:copy copy-namespaces="no"><xsl:apply-templates/></xsl:copy></xsl:template>`, "<a xmlns=\"urn:d\"><b><p:c xmlns:p=\"urn:p2\"><d xmlns=\"\"><e xmlns=\"urn:e\"><p:f><g/></p:f></e></d></p:c><h/></b><p:i xmlns:p=\"urn:p\"/></a>"},
+		{`<xsl:mode streamable="yes"/><xsl:template match="*"><xsl:copy inherit-namespaces="no"><xsl:apply-templates/></xsl:copy></xsl:template>`, "<a xmlns=\"urn:d\" xmlns:p=\"urn:p\"><b xmlns:p=\"urn:p2\"><p:c><d xmlns=\"\"><e xmlns=\"urn:e\"><p:f xmlns:q=\"urn:q\"><g/></p:f></e></d></p:c><h/></b><p:i/></a>"},
+		{`<xsl:template match="*"><xsl:copy><w xmlns:p="urn:w"><xsl:apply-templates/></w></xsl:copy></xsl:template>`, "<a xmlns=\"urn:d\" xmlns:p=\"urn:p\"><w xmlns:p=\"urn:w\" xmlns=\"\"><b xmlns=\"urn:d\" xmlns:p=\"urn:p2\"><w xmlns:p=\"urn:w\" xmlns=\"\"><p:c xmlns=\"urn:d\" xmlns:p=\"urn:p2\"><w xmlns:p=\"urn:w\" xmlns=\"\"><d xmlns:p=\"urn:p2\"><w xmlns:p=\"urn:w\"><e xmlns=\"urn:e\" xmlns:p=\"urn:p2\"><w xmlns:p=\"urn:w\" xmlns=\"\"><p:f xmlns=\"urn:e\" xmlns:p=\"urn:p2\" xmlns:q=\"urn:q\"><w xmlns:p=\"urn:w\" xmlns=\"\"><g xmlns=\"urn:e\" xmlns:p=\"urn:p2\"><w xmlns:p=\"urn:w\" xmlns=\"\"/></g></w></p:f></w></e></w></d></w></p:c><h xmlns=\"urn:d\" xmlns:p=\"urn:p2\"><w xmlns:p=\"urn:w\" xmlns=\"\"/></h></w></b><p:i xmlns=\"urn:d\" xmlns:p=\"urn:p\"><w xmlns:p=\"urn:w\" xmlns=\"\"/></p:i></w></a>"},
+		{`<xsl:template match="*"><xsl:copy copy-namespaces="no"><p:w xmlns:p="urn:w"><xsl:apply-templates/></p:w></xsl:copy></xsl:template>`, "<a xmlns=\"urn:d\"><p:w xmlns:p=\"urn:w\"><b><p:w><p:c xmlns:p=\"urn:p2\"><p:w xmlns:p=\"urn:w\"><d xmlns=\"\"><p:w><e xmlns=\"urn:e\"><p:w><p:f xmlns:p=\"urn:p2\"><p:w xmlns:p=\"urn:w\"><g><p:w/></g></p:w></p:f></p:w></e></p:w></d></p:w></p:c><h><p:w/></h></p:w></b><p:i xmlns:p=\"urn:p\"><p:w xmlns:p=\"urn:w\"/></p:i></p:w></a>"},
+	}
+	for _, r := range rows {
+		sheet := outSheet(t, ``, r.body)
+		for _, main := range []bool{false, true} {
+			got, err := outRun(sheet, doc, main, false, TransformOptions{})
+			if err != nil || got != decl+r.want {
+				t.Errorf("%s (main %v, frames from %d):\n got %s %v\nwant %s", r.body, main, nsFrameDepth, got, err, decl+r.want)
+			}
+		}
+	}
+	// The namespace axis of the copies, in a temporary tree.
+	axis := []struct{ attr, want string }{
+		{``, "a:=urn:d,p=urn:p,;b:=urn:d,p=urn:p2,;p:c:=urn:d,p=urn:p2,;d:=urn:d,p=urn:p2,;e:=urn:e,p=urn:p2,;p:f:=urn:e,p=urn:p2,q=urn:q,;g:=urn:e,p=urn:p2,q=urn:q,;h:=urn:d,p=urn:p2,;p:i:=urn:d,p=urn:p,;"},
+		{` copy-namespaces="no"`, "a:=urn:d,;b:=urn:d,;p:c:=urn:d,p=urn:p2,;d:=urn:d,p=urn:p2,;e:=urn:e,p=urn:p2,;p:f:=urn:e,p=urn:p2,;g:=urn:e,p=urn:p2,;h:=urn:d,;p:i:=urn:d,p=urn:p,;"},
+		{` inherit-namespaces="no"`, "a:=urn:d,p=urn:p,;b:=urn:d,p=urn:p2,;p:c:=urn:d,p=urn:p2,;d:p=urn:p2,;e:=urn:e,p=urn:p2,;p:f:=urn:e,p=urn:p2,q=urn:q,;g:=urn:e,p=urn:p2,q=urn:q,;h:=urn:d,p=urn:p2,;p:i:=urn:d,p=urn:p,;"},
+	}
+	for _, r := range axis {
+		sheet := outSheet(t, `<xsl:output method="text"/>`, `<xsl:template match="*" mode="c"><xsl:copy`+r.attr+`><xsl:apply-templates mode="c"/></xsl:copy></xsl:template>
+<xsl:template match="/"><xsl:variable name="v"><xsl:apply-templates mode="c"/></xsl:variable><xsl:for-each select="$v//*"><xsl:variable name="e" select="."/><xsl:value-of select="name()"/>:<xsl:for-each select="sort(in-scope-prefixes(.)[. ne 'xml'])"><xsl:value-of select=".||'='||namespace-uri-for-prefix(., $e)"/>,</xsl:for-each>;</xsl:for-each></xsl:template>`)
+		if got, err := outRun(sheet, doc, false, false, TransformOptions{}); err != nil || got != r.want {
+			t.Errorf("axis%s (frames from %d):\n got %s %v\nwant %s", r.attr, nsFrameDepth, got, err, r.want)
+		}
+	}
+}
