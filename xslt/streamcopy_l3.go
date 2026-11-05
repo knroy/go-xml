@@ -312,9 +312,8 @@ func (run *streamRun) docCopyEval(rt *runtime, op *streamOp) (xdm.Sequence, erro
 		return nil, errStreamPlan
 	}
 	run.used = true
-	var doc *xdm.Node
-	var err error
 	octx := rt.ctx.WithFocus(xdm.NewTree().Root, 1, 1)
+	build := func() (*xdm.Node, error) { return buildDoc(rt, run.c) }
 	if run.d > 0 {
 		// copy-of(.) of the context element (streamcopy_l3apply.go).
 		v, verr := run.c.View()
@@ -322,9 +321,17 @@ func (run *streamRun) docCopyEval(rt *runtime, op *streamOp) (xdm.Sequence, erro
 			return nil, verr
 		}
 		octx = rt.ctx.WithFocus(v, 1, 1)
-		doc, err = buildElem(rt, run)
-	} else {
-		doc, err = buildDoc(rt, run.c)
+		build = func() (*xdm.Node, error) { return buildElem(rt, run) }
+	}
+	// The copy answers accumulators with the original's values
+	// (streamaccum_ground_l4.go); with none recorded it would answer with
+	// its own tree's.
+	doc, ok, err := recordCopy(rt, run.c, run.d, build)
+	if !ok {
+		if len(rt.sheet.accumulators) > 0 {
+			return nil, errStreamPlan
+		}
+		doc, err = build()
 	}
 	if err != nil {
 		return nil, err
