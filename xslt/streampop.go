@@ -112,7 +112,7 @@ func (pb *popBuilder) part(x xpath.Expr) *xpath.Compiled {
 
 // motionless reports whether x reads of the loop's focus only what it has.
 func (pb *popBuilder) motionless(x xpath.Expr) bool {
-	return (viewCheck{key: pb.key}).safe(x, pb.focus, true)
+	return !(pb.group && readsGroup(x)) && (viewCheck{key: pb.key}).safe(x, pb.focus, true) // streamgroup_copies_mm7.go
 }
 
 // popFor normalises the select of a loop op whose split is not a bare path,
@@ -134,6 +134,9 @@ func (c *compiler) popFor(op *streamOp, ns xpath.NamespaceResolver) (*streamPop,
 	}
 	if s := op.split; s.valuesOnly() || sheetCopiesPop(s, op.el) { // streamfn_copies.go
 		return &streamPop{values: true, off: true}, s, ""
+	}
+	if s := op.split; groundTailPop(s, op.el) { // streamfn_instrburst_mm7.go
+		return &streamPop{at: 0, parts: []*xpath.Compiled{nil}, off: true}, s, ""
 	}
 	return nil, nil, pb.why
 }
@@ -296,6 +299,9 @@ func (pb *popBuilder) stream(p *streamPop, e xpath.Expr) bool {
 		return pb.snapshot(p, x)
 	}
 	if x, ok := copyOfTail(e); ok { // streamsplit_l6.go
+		return pb.stream(p, x)
+	}
+	if x, ok := copyOfMap(e); ok { // streamgroup_copies_mm7.go
 		return pb.stream(p, x)
 	}
 	if x := rangeWindow(e); x != nil { // streampop_snapshot.go

@@ -158,6 +158,9 @@ type streamOp struct {
 	// copies says a copy-of hands each item over as it is read (its split
 	// would collect grounded copies): copyOfInstr copies it and lets go.
 	copies bool
+	// sized says a loop over fresh copies reads last(): its items are
+	// collected first (streamgroup_copies_mm7.go).
+	sized bool
 	// For a loop: inner are the consuming instructions of the body, kinds
 	// its sNodes, planned whether every one is one the core runs, and
 	// grounded whether the body may run on a grounded copy instead.
@@ -1162,7 +1165,7 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 		if !op.planned || op.pop != nil && op.pop.off {
 			// Unplanned, or a population's items handed one at a time off
 			// the cursor: either way no context size (streamsplit_l6.go).
-			if why := groundLastWhy(op.el); why != "" { // streamsplit_l6.go
+			if why := groundLastWhy(op.el); why != "" && !sizedLoop(op) { // streamsplit_l6.go, streamgroup_copies_mm7.go
 				return why
 			}
 		}
@@ -1320,12 +1323,15 @@ func (s *streamSplit) memory(minD int) string {
 	switch c := s.class(); {
 	case c == "nodes" && s.fresh:
 		// The tail's own nodes, not copies of the stream (streamshapes.go).
+	case c == "nodes" && s.group && s.itemsOnlyCopied():
+		// Copied whole (copy-of(current-group())): the tree holds those
+		// copies too, beside its document (streamgroup_copies_mm7.go).
 	case (c == "nodes" || c == "subtree") && s.group:
 		// A group's members may be all of the document element's children.
 		return "collects grounded copies (" + c + ") of the current group"
 	case c == "nodes" && minD == 0 && !s.group:
 		s.holdAt() // streamhold.go: held, capped at the tree's records
-	case (c == "nodes" || c == "subtree") && minD < 2:
+	case (c == "nodes" || c == "subtree") && minD < 2 && !(s.dynCopies && s.itemsOnlyCopied()): // streamdyncall_mm7.go
 		return "collects grounded copies (" + c + ") of the document element"
 	case (s.red == "min" || s.red == "max") && (minD > 0 || s.group) && !s.oneTake(): // streamsplit_onetake.go
 		return s.red + "() below the document node cannot fall back to the tree"
@@ -1446,6 +1452,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 	}
 	if !op.loop {
 		return &burstFeed{instr: instr, eval: func(rt *runtime) (xdm.Sequence, error) { return run.evalOp(rt, op) }}
+	}
+	if op.pop != nil && op.sized {
+		return run.sizedFeed(run.popFeed(instr, rt, op, g)) // streamgroup_copies_mm7.go
 	}
 	if op.pop != nil {
 		return run.popFeed(instr, rt, op, g)

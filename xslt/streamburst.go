@@ -67,6 +67,9 @@ type burstFeed struct {
 	// offBody, for an xsl:for-each-group whose population eval builds, says
 	// its grouping and body run off the stream (streamgroup_pruned.go).
 	offBody bool
+	// size, set by a sized feed's read before it hands its first item, is
+	// the context size of an xsl:for-each it drives (streamgroup_copies_mm7.go).
+	size int
 }
 
 // burstResolver is a document resolver that can stream a document.

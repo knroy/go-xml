@@ -545,7 +545,7 @@ func foreignApply(el *xdm.Node, e xpath.Expr, f vfocus) bool {
 	if e == nil || f == vLeaf {
 		return false
 	}
-	if x, ok := e.(*xpath.FuncCall); ok && isFn(x, "copy-of", 1) && endsInAttribute(x.Args[0]) {
+	if x, ok := e.(*xpath.FuncCall); ok && (isFn(x, "copy-of", 1) || isFn(x, "snapshot", 1)) && endsInAttribute(x.Args[0]) { // snapshot: streamdyncall_mm7.go
 		return (viewCheck{}).safe(x.Args[0], f, true)
 	}
 	if noNodes(e) && (viewCheck{}).safe(e, f, false) {

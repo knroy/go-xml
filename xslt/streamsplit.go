@@ -143,6 +143,9 @@ type streamSplit struct {
 	// copiedOut says the instruction holding the split copies what the
 	// outer gives (streamfn_copies.go).
 	copiedOut bool
+	// dynCopies says the outer is a dynamic call given copies of the
+	// matches (streamdyncall_mm7.go).
+	dynCopies bool
 	// predFail and tailFail say a predicate of P, or the tail, may raise an
 	// error: the tree evaluates them all, so the split may not stop early.
 	predFail, tailFail bool
@@ -252,7 +255,7 @@ func splitStreamAt(e xpath.Expr, base *xpath.Compiled, doc, group, key, views bo
 	if !w.slot(e, func(y xpath.Expr) { root = y }, useKeep) {
 		return nil, w.why
 	}
-	s := &streamSplit{doc: doc, outerVar: splitItems}
+	s := &streamSplit{doc: doc, outerVar: splitItems, dynCopies: w.dynCopies}
 	if w.pe != nil {
 		if why := s.path(w, part); why != "" {
 			return nil, why
@@ -856,6 +859,8 @@ type splitter struct {
 	why    string
 	// json says the path found is the node of fn:xml-to-json (streamfn_json.go).
 	json *jsonSplit
+	// dynCopies: a dynamic call given copies holds the path (streamdyncall_mm7.go).
+	dynCopies bool
 }
 
 // isCurrentGroup reports whether e is a call on fn:current-group().
@@ -882,7 +887,7 @@ func (w *splitter) refuse(why string) bool {
 // slot checks an operand consumed as use: motionless, it is evaluated with
 // the outer; otherwise it must hold the consuming path.
 func (w *splitter) slot(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
-	if (viewCheck{kids: true, key: w.key}).safe(e, w.focus, use == useCount || use == useEBV) {
+	if !(w.group && readsGroup(e)) && (viewCheck{kids: true, key: w.key}).safe(e, w.focus, use == useCount || use == useEBV) { // streamgroup_copies_mm7.go
 		return true
 	}
 	return w.walk(e, put, use)
@@ -914,6 +919,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 		return false
 	}
 	if done, ok := w.collection(e); done { // streamshapes.go
+		return ok
+	}
+	if done, ok := w.dynCopiesCall(e); done { // streamdyncall_mm7.go
 		return ok
 	}
 	switch x := e.(type) {
@@ -1070,6 +1078,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 			put(u)
 			return w.walk(u, put, use)
 		}
+		if done, ok := w.snapshotHead(e); done { // streamsnapshot_mm7.go
+			return ok
+		}
 		return w.refuse("path " + e.String())
 	}
 	return w.refuse("expression " + e.String())
@@ -1149,6 +1160,9 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 			if ok && climbedOuter(inner) { // streamsplit_foreign.go
 				return pp, false
 			}
+			if ok && w.oneMatchTail(x, &inner) { // streamfn_instrburst_mm7.go
+				return inner, true
+			}
 			if ok {
 				w.refuse(x.Name.Local + "() of a path with a tail")
 			}
@@ -1187,7 +1201,7 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 					if !ok {
 						return pp, false
 					}
-					inner.tail = list[1:]
+					inner.tail = append(inner.tail, list[1:]...) // oneMatchTail's own, then these
 					return inner, true
 				}
 			}

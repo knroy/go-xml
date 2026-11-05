@@ -25,9 +25,10 @@ var l6Bodies = []struct {
 	{`<out><xsl:iterate select=".//*/name()"><xsl:param name="n" select="0"/><xsl:on-completion><xsl:value-of select="$n"/></xsl:on-completion><xsl:next-iteration><xsl:with-param name="n" select="$n + string-length(.)"/></xsl:next-iteration></xsl:iterate></out>`, true},
 	// A for-each over copies of nested matches (applyCopies on a loop op).
 	{`<out><xsl:for-each select=".//rec/copy-of(.)"><r k="{@k}" n="{count(.//sub)}"/></xsl:for-each></out>`, true},
-	// A grounded loop body reading last() stays on the tree (groundLastWhy).
-	{`<out><xsl:for-each select="copy-of(doc/rec)"><r n="{position()}" of="{last()}"/></xsl:for-each></out>`, false},
-	{`<out><xsl:for-each select="doc/rec/copy-of(.)"><r of="{last()}" n="{count(.//sub)}"/></xsl:for-each></out>`, false},
+	// A loop over copies whose body reads last() collects the copies first
+	// (sizedLoop, streamgroup_copies_mm7.go).
+	{`<out><xsl:for-each select="copy-of(doc/rec)"><r n="{position()}" of="{last()}"/></xsl:for-each></out>`, true},
+	{`<out><xsl:for-each select="doc/rec/copy-of(.)"><r of="{last()}" n="{count(.//sub)}"/></xsl:for-each></out>`, true},
 	// Simple content over the context's subtree, from its grounded copy (groundContextSplit).
 	{`<out><xsl:for-each select="doc/rec"><e><xsl:value-of select="descendant-or-self::*" separator="~"/></e></xsl:for-each></out>`, true},
 	// Two consuming operands of "," make the body free-ranging (§19.8.1, the
