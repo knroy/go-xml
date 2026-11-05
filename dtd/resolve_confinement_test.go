@@ -167,3 +167,27 @@ func TestFileResolverErrorsNameOnlyTheSystemID(t *testing.T) {
 		}
 	}
 }
+
+// A missing file in a missing subdirectory of a Root reached through a
+// symlink is not found, not refused: the parent is resolved up to its deepest
+// existing ancestor before it is compared with the resolved Root. Escapes stay
+// refused.
+func TestFileResolverMissingInRootThroughLink(t *testing.T) {
+	dir := t.TempDir()
+	real, link := filepath.Join(dir, "real"), filepath.Join(dir, "link")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	r := &FileResolver{Root: link}
+	base := filepath.Join(link, "doc.xml")
+	_, _, err := r.ResolveExternal("nodir/x.ent", "", base)
+	if err == nil || errors.Is(err, fs.ErrPermission) || !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("nodir/x.ent: %v; want not-exist, not a refusal", err)
+	}
+	if _, _, err := r.ResolveExternal("../nodir/x.ent", "", base); !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("../nodir/x.ent: %v; want the outside-the-root refusal", err)
+	}
+}

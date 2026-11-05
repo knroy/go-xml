@@ -161,9 +161,7 @@ func (r *FileResolver) resolvePath(systemID, base string) (root, rel string, err
 	// would pass and the escape would already have happened. The parent is
 	// resolved only so both sides compare alike, since on macOS /var is itself
 	// a link to /private/var.
-	if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
-		abs = filepath.Join(dir, filepath.Base(abs))
-	}
+	abs = filepath.Join(uripath.EvalExisting(filepath.Dir(abs)), filepath.Base(abs))
 	root, err = filepath.Abs(r.Root)
 	if err != nil {
 		return "", "", err
