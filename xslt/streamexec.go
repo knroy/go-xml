@@ -1319,7 +1319,7 @@ func (s *streamSplit) memory(minD int) string {
 		return "collects grounded copies (" + c + ") of the current group"
 	case c == "nodes" && minD == 0 && !s.group:
 		s.holdAt() // streamhold.go: held, capped at the tree's records
-	case (c == "nodes" || c == "subtree") && minD < 2:
+	case (c == "nodes" || c == "subtree") && minD < 2 && !(s.dynCopies && s.itemsOnlyCopied()): // streamdyncall_mm7.go
 		return "collects grounded copies (" + c + ") of the document element"
 	case (s.red == "min" || s.red == "max") && (minD > 0 || s.group) && !s.oneTake(): // streamsplit_onetake.go
 		return s.red + "() below the document node cannot fall back to the tree"

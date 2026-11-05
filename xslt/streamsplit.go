@@ -143,6 +143,9 @@ type streamSplit struct {
 	// copiedOut says the instruction holding the split copies what the
 	// outer gives (streamfn_copies.go).
 	copiedOut bool
+	// dynCopies says the outer is a dynamic call given copies of the
+	// matches (streamdyncall_mm7.go).
+	dynCopies bool
 	// predFail and tailFail say a predicate of P, or the tail, may raise an
 	// error: the tree evaluates them all, so the split may not stop early.
 	predFail, tailFail bool
@@ -252,7 +255,7 @@ func splitStreamAt(e xpath.Expr, base *xpath.Compiled, doc, group, key, views bo
 	if !w.slot(e, func(y xpath.Expr) { root = y }, useKeep) {
 		return nil, w.why
 	}
-	s := &streamSplit{doc: doc, outerVar: splitItems}
+	s := &streamSplit{doc: doc, outerVar: splitItems, dynCopies: w.dynCopies}
 	if w.pe != nil {
 		if why := s.path(w, part); why != "" {
 			return nil, why
@@ -856,6 +859,8 @@ type splitter struct {
 	why    string
 	// json says the path found is the node of fn:xml-to-json (streamfn_json.go).
 	json *jsonSplit
+	// dynCopies: a dynamic call given copies holds the path (streamdyncall_mm7.go).
+	dynCopies bool
 }
 
 // isCurrentGroup reports whether e is a call on fn:current-group().
@@ -914,6 +919,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 		return false
 	}
 	if done, ok := w.collection(e); done { // streamshapes.go
+		return ok
+	}
+	if done, ok := w.dynCopiesCall(e); done { // streamdyncall_mm7.go
 		return ok
 	}
 	switch x := e.(type) {

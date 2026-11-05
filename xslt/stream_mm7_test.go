@@ -117,3 +117,44 @@ func TestStreamOneMatchTail(t *testing.T) {
 	mm5Rows(t, `<d><s><s><p>a<p>in</p></p><p>b</p></s></s><s><s><p>c</p></s></s></d>`, rows)
 	mm5Rows(t, `<d><x/></d>`, rows)
 }
+
+// TestStreamDynCallCopies: a dynamic call given only copies of the stream
+// and values, its function item a variable's or a tunnel parameter's whatever
+// it holds, streams in a rule that may match the document element; and
+// snapshot(@a) applied to a mode that is not streamable (use-package-152).
+// A call given the match itself does not stream.
+func TestStreamDynCallCopies(t *testing.T) {
+	const doc = `<d k="0"><rec k="a" v="1">t1</rec><rec k="b"><v>x<s/></v></rec><x k="z"/></d>`
+	const fn = `<xsl:variable name="f" select="function($e) { string($e/@k) || '/' || count($e//*) || '/' || name($e/..) }"/>`
+	rows := []struct {
+		name, decls string
+		stream      bool
+	}{
+		{"snapshot", `<xsl:mode streamable="yes"/>` + fn + `<xsl:template match="*"><r><xsl:value-of select="$f(snapshot(.))"/></r></xsl:template>`, true},
+		{"snapshot below", `<xsl:mode streamable="yes" on-no-match="shallow-copy"/>` + fn + `<xsl:template match="rec"><r><xsl:value-of select="$f(snapshot(.))"/></r></xsl:template>`, true},
+		{"copy-of and a value", `<xsl:mode streamable="yes"/><xsl:variable name="g" select="function($e, $s) { $s || count($e//*) || name($e/..) }"/>` +
+			`<xsl:template match="*"><r><xsl:value-of select="$g(copy-of(.), 'n')"/></r></xsl:template>`, true},
+		{"tunnel from a map, never called", `<xsl:mode streamable="yes"/><xsl:mode name="k" streamable="no" on-no-match="fail"/><xsl:variable name="o" as="map(*)" select="map{}"/>` +
+			`<xsl:template match="/"><o><xsl:apply-templates><xsl:with-param name="f" select="$o('f')" tunnel="yes"/></xsl:apply-templates></o></xsl:template>` +
+			`<xsl:template match="*"><xsl:param name="f" as="(function(element()) as xs:string)?" tunnel="yes"/>` +
+			`<xsl:choose><xsl:when test="exists($f)"><xsl:value-of select="$f(snapshot(.))"/></xsl:when>` +
+			`<xsl:otherwise><r><xsl:apply-templates select="snapshot(@k)" mode="k"/></r></xsl:otherwise></xsl:choose></xsl:template>` +
+			`<xsl:template match="*[@k != 'z']/@k" mode="k"><a v="{.}" p="{name(..)}" n="{count(../*)}"/></xsl:template>`, true},
+		{"tunnel from a map, called", `<xsl:mode streamable="yes"/><xsl:variable name="o" as="map(*)" select="map{'f': function($e) { name($e) || count($e//node()) }}"/>` +
+			`<xsl:template match="/"><o><xsl:apply-templates><xsl:with-param name="f" select="$o('f')" tunnel="yes"/></xsl:apply-templates></o></xsl:template>` +
+			`<xsl:template match="*"><xsl:param name="f" as="(function(element()) as xs:string)?" tunnel="yes"/>` +
+			`<xsl:if test="exists($f)"><xsl:value-of select="$f(snapshot(.))"/></xsl:if></xsl:template>`, true},
+		{"the match itself", `<xsl:mode streamable="yes"/>` + fn + `<xsl:template match="*"><r><xsl:value-of select="$f(.)"/></r></xsl:template>`, false},
+	}
+	for _, r := range rows {
+		sheet := mainSheet(r.decls)
+		so, st := mainRun(sheet, doc, true, TransformOptions{})
+		to, _ := mainRun(sheet, doc, false, TransformOptions{})
+		if so != to {
+			t.Errorf("%s:\nstreamed %s\ntree     %s", r.name, so, to)
+		}
+		if got := st.Runs[streamtrace.Main] != 0; got != r.stream {
+			t.Errorf("%s: streamed %v, want %v", r.name, got, r.stream)
+		}
+	}
+}
