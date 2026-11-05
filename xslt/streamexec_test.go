@@ -199,6 +199,8 @@ var coreBodies = []struct {
 	{`<o><xsl:value-of select="count(copy-of(/)//node())"/></o>`, true},
 	{`<o><xsl:copy-of select="snapshot(/*)"/></o>`, true},
 	{`<xsl:variable name="v" select="snapshot(/)"/><o e="{deep-equal(doc('doc.xml'), $v)}" i="{$v is doc('doc.xml')}"/>`, true},
+	{`<xsl:variable name="w" select="snapshot(/*)"/><o e="{deep-equal(doc('doc.xml')/*, $w)}" p="{exists($w/..)}" n="{name($w/..)}{count($w/../node())}"` +
+		` i="{$w is doc('doc.xml')/*, $w/.. is doc('doc.xml')}"/>`, true},
 	{`<o><xsl:copy-of select="snapshot(/*)//rec[@k = current()//rec/@k]"/></o>`, false},
 	{`<xsl:apply-templates select="//rec"/>`, false},
 }

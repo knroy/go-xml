@@ -1256,6 +1256,9 @@ type viewCheck struct {
 	peek bool
 	// inlined says the expression is a call's inlined body (streamview_leafcall.go).
 	inlined bool
+	// whole are variables holding a built copy of the document or its
+	// element (streamexec_whole.go, wholeRead).
+	whole map[xdm.QName]*streamOp
 }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
@@ -1276,6 +1279,9 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		}
 		if v, ok := firstVar(x.Steps); ok && vc.items && isSplitItems(v) {
 			return vc.path(x.Steps[1:], vElem, nodeOK)
+		}
+		if v, ok := firstVar(x.Steps); ok && vc.whole[v.Name] != nil && wholeRead(x, vc.whole) { // streamexec_whole.go
+			return true
 		}
 		if len(x.Steps) > 0 && focusFree(x.Steps[0]) {
 			// $v/...: the rest reads the variable's nodes, not the focus.

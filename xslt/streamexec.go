@@ -92,6 +92,9 @@ type streamExec struct {
 	drainFirst bool
 	// promoted are the instructions promote took as consuming.
 	promoted map[*xdm.Node]bool
+	// whole are the local variables bound at the document node to a copy
+	// of the whole document or its element (streamexec_whole.go).
+	whole map[xdm.QName]*streamOp
 	// exprOps are the ops of consuming expressions that are not an
 	// instruction's select: a value template's part, an xsl:with-param's
 	// select (byExpr, once compiled).
@@ -869,7 +872,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := b.loopRead(parseAt(el, src)) // streamfn_loop.go
 	peek := b.kidsAt(el, e, f)        // streamkids_l6.go
-	vc := viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek}
+	vc := viewCheck{pos: true, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek, whole: b.x.whole}
 	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) { // streamcopy_l3doc.go
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
 	}
@@ -1103,6 +1106,9 @@ func (x *streamExec) ready() string {
 		minD = 1 // a rule's context element: the document element, or below
 	}
 	if why := x.readyDocCopy(); why != "" { // streamcopy_l3.go
+		return why
+	}
+	if why := x.readyWhole(); why != "" { // streamexec_whole.go
 		return why
 	}
 	if why := x.readyOps(x.top, minD, &x.kinds); why != "" {

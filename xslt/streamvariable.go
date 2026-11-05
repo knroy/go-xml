@@ -24,6 +24,9 @@ func (b *streamBuilder) variableOp(el *xdm.Node, f vfocus) bool {
 		}
 	}
 	op := &streamOp{x: b.x, el: el, doc: f == vNone, inGroup: b.grp, key: b.key}
+	if op.doc && !b.grp {
+		b.x.noteWholeVar(op) // streamexec_whole.go
+	}
 	*b.ops = append(*b.ops, op)
 	b.x.exprOps = append(b.x.exprOps, op)
 	b.kinds[streamtrace.KindSelect]++
