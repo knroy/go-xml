@@ -1474,7 +1474,11 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 		return f
 	}
 	if !op.loop {
-		return &burstFeed{instr: instr, eval: func(rt *runtime) (xdm.Sequence, error) { return run.evalOp(rt, op) }}
+		f := &burstFeed{instr: instr, eval: func(rt *runtime) (xdm.Sequence, error) { return run.evalOp(rt, op) }}
+		if jsonWhole(op) {
+			f.jsonOut = func(rt *runtime, out *outputBuilder) (bool, error) { return run.jsonOut(rt, op, out) }
+		}
+		return f
 	}
 	if op.pop != nil && op.sized {
 		return run.sizedFeed(run.popFeed(instr, rt, op, g)) // streamgroup_copies_mm7.go

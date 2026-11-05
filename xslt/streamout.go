@@ -494,6 +494,25 @@ func (o *streamOut) Item(it xdm.Item, doc, own bool) {
 	}
 }
 
+// TextOK implements xdmsink.TextWriter.
+func (o *streamOut) TextOK() bool { return o.s != nil && o.text && o.cps == 0 && o.recAt < 0 }
+
+// WriteText implements xdmsink.TextWriter: as textNode and textItem write a
+// text node's value under the text method.
+func (o *streamOut) WriteText(p []byte, top, doc bool) {
+	switch {
+	case top:
+		o.rootAtomic = false
+	case doc:
+		o.docAtomic = false
+	}
+	if len(o.s.charMap) == 0 {
+		o.s.writeBytes(p)
+	} else {
+		o.s.writeString(o.s.mapChars(string(p)))
+	}
+}
+
 func (o *streamOut) End(seq xdm.Sequence) error {
 	var err error
 	if o.s == nil {

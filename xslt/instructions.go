@@ -56,6 +56,11 @@ type valueOfInstr struct {
 func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	var seq xdm.Sequence
 	if i.sel != nil {
+		if f := rt.burstsFor(i); f != nil && f.jsonOut != nil {
+			if done, err := f.jsonOut(rt, out); done { // streamfn_json.go
+				return err
+			}
+		}
 		v, err := rt.evalSelect(i, i.sel)
 		if err != nil {
 			return err

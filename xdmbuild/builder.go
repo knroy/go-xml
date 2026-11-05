@@ -43,12 +43,14 @@ type Builder struct {
 	// declShared marks declared as a list NoteDeclaredList lent the builder,
 	// which must be copied before an entry is written in place.
 	declShared bool
-	// hold, fr and doc are the streamed output's (sink.go): hold keeps the
-	// element from being opened, fr is the builder's place in the sink's
-	// frames (+1; 0 for none), doc marks a document level.
-	hold bool
-	doc  uint8
-	fr   int32
+	// hold, fr, doc and released are the streamed output's (sink.go): hold
+	// keeps the element from being opened, fr is the builder's place in the
+	// sink's frames (+1; 0 for none), doc marks a document level, released
+	// that its caller is done with it (xdmsink.Release).
+	hold     bool
+	released bool
+	doc      uint8
+	fr       int32
 
 	// lastAtomic records that the item most recently appended was an atomic
 	// value rather than a node.
@@ -918,8 +920,16 @@ func (b *Builder) StartElement(name xdm.QName) *Builder {
 		el = b.newItem(xdm.KindElement, name, "")
 		b.items = append(b.items, el)
 	}
-	return &Builder{open: el, parent: b, policy: b.policy,
+	var nb *Builder
+	if s := b.sink; s != nil && len(s.free) > 0 {
+		k := len(s.free) - 1
+		nb, s.free[k], s.free = s.free[k], nil, s.free[:k]
+	} else {
+		nb = new(Builder)
+	}
+	*nb = Builder{open: el, parent: b, policy: b.policy,
 		refused: b.refused, sink: b.sink}
+	return nb
 }
 
 // ReplaceOpen puts n, a parentless node, in place of the element this builder

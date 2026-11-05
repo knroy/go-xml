@@ -46,6 +46,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -1070,6 +1071,11 @@ func (run *streamRun) leaf(focus focuser, pos int, n *xdm.Node, mode string,
 		return err
 	}
 	if t == nil {
+		if !s.modeWarnNoMatch[mode] {
+			// The built-in rule of a leaf reads no focus (builtIn): disp's
+			// runtime is as good as the leaf's, which is not made.
+			return run.builtIn(focus.disp, n, mode, params, tunnels, out)
+		}
 		if ctx == nil {
 			ctx = focus.focusCtx(n, pos, 0)
 		}
@@ -1275,7 +1281,9 @@ func (run *streamRun) builtIn(rt *runtime, node *xdm.Node, mode string, params, 
 		if err := b.attrs(sub, true); err != nil {
 			return err
 		}
-		return b.kids(sub)
+		err := b.kids(sub)
+		xdmsink.Release(sub) // its builder is reused once it is written (A3-4)
+		return err
 	}
 	return b.descend(out)
 }
