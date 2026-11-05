@@ -191,6 +191,15 @@ var coreBodies = []struct {
 	// copy costs what its tree does (the burst path's shape, si-lre-C).
 	{`<xsl:for-each select="/*"><xsl:copy-of select="."/></xsl:for-each>`, true},
 	{`<xsl:for-each select="//rec"><xsl:sort select="@k"/><r/></xsl:for-each>`, false},
+	// Copies of the whole document or its element, the select run on the
+	// document built off the cursor (streamcopy_whole.go; sf-innermost-001,
+	// sf-reverse-001, sf-snapshot-0101a/b): no memory saved.
+	{`<o><xsl:value-of select="innermost(snapshot(/*)//rec)/@k"/></o>`, true},
+	{`<o><xsl:value-of select="reverse(snapshot(/doc)//rec)/@k"/></o>`, true},
+	{`<o><xsl:value-of select="count(copy-of(/)//node())"/></o>`, true},
+	{`<o><xsl:copy-of select="snapshot(/*)"/></o>`, true},
+	{`<xsl:variable name="v" select="snapshot(/)"/><o e="{deep-equal(doc('doc.xml'), $v)}" i="{$v is doc('doc.xml')}"/>`, true},
+	{`<o><xsl:copy-of select="snapshot(/*)//rec[@k = current()//rec/@k]"/></o>`, false},
 	{`<xsl:apply-templates select="//rec"/>`, false},
 }
 
