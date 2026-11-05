@@ -131,7 +131,9 @@ var mainCases = []struct {
 	{`<xsl:mode streamable="yes"/><xsl:accumulator name="a" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>`, true},
 	// At the top of the principal result the tree keeps the source's own
 	// nodes: the built-ins' copies of leaves, a deep-copy, an attribute rule.
-	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/"><xsl:apply-templates/></xsl:template>`, false},
+	// A leaf's is its node in the document built as it is read
+	// (streammain_leaftop.go).
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/"><xsl:apply-templates/></xsl:template>`, true},
 	{`<xsl:mode streamable="yes" on-no-match="deep-copy"/><xsl:template match="/"><xsl:apply-templates/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/"><xsl:apply-templates select="*"/></xsl:template>` +
 		`<xsl:template match="/*"><xsl:apply-templates select="@*"/></xsl:template>`, false},

@@ -1368,6 +1368,9 @@ type streamRun struct {
 	teed bool
 	// typed says the document is validated as it is read (streamcopy_l3.go).
 	typed bool
+	// build, for a principal input, is its document built as it is read
+	// (streammain_leaftop.go).
+	build *mainBuild
 }
 
 // feed returns the feed that drives instr from the cursor, or nil when instr

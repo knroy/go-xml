@@ -255,6 +255,9 @@ type Stylesheet struct {
 	// mainStreams are the modes TransformReader can stream a principal
 	// input in (streammain.go).
 	mainStreams map[string]bool
+	// mainBuilds are those of them whose run builds the document as it is
+	// read (streammain_leaftop.go).
+	mainBuilds map[string]bool
 	// nested caches the stylesheets fn:transform compiles; see nestedCache.
 	nested nestedCache
 	// globalsOnce builds globalsByName, the first declaration of each global
