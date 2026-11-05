@@ -11,7 +11,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | What it does | Commit |
 |---|---|---|
 | Streamed record paths with `//`, wildcards and `outermost()` | `//rec`, `doc//rec`, `/*/*/rec`, `*:rec`, `p:*` stream; nested matches ride inside their outermost record. Small records share one tree: 900-deep `count(//rec)` 2.0 s CPU. | [`df9677e`][df9677e], [`fd31bb3`][fd31bb3], [`382983c`][382983c], [`22af5f4`][22af5f4] |
-| Streamed core for `xsl:source-document` | One streamed path for every trusted container: wrappers, choose, loops, split selects; any error re-runs on the tree, so errors are the tree's. W3C streamed cases 450 → 2,281. | [`ff0c463`][ff0c463], [`44db07f`][44db07f], [`096a587`][096a587], [`d1a98a8`][d1a98a8] |
+| Streamed core for `xsl:source-document` | One streamed path for every trusted container: wrappers, choose, loops, split selects; any error re-runs on the tree, so errors are the tree's. W3C streamed cases 450 → 2,661. | [`ff0c463`][ff0c463], [`44db07f`][44db07f], [`096a587`][096a587], [`d1a98a8`][d1a98a8] |
 | `Stylesheet.TransformReader`, `TransformOptions.SourceParseOptions` | Applies a stylesheet to a reader, streaming it when the initial mode is streamable and verified (a 1 GB filter in 620 MB heap, not 7.3 GB); otherwise exactly Parse + Transform. | [`bdf45d8`][bdf45d8] |
 | Streamed `xsl:apply-templates` | Template rules, built-in rules, `next-match`, `apply-imports` and tunnels run on the cursor in a streamable container: a 1 GB filter in 624 MB, not 7.4 GB. | [`c8c0a01`][c8c0a01] |
 | Streamed `xsl:for-each-group` | group-adjacent, -starting-with and -ending-with over a child path stream in a streamable container or rule, each group as it closes, `current-group()` read once off the cursor: a 1 GB log grouped in 158 MB heap, not 6.0 GB. | [`fe1eb18`][fe1eb18] |
@@ -113,115 +113,197 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A streamed apply op's feed and a children filter were made per element | Both are made once per run: two-instruction identity 88 → 76 allocations per record. | [`40d9b34`][40d9b34] |
 | A streamed leaf a rule matched got one runtime for matching and another for its copy | It gets one: 76 → 64 allocations per record. | [`a41d41d`][a41d41d] |
 | A matched streamed node's runtime was copied twice, for its focus and its selection | Once: 64 → 52 allocations per record (the tree's 61), two-instruction identity 1.58× → 1.39× CPU. | [`f34dfa2`][f34dfa2] |
-| An `xsl:try` rolled back under `Output` before the sink began could panic, or lose whitespace written ahead of the mark | A rollback puts back the items of the result's top and document level written after the mark. (untested) | [`a7befda`][a7befda] |
-| A nested `xsl:try` rolled back on an element an outer try built in place under `Output` could miss XTDE0410 for a later attribute | The rollback keeps the child written before its mark. (untested) | [`7ff197b`][7ff197b] |
-| A streamed expression calling a recursive or non-inlinable stylesheet function sent the container to the tree | The call runs on values, or on each match's grounded copy, when its body allows. (untested) | [`19593ed`][19593ed] |
-| `[A, B]?*/T` over a streamed path sent the container to the tree | It streams as `(A, B)/T`, the union of the paths. (untested) | [`ae36f0b`][ae36f0b] |
-| A simple map over streamed text, comment or PI nodes sent the container to the tree | R runs on each kept leaf, as a path's tail over leaves does. (untested) | [`94181b7`][94181b7] |
-| `replace()` over the streamed document's text sent the container to the tree | It is read off the stream as `matches()` is. (untested) | [`6ee4b2e`][6ee4b2e] |
+| An `xsl:try` rolled back under `Output` before the sink began could panic, or lose whitespace written ahead of the mark | A rollback puts back the items of the result's top and document level written after the mark. | [`a7befda`][a7befda] |
+| A nested `xsl:try` rolled back on an element an outer try built in place under `Output` could miss XTDE0410 for a later attribute | The rollback keeps the child written before its mark. | [`7ff197b`][7ff197b] |
+| A streamed expression calling a recursive or non-inlinable stylesheet function sent the container to the tree | The call runs on values, or on each match's grounded copy, when its body allows. | [`19593ed`][19593ed] |
+| `[A, B]?*/T` over a streamed path sent the container to the tree | It streams as `(A, B)/T` when no member is a path of the stream (that is XTSE3430, §19.8.8). | [`ae36f0b`][ae36f0b] |
+| A simple map over streamed text, comment or PI nodes sent the container to the tree | R runs on each kept leaf, as a path's tail over leaves does. | [`94181b7`][94181b7] |
+| `replace()` over the streamed document's text sent the container to the tree | It is read off the stream as `matches()` is. | [`6ee4b2e`][6ee4b2e] |
 | `($v \| P)/T`, a path over a union of a variable and a streamed path, sent the container to the tree | It is read as `($v union ())/T union P/T`, which streams. | [`95944f3`][95944f3] |
-| `P ! (* union $v)` and the other set operators of a match's nodes and a variable sent the container to the tree | They run per match on the grounded copy, which orders as its original. (untested) | [`c665e0d`][c665e0d] |
-| A for, some or every over values of a streamed path whose return used `\|\|` or an xs constructor sent the container to the tree | A return reading only its variables is evaluated over the values. (untested) | [`9f41f98`][9f41f98] |
-| `(if ($c) then A else B) ! R` over streamed paths sent the container to the tree | The choice is lifted over the map; only the chosen branch streams. (untested) | [`e8246dc`][e8246dc] |
-| A separator, name or namespace value template of `xsl:value-of`, `xsl:attribute` or `xsl:element` reading the stream sent the container to the tree | That part streams as a literal result element's value template does. (untested) | [`4ac277f`][4ac277f] |
-| `generate-id()` of the context element in a streamed rule or loop sent the container to the tree | It reads the view's origin, the tree's id for the node. (untested) | [`4f9aea4`][4f9aea4] |
-| A rule pattern whose predicate reads `accumulator-before` sent the streamed apply to the tree | The predicate reads the observer's value at the start tag. (untested) | [`2f6bca5`][2f6bca5] |
-| A streamed path ending in a sequence of value paths, `P/(@a/string(), c/string())`, sent the container to the tree | The tail is known to make values and runs per match on its copy. (untested) | [`afadaf0`][afadaf0] |
-| The range operator over a streamed operand, `1 to count(.//*)`, sent the container to the tree | The split takes it as it takes arithmetic. (untested) | [`fcf384f`][fcf384f] |
-| A streamed loop body using `is`, `union`, `intersect` or `except` on its match sent the container to the tree | The body runs on a grounded copy, which has the original's identity and order. (untested) | [`a4162b6`][a4162b6] |
-| `xsl:apply-templates` over `(P, $v)`, `insert-before(P, n, $v)` or `if ($c) then () else P` sent the container to the tree | The stream's matches are dispatched as read, the other items as the tree dispatches them. (untested) | [`b75f94e`][b75f94e] |
+| `P ! (* union $v)` and the other set operators of a match's nodes and a variable sent the container to the tree | They run per match on the grounded copy, which orders as its original. | [`c665e0d`][c665e0d] |
+| A for, some or every over values of a streamed path whose return used `\|\|` or an xs constructor sent the container to the tree | A return reading only its variables is evaluated over the values. | [`9f41f98`][9f41f98] |
+| `(if ($c) then A else B) ! R` over streamed paths sent the container to the tree | The choice is lifted over the map; only the chosen branch streams. | [`e8246dc`][e8246dc] |
+| A separator, name or namespace value template of `xsl:value-of`, `xsl:attribute` or `xsl:element` reading the stream sent the container to the tree | That part streams as a literal result element's value template does. | [`4ac277f`][4ac277f] |
+| `generate-id()` of the context element in a streamed rule or loop sent the container to the tree | It reads the view's origin, the tree's id for the node. | [`4f9aea4`][4f9aea4] |
+| A rule pattern whose predicate reads `accumulator-before` sent the streamed apply to the tree | The predicate reads the observer's value at the start tag. | [`2f6bca5`][2f6bca5] |
+| A streamed path ending in a sequence of value paths, `P/(@a/string(), c/string())`, sent the container to the tree | The tail is known to make values and runs per match on its copy. | [`afadaf0`][afadaf0] |
+| The range operator over a streamed operand, `1 to count(.//*)`, sent the container to the tree | The split takes it as it takes arithmetic. | [`fcf384f`][fcf384f] |
+| A streamed loop body using `is`, `union`, `intersect` or `except` on its match sent the container to the tree | The body runs on a grounded copy, which has the original's identity and order. | [`a4162b6`][a4162b6] |
+| `xsl:apply-templates` over `(P, $v)`, `insert-before(P, n, $v)` or `if ($c) then () else P` sent the container to the tree | The stream's matches are dispatched as read, the other items as the tree dispatches them. | [`b75f94e`][b75f94e] |
 | `xsl:copy` with validation strict or lax, or a type, in a streamed container sent it to the tree, even for an element | It streams when the copied item is never an attribute, read from the select or the enclosing loop. | [`aa91721`][aa91721] |
-| An `xsl:global-context-item` sent a streamable mode's principal input to the tree | With no type it reads nothing of the input, so the input streams. (untested) | [`904f322`][904f322] |
-| `xsl:comment` or `xsl:processing-instruction` with a select reading the stream sent the container to the tree | The select is split as `xsl:sequence`'s and read off the cursor. (untested) | [`595bcf2`][595bcf2] |
-| Streamed `Output` looked to grow its heap with output size (300,000 elements, 90 MB peak) | Its live heap is flat in output size; the growth was `1 to N`'s integers, held in tree mode too. A test pins it. (untested) | [`ac8bb00`][ac8bb00] |
-| A document the conformance harness preloads as validated ran on the tree when read with the default validation | It streams, repeating the harness's validation as it reads. (untested) | [`e086524`][e086524] |
-| `min(.)` or `max(.)` in a template rule below the document node ran on the tree | They stream, folded once over the context's values. (untested) | [`9643910`][9643910] |
-| Tree mode too: under `TransformReader` in a streamable initial mode, a global read the input as its context item | The global context item is absent for a streamed input (XSLT 3.0 §2.3.2), streamed or on the tree fallback: XPDY0002. (untested) | [`6cc2247`][6cc2247] |
-| Tree mode too: an `accumulator-after#1` item made on a `TransformReader` input kept its focus | §10.3.6 saves an absent focus on a streamed input, streamed or on the tree fallback: its call raises XTDE3350. (untested) | [`be09e99`][be09e99] |
-| Tree mode too: an accumulator whose walk failed anywhere failed every read of it | A read fails only when its value depends on the failed computation (§18.2.5); values set before it stand. (untested) | [`b90d54e`][b90d54e] |
-| Tree mode too: a merge made its trees in source order, so an unstreamed source after a streamed one ran on the tree | Both modes collect unstreamed sources first (order across trees is implementation-dependent, XPath 3.1 §2.4.1). (untested) | [`df063a5`][df063a5] |
-| A streamed rule whose body read its element twice (two fork prongs, a copy beside a read) sent the container to the tree | The rule runs on a grounded copy of its element, at most the tree's memory. (untested) | [`5663391`][5663391] |
-| `base-uri()`, `document-uri()` or `. instance of document-node()` at a streamed document node sent the container to the tree | The stand-in has the document's URIs from the start. (untested) | [`8e3270a`][8e3270a] |
-| A streamed map constructor whose entries each read the document sent the container to the tree | Each entry is read on its own tee cursor; the first error in entry order is the map's. (untested) | [`fb356ca`][fb356ca] |
-| An `xsl:fork` whose prongs each read the document, inside `xsl:try`, sent the container to the tree | The first error in prong order is the try's; a failed prong reads on, so parse errors stay the document's. (untested) | [`cca65c4`][cca65c4] |
-| A streamed rule calling a global `accumulator-after#1` through a variable ran on the tree | The call reads no focus (§2.3.2, §10.3.6), so it is motionless; a supplied parameter declines streaming. (untested) | [`844cd8f`][844cd8f] |
-| `unparsed-entity-uri()` in a streamed rule on a grounded copy answered "" | The copy is given the document's DTD. (untested) | [`6b07dab`][6b07dab] |
-| `unparsed-entity-uri()` in a streamed rule for `/` before its consumer sent the input to the tree | The run moves to the document element first, where the DOCTYPE is known. (untested) | [`13f330b`][13f330b] |
-| A streamed call on a function whose body climbs (recursion on `$n/..`, `parent::X` tests) ran on the tree | Bodies are judged per value kind; ancestors' copies answer names, attributes and existence. (untested) | [`d2a3158`][d2a3158] |
-| `fn:xml-to-json` of a streamed document node or element ran on the tree | It is written from the parse events as the tree writes it; invalid input goes to the tree for its error. (untested) | [`5ed3b7d`][5ed3b7d], [`eb66e23`][eb66e23] |
-| A streamed `filter(P, f#1)` or `outermost(copy-of(P))` ran on the tree | Named function references are read as calls; outermost or innermost of copies are the copies. (untested) | [`9f02ee9`][9f02ee9] |
-| A streamed call on a function whose body has instructions (apply-templates, grouping, literal elements) ran on the tree | The body is planned and run inside the caller's plan. (untested) | [`0489759`][0489759] |
-| A streamed body calling a stylesheet function on a variable's copies sent the container to the tree | The call reads nothing of the stream and is motionless. (untested) | [`c68e9b4`][c68e9b4] |
-| A streamed call passing a path to an atomic parameter of a function with node parameters ran on the tree | The argument is read off the stream as values. (untested) | [`8a4f213`][8a4f213] |
-| A streamed function recursing on the current group ran on the tree | Each recursive call site gets a call frame, a plan of its own run in the caller's stream. (untested) | [`0dfff09`][0dfff09] |
-| A streamed call passing a path to a one-node parameter, or recursing as `$n!*!f(.)`, ran on the tree | It runs as a loop over the matches with the tree's cardinality check. (untested) | [`d7f3a71`][d7f3a71] |
-| A streamed call whose value is copied gave up at the document element | The element's grounded copy is held under the tree's cap, as the tree holds it and the copy. (untested) | [`9354f1d`][9354f1d], [`63dd3ad`][63dd3ad], [`328460b`][328460b] |
-| A streamed for-each over a stylesheet call on a path ran on the tree | The call runs on the matches' grounded copies and the loop over its value. (untested) | [`c942506`][c942506] |
-| `copy-of(.)`, `snapshot(.)` or `value-of` of `.` at a streamed document node sent the container to the tree | The copy is written from the parse events, or built once; the string value is read off the text. (untested) | [`29cc3e9`][29cc3e9] |
-| `xsl:copy` of a streamed document node sent the container to the tree unless its body was one apply-templates | The stand-in takes the DOCTYPE and base URI when the parse meets the root. (untested) | [`b9cbc6d`][b9cbc6d] |
-| A copy-of or sequence of a choice of paths, in a rule that may match the document element, was refused | The condition is evaluated first and the chosen branch's matches copied as read. (untested) | [`932bb98`][932bb98] |
-| A streamed rule for text, comment or PI nodes returning atomic values with `xsl:sequence` was refused | A select that can return only atomic values hands on no copy of the leaf. (untested) | [`ead3f81`][ead3f81] |
-| A streamed `xsl:variable` with an atomic `as` type selecting its context was refused as a grounded copy | The declared type atomizes the value, which is read off the cursor. (untested) | [`2cfd986`][2cfd986] |
-| apply-templates over a streamed path that may select text, comment or PI nodes sent the container to the tree | Each such match is dispatched on its complete copy, in place. (untested) | [`9a7551b`][9a7551b] |
-| Copies of a streamed document made from the parse's events lost the DTD's ID attributes | They keep is-id and is-idrefs, and all typing where the tree's copy does. (untested) | [`f05fd39`][f05fd39] |
-| `unparsed-entity-uri()` of a streamed document node sent the container to the tree | It reads the DOCTYPE the stand-in takes at the root, once the document is read. (untested) | [`ff1f3ac`][ff1f3ac] |
-| A streamed `xsl:comment` or `xsl:processing-instruction` selecting elements in a loop that may match the root was refused | Their select is simple content, read as values. (untested) | [`302ddf2`][302ddf2] |
-| `xsl:value-of` of text nodes beside a streamed path of elements was refused | Only the path is read as values; the text nodes merge as in the tree. (untested) | [`64ae463`][64ae463] |
-| apply-templates over `copy-of()` or `P ! snapshot(.)` of a streamed node sent the container to the tree | The copies are read off the cursor and the templates applied to them on the tree. (untested) | [`8a68af2`][8a68af2] |
-| A group-by over members that may be the root's children was refused by the memory rule | They are held as one fragment of copies made from the events, when the body cannot tell a copy. (untested) | [`a6f13b1`][a6f13b1] |
-| An accumulator rule reading another accumulator, or itself, sent the document to the tree | The read accumulator is stepped first at the node, in the tree's error order; mutual reads stay refused. (untested) | [`87cea8b`][87cea8b] |
-| `xsl:try` or `xsl:message` reading an accumulator sent the container to the tree | Under §18.2.5's errors both modes raise at the same read, so they stream. (untested) | [`827e309`][827e309], [`b90d54e`][b90d54e] |
-| `xsl:apply-templates` inside a streamed `xsl:try` sent the mode to the tree | It streams when no rule it reaches can fail but the built-ins, whose first error both modes meet at one node. (untested) | [`1ac69c5`][1ac69c5] |
-| A merge action asking for `last()` sent the merge to the tree | The streamed merge forms every group first, holding only the items' snapshots. (untested) | [`54dbc38`][54dbc38] |
-| `xsl:message` in a merge action, or boolean or global-map merge keys, sent the merge to the tree | Admitted: messages are taken back on a re-run, key classes read from the expression. (untested) | [`54dbc38`][54dbc38] |
-| A merge whose first streamed source's `for-each-source` failed re-ran on the tree | The error, the tree's first, is returned at once. (untested) | [`54dbc38`][54dbc38] |
-| A streamed merge source with `use-accumulators` sent the merge to the tree | An observer per document gives each item's snapshot its values; a failing walk re-runs on the tree. (untested) | [`cb7bc56`][cb7bc56] |
-| `copy-accumulators="no"` on a streamed `xsl:copy-of` sent it to the tree | It is the default and streams as the attribute's absence does. (untested) | [`3507414`][3507414] |
-| An accumulator rule reading `base-uri(/)` sent the document to the tree | The parse's document node has the document's base URI from the start, so the rule streams. (untested) | [`b3cf350`][b3cf350] |
-| `xsl:copy-of copy-accumulators="yes"` of streamed nodes sent the container to the tree | The matches' values are recorded while they are grounded and answer for the copies. (untested) | [`816d8ec`][816d8ec] |
-| `intersect` or `except` of two climbing paths (`A/ancestor::* intersect B/ancestor::*`) sent the container to the tree | Each operand's climbed nodes are recorded once with a branch mask; the operator applies at the end. (untested) | [`fd303aa`][fd303aa] |
-| A streamed `xsl:for-each-group` over `subsequence(P, a, b)` sent the container to the tree | The population walk counts P's matches and passes over those outside the window. (untested) | [`0bd7034`][0bd7034] |
-| `xsl:for-each-group` over attributes, text nodes or `outermost(P)` of a stream sent the container to the tree | The population is held as collected, under the memory cap, and grouped by the tree's code. (untested) | [`de0784c`][de0784c] |
-| A grouping over `(//x)[...]` with a motionless body, or text value templates in its body, sent the container to the tree | The population is walked as the split walks it, nested members included. (untested) | [`960370b`][960370b] |
-| A grouping over attributes, text or `node()` in a rule for the document element sent it to the tree | The population is a pruned copy built from the events; the body runs off the stream. (untested) | [`5bbaba2`][5bbaba2] |
-| A group-by in `xsl:fork` whose body applied templates to or sequenced `current-group()` sent the run to the tree | The members are held as copies under their ancestors' copies, from the events. (untested) | [`b79ca81`][b79ca81] |
-| A streamed for-each over attributes or text nodes whose body read `data(.)` or `copy-of(.)` sent the container to the tree | The body is planned at a leaf's focus and runs on each complete item. (untested) | [`e73ae6b`][e73ae6b] |
-| A for-each over a streamed element's attributes whose body read `.` sent the container to the tree | Its body is checked at a leaf's focus: each attribute is complete. (untested) | [`1d406ab`][1d406ab] |
-| A streamed `xsl:iterate` over attributes or values whose body read `.` sent the container to the tree | Its body is checked at a leaf's focus, as a for-each's. (untested) | [`65ebe0e`][65ebe0e] |
-| `xsl:apply-templates` over `copy-of(P)` or `P/copy-of(.)` of a streamed document sent the container to the tree | The copies are collected as read and dispatched as the tree does, with its sort, parameters and `last()`. (untested) | [`a52bc6b`][a52bc6b] |
-| A streamed for-each over `P/copy-of(.)` whose matches may nest sent the container to the tree | It runs over the copies of a population, one grounded match at a time. (untested) | [`2536f98`][2536f98] |
-| A streamed for-each over copies whose body read `last()` raised XPDY0002 where the tree gives the count | Such a loop runs on the tree; a body that cannot read `last()` still streams. (untested) | [`d2c48ef`][d2c48ef] |
-| `xsl:value-of` over the context's own subtree, such as `descendant-or-self::*`, in a streamed rule sent the container to the tree | The context is grounded once and the values made from its copy. (untested) | [`d5178af`][d5178af] |
-| A motionless `xsl:iterate` over a node's ancestors, or a motionless for-each with `xsl:sort` over a variable, sent the container to the tree | Both are checked as a motionless for-each is. (untested) | [`a0e226c`][a0e226c] |
-| A streamed rule using `key()` over a global's document, or `current()` in its pattern, sent the container to the tree | Both are read off the candidate's view. (untested) | [`91af2f9`][91af2f9] |
-| `current()` in a streamed rule's instruction, or apply-templates `select="@*"` on the document node, sent the stylesheet to the tree | `current()` is the instruction's item; `@*` of the document node is empty. (untested) | [`e4ecbd7`][e4ecbd7] |
-| A streamed rule matching text nodes too that copied `@* except @a` sent the container to the tree | On a text node both operands are empty, so it is motionless. (untested) | [`0a73669`][0a73669] |
-| A streamed rule applying templates to copies of its attributes, a map of its values or a variable's copies sent the container to the tree | The items go to the tree's rules off the cursor. (untested) | [`b50e009`][b50e009] |
-| `has-children()` in a streamed rule's motionless instruction or pattern sent the stylesheet to the tree | The dispatch peeks past the element's start tag and records the answer on its view. (untested) | [`a386ca5`][a386ca5] |
-| A streamed for-each or apply-templates over `if ($c) then P else Q`, or `$v union P`, sent the container to the tree | The chosen branch's own split is read; `$v`'s nodes are merged into the matches by order. (untested) | [`44fc1c0`][44fc1c0] |
-| `xsl:apply-templates` over a value computed from the stream, such as `if (P) then 0 else 1`, sent the container to the tree | The values are read off the stream and dispatched as the tree does. (untested) | [`1f91b5d`][1f91b5d] |
-| A streamed for-each or apply-templates over `[$v, P/copy-of()]?*` sent the container to the tree | The array's members are read as a sequence population. (untested) | [`c92d154`][c92d154] |
-| An apply-templates in a streamed loop body over snapshots or copies required a streamable mode, sending the container to the tree | It runs the tree's dispatch on the copy, in any mode. (untested) | [`d26ad2e`][d26ad2e] |
-| A streamed `xsl:call-template` passing a child of the context, atomized by the callee, sent the container to the tree | The parameter is read off the cursor as `xsl:next-iteration`'s is. (untested) | [`0f78020`][0f78020] |
-| `outermost(P)/T` over a document where P's matches nest sent the container to the tree | The outermost matches do not nest: T runs on each one's copy. (untested) | [`bf94023`][bf94023] |
-| A streamed rule applying templates to `doc()` of another document sent the container to the tree | That document's nodes go to the tree's rules; the streamed document itself is declined at run time. (untested) | [`6feaadd`][6feaadd] |
-| `xsl:apply-templates` over a filter of copies, `(copy-of(P))[pred]`, sent the container to the tree | The copies are collected, filtered and dispatched as the tree does. (untested) | [`35d5ad7`][35d5ad7] |
-| A window over a streamed path mapped to a name, `subsequence(P, 1, 4) ! name(..)`, sent the container to the tree | It is read as the window over the mapped path, which streams. (untested) | [`40bb829`][40bb829] |
-| A streamed apply-templates over copies whose rules read accumulator values sent the stylesheet to the tree | The observer keeps the values of the nodes read while the copies are made, as the tree's tables would. (untested) | [`1b4d62e`][1b4d62e] |
-| A streamed container reading a non-streamable accumulator ran on the tree | It streams and raises XTDE3362 as the tree does. (untested) | [`065b5b5`][065b5b5] |
-| `root()` of a copied node, or `fold-right()` over values of the stream, left the streamed container with no verdict | The analysis models them for a grounded operand, by §19.8.9.18 and §19.8.9.9. (untested) | [`ef9e55b`][ef9e55b] |
-| `xsl:copy` of a streamed attribute with a `type` sent the container to the tree | The attribute's name and value are assessed against the type as a detached copy, as the tree's result. (untested) | [`b7e79f7`][b7e79f7] |
-| A for-each over a union of two same-depth paths with a `\|\|` body ran on the tree | The trusting walk reads the union as striding, since such nodes cannot nest; the refusal is unchanged. (untested) | [`4f2cc85`][4f2cc85] |
-| `copy-of()` of the attributes a streamed path climbs to sent the container to the tree | A copy of an attribute or leaf is taken from its view, as complete as the tree's node. (untested) | [`adc813c`][adc813c] |
-| `xsl:perform-sort` over copies or values of the streamed document sent the streamed rule to the tree | Its select is read off the stream and the sort runs on what it returned. (untested) | [`157f717`][157f717] |
-| `xsl:apply-templates` building an `xsl:map` held in a typed variable sent the streamed container to the tree | The map's content is maps or an error alike in both modes, so the apply streams. (untested) | [`167a347`][167a347] |
-| A stylesheet comparing streamed nodes with `doc()` nodes of the same document could stream a different answer from the tree's | It runs on the tree when a load may reach the streamed URI; a literal other URI still streams. (untested) | [`60cf53e`][60cf53e], [`ddcaebf`][ddcaebf] |
-| A streamed container in a stylesheet that uses a package ran on the tree | A plain `xsl:use-package` leaves the using module's own declarations trusted, so it streams. (untested) | [`381a787`][381a787] |
-| A streamable mode whose rules sit in imported or included modules ran on the tree | Its rules are verified across every module, by import precedence, and stream. (untested) | [`954a278`][954a278] |
-| A streamed container in a package that overrides a used package's function ran on the tree | The overriding declarations are the using package's own and are trusted. (untested) | [`0175e4b`][0175e4b] |
-| A streamed container calling a function of a used package ran on the tree | The function is verified in its own package and called as itself. (untested) | [`8d10f9e`][8d10f9e] |
-| A streamed call on a stylesheet function with an instruction body over atomic arguments ran on the tree | The call is given values only and runs as itself. (untested) | [`d4feb67`][d4feb67] |
-| A streamed call on a used package's absorbing function, such as the spec's xml-to-json package, ran on the tree | Its body runs as a call frame in the caller's stream, compiled in the package's state, its modes planned per package. (untested) | [`38629c8`][38629c8] |
+| An `xsl:global-context-item` sent a streamable mode's principal input to the tree | With no type it reads nothing of the input, so the input streams. | [`904f322`][904f322] |
+| `xsl:comment` or `xsl:processing-instruction` with a select reading the stream sent the container to the tree | The select is split as `xsl:sequence`'s and read off the cursor. | [`595bcf2`][595bcf2] |
+| Streamed `Output` looked to grow its heap with output size (300,000 elements, 90 MB peak) | Its live heap is flat in output size; the growth was `1 to N`'s integers, held in tree mode too. A test pins it. | [`ac8bb00`][ac8bb00] |
+| A document the conformance harness preloads as validated ran on the tree when read with the default validation | It streams, repeating the harness's validation as it reads. | [`e086524`][e086524] |
+| `min(.)` or `max(.)` in a template rule below the document node ran on the tree | They stream, folded once over the context's values. | [`9643910`][9643910] |
+| Tree mode too: under `TransformReader` in a streamable initial mode, a global read the input as its context item | The global context item is absent for a streamed input (XSLT 3.0 §2.3.2), streamed or on the tree fallback: XPDY0002. | [`6cc2247`][6cc2247] |
+| Tree mode too: an `accumulator-after#1` item made on a `TransformReader` input kept its focus | §10.3.6 saves an absent focus on a streamed input, streamed or on the tree fallback: its call raises XTDE3350. | [`be09e99`][be09e99] |
+| Tree mode too: an accumulator whose walk failed anywhere failed every read of it | A read fails only when its value depends on the failed computation (§18.2.5); values set before it stand. A cycle fails every read (below). | [`b90d54e`][b90d54e] |
+| Tree mode too: a merge made its trees in source order, so an unstreamed source after a streamed one ran on the tree | Both modes collect unstreamed sources first (order across trees is implementation-dependent, XPath 3.1 §2.4.1). | [`df063a5`][df063a5] |
+| Tree mode too: `document-uri()` of a source document stripped by `xsl:strip-space` returned the empty sequence | The stripped copy keeps the document's URI (F&O §2.6). | [`2e860a2`][2e860a2] |
+| Tree mode too: a circular accumulator read at the document node gave its initial value (`error-3410a`) | Every read of it raises XTDE3400 (§18.2.6); a rule reading the value it computes is not streamed. | [`3916423`][3916423] |
+| A streamed rule whose body read its element twice (two fork prongs, a copy beside a read) sent the container to the tree | The rule runs on a grounded copy of its element, at most the tree's memory. | [`5663391`][5663391] |
+| `base-uri()`, `document-uri()` or `. instance of document-node()` at a streamed document node sent the container to the tree | The stand-in has the document's URIs from the start. | [`8e3270a`][8e3270a] |
+| A streamed map constructor whose entries each read the document sent the container to the tree | Each entry is read on its own tee cursor; the first error in entry order is the map's. | [`fb356ca`][fb356ca] |
+| An `xsl:fork` whose prongs each read the document, inside `xsl:try`, sent the container to the tree | The first error in prong order is the try's; a failed prong reads on, so parse errors stay the document's. | [`cca65c4`][cca65c4] |
+| A streamed rule calling a global `accumulator-after#1` through a variable ran on the tree | The call reads no focus (§2.3.2, §10.3.6), so it is motionless; a supplied parameter declines streaming. | [`844cd8f`][844cd8f] |
+| `unparsed-entity-uri()` in a streamed rule on a grounded copy answered "" | The copy is given the document's DTD. | [`6b07dab`][6b07dab] |
+| `unparsed-entity-uri()` in a streamed rule for `/` before its consumer sent the input to the tree | The run moves to the document element first, where the DOCTYPE is known. | [`13f330b`][13f330b] |
+| A streamed call on a function whose body climbs (recursion on `$n/..`, `parent::X` tests) ran on the tree | Bodies are judged per value kind; ancestors' copies answer names, attributes and existence. | [`d2a3158`][d2a3158] |
+| `fn:xml-to-json` of a streamed document node or element ran on the tree | It is written from the parse events as the tree writes it; invalid input goes to the tree for its error. | [`5ed3b7d`][5ed3b7d], [`eb66e23`][eb66e23] |
+| A streamed `filter(P, f#1)` or `outermost(copy-of(P))` ran on the tree | Named function references are read as calls; outermost or innermost of copies are the copies. | [`9f02ee9`][9f02ee9] |
+| A streamed call on a function whose body has instructions (apply-templates, grouping, literal elements) ran on the tree | The body is planned and run inside the caller's plan. | [`0489759`][0489759] |
+| A streamed body calling a stylesheet function on a variable's copies sent the container to the tree | The call reads nothing of the stream and is motionless. | [`c68e9b4`][c68e9b4] |
+| A streamed call passing a path to an atomic parameter of a function with node parameters ran on the tree | The argument is read off the stream as values. | [`8a4f213`][8a4f213] |
+| A streamed function recursing on the current group ran on the tree | Each recursive call site gets a call frame, a plan of its own run in the caller's stream. | [`0dfff09`][0dfff09] |
+| A streamed call passing a path to a one-node parameter, or recursing as `$n!*!f(.)`, ran on the tree | It runs as a loop over the matches with the tree's cardinality check. | [`d7f3a71`][d7f3a71] |
+| A streamed call whose value is copied gave up at the document element | The element's grounded copy is held under the tree's cap, as the tree holds it and the copy. | [`9354f1d`][9354f1d], [`63dd3ad`][63dd3ad], [`328460b`][328460b] |
+| A streamed for-each over a stylesheet call on a path ran on the tree | The call runs on the matches' grounded copies and the loop over its value. | [`c942506`][c942506] |
+| `copy-of(.)`, `snapshot(.)` or `value-of` of `.` at a streamed document node sent the container to the tree | The copy is written from the parse events, or built once; the string value is read off the text. | [`29cc3e9`][29cc3e9] |
+| `xsl:copy` of a streamed document node sent the container to the tree unless its body was one apply-templates | The stand-in takes the DOCTYPE and base URI when the parse meets the root. | [`b9cbc6d`][b9cbc6d] |
+| A copy-of or sequence of a choice of paths, in a rule that may match the document element, was refused | The condition is evaluated first and the chosen branch's matches copied as read. | [`932bb98`][932bb98] |
+| A streamed rule for text, comment or PI nodes returning atomic values with `xsl:sequence` was refused | A select that can return only atomic values hands on no copy of the leaf. | [`ead3f81`][ead3f81] |
+| A streamed `xsl:variable` with an atomic `as` type selecting its context was refused as a grounded copy | The declared type atomizes the value, which is read off the cursor. | [`2cfd986`][2cfd986] |
+| apply-templates over a streamed path that may select text, comment or PI nodes sent the container to the tree | Each such match is dispatched on its complete copy, in place. | [`9a7551b`][9a7551b] |
+| Copies of a streamed document made from the parse's events lost the DTD's ID attributes | They keep is-id and is-idrefs, and all typing where the tree's copy does. | [`f05fd39`][f05fd39] |
+| `unparsed-entity-uri()` of a streamed document node sent the container to the tree | It reads the DOCTYPE the stand-in takes at the root, once the document is read. | [`ff1f3ac`][ff1f3ac] |
+| A streamed `xsl:comment` or `xsl:processing-instruction` selecting elements in a loop that may match the root was refused | Their select is simple content, read as values. | [`302ddf2`][302ddf2] |
+| `xsl:value-of` of text nodes beside a streamed path of elements was refused | Only the path is read as values; the text nodes merge as in the tree. | [`64ae463`][64ae463] |
+| apply-templates over `copy-of()` or `P ! snapshot(.)` of a streamed node sent the container to the tree | The copies are read off the cursor and the templates applied to them on the tree. | [`8a68af2`][8a68af2] |
+| A group-by over members that may be the root's children was refused by the memory rule | They are held as one fragment of copies made from the events, when the body cannot tell a copy. | [`a6f13b1`][a6f13b1] |
+| An accumulator rule reading another accumulator, or itself, sent the document to the tree | The read accumulator is stepped first at the node, in the tree's error order; mutual reads stay refused. | [`87cea8b`][87cea8b] |
+| `xsl:try` or `xsl:message` reading an accumulator sent the container to the tree | Under §18.2.5's errors both modes raise at the same read, so they stream. | [`827e309`][827e309], [`b90d54e`][b90d54e] |
+| `xsl:apply-templates` inside a streamed `xsl:try` sent the mode to the tree | It streams when no rule it reaches can fail but the built-ins, whose first error both modes meet at one node. | [`1ac69c5`][1ac69c5] |
+| A merge action asking for `last()` sent the merge to the tree | The streamed merge forms every group first, holding only the items' snapshots. | [`54dbc38`][54dbc38] |
+| `xsl:message` in a merge action, or boolean or global-map merge keys, sent the merge to the tree | Admitted: messages are taken back on a re-run, key classes read from the expression. | [`54dbc38`][54dbc38] |
+| A merge whose first streamed source's `for-each-source` failed re-ran on the tree | The error, the tree's first, is returned at once. | [`54dbc38`][54dbc38] |
+| A streamed merge source with `use-accumulators` sent the merge to the tree | An observer per document gives each item's snapshot its values; a failing walk re-runs on the tree. | [`cb7bc56`][cb7bc56] |
+| `copy-accumulators="no"` on a streamed `xsl:copy-of` sent it to the tree | It is the default and streams as the attribute's absence does. | [`3507414`][3507414] |
+| An accumulator rule reading `base-uri(/)` sent the document to the tree | The parse's document node has the document's base URI from the start, so the rule streams. | [`b3cf350`][b3cf350] |
+| `xsl:copy-of copy-accumulators="yes"` of streamed nodes sent the container to the tree | The matches' values are recorded while they are grounded and answer for the copies. | [`816d8ec`][816d8ec] |
+| `intersect` or `except` of two climbing paths (`A/ancestor::* intersect B/ancestor::*`) sent the container to the tree | Each operand's climbed nodes are recorded once with a branch mask; the operator applies at the end. | [`fd303aa`][fd303aa] |
+| A streamed `xsl:for-each-group` over `subsequence(P, a, b)` sent the container to the tree | The population walk counts P's matches and passes over those outside the window. | [`0bd7034`][0bd7034] |
+| `xsl:for-each-group` over attributes, text nodes or `outermost(P)` of a stream sent the container to the tree | The population is held as collected, under the memory cap, and grouped by the tree's code. | [`de0784c`][de0784c] |
+| A grouping over `(//x)[...]` with a motionless body, or text value templates in its body, sent the container to the tree | The population is walked as the split walks it, nested members included. | [`960370b`][960370b] |
+| A grouping over attributes, text or `node()` in a rule for the document element sent it to the tree | The population is a pruned copy built from the events; the body runs off the stream. | [`5bbaba2`][5bbaba2] |
+| A group-by in `xsl:fork` whose body applied templates to or sequenced `current-group()` sent the run to the tree | The members are held as copies under their ancestors' copies, from the events. | [`b79ca81`][b79ca81] |
+| A streamed for-each over attributes or text nodes whose body read `data(.)` or `copy-of(.)` sent the container to the tree | The body is planned at a leaf's focus and runs on each complete item. | [`e73ae6b`][e73ae6b] |
+| A for-each over a streamed element's attributes whose body read `.` sent the container to the tree | Its body is checked at a leaf's focus: each attribute is complete. | [`1d406ab`][1d406ab] |
+| A streamed `xsl:iterate` over attributes or values whose body read `.` sent the container to the tree | Its body is checked at a leaf's focus, as a for-each's. | [`65ebe0e`][65ebe0e] |
+| `xsl:apply-templates` over `copy-of(P)` or `P/copy-of(.)` of a streamed document sent the container to the tree | The copies are collected as read and dispatched as the tree does, with its sort, parameters and `last()`. | [`a52bc6b`][a52bc6b] |
+| A streamed for-each over `P/copy-of(.)` whose matches may nest sent the container to the tree | It runs over the copies of a population, one grounded match at a time. | [`2536f98`][2536f98] |
+| A streamed for-each over copies whose body read `last()` raised XPDY0002 where the tree gives the count | Such a loop runs on the tree; a body that cannot read `last()` still streams. | [`d2c48ef`][d2c48ef] |
+| `xsl:value-of` over the context's own subtree, such as `descendant-or-self::*`, in a streamed rule sent the container to the tree | The context is grounded once and the values made from its copy. | [`d5178af`][d5178af] |
+| A motionless `xsl:iterate` over a node's ancestors, or a motionless for-each with `xsl:sort` over a variable, sent the container to the tree | Both are checked as a motionless for-each is. | [`a0e226c`][a0e226c] |
+| A streamed rule using `key()` over a global's document, or `current()` in its pattern, sent the container to the tree | Both are read off the candidate's view. | [`91af2f9`][91af2f9] |
+| `current()` in a streamed rule's instruction, or apply-templates `select="@*"` on the document node, sent the stylesheet to the tree | `current()` is the instruction's item; `@*` of the document node is empty. | [`e4ecbd7`][e4ecbd7] |
+| A streamed rule matching text nodes too that copied `@* except @a` sent the container to the tree | On a text node both operands are empty, so it is motionless. | [`0a73669`][0a73669] |
+| A streamed rule applying templates to copies of its attributes, a map of its values or a variable's copies sent the container to the tree | The items go to the tree's rules off the cursor. | [`b50e009`][b50e009] |
+| `has-children()` in a streamed rule's motionless instruction or pattern sent the stylesheet to the tree | The dispatch peeks past the element's start tag and records the answer on its view. | [`a386ca5`][a386ca5] |
+| A streamed for-each or apply-templates over `if ($c) then P else Q`, or `$v union P`, sent the container to the tree | The chosen branch's own split is read; `$v`'s nodes are merged into the matches by order. | [`44fc1c0`][44fc1c0] |
+| `xsl:apply-templates` over a value computed from the stream, such as `if (P) then 0 else 1`, sent the container to the tree | The values are read off the stream and dispatched as the tree does. | [`1f91b5d`][1f91b5d] |
+| A streamed for-each or apply-templates over `[$v, P/copy-of()]?*` sent the container to the tree | The array's members are read as a sequence population. | [`c92d154`][c92d154] |
+| An apply-templates in a streamed loop body over snapshots or copies required a streamable mode, sending the container to the tree | It runs the tree's dispatch on the copy, in any mode. | [`d26ad2e`][d26ad2e] |
+| A streamed `xsl:call-template` passing a child of the context, atomized by the callee, sent the container to the tree | The parameter is read off the cursor as `xsl:next-iteration`'s is. | [`0f78020`][0f78020] |
+| `outermost(P)/T` over a document where P's matches nest sent the container to the tree | The outermost matches do not nest: T runs on each one's copy. | [`bf94023`][bf94023] |
+| A streamed rule applying templates to `doc()` of another document sent the container to the tree | That document's nodes go to the tree's rules; the streamed document itself is declined at run time. | [`6feaadd`][6feaadd] |
+| `xsl:apply-templates` over a filter of copies, `(copy-of(P))[pred]`, sent the container to the tree | The copies are collected, filtered and dispatched as the tree does. | [`35d5ad7`][35d5ad7] |
+| A window over a streamed path mapped to a name, `subsequence(P, 1, 4) ! name(..)`, sent the container to the tree | It is read as the window over the mapped path, which streams. | [`40bb829`][40bb829] |
+| A streamed apply-templates over copies whose rules read accumulator values sent the stylesheet to the tree | The observer keeps the values of the nodes read while the copies are made, as the tree's tables would. | [`1b4d62e`][1b4d62e] |
+| A streamed container reading a non-streamable accumulator ran on the tree | It streams and raises XTDE3362 as the tree does. | [`065b5b5`][065b5b5] |
+| `root()` of a copied node, or `fold-right()` over values of the stream, left the streamed container with no verdict | The analysis models them for a grounded operand, by §19.8.9.18 and §19.8.9.9. | [`ef9e55b`][ef9e55b] |
+| `xsl:copy` of a streamed attribute with a `type` sent the container to the tree | The attribute's name and value are assessed against the type as a detached copy, as the tree's result. | [`b7e79f7`][b7e79f7] |
+| A for-each over a union of two same-depth paths with a `\|\|` body ran on the tree | The trusting walk reads the union as striding, since such nodes cannot nest; the refusal is unchanged. | [`4f2cc85`][4f2cc85] |
+| `copy-of()` of the attributes a streamed path climbs to sent the container to the tree | A copy of an attribute or leaf is taken from its view, as complete as the tree's node. | [`adc813c`][adc813c] |
+| `xsl:perform-sort` over copies or values of the streamed document sent the streamed rule to the tree | Its select is read off the stream and the sort runs on what it returned. | [`157f717`][157f717] |
+| `xsl:apply-templates` building an `xsl:map` held in a typed variable sent the streamed container to the tree | The map's content is maps or an error alike in both modes, so the apply streams. | [`167a347`][167a347] |
+| A stylesheet comparing streamed nodes with `doc()` nodes of the same document could stream a different answer from the tree's | It runs on the tree when a load may reach the streamed URI; a literal other URI still streams. | [`60cf53e`][60cf53e], [`ddcaebf`][ddcaebf] |
+| A streamed container in a stylesheet that uses a package ran on the tree | A plain `xsl:use-package` leaves the using module's own declarations trusted, so it streams. | [`381a787`][381a787] |
+| A streamable mode whose rules sit in imported or included modules ran on the tree | Its rules are verified across every module, by import precedence, and stream. | [`954a278`][954a278] |
+| A streamed container in a package that overrides a used package's function ran on the tree | The overriding declarations are the using package's own and are trusted. | [`0175e4b`][0175e4b] |
+| A streamed container calling a function of a used package ran on the tree | The function is verified in its own package and called as itself. | [`8d10f9e`][8d10f9e] |
+| A streamed call on a stylesheet function with an instruction body over atomic arguments ran on the tree | The call is given values only and runs as itself. | [`d4feb67`][d4feb67] |
+| A streamed call on a used package's absorbing function, such as the spec's xml-to-json package, ran on the tree | Its body runs as a call frame in the caller's stream, compiled in the package's state, its modes planned per package. | [`38629c8`][38629c8] |
+| `accumulator-after` on an element whose subtree failed an accumulator rule gave a value when streamed | The read re-takes its frame after consuming the element and raises the error (§18.2.5). | [`59e5ee0`][59e5ee0] |
+| A mode reading an accumulator whose end rule calls `accumulator-after` was not verified streamable | §19.8.9.1 rules 4 and 5: motionless in an end rule, free-ranging in a start rule. | [`a8b0eeb`][a8b0eeb] |
+| A streamed rule on a grounded copy at the top of a principal result ran on the tree | It streams when its body's top makes only new nodes. | [`724617a`][724617a] |
+| A streamed container ran on the tree when a used package declared an accumulator of the same name | The package's accumulator is its own and no longer refuses it. | [`d30a7e8`][d30a7e8] |
+| A call on a used package's absorbing function through a wrapper still ran on the tree | The wrapper call is rewritten in place, `map:get` is focus-free, values calls are not inlined. | [`0ae8a17`][0ae8a17] |
+| A streamed call `f(.)` at an element, on a function with an instruction body, ran on the tree | `.` at an element is the match the inlined body consumes. | [`678c4ef`][678c4ef] |
+| A recursive streamed function over `tail(current-group())` ran on the tree | The frame's grouping reads the enclosing group past its first member. | [`4bdcad8`][4bdcad8] |
+| A streamed call passing a path to a one-node parameter never streamed | Its loop path is split from a fresh parse; the body reads the parameter as the match's view. | [`0a00b54`][0a00b54] |
+| A select calling an instruction-bodied function the inliner refused ran on the tree | It is planned by the split, as before inlining. | [`36ecaac`][36ecaac] |
+| `P ! f(.)/@x` over nested matches with a climbing `f` ran on the tree | Atomized, it runs on each match's grounded copy. | [`a788a32`][a788a32] |
+| A streamed group key reading a function parameter raised XPST0008 inside an inlined call (`su-absorbing-301`) | The key sees its grouping's own locals. | [`79b94b5`][79b94b5] |
+| `tail(P) ! R` streamed ran R on P's first match, raising its error where the tree drops it | The split skips the match before its tail runs. | [`5804464`][5804464] |
+| `xsl:value-of` of `(if (c) then A else B) ! R` sent the container to the tree | The choice is hoisted through simple content's `data()`. | [`8fe2846`][8fe2846] |
+| A loop over `(P)[position() = L to H]` went to the tree again once filtered copies were read first | A refused filtered-copies reading leaves the window reading free. | [`cccfc14`][cccfc14] |
+| A streamed for-each over `copy-of(P)` whose body read `last()` failed XPDY0002 (guard) | A population read off the cursor is checked for `last()` as an unplanned loop is. | [`3208035`][3208035] |
+| An apply-templates over `snapshot(P)` whose rules read accumulators failed on the stream | The tree's dispatch over the copies keeps the originals' values, as for `copy-of`. | [`6fc06e9`][6fc06e9] |
+| A for-each or apply-templates over `copy-of(//P)` or `snapshot(//P)` sent the container to the tree | Only the last step says whether a match may be a leaf. | [`608935d`][608935d] |
+| An `xsl:iterate` or for-each over `P/name()` sent the container to the tree | A loop over an atomic tail of each match is a loop over values. | [`db6f542`][db6f542] |
+| `subsequence(P, 1, 2) ! name(ancestor::*[1])` sent the container to the tree | A map climbing inside a function call is a mapped path, read off the matches' views. | [`5ab15c4`][5ab15c4] |
+| `id()`, `idref()` or `unparsed-entity-uri()` on a variable's copy of the streamed document sent the container to the tree | A call whose node argument is a variable reads that node's document. | [`0b676e7`][0b676e7] |
+| A streamed group's variable copying `current-group()` beside `copy-of(.)` hit the posture guard | A split whose outer calls `current-group()` is refused. | [`36f470e`][36f470e] |
+| apply-templates over `$t/*` in a streamed group, with a with-param reading the group, hit the posture guard | A values population takes no with-param. | [`35422d9`][35422d9] |
+| A streamed `string(.)` of a typed node gave its typed value's form ("4.5"), not its string value ("4.50") | The split takes `fn:string`'s argument as string values. | [`c2e2af2`][c2e2af2] |
+| A streamed copy of the document declared each element's namespaces sorted by prefix, not in source order | `copy-of`'s binding order is used, for the document and a grouping's pruned copies. | [`9315ac0`][9315ac0], [`4f1dad9`][4f1dad9] |
+| A streamed `tail(*)` or `tail(/*)` copied at the document node wrote the document element | The root copy skips it, as `tail()` does. | [`5c09c9d`][5c09c9d] |
+| A streamed source-document inside another dropped the outer run's accumulator observer, re-running its rules on the tree | The rules' runtime no longer replaces the transform-wide list. | [`23da903`][23da903] |
+| Under `Output`, a nested `xsl:try`'s rollback could lose the catch's text when a node reused a taken-back child's slot | The rollback trusts that child only while the sink holds it. | [`76bc90b`][76bc90b] |
+| F9: `TestStreamFuzz` seeds 34820 and 71752 (OUTPUT) differ from the tree | F9: to be filled by the integrator. | (F9) |
+| A `separator="\|"`, or `is` over `doc()` nodes alone, kept a whole stylesheet on the tree | The alias guard follows the parsed expressions as a flow, refusing only where a stream's node may meet a load's. | [`90b29d9`][90b29d9] |
+| An `xsl:evaluate` given a stream's node was not counted by the alias guard | It is an identity use of both kinds (§10.4.2). | [`2de588e`][2de588e] |
+| `last()` in a streamed rule's for-each over its ancestors sent the mode to the tree | A motionless loop's `last()` is its select's size, known before the body. | [`305b99d`][305b99d] |
+| `xsl:next-match` in a streamed rule for text nodes sent the mode to the tree | The next rule runs on the complete text node, as the tree's does. | [`bf58cad`][bf58cad] |
+| apply-templates over a variable holding `xsl:copy-of`'s copies sent a streamed mode to the tree | Such a variable holds new trees; the rules run on them. | [`acf9a9c`][acf9a9c] |
+| A streamed text-node pattern reading an accumulator sent the mode to the tree | The observer keeps the text node's values for its pattern. | [`9f896b0`][9f896b0] |
+| apply-templates over a global tree with a `copy-of(.)` parameter sent a streamed loop to the tree | The parameter is read off the cursor before the tree's rules run. | [`9e7f579`][9e7f579] |
+| An `xsl:iterate` comparing carried copies with `current()`, or binding `copy-of()`, went to the tree | Both read the view and the item's copy. | [`acc785d`][acc785d] |
+| A streamed path whose `text()` or `node()` step tested its parent's attribute went to the tree | The leaf's predicate reads its ancestors on its copy under theirs. | [`b0894e2`][b0894e2] |
+| A streamed for-each over `head(//X)` whose body copied content went to the tree | The body runs on the first match; matches inside it are no items. | [`96b8df3`][96b8df3] |
+| A test or predicate calling an inspection `xsl:function` on the stream went to the tree | The call is checked as its body; `[position() = N and P]` reads as `[N][P]`. | [`0e0d2b8`][0e0d2b8] |
+| A streamed path testing its outermost ancestor by `ancestor-or-self::*[last()]` went to the tree | The view has every ancestor: positions among them are read on it. | [`af1a9e5`][af1a9e5] |
+| A streamed rule filtering tokens of its own string by `last()` went to the tree | The outer has the whole value: `last()` is its count. | [`c4323f5`][c4323f5] |
+| apply-templates to an array built of snapshots of the stream went to the tree | The array is made over the collected copies and dispatched. | [`f638162`][f638162] |
+| A for-each over climbed ancestors (`function-5017`, `-5018`) ran on the tree | It streams when the body is motionless on their views. | [`256759e`][256759e] |
+| `unparsed-entity-uri#1` in a rule for an element ran on the tree | The view's tree has the document's DTD, so it streams. | [`8a9d83d`][8a9d83d] |
+| An accumulator rule with a sequence-constructor body (`accumulator-036s`) kept the mode on the tree | It is judged at its matched node, as a select is. | [`a98e534`][a98e534] |
+| A used package's streamable `xsl:source-document` (`override-misc-007`) ran on the tree | It is trusted when used through `xsl:accept` alone, and its accumulators are observed. | [`66777b6`][66777b6] |
+| A call at the document node on a module function given the document node (`function-5002`) ran on the tree | It is inlined as a call frame. | [`5a0eab3`][5a0eab3] |
+| An instruction-body function given `copy-of(.)` in a tail (`function-5011`) ran on the tree | A call given only copies and values streams. | [`4bea4f9`][4bea4f9] |
+| A copy of `/doc/chap[2]` at the document node kept a principal input on the tree | A held select with at most one match streams it. | [`eb144dd`][eb144dd] |
+| A filter over `tokenize()`'s strings at the document node kept a principal input on the tree | Its predicates read atomic values only, and it streams. | [`8be963f`][8be963f] |
+| A rule whose group is read beside its consuming path kept the mode on the tree | The rule runs on a grounded copy of its element. | [`7bec012`][7bec012] |
+| A rule with a map of two consuming values kept the mode on the tree | The rule runs on a grounded copy of its element. | [`f6e3637`][f6e3637] |
+| A rule on a grounded copy refused accumulators | The copy carries the document's accumulator values. | [`4e56b21`][4e56b21] |
+| A copy-of whose tail runs on a copy of the document element kept a principal input on the tree | The element is grounded, as the tree holds it. | [`75c5d3c`][75c5d3c] |
+| A leaf's rule returning a stylesheet function of the leaf stayed on the tree | The call is checked through its inlined body. | [`cac3851`][cac3851] |
+| `current-group()!copy-of()` over the document element's children stayed on the tree | Each member is copied as its path's tail and the ground let go. | [`16a64ec`][16a64ec] |
+| An `xsl:try` whose catch had `exclude-result-prefixes` ran on the tree | The attribute is not an instruction; the try streams. | [`cc11df5`][cc11df5] |
+| apply-templates in a variable typed as maps or arrays ran on the tree | No node is an instance of that type: it streams, with the same XTTE. | [`7730dcb`][7730dcb] |
+| An accumulator typed as a map or array of atomic values ran on the tree | Such a value holds no node of the parse: it streams. | [`95171aa`][95171aa] |
+| `accumulator-before('m')(k)` was refused in a streamed rule | A call on an accumulator's value with atomic arguments reads nothing of the stream. | [`ce41a32`][ce41a32] |
+| An accumulator pattern with a `some` or `every` predicate was refused | Quantified predicates over attribute values are decided at the start tag. | [`d02cb54`][d02cb54] |
+| A merge of a collected path-keyed source with streamed string keys ran on the tree | It streams when the collected keys are untyped, checked as read. | [`42ce08f`][42ce08f] |
+| A `group-by` in `xsl:fork` returning `map{...}` ran on the tree | A map constructor of atomic values hands no member on. | [`5531827`][5531827] |
+| `f(snapshot(.))` in a rule for the document element (`sf-unparsed-entity-03`, `-04`) stayed on the tree | The one copy of the match streams, at the tree's memory. | [`a7d0796`][a7d0796] |
+| `xsl:perform-sort` over `copy-of(item)` (`si-perform-sort-001`) stayed on the tree | Each item is copied as its tail and the ground let go. | [`20a5eef`][20a5eef] |
+| `innermost` or `reverse` over `snapshot(/chapter)`, or `snapshot(/)`, at the document node stayed on the tree | The select runs on the document built off the stream. | [`4f870c3`][4f870c3] |
+| A `snapshot(/*)` variable read with `$v/..` (`sf-snapshot-0101b`) stayed on the tree | In its scope the variable is read as the tree it is. | [`609bc45`][609bc45], [`3fbd05e`][3fbd05e] |
+| An unclassified function given `copy-of(.)` at `/` (`function-5001`) stayed on the tree | The call is not inlined and runs on the document built. | [`330e96a`][330e96a] |
+| A `copy-of(current-group())` parameter refused streaming | It is read from the group's members at the instruction; one group's copies are held. | [`19f2492`][19f2492] |
+| A for-each over copies reading `last()` ran on the tree | The copies are collected first, then looped with their count. | [`c6b67df`][c6b67df] |
+| A path climbing out of `snapshot(P)` ran on the tree | P's matches are grounded and the snapshots' own ancestors climbed. | [`bedbb23`][bedbb23] |
+| An instruction-body function given the match in a tail ran on the tree | It runs on the match's grounded copy when its body sets no focus and reads only down. | [`84c0f1f`][84c0f1f] |
+| `outermost(doc/f(x))`, and a loop over a tail on grounded copies, ran on the tree | The path is the document element, the tail run on its grounded copy. | [`d32fa1d`][d32fa1d] |
+| `$f(snapshot(.))`, and `snapshot(@a)` applied in a tree mode, ran on the tree | A dynamic call given copies streams; `snapshot(@a)` is applied as `copy-of(@a)` is. | [`cc32228`][cc32228] |
+| `xml-to-json()` of a path whose matches may nest stayed on the tree | The writer matches below the first match; a second raises the tree's XPTY0004. | [`eb315d3`][eb315d3] |
+| A built-in copy of a comment, PI or text node at the top of a streamed principal result was refused | The document is built as read and `Result.Nodes` holds its nodes. | [`5cd3316`][5cd3316] |
+| `max()` or `min()` below the document node over schema-typed elements stayed on the tree | A schema list of one atomic item type makes the fold exact. | [`6930e60`][6930e60] |
+| A `group-by` body returning arrays or maps of atomic values kept its members on the tree | Such a body hands no member on; members are copied as events. | [`c5c4fa9`][c5c4fa9] |
+| `xsl:source-document` with a `#id` fragment never streamed | The cursor is read to the element, whose copy is the body's context; absent, the tree runs. | [`11c4ba5`][11c4ba5] |
+| `evaluate-046`'s preprocessor stayed on the tree | Atomic results in the alias flow, an accumulator's own value, except-patterns, a motionless `xsl:evaluate`. | [`69101da`][69101da], [`13ecb6e`][13ecb6e], [`615676a`][615676a], [`95338d5`][95338d5] |
 | `system-property('xsl:supports-streaming')` answered `no` | It answers `yes`, and `fn:transform` requested-properties match it; `streaming-fallback` is not claimed. | [`de7aab2`][de7aab2] |
 | `\|\|` was unmodelled in the §19.8 analysis, so si-fork-902 and -952 compiled | Modelled per §19.8.8 (`A \|\| A`), withheld in a crawling focus; both now get XTSE3430. | [`1f6576d`][1f6576d] |
 | A streamable function whose body was not one `xsl:sequence` was never checked | Its sequence constructor is assessed (§19.8.5); su-absorbing-205 gets XTSE3430. All 151 W3C XTSE3430 cases now refuse. | [`6e960b7`][6e960b7] |
@@ -2341,3 +2423,89 @@ here so every entry in this file sits under a release.
 [44db07f]: https://github.com/knroy/go-xml/commit/44db07f
 [096a587]: https://github.com/knroy/go-xml/commit/096a587
 [294b965]: https://github.com/knroy/go-xml/commit/294b965
+[2e860a2]: https://github.com/knroy/go-xml/commit/2e860a2
+[3916423]: https://github.com/knroy/go-xml/commit/3916423
+[59e5ee0]: https://github.com/knroy/go-xml/commit/59e5ee0
+[a8b0eeb]: https://github.com/knroy/go-xml/commit/a8b0eeb
+[724617a]: https://github.com/knroy/go-xml/commit/724617a
+[d30a7e8]: https://github.com/knroy/go-xml/commit/d30a7e8
+[0ae8a17]: https://github.com/knroy/go-xml/commit/0ae8a17
+[678c4ef]: https://github.com/knroy/go-xml/commit/678c4ef
+[4bdcad8]: https://github.com/knroy/go-xml/commit/4bdcad8
+[0a00b54]: https://github.com/knroy/go-xml/commit/0a00b54
+[36ecaac]: https://github.com/knroy/go-xml/commit/36ecaac
+[a788a32]: https://github.com/knroy/go-xml/commit/a788a32
+[79b94b5]: https://github.com/knroy/go-xml/commit/79b94b5
+[5804464]: https://github.com/knroy/go-xml/commit/5804464
+[8fe2846]: https://github.com/knroy/go-xml/commit/8fe2846
+[cccfc14]: https://github.com/knroy/go-xml/commit/cccfc14
+[3208035]: https://github.com/knroy/go-xml/commit/3208035
+[6fc06e9]: https://github.com/knroy/go-xml/commit/6fc06e9
+[608935d]: https://github.com/knroy/go-xml/commit/608935d
+[db6f542]: https://github.com/knroy/go-xml/commit/db6f542
+[5ab15c4]: https://github.com/knroy/go-xml/commit/5ab15c4
+[0b676e7]: https://github.com/knroy/go-xml/commit/0b676e7
+[36f470e]: https://github.com/knroy/go-xml/commit/36f470e
+[35422d9]: https://github.com/knroy/go-xml/commit/35422d9
+[c2e2af2]: https://github.com/knroy/go-xml/commit/c2e2af2
+[9315ac0]: https://github.com/knroy/go-xml/commit/9315ac0
+[4f1dad9]: https://github.com/knroy/go-xml/commit/4f1dad9
+[5c09c9d]: https://github.com/knroy/go-xml/commit/5c09c9d
+[23da903]: https://github.com/knroy/go-xml/commit/23da903
+[76bc90b]: https://github.com/knroy/go-xml/commit/76bc90b
+[90b29d9]: https://github.com/knroy/go-xml/commit/90b29d9
+[2de588e]: https://github.com/knroy/go-xml/commit/2de588e
+[305b99d]: https://github.com/knroy/go-xml/commit/305b99d
+[bf58cad]: https://github.com/knroy/go-xml/commit/bf58cad
+[acf9a9c]: https://github.com/knroy/go-xml/commit/acf9a9c
+[9f896b0]: https://github.com/knroy/go-xml/commit/9f896b0
+[9e7f579]: https://github.com/knroy/go-xml/commit/9e7f579
+[acc785d]: https://github.com/knroy/go-xml/commit/acc785d
+[b0894e2]: https://github.com/knroy/go-xml/commit/b0894e2
+[96b8df3]: https://github.com/knroy/go-xml/commit/96b8df3
+[0e0d2b8]: https://github.com/knroy/go-xml/commit/0e0d2b8
+[af1a9e5]: https://github.com/knroy/go-xml/commit/af1a9e5
+[c4323f5]: https://github.com/knroy/go-xml/commit/c4323f5
+[f638162]: https://github.com/knroy/go-xml/commit/f638162
+[256759e]: https://github.com/knroy/go-xml/commit/256759e
+[8a9d83d]: https://github.com/knroy/go-xml/commit/8a9d83d
+[a98e534]: https://github.com/knroy/go-xml/commit/a98e534
+[66777b6]: https://github.com/knroy/go-xml/commit/66777b6
+[5a0eab3]: https://github.com/knroy/go-xml/commit/5a0eab3
+[4bea4f9]: https://github.com/knroy/go-xml/commit/4bea4f9
+[eb144dd]: https://github.com/knroy/go-xml/commit/eb144dd
+[8be963f]: https://github.com/knroy/go-xml/commit/8be963f
+[7bec012]: https://github.com/knroy/go-xml/commit/7bec012
+[f6e3637]: https://github.com/knroy/go-xml/commit/f6e3637
+[4e56b21]: https://github.com/knroy/go-xml/commit/4e56b21
+[75c5d3c]: https://github.com/knroy/go-xml/commit/75c5d3c
+[cac3851]: https://github.com/knroy/go-xml/commit/cac3851
+[16a64ec]: https://github.com/knroy/go-xml/commit/16a64ec
+[cc11df5]: https://github.com/knroy/go-xml/commit/cc11df5
+[7730dcb]: https://github.com/knroy/go-xml/commit/7730dcb
+[95171aa]: https://github.com/knroy/go-xml/commit/95171aa
+[ce41a32]: https://github.com/knroy/go-xml/commit/ce41a32
+[d02cb54]: https://github.com/knroy/go-xml/commit/d02cb54
+[42ce08f]: https://github.com/knroy/go-xml/commit/42ce08f
+[5531827]: https://github.com/knroy/go-xml/commit/5531827
+[a7d0796]: https://github.com/knroy/go-xml/commit/a7d0796
+[20a5eef]: https://github.com/knroy/go-xml/commit/20a5eef
+[4f870c3]: https://github.com/knroy/go-xml/commit/4f870c3
+[609bc45]: https://github.com/knroy/go-xml/commit/609bc45
+[3fbd05e]: https://github.com/knroy/go-xml/commit/3fbd05e
+[330e96a]: https://github.com/knroy/go-xml/commit/330e96a
+[19f2492]: https://github.com/knroy/go-xml/commit/19f2492
+[c6b67df]: https://github.com/knroy/go-xml/commit/c6b67df
+[bedbb23]: https://github.com/knroy/go-xml/commit/bedbb23
+[84c0f1f]: https://github.com/knroy/go-xml/commit/84c0f1f
+[d32fa1d]: https://github.com/knroy/go-xml/commit/d32fa1d
+[cc32228]: https://github.com/knroy/go-xml/commit/cc32228
+[eb315d3]: https://github.com/knroy/go-xml/commit/eb315d3
+[5cd3316]: https://github.com/knroy/go-xml/commit/5cd3316
+[6930e60]: https://github.com/knroy/go-xml/commit/6930e60
+[c5c4fa9]: https://github.com/knroy/go-xml/commit/c5c4fa9
+[11c4ba5]: https://github.com/knroy/go-xml/commit/11c4ba5
+[69101da]: https://github.com/knroy/go-xml/commit/69101da
+[13ecb6e]: https://github.com/knroy/go-xml/commit/13ecb6e
+[615676a]: https://github.com/knroy/go-xml/commit/615676a
+[95338d5]: https://github.com/knroy/go-xml/commit/95338d5

@@ -116,10 +116,10 @@
       "component": "xslt",
       "suite": "W3C XSLT 3.0",
       "edition": "XSLT 3.0",
-      "passed": 11499,
-      "disagreements": 19,
+      "passed": 11501,
+      "disagreements": 17,
       "total": 11518,
-      "run_date": "2026-11-03",
+      "run_date": "2026-11-04",
       "command": "tests/check.sh (TestXSLT30Suite)",
       "skipped_out_of_scope": 2949,
       "skipped_unimplemented": 134,
@@ -133,11 +133,6 @@
           "id": "accumulator-038",
           "verdict": "fixture",
           "note": "Suite defect; only accumulator-039 carries the 2019 public-visibility repair."
-        },
-        {
-          "id": "accumulator-061",
-          "verdict": "deliberate-divergence",
-          "note": "Costs more than it gains; read in §2."
         },
         {
           "id": "accumulator-073",
@@ -200,11 +195,6 @@
           "note": "Same shape as si-copy-117."
         },
         {
-          "id": "streamable-116",
-          "verdict": "implementation-defined",
-          "note": "§3.6.6 permits building the tree; the catalog marks the case _WRONG:wrong-error-code."
-        },
-        {
           "id": "strip-space-009",
           "verdict": "fixture",
           "note": "§4.4 grants no ancestor-assertion exemption; the case exists to exercise Saxon paths."
@@ -220,7 +210,7 @@
           "note": "Read in §2 and in Corrections."
         }
       ],
-      "unenumerated_note": "All 19 are enumerated. The XTSE3430 block is closed: si-fork-902 and si-fork-952 (|| modelled per §19.8.8, withheld in a crawling focus for sx-union-C) and su-absorbing-205 (§19.8.5's body rule) now get the refusal, so every W3C case wanting XTSE3430 gets it. su-ascent-903, the former overlap, passes since the ascent call rule was applied by intent (§19.8.5.7's last clause is otherwise unreachable). merge-097sf is not a disagreement: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
+      "unenumerated_note": "All 17 are enumerated. The XTSE3430 block is closed: si-fork-902 and si-fork-952 (|| modelled per §19.8.8, withheld in a crawling focus for sx-union-C) and su-absorbing-205 (§19.8.5's body rule) now get the refusal, so every W3C case wanting XTSE3430 gets it. su-ascent-903, the former overlap, passes since the ascent call rule was applied by intent (§19.8.5.7's last clause is otherwise unreachable). merge-097sf is not a disagreement: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
     },
     {
       "id": "xsd-1.0",

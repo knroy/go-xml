@@ -134,12 +134,12 @@ and maintains it as a project of his own.
 | **XPath 3.1** | 100.00% of the W3C QT3 suite (22,054 of 22,054 in scope); maps, arrays, the lookup operator, the JSON family, and `fn:transform`, measured since it became callable from XPath |
 | **XQuery 3.1** | 100.00% of the W3C QT3 suite (30,516 of 30,517 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 318 more passes; the 1 remaining failure, `contextDecl-052`, is a W3C fixture defect catalogued in [conformance-gaps.md](docs/conformance-gaps.md) |
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,193 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.84% of the W3C XSLT suite filtered to 3.0 (11,499 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases; every one of the 151 cases that wants the XTSE3430 refusal gets it — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XSLT 3.0** | 99.85% of the W3C XSLT suite filtered to 3.0 (11,501 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases; every one of the 151 cases that wants the XTSE3430 refusal gets it — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 3,112 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 3,167 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -188,15 +188,20 @@ true here:
    `xsl:apply-templates` into streamable modes, `xsl:for-each-group`
    (adjacent, starting-with, ending-with), `xsl:try`, streamable attribute
    sets, calls on stylesheet functions whose body is one `xsl:sequence`
-   (recursive ones too, over values or a match's grounded copy) and, since
-   round L (untested), bodies with instructions planned in the caller's plan,
-   call frames for recursion, and a used package's functions,
+   (recursive ones too, over values or a match's grounded copy), bodies with
+   instructions planned in the caller's plan, call frames for recursion, and
+   a used package's functions,
    accumulators, `xsl:fork` and `xsl:map`, `xsl:merge` over streamable
    sources, set operators, climbing paths, kept text nodes, `xsl:message`,
    `xsl:comment`, `xsl:processing-instruction` and `xsl:result-document`, and
    validated inputs; `TransformOptions.Output` and
-   `SecondaryOutput` write the results as they are made (2,281 W3C cases
-   stream; see [known gaps](docs/known-gaps.md)). Otherwise the streaming cases are in
+   `SecondaryOutput` write the results as they are made. Of the 2,930 W3C
+   cases that touch streaming, 2,661 stream; 262 are refused as the spec
+   requires or ask for no streamed input, and the 7 left are proved not
+   streamable (a cycle, an invalid URI, an input that is already a tree, a
+   mode the spec does not guarantee); a few that stream hold a copy of the
+   whole document and save no memory (see [known gaps](docs/known-gaps.md)).
+   Otherwise the streaming cases are in
    scope and counted: the stylesheet-level half of streaming, the §19.8
    streamability analysis that refuses a construct with `XTSE3430`, is
    implemented and measured. A construct the streamed core does not take
@@ -376,7 +381,7 @@ it once, as the transform runs, when the stylesheet starts in a mode declared
 exactly `xdm.Parse` then `Transform`, so the result, errors and limits are the
 same either way. One difference from `Transform` of a parsed tree is the
 spec's: in a mode declared streamable the global context item is absent
-(XSLT 3.0 §2.3.2), on both paths (round L, untested):
+(XSLT 3.0 §2.3.2), on both paths:
 
 ```go
 f, err := os.Open("big.xml")
@@ -444,7 +449,7 @@ Nothing outside the rules may read the document for it to stream: no typed
 `xsl:global-context-item`, no applicable accumulator that is not streamable or
 that the stream cannot compute. A global variable reading `.` does not read
 the document: the global context item is absent for a streamed input, so it
-raises XPDY0002, streamed or not (round L, untested). In a streamable
+raises XPDY0002, streamed or not. In a streamable
 mode the identity template's `<xsl:apply-templates select="@*|node()"/>` is
 refused with `XTSE3430` (§19.8.8.4 makes the union crawling); write it as
 `<xsl:apply-templates select="@*"/><xsl:apply-templates select="node()"/>`,
@@ -1483,7 +1488,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (3,112 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (3,167 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,517 XQuery cases | XSLT (it is an XPath suite) |

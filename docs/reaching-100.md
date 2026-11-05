@@ -15,10 +15,10 @@ case by case; this file is about what buying them would cost.
 | XPath 3.1 | 0 | 0 | 0 | 0 |
 | XQuery 3.1 | 1 | 0 | 0 | 1 |
 | XSLT 2.0 | 8 | 0 | 0 | 8 |
-| XSLT 3.0 | 19 | 0 | 0 | 19 |
+| XSLT 3.0 | 17 | 0 | 0 | 17 |
 | XSD 1.0 | 30 | 0 | 0 | 30 |
 | XSD 1.1 | 31 | 0 | 0 | 31 |
-| **Total** | **89** | **0** | **0** | **89** |
+| **Total** | **87** | **0** | **0** | **87** |
 
 XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 
@@ -53,7 +53,7 @@ cases in Part 2, not a defect. The two the suite itself declared out of scope
 left the denominator, and the harness scoring defects — chiefly the eight XSD
 `indeterminate` expectations per version that were silently scored as "must be
 invalid" — were fixed in the harness. What stands between here and 100% is
-the 89 in Part 2.
+the 87 in Part 2.
 
 The last four to fall are worth recording, because they are the shape of what
 "fixable" meant:
@@ -100,7 +100,7 @@ A ceiling bounds what the suite asks, not what the code does.
 
 ---
 
-## Part 2 — the 89 that are not work
+## Part 2 — the 87 that are not work
 
 Grouped by what would actually have to change.
 
@@ -305,7 +305,9 @@ The one left is `sf-reverse-001`, which wants `reverse(snapshot(/chapter)//secti
 in reversed order. XPath 3.1 §3.3.1.1 returns a path's nodes in document order
 however the left operand was ordered; the catalog's answer is what a
 *streaming* evaluator produces, since §19.11 says sorting is incompatible with
-streaming. The only route to it is streamed execution proper.
+streaming. Streamed execution does not reach it: the case streams since
+4f870c3c and sorts as the tree does, so the only route is a path out of
+document order.
 
 Three cases used to be on this list and are now **fixed**. `base-uri-052` went
 when XInclude was implemented (`xdm.ProcessXInclude`), and the harness honours
@@ -317,15 +319,11 @@ stated in 19 Streamability", so it never needed the streamability analysis
 this file said it required. A verdict of "needs a feature we have not built"
 is worth re-deriving before it is believed.
 
-### 4 — costs more than it gains
+### 3 — costs more than it gains
 
 - `package-200` — a rule separating it from `use-package-291`–`294` exists but
   rests on quoting, which neither grammar mentions, and would have exactly one
   instance in the suite.
-- `accumulator-061` — §10.3.6 focus capture is implemented; what is missing is
-  that nothing marks the principal input as streamed, and supplying that puts
-  the 2,020 cases in `tests/strm/` at risk to win one. Round L supplied the mark
-  (be09e991, untested): expected to pass, pending the full run.
 - `particlesZ033_g` (XSD 1.1) — enforcing the 1.0 wildcard reading costs
   seventeen valid schemas for the one case.
 - `id017.n01.xml` (XSD 1.1) — a defaulted `xs:ENTITY` in a document with no
@@ -333,7 +331,10 @@ is worth re-deriving before it is believed.
   and the XSLT suite's `as-3401`, `match-208` and `match-209`, which Saxon
   validates.
 
-`use-package-003` was once an entry, and it is now **fixed**. This file said
+`accumulator-061` was an entry, priced as putting the 2,020 cases in
+`tests/strm/` at risk to win one, and it is now **fixed**: round L marks
+`TransformReader`'s input as streamed (be09e991), and the full run lost no
+`tests/strm/` case. `use-package-003` was once an entry, and it is now **fixed**. This file said
 a real fix needed the package threaded through the XPath static context and
 called it "the single largest structural change on this list". The narrow form
 of that turned out to be contained: the declaring package's visibility is
@@ -346,19 +347,18 @@ the wanted code was shown to be unreachable.
 
 ---
 
-### 3 — an implementation-defined difference, and the engine defect that hid behind it (fixed)
+### 2 — an implementation-defined difference, and the engine defect that hid behind it (fixed)
 
-`validation-0201`, on both targets, and `streamable-116`. **Nothing is left to
-do here.**
+`validation-0201`, on both targets. **Nothing is left to do here.**
 
-`streamable-116` wants XPDY0002 because a global variable reads the context
-item while the initial mode streams. §3.6.6 offers two options to the API, one
-of which is "building the corresponding tree in memory and supplying the global
-context item as an unstreamed node" — which is what this engine does — and the
-catalog's own keywords mark the case `_WRONG:wrong-error-code`. Round L
-(6cc2247f, untested) follows §2.3.2 instead, on the owner's decision: in a
-streamable initial mode `TransformReader` makes the global context item absent,
-so the case gets XPDY0002; expected to pass, pending the full run.
+`streamable-116` was on this list and now **passes**. It wants XPDY0002
+because a global variable reads the context item while the initial mode
+streams. §3.6.6 offers the API "building the corresponding tree in memory and
+supplying the global context item as an unstreamed node", which this engine
+did, and the catalog marks the case `_WRONG:wrong-error-code`. Round L
+(6cc2247f) follows §2.3.2 instead, on the owner's decision: in a streamable
+initial mode `TransformReader` makes the global context item absent, so the
+case gets XPDY0002.
 
 `validation-0201` does assert Saxon's three-space indent byte-for-byte, and
 indentation is implementation-defined by §10 of the serialization spec — the
@@ -391,7 +391,7 @@ lands after all, by a route that had to be walked to be believed. See
 
 ## Part 3 — the honest bottom line
 
-**Reaching 100% is not a goal that survives contact with the suites.** All 89
+**Reaching 100% is not a goal that survives contact with the suites.** All 87
 remaining disagreements would require agreeing with a disputed result,
 contradicting §18.2.2, implementing vendor extensions, freezing a stale Unicode
 table, accepting invalid input, weakening a security default, returning a
