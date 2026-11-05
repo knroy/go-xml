@@ -2117,6 +2117,53 @@ type splitOpen struct {
 	silent bool
 }
 
+// splitStack is walk's stack of open elements, held as runs of equal
+// entries: the levels of a deep document mostly have the same frame, and a
+// run stands for all of them.
+type splitStack struct {
+	runs []splitOpenRun
+	n    int
+}
+
+type splitOpenRun struct {
+	o splitOpen
+	n int
+}
+
+func (st *splitStack) len() int { return st.n }
+
+func (st *splitStack) push(o splitOpen) {
+	if k := len(st.runs); k > 0 && sameOpen(&st.runs[k-1].o, &o) {
+		st.runs[k-1].n++
+	} else {
+		st.runs = append(st.runs, splitOpenRun{o, 1})
+	}
+	st.n++
+}
+
+// top is the entry on top, shared with the others of its run: read only.
+func (st *splitStack) top() *splitOpen { return &st.runs[len(st.runs)-1].o }
+
+func (st *splitStack) pop() splitOpen {
+	k := len(st.runs) - 1
+	o := st.runs[k].o
+	if st.runs[k].n--; st.runs[k].n == 0 {
+		st.runs = st.runs[:k]
+	}
+	st.n--
+	return o
+}
+
+// sameOpen reports whether a and b are the same entry: no match pending,
+// and the same frame, sharing its lists.
+func sameOpen(a, b *splitOpen) bool {
+	same := func(x, y []*splitInst) bool {
+		return len(x) == len(y) && cap(x) == cap(y) && (cap(x) == 0 || &x[:1][0] == &y[:1][0])
+	}
+	return !a.match && !b.match && a.pending == nil && b.pending == nil && a.silent == b.silent &&
+		a.f.base == b.f.base && a.f.hit == b.f.hit && same(a.f.own, b.f.own) && same(a.f.desc, b.f.desc)
+}
+
 // walk reads the context's content, matching P.
 //
 // It reads the cursor with NextTag: only start tags whose name some step of
@@ -2126,11 +2173,11 @@ type splitOpen struct {
 // it arrives.
 func (r *splitRun) walk(root splitFrame, d int) error {
 	s, c := r.s, r.c
-	stack := []splitOpen{{f: root}}
+	var stack splitStack
+	stack.push(splitOpen{f: root})
 	// pop closes the open element on top of the stack.
 	pop := func() error {
-		top := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
+		top := stack.pop()
 		if top.silent {
 			r.silent--
 		}
@@ -2166,7 +2213,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 			ev  xdmstream.Event
 			err error
 		)
-		ev, err = r.read(skip, filt, len(stack) == 1, d)
+		ev, err = r.read(skip, filt, stack.len() == 1, d)
 		skip = false
 		if err != nil {
 			return err
@@ -2179,7 +2226,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 		}
 		// The elements passed over that closed are gone; those above the
 		// event, open, get their frames.
-		for ev.Closed > 0 && d+len(stack)-1 >= ev.Closed {
+		for ev.Closed > 0 && d+stack.len()-1 >= ev.Closed {
 			if err := pop(); err != nil {
 				return err
 			}
@@ -2188,13 +2235,13 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 		if ev.Kind == xdmstream.EndElement {
 			at++
 		}
-		for d+len(stack) > at {
+		for d+stack.len() > at {
 			if err := pop(); err != nil {
 				return err
 			}
 		}
-		for d+len(stack) < at {
-			stack = append(stack, splitOpen{f: s.hidden(&stack[len(stack)-1].f)})
+		for d+stack.len() < at {
+			stack.push(splitOpen{f: s.hidden(&stack.top().f)})
 		}
 		if ev.Kind == xdmstream.EndElement {
 			if err := pop(); err != nil {
@@ -2209,7 +2256,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 			continue
 		}
 		cand := splitAt{r: r, n: ev.Node, leaf: ev.Kind != xdmstream.StartElement}
-		f, match, err := s.enter(&stack[len(stack)-1].f, &cand)
+		f, match, err := s.enter(&stack.top().f, &cand)
 		if err != nil {
 			return err
 		}
@@ -2352,7 +2399,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 			if open.silent {
 				r.silent++
 			}
-			stack = append(stack, open)
+			stack.push(open)
 		default:
 			skip = true
 		}

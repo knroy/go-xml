@@ -287,8 +287,8 @@ func copyStartOf(rt *runtime, out *outputBuilder, v *xdm.Node) (*outputBuilder, 
 		el.SetBaseURI(v.BaseURI())
 	}
 	copyTyping(el, v, false)
-	var arr [32]nsBinding
-	addBindings(rt, sub, copyOfBindings(v, arr[:0])) // the source's order, as copyStart
+	var arr, all [32]nsBinding
+	addBindings(rt, sub, copyOfBindings(v, scopeBindings(v, all[:0]), arr[:0])) // the source's order, as copyStart
 	for a := range v.Attrs() {
 		if err := sub.AddAttributeWithTyping(a.Name(), a.Value(), copiedTyping(a, false)); err != nil {
 			return nil, err

@@ -46,12 +46,38 @@ import (
 // otherwise it keeps all of it, as AppendCopy does.
 func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, strip bool, doc func(v *xdm.Node)) error {
 	stack := []*outputBuilder{out}
-	if d > 0 {
-		sub, err := copyStart(rt, out, c, strip)
+	// The in-scope bindings of the open elements, an entry only where an
+	// element declares one: each copied element's come from its parent's
+	// and its own declarations, not from a walk up its ancestors, which made
+	// a deep copy quadratic.
+	var scopes []copyScope
+	start := func(top *outputBuilder, depth int) error {
+		v, err := c.View()
+		if err != nil {
+			return err
+		}
+		var all []nsBinding
+		switch {
+		case len(scopes) == 0:
+			all = scopeBindings(v, nil)
+			scopes = append(scopes, copyScope{depth, all})
+		case v.NumNamespaceDecls() > 0:
+			all = overlayScope(scopes[len(scopes)-1].all, v)
+			scopes = append(scopes, copyScope{depth, all})
+		default:
+			all = scopes[len(scopes)-1].all
+		}
+		sub, err := copyStart(rt, top, v, strip, all)
 		if err != nil {
 			return err
 		}
 		stack = append(stack, sub)
+		return nil
+	}
+	if d > 0 {
+		if err := start(out, d); err != nil {
+			return err
+		}
 	} else if err := rt.ctx.ChargeNodes(1); err != nil {
 		return err // the document node, as countSubtree counts it
 	}
@@ -66,6 +92,9 @@ func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, str
 			return top.Refused()
 		case xdmstream.EndElement:
 			stack = stack[:len(stack)-1]
+			if n := len(scopes); n > 0 && scopes[n-1].depth == ev.Depth {
+				scopes = scopes[:n-1]
+			}
 			if err := top.Refused(); err != nil || ev.Depth == d {
 				return err
 			}
@@ -80,11 +109,9 @@ func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, str
 				}
 				doc(v)
 			}
-			sub, err := copyStart(rt, top, c, strip)
-			if err != nil {
+			if err := start(top, ev.Depth); err != nil {
 				return err
 			}
-			stack = append(stack, sub)
 		case xdmstream.Text:
 			if len(stack) > 1 { // a document node has no text children
 				top.AppendText(ev.Node.Value())
@@ -103,14 +130,37 @@ func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, str
 	}
 }
 
-// copyStart opens, in out, the copy of the element whose start tag the
-// cursor is at, as xsl:copy of an element opens it (copyInstr), with its
-// attributes; the builder of its content is returned.
-func copyStart(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, strip bool) (*outputBuilder, error) {
-	v, err := c.View()
-	if err != nil {
-		return nil, err
+// copyScope is the in-scope bindings (scopeBindings) of the open element at
+// depth, one that declares a namespace.
+type copyScope struct {
+	depth int
+	all   []nsBinding
+}
+
+// overlayScope is scopeBindings of v given its parent's, parent: v's own
+// declarations, the last of a prefix winning, over the inherited ones.
+func overlayScope(parent []nsBinding, v *xdm.Node) []nsBinding {
+	all := slices.Clone(parent)
+	for prefix, uri := range v.DeclaredNamespaces() {
+		if prefix == "xml" {
+			continue
+		}
+		if k := slices.IndexFunc(all, func(b nsBinding) bool { return b.prefix == prefix }); k >= 0 {
+			all[k].uri = uri
+		} else {
+			all = append(all, nsBinding{prefix, uri})
+		}
 	}
+	all = slices.DeleteFunc(all, func(b nsBinding) bool { return b.uri == "" })
+	slices.SortFunc(all, func(a, b nsBinding) int { return strings.Compare(a.prefix, b.prefix) })
+	return all
+}
+
+// copyStart opens, in out, the copy of v, the element whose start tag the
+// cursor is at, as xsl:copy of an element opens it (copyInstr), with its
+// attributes; all is v's in-scope bindings. The builder of its content is
+// returned.
+func copyStart(rt *runtime, out *outputBuilder, v *xdm.Node, strip bool, all []nsBinding) (*outputBuilder, error) {
 	sub := out.StartElement(v.Name())
 	el := sub.Open()
 	if out.Open() == nil && el.BaseURI() == "" {
@@ -118,7 +168,7 @@ func copyStart(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, strip bool)
 	}
 	copyTyping(el, v, strip)
 	var arr [32]nsBinding
-	addBindings(rt, sub, copyOfBindings(v, arr[:0]))
+	addBindings(rt, sub, copyOfBindings(v, all, arr[:0]))
 	for a := range v.Attrs() {
 		if err := sub.AddAttributeWithTyping(a.Name(), a.Value(), copiedTyping(a, strip)); err != nil {
 			return nil, err
@@ -136,10 +186,8 @@ func copyStart(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, strip bool)
 // tree's copy-of gives its copy (copyItem: deepCopy, then
 // inheritNamespaces): v's own declarations as written, then the inherited
 // ones, sorted. xsl:copy's sorted order would serialise them otherwise
-// (si-result-document-107).
-func copyOfBindings(v *xdm.Node, buf []nsBinding) []nsBinding {
-	var arr [32]nsBinding
-	all := scopeBindings(v, arr[:0])
+// (si-result-document-107). all is v's in-scope bindings (scopeBindings).
+func copyOfBindings(v *xdm.Node, all, buf []nsBinding) []nsBinding {
 	for p := range v.DeclaredNamespaces() {
 		for _, b := range all {
 			if b.prefix == p { // not xml, nor an undeclaration

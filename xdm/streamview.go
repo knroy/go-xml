@@ -190,7 +190,7 @@ func (b *burster) viewUnder(n *Node, d int) *viewBatch {
 	// is of the open element at its depth has its ancestors' copies above
 	// it, so the search goes up from the deepest, over the copies it drops.
 	k := min(len(vb.path), d)
-	for k > 1 && vb.gens[k-1] != b.gens[k-1] {
+	for k > 1 && vb.gens[k-1] != b.gens.at(k-1) {
 		k--
 		b.viewScans++
 	}
@@ -202,7 +202,7 @@ func (b *burster) viewUnder(n *Node, d int) *viewBatch {
 		anc[i] = p
 	}
 	for i, a := range anc {
-		vb.push(a, b.ords[k+i], b.gens[k+i])
+		vb.push(a, b.ords.at(k+i), b.gens.at(k+i))
 		b.viewCopies += 1 + a.NumAttrs()
 	}
 	return vb

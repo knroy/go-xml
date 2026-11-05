@@ -107,7 +107,7 @@ type Cursor struct {
 	// next event.
 	filt        *Filter
 	quiet, hide bool
-	open        []openState
+	open        openStates
 	closed      int
 	// resumes counts the steps of the parse, for the tests.
 	resumes int
@@ -149,6 +149,21 @@ const (
 	openHidden                   // not reported (NextTag's filter), its end neither
 	openDecided                  // reported, and skipped or grounded
 )
+
+// openStates holds an openState per depth in two bits, so that a deep
+// document costs a quarter of a byte per open element; a depth not yet set
+// is openKept.
+type openStates []byte
+
+func (o openStates) at(d int) openState { return openState(o[d/4]>>(d%4*2)) & 3 }
+
+func (o *openStates) set(d int, s openState) {
+	for len(*o) <= d/4 {
+		*o = append(*o, 0)
+	}
+	sh := d % 4 * 2
+	(*o)[d/4] = (*o)[d/4]&^(3<<sh) | byte(s)<<sh
+}
 
 // errNotAtEnd is Flush's error away from an end tag.
 var errNotAtEnd = errors.New("xdmstream: not at an end tag")
@@ -456,11 +471,12 @@ func (c *Cursor) resume(act xdmburst.Action) (Event, error) {
 		switch {
 		case c.hide:
 			// NextTag dropped it after a Peek had read it.
-			c.hide, c.open[d] = false, openHidden
+			c.hide = false
+			c.open.set(d, openHidden)
 		case act == xdmburst.Keep:
-			c.open[d] = openKept
+			c.open.set(d, openKept)
 		default:
-			c.open[d] = openDecided
+			c.open.set(d, openDecided)
 		}
 	}
 	if c.step == nil {
@@ -507,11 +523,11 @@ func (k *client) send(ev Event) {
 
 func (k *client) Start(el any, d int) (xdmburst.Action, error) {
 	c, n := k.c, el.(*xdm.Node)
-	for len(c.open) <= d {
-		c.open = append(c.open, openKept)
+	if len(c.open) <= d/4 {
+		c.open.set(d, openKept) // as a depth never set reads
 	}
 	if f := c.filt; f != nil && f.Accept != nil && !f.Accept(n) {
-		c.open[d] = openHidden
+		c.open.set(d, openHidden)
 		return xdmburst.Keep, nil
 	}
 	k.send(Event{Kind: StartElement, Depth: d, Node: n})
@@ -540,7 +556,7 @@ func (k *client) End(el any, d int, grounded any) error {
 	if grounded != nil {
 		c.grounded = grounded.(*xdm.Node)
 	}
-	switch c.open[d] {
+	switch c.open.at(d) {
 	case openHidden:
 		c.closed = min0(c.closed, d)
 		return nil

@@ -50,20 +50,24 @@ func driver(c xdmburst.Client) *burster {
 		c:      &driveClient{c},
 		fn:     func(n *Node) error { return c.Later(n) },
 		leaves: true,
-		gens:   []uint64{0},
-		ords:   []uint64{0},
+		gens:   ordsOf(0),
+		ords:   &ordStack{},
 	}
+	b.ords.push(0)
 	// An element's ordinal is taken at its start: records under it may be
 	// taken back before its end, which shifts what ordOf would say then.
-	var open []uint64
+	var open ordStack
 	b.watch = func(n *Node, d int, end bool) {
 		switch {
 		case end:
-			c.Watch(n, d, true, open[d])
+			c.Watch(n, d, true, open.at(d))
 		case n.Kind() == KindElement:
-			open = append(open[:min(d, len(open))], make([]uint64, d+1-min(d, len(open)))...)
-			open[d] = b.ordOf(n)
-			c.Watch(n, d, false, open[d])
+			open.truncate(d)
+			for open.len() < d {
+				open.push(0)
+			}
+			open.push(b.ordOf(n))
+			c.Watch(n, d, false, open.at(d))
 		default:
 			c.Watch(n, d, false, b.ordOf(n))
 		}

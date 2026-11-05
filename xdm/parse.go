@@ -460,7 +460,7 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 						ps.spaces.home = int32(len(tree.text.blocks))
 						ps.spaces.hi = max(ps.spaces.hi, ps.spaces.home)
 					}
-					bs.marks = append(bs.marks[:0], markOf(tree))
+					bs.marks.reset(markOf(tree))
 					bs.v11 = dec.IsVersion11()
 					// Known from here, as an Observer of the parse may read.
 					tree.XMLVersion = "1.0"
