@@ -336,6 +336,9 @@ func (run *streamRun) docCopyEval(rt *runtime, op *streamOp) (xdm.Sequence, erro
 	if err != nil {
 		return nil, err
 	}
+	if op.split.wholeSole != nil && doc.FirstChild() != nil && doc.FirstChild().NextSibling() == nil {
+		return op.split.wholeSole.Eval(octx.WithVar(splitItems, xdm.One(doc))) // streamcopy_whole.go
+	}
 	return op.split.outer.Eval(octx.WithVar(splitItems, xdm.One(doc)))
 }
 

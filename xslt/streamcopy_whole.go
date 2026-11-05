@@ -37,8 +37,8 @@ func (c *compiler) wholeDocSplit(sel *xpath.Compiled, ns xpath.NamespaceResolver
 		return nil
 	}
 	items := func() xpath.Expr { return &xpath.VarRef{Name: splitItems} }
-	n := wholeCopies(&e, items)
-	if n == 0 || wholeCopies(&probe, items) != n {
+	n := wholeCopies(&e, items, false)
+	if n == 0 || wholeCopies(&probe, items, false) != n {
 		return nil
 	}
 	markSheetCalls(e, c.pkgStreamFuncs()) // streamsplit_calls.go
@@ -79,8 +79,18 @@ func (c *compiler) wholeDocSplit(sel *xpath.Compiled, ns xpath.NamespaceResolver
 	if !focusFree(probe) {
 		return nil
 	}
-	return &streamSplit{doc: true, ctxItem: true, docCopy: true, outerVar: splitItems,
+	s := &streamSplit{doc: true, ctxItem: true, docCopy: true, outerVar: splitItems,
 		outer: xpathleaf.WithExpr(sel, e).(*xpath.Compiled)}
+	// snapshot(/E), the only copy: a document whose only child is E is
+	// that snapshot already (a document node with E's copy, its base URI
+	// and DTD), so the stream holds one copy where the tree holds its
+	// document and the snapshot (audit A2-7: 1.26-1.32x the tree's live
+	// heap when it held the built document and a snapshot of it).
+	if sole := reparse(sel, ns); n == 1 && sole != nil && wholeCopies(&sole, items, true) == 1 {
+		markSheetCalls(sole, c.pkgStreamFuncs())
+		s.wholeSole = xpathleaf.WithExpr(sel, sole).(*xpath.Compiled)
+	}
+	return s
 }
 
 // wholeCopies rewrites, in *e and only where the focus is the outer one
@@ -88,8 +98,9 @@ func (c *compiler) wholeDocSplit(sel *xpath.Compiled, ns xpath.NamespaceResolver
 // (X ".", "/") as the built document, and of the document element (X "/E",
 // E one child step without predicates) as that call on E of it. It returns
 // how many it rewrote; the context or the root read anywhere else is left
-// for the probe's focusFree to find.
-func wholeCopies(e *xpath.Expr, items func() xpath.Expr) int {
+// for the probe's focusFree to find. sole rewrites only snapshot(/E), as
+// E of the built document itself, and counts only those.
+func wholeCopies(e *xpath.Expr, items func() xpath.Expr, sole bool) int {
 	n := 0
 	var at func(p *xpath.Expr)
 	all := func(ps []xpath.Expr) {
@@ -105,7 +116,7 @@ func wholeCopies(e *xpath.Expr, items func() xpath.Expr) int {
 	at = func(p *xpath.Expr) {
 		switch x := (*p).(type) {
 		case *xpath.FuncCall:
-			if x.Name.URI == fnNS && (x.Name.Local == "copy-of" || x.Name.Local == "snapshot") && len(x.Args) == 1 {
+			if x.Name.URI == fnNS && (x.Name.Local == "copy-of" || x.Name.Local == "snapshot") && len(x.Args) == 1 && !sole {
 				switch a := x.Args[0].(type) {
 				case *xpath.ContextItem:
 					*p = items()
@@ -119,6 +130,15 @@ func wholeCopies(e *xpath.Expr, items func() xpath.Expr) int {
 					}
 					if st, ok := oneChildStep(a); ok {
 						x.Args[0] = &xpath.PathExpr{Steps: []xpath.Expr{items(), st}}
+						n++
+						return
+					}
+				}
+			}
+			if sole && x.Name.URI == fnNS && x.Name.Local == "snapshot" && len(x.Args) == 1 {
+				if a, ok := x.Args[0].(*xpath.PathExpr); ok {
+					if st, ok := oneChildStep(a); ok {
+						*p = &xpath.PathExpr{Steps: []xpath.Expr{items(), st}}
 						n++
 						return
 					}

@@ -242,7 +242,7 @@ func (i *applyTemplatesInstr) executeCopies(rt *runtime, out *outputBuilder, run
 	if sa := rt.runAccums(run); sa != nil {
 		// The copies' originals' values, for the rules (streamaccum_l6.go).
 		sa.keep++
-		defer func() { sa.keep-- }()
+		defer sa.release()
 	}
 	var seq xdm.Sequence
 	err := op.pop.read(run, rt, op, func(it xdm.Item) error {

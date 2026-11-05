@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"context"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -75,10 +76,17 @@ func TestStreamCopyAccumulatorValues(t *testing.T) {
 		  <xsl:template match="/"><o><xsl:apply-templates select="copy-of(.)" mode="c"/></o></xsl:template>
 		  <xsl:template match="/|doc" mode="c"><xsl:apply-templates mode="c"/></xsl:template>` + read, false},
 		// xsl:copy-of copy-accumulators="yes" into a variable, of a match and
-		// of the document.
+		// of the document. The variable's temporary tree copies the copy
+		// again with copy-accumulators="no" (§5.7.1), so $v/rec reads the
+		// temporary tree's own values: n="1" a="1" for every rec, as
+		// Saxon-HE 10.3, 10.6 and 12.10 give (fix round S, lane S2); with
+		// as="element()" the copy itself is bound and reads 1, 2, 3.
 		{"copy-of-instr-variable", `<xsl:mode streamable="yes" use-accumulators="n"/>
 		  <xsl:template match="/doc"><o><xsl:apply-templates select="rec"/></o></xsl:template>
 		  <xsl:template match="rec"><xsl:variable name="v"><xsl:copy-of select="." copy-accumulators="yes"/></xsl:variable><r n="{$v/rec/accumulator-before('n')}" a="{$v/rec/accumulator-after('n')}"/></xsl:template>`, false},
+		{"copy-of-instr-element", `<xsl:mode streamable="yes" use-accumulators="n"/>
+		  <xsl:template match="/doc"><o><xsl:apply-templates select="rec"/></o></xsl:template>
+		  <xsl:template match="rec"><xsl:variable name="v" as="element()"><xsl:copy-of select="." copy-accumulators="yes"/></xsl:variable><r n="{$v/accumulator-before('n')}" a="{$v/accumulator-after('n')}"/></xsl:template>`, false},
 		{"copy-of-instr-variable-doc", `<xsl:mode streamable="yes" use-accumulators="n"/>
 		  <xsl:template match="/"><xsl:variable name="v"><xsl:copy-of select="." copy-accumulators="yes"/></xsl:variable><o><xsl:value-of select="$v//rec ! accumulator-after('n')"/></o></xsl:template>`, false},
 		// A whole-document copy read by a select (streamcopy_whole.go).
@@ -101,5 +109,48 @@ func TestStreamCopyAccumulatorValues(t *testing.T) {
 			t.Errorf("%s: did not stream", r.name)
 		}
 		t.Logf("%s: streamed %v: %s", r.name, streamed, tree)
+	}
+}
+
+// TestStreamCopyAccumulatorsReleased: apply-templates over snapshot(.) per
+// record keeps each node's accumulator values while the copies are read
+// and dispatched (streamaccum_l6.go), and lets them go once no copy can
+// read them. Kept for the whole run they grew with the document (fix round
+// R's open item: 62.5 MB at 40k records, the tree 79 MB); let go, the run
+// holds a few MB (the copies' tables between sweeps), the tree its document.
+func TestStreamCopyAccumulatorsReleased(t *testing.T) {
+	if testing.Short() {
+		t.Skip("memory test")
+	}
+	tr, err := xdm.ParseString(`<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xpath-default-namespace="urn:orders">`+
+		`<xsl:accumulator name="n" initial-value="0" streamable="yes"><xsl:accumulator-rule match="order" select="$value + 1"/></xsl:accumulator>`+
+		`<xsl:mode streamable="yes" use-accumulators="n"/><xsl:mode name="c" use-accumulators="n"/>`+
+		`<xsl:template match="/orders"><o><xsl:apply-templates select="order"/></o></xsl:template>`+
+		`<xsl:template match="order"><xsl:apply-templates select="snapshot(.)" mode="c"/></xsl:template>`+
+		`<xsl:template match="order" mode="c"><r n="{accumulator-before('n')}" a="{accumulator-after('n')}" i="{item/accumulator-after('n')}"/></xsl:template>`+
+		`</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Compile(tr.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := liveOrders(40000)
+	stream := peakLive(t, s, doc)
+	var m goruntime.MemStats
+	goruntime.GC()
+	goruntime.ReadMemStats(&m)
+	w := &liveWriter{base: m.HeapAlloc}
+	src, err := xdm.ParseString(doc, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Transform(context.Background(), src.Root, TransformOptions{Output: w}); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("peak live %.1f MB streamed, %.1f MB on the tree", float64(stream)/1e6, float64(w.peak)/1e6)
+	if stream > w.peak*2/5 {
+		t.Errorf("peak live %d bytes streamed, %d on the tree (bound 40%%)", stream, w.peak)
 	}
 }

@@ -95,7 +95,7 @@ func (run *streamRun) treeApplyFeed(instr Instruction, op *streamOp) *burstFeed 
 func (i *applyTemplatesInstr) executeTreeApply(rt *runtime, out *outputBuilder, f *burstFeed) error {
 	if sa := rt.runAccums(f.keep); sa != nil {
 		sa.keep++
-		defer func() { sa.keep-- }()
+		defer sa.release() // streamaccum_l6.go
 	}
 	seq, err := f.eval(rt)
 	if err != nil {
