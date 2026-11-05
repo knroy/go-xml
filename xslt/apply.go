@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -1370,6 +1371,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 				return err
 			}
 		}
+		xdmsink.Release(sub) // its builder is reused once it is written (A3-4)
 		return nil
 	default:
 		// Text, comments, processing instructions and attributes have no

@@ -113,4 +113,8 @@ var (
 	// It returns the result nodes rolling back left charged that tree mode
 	// would not have charged, for the caller to hand back.
 	TryEnd func(b any, commit bool) int64
+	// Release says b, a builder StartElement made, is no longer used by
+	// its caller: once a streaming builder's sink has written its element
+	// and taken it back, b is reused for a later element.
+	Release func(b any)
 )

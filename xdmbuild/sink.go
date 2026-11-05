@@ -59,12 +59,21 @@ type sink struct {
 	anchors map[*xdm.Node]bool
 	kept    *xdm.Node
 	opened  int64
+	// free are released builders whose frames have closed, for
+	// StartElement to reuse: nothing refers to them but the frames' own
+	// children, which are done too.
+	free []*Builder
 }
 
 func init() {
 	xdmsink.Attach = func(b any, w xdmsink.Writer) {
 		r := b.(*Builder)
 		r.sink = &sink{w: w, root: r, streamed: map[*xdm.Node]bool{}, anchors: map[*xdm.Node]bool{}}
+	}
+	xdmsink.Release = func(b any) {
+		if r := b.(*Builder); r.sink != nil {
+			r.released = true
+		}
 	}
 	xdmsink.Hold = func(b any) {
 		if r := b.(*Builder); r.sink != nil {
@@ -288,6 +297,10 @@ func (s *sink) close(t *Builder, done *xdm.Node) {
 	t.fr = 0
 	s.frames[k] = nil
 	s.frames, s.depths = s.frames[:k], s.depths[:k]
+	if t.released && s.cps == 0 {
+		// Reset when reused: the caller may still read t.open.
+		s.free = append(s.free, t)
+	}
 }
 
 // flush writes the content of t, the innermost frame, which is complete, and

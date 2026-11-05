@@ -46,6 +46,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -1280,7 +1281,9 @@ func (run *streamRun) builtIn(rt *runtime, node *xdm.Node, mode string, params, 
 		if err := b.attrs(sub, true); err != nil {
 			return err
 		}
-		return b.kids(sub)
+		err := b.kids(sub)
+		xdmsink.Release(sub) // its builder is reused once it is written (A3-4)
+		return err
 	}
 	return b.descend(out)
 }
