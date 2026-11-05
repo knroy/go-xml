@@ -566,3 +566,35 @@ func mm2IterateMax(pred string) string {
 // node (function-5003).
 const mm2Inspect = `<xsl:mode streamable="yes"/><xsl:function name="p:i" as="xs:boolean" streamability="inspection">` +
 	`<xsl:param name="n" as="node()"/><xsl:sequence select="$n instance of document-node()"/></xsl:function>`
+
+// TestMainStandInOrderNotObservable: TransformReader makes the stand-in
+// document node's tree before the cursor's (transformStream), so that it
+// orders before the stream's copies as the tree's document node does (R2,
+// 0824c9c9). No main-mode run can observe that order today, and this pins
+// why: the stand-in is reached only as the "/" rule's context item and
+// current() (a view's root() and ancestors are its own copy of the document
+// node, ordered by origin), and every shape that sets it beside a node of
+// the stream in an order or identity operator is refused (it does not
+// stream). A row that starts to stream needs an order test against the
+// reversed construction.
+func TestMainStandInOrderNotObservable(t *testing.T) {
+	doc := `<doc><rec k="a"><sub/></rec><rec k="b"/></doc>`
+	for _, rule := range []string{
+		`<o><xsl:value-of select="doc/rec ! (current() &lt;&lt; .)"/></o>`,
+		`<o><xsl:value-of select="count(doc/rec[current() &lt;&lt; .])"/></o>`,
+		`<o><xsl:value-of select="(. | doc/rec) ! name()"/></o>`,
+		`<o><xsl:value-of select="doc/rec ! (current() union .) ! name()"/></o>`,
+		`<o><xsl:value-of select="doc/rec/copy-of() ! (current() &lt;&lt; .)"/></o>`,
+		`<o><xsl:value-of select="doc/rec ! (current() is root(.))"/></o>`,
+		`<xsl:variable name="d" select="copy-of(doc)"/><o><xsl:value-of select="(. | $d) ! name()"/></o>`,
+		`<xsl:variable name="d" select="copy-of(.)"/><o b="{. &lt;&lt; $d}"/>`,
+		`<xsl:variable name="d" select="."/><o><xsl:for-each select="doc/rec"><e b="{$d &lt;&lt; .}"/></xsl:for-each></o>`,
+	} {
+		sheet := mainSheet(`<xsl:mode streamable="yes"/><xsl:template match="/">` + rule + `</xsl:template>`)
+		so, st := mainRun(sheet, doc, true, TransformOptions{})
+		to, _ := mainRun(sheet, doc, false, TransformOptions{})
+		if st.Streamed() != 0 || so != to {
+			t.Errorf("%s streams (%d): add an order test for the stand-in\nstream %.200s\ntree   %.200s", rule, st.Streamed(), so, to)
+		}
+	}
+}
