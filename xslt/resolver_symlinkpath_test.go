@@ -97,3 +97,66 @@ func TestFileResolverMissingInRootThroughLink(t *testing.T) {
 		t.Errorf("doc('nosuch.xml') = %v; want FODC0002 not found", err)
 	}
 }
+
+// One file reached through a symlinked directory and through its real path
+// has one identity: one module (an import of itself through the other
+// spelling is circular), and one document (doc() hands back the same tree,
+// with one document-uri, tree and streamed).
+func TestFileResolverOneIdentityThroughLink(t *testing.T) {
+	real, link := symlinkedTree(t, map[string]string{
+		"d.xml": `<d/>`,
+		"m.xsl": `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:import href="../real/m.xsl"/></xsl:stylesheet>`,
+	})
+	r, err := NewFileResolver(filepath.Dir(real))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, viaLink, err := r.ResolveModule("m.xsl", fileuri.Of(filepath.Join(link, "s.xsl")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, viaReal, err := r.ResolveModule("m.xsl", fileuri.Of(filepath.Join(real, "s.xsl")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if viaLink != viaReal {
+		t.Errorf("one module, two identities: %s and %s", viaLink, viaReal)
+	}
+
+	compile := func(src string) (*Stylesheet, error) {
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{
+			BaseURI: fileuri.Of(filepath.Join(filepath.Dir(real), "main.xsl"))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Compile(tree.Root, CompileOptions{Resolver: r})
+	}
+	_, err = compile(`<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:import href="link/m.xsl"/></xsl:stylesheet>`)
+	if err == nil || !strings.Contains(err.Error(), "XTSE0210") {
+		t.Errorf("m.xsl importing itself through its real path: %v; want XTSE0210", err)
+	}
+
+	for _, streamable := range []string{"no", "yes"} {
+		s, err := compile(`<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:template name="xsl:initial-template">
+<xsl:value-of select="doc('link/d.xml') is doc('real/d.xml')"/>
+<xsl:source-document streamable="` + streamable + `" href="link/d.xml"><xsl:text>|</xsl:text><xsl:value-of select="document-uri(.)"/></xsl:source-document>
+<xsl:source-document streamable="` + streamable + `" href="real/d.xml"><xsl:text>|</xsl:text><xsl:value-of select="document-uri(.)"/></xsl:source-document>
+</xsl:template></xsl:stylesheet>`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := s.Transform(context.Background(), nil, TransformOptions{
+			InitialTemplate: "{http://www.w3.org/1999/XSL/Transform}initial-template", Documents: r})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := res.String()
+		f := strings.Split(out[strings.Index(out, "?>")+2:], "|")
+		if len(f) != 3 || f[0] != "true" || f[1] != f[2] {
+			t.Errorf("streamable=%s: %q; want true and one document-uri twice", streamable, out)
+		}
+	}
+}
