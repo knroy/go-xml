@@ -76,10 +76,17 @@ func TestStreamCopyAccumulatorValues(t *testing.T) {
 		  <xsl:template match="/"><o><xsl:apply-templates select="copy-of(.)" mode="c"/></o></xsl:template>
 		  <xsl:template match="/|doc" mode="c"><xsl:apply-templates mode="c"/></xsl:template>` + read, false},
 		// xsl:copy-of copy-accumulators="yes" into a variable, of a match and
-		// of the document.
+		// of the document. The variable's temporary tree copies the copy
+		// again with copy-accumulators="no" (§5.7.1), so $v/rec reads the
+		// temporary tree's own values: n="1" a="1" for every rec, as
+		// Saxon-HE 10.3, 10.6 and 12.10 give (fix round S, lane S2); with
+		// as="element()" the copy itself is bound and reads 1, 2, 3.
 		{"copy-of-instr-variable", `<xsl:mode streamable="yes" use-accumulators="n"/>
 		  <xsl:template match="/doc"><o><xsl:apply-templates select="rec"/></o></xsl:template>
 		  <xsl:template match="rec"><xsl:variable name="v"><xsl:copy-of select="." copy-accumulators="yes"/></xsl:variable><r n="{$v/rec/accumulator-before('n')}" a="{$v/rec/accumulator-after('n')}"/></xsl:template>`, false},
+		{"copy-of-instr-element", `<xsl:mode streamable="yes" use-accumulators="n"/>
+		  <xsl:template match="/doc"><o><xsl:apply-templates select="rec"/></o></xsl:template>
+		  <xsl:template match="rec"><xsl:variable name="v" as="element()"><xsl:copy-of select="." copy-accumulators="yes"/></xsl:variable><r n="{$v/accumulator-before('n')}" a="{$v/accumulator-after('n')}"/></xsl:template>`, false},
 		{"copy-of-instr-variable-doc", `<xsl:mode streamable="yes" use-accumulators="n"/>
 		  <xsl:template match="/"><xsl:variable name="v"><xsl:copy-of select="." copy-accumulators="yes"/></xsl:variable><o><xsl:value-of select="$v//rec ! accumulator-after('n')"/></o></xsl:template>`, false},
 		// A whole-document copy read by a select (streamcopy_whole.go).
