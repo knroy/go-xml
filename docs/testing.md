@@ -722,8 +722,9 @@ and a 600 s native fuzz of `TransformReader` (6.94M executions, 0 failures).
 It found 4 silent wrong results, 9 P1 and 12 P2 items; fix round R (R1 to R6)
 closed 17, and [known-gaps.md](known-gaps.md) records what is open. After R1
 `TestStreamFuzz` gives 0 differences at all three new seeds, 100,000 cases
-each. The six differential fuzzers at 100,000 cases (seed 91): pending the
-final run at ce880ea0.
+each. At ce880ea0 (all of round R merged) the six differential fuzzers give
+0 differences at 100,000 cases each (seed 91), and `tests/streamdiff` 0
+unexplained with 2661 cases streamed.
 
 Round R added fifteen regression tests:
 `TestStreamTailFocusPosition`, `TestStreamIterateLast`
