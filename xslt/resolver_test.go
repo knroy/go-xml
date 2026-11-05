@@ -2,8 +2,11 @@ package xslt
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -78,6 +81,46 @@ func TestFileResolverSymlinkCannotEscape(t *testing.T) {
 	}
 	if _, err := r.ResolveDocument(link, ""); err == nil {
 		t.Error("a symlink escaping the root was followed")
+	}
+}
+
+// TestFileResolverOutsideErrorNamesOnlyTheHref: a refusal names the href
+// as written, not the resolved path or the roots, so whether a file outside
+// the roots exists cannot be read off it through a symlink (A4-F3); it is
+// fs.ErrPermission to errors.Is.
+func TestFileResolverOutsideErrorNamesOnlyTheHref(t *testing.T) {
+	base := t.TempDir()
+	root, out := filepath.Join(base, "root"), filepath.Join(base, "outside")
+	for _, d := range []string{root, out} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(out, "secret.xml"), []byte(`<s/>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hrefs := []string{"../outside/secret.xml", "../outside/missing.xml"}
+	for _, name := range []string{"secret.xml", "missing.xml"} {
+		if err := os.Symlink(filepath.Join(out, name), filepath.Join(root, "l-"+name)); err == nil {
+			hrefs = append(hrefs, "l-"+name)
+		}
+	}
+	r, err := NewFileResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stylesheet := fileuri.Of(filepath.Join(root, "s.xsl"))
+	for _, href := range hrefs {
+		_, err := r.ResolveDocument(href, stylesheet)
+		if err == nil {
+			t.Fatalf("%s: read outside the root", href)
+		}
+		if want := strconv.Quote(href) + " is outside the permitted directories"; err.Error() != want {
+			t.Errorf("%s: %q, want %q", href, err, want)
+		}
+		if !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("%s: %v is not fs.ErrPermission", href, err)
+		}
 	}
 }
 

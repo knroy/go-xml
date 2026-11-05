@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"net/url"
 	"os"
@@ -301,9 +302,22 @@ func (r *FileResolver) openConfined(path string, use func(f *os.File) error) err
 		defer f.Close()
 		return use(f)
 	}
-	return fmt.Errorf("%q is outside the permitted directories %v",
-		path, r.Roots)
+	return &outsideRootsError{href: filepath.Base(path)}
 }
+
+// outsideRootsError refuses a file no root of the resolver contains. It
+// names the href as the stylesheet wrote it and nothing more: the resolved
+// path and the roots would tell an untrusted stylesheet, through
+// $err:description or a host that returns the error, where the roots lie
+// and, by a symlinked component, whether a file outside them exists
+// (A4-F3). errors.Is(err, fs.ErrPermission) recognises it.
+type outsideRootsError struct{ href string }
+
+func (e *outsideRootsError) Error() string {
+	return fmt.Sprintf("%q is outside the permitted directories", e.href)
+}
+
+func (e *outsideRootsError) Unwrap() error { return fs.ErrPermission }
 
 // readLimited reads f whole, refusing a file larger than the resolver's byte
 // budget rather than truncating it.
@@ -374,6 +388,7 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 		}
 		href = base
 	}
+	given := href
 
 	// Reject anything that names a non-file scheme before touching the
 	// filesystem, so that an http:// URI produces a clear refusal rather than
@@ -444,7 +459,7 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 			return abs, nil
 		}
 	}
-	return "", fmt.Errorf("%q is outside the permitted directories %v", abs, r.Roots)
+	return "", &outsideRootsError{href: given}
 }
 
 // ResolveModule implements ModuleResolver for xsl:include and xsl:import.
