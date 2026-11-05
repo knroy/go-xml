@@ -1081,7 +1081,7 @@ func (run *streamRun) leaf(focus focuser, pos int, n *xdm.Node, mode string,
 	if err != nil {
 		return err
 	}
-	sub := focus.ruleRuntime(withFocusCurrent(focus.disp.ctx, c, pos, 0), c, t, next, mode, params, tunnels)
+	sub := focus.ruleRuntime(withFocusCurrent(focus.disp.ctx, c, pos, 0, focus.disp.depth), c, t, next, mode, params, tunnels)
 	if err := s.warnMultipleMatch(sub, c, mode, t, next, sub.ctx); err != nil {
 		return err
 	}

@@ -191,6 +191,6 @@ func (run *streamRun) groundRule(rt *runtime, t *Template, params, tunnels param
 		sub = rt.withSel(s)
 	}
 	n := *sub
-	n.ctx = withFocusCurrent(rt.ctx, g, int(rt.ctx.Position), int(rt.ctx.Size))
+	n.ctx = withFocusCurrent(rt.ctx, g, int(rt.ctx.Position), int(rt.ctx.Size), rt.depth)
 	return run.offCursor(func() error { return runTemplateBody(&n, t, params, tunnels, out) })
 }

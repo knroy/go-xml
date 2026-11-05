@@ -125,7 +125,7 @@ func (f focuser) focusCtx(n *xdm.Node, pos, size int) *xpath.Context {
 	if mr := f.disp.sheet.rules[f.mode]; f.builtIn && mr != nil && mr.empty {
 		return f.disp.ctx
 	}
-	return withFocusCurrent(f.disp.ctx, n, pos, size)
+	return withFocusCurrent(f.disp.ctx, n, pos, size, f.disp.depth)
 }
 
 // runtimeIn is f.at's runtime made of its context ctx (focusCtx).

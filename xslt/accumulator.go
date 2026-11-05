@@ -381,7 +381,7 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	}
 	rt.accumBuilding[key] = vals
 	defer delete(rt.accumBuilding, key)
-	cur, err := def.initial.Eval(withFocusCurrent(ctx, root, 1, 1))
+	cur, err := def.initial.Eval(withFocusCurrent(ctx, root, 1, 1, hostDepth(hostOf(ctx))))
 	if err != nil {
 		err = fmt.Errorf(
 			"evaluating xsl:accumulator %s initial-value: %w",
@@ -563,7 +563,7 @@ func (rt *runtime) applyAccumRules(def *accumulatorDef, n *xdm.Node,
 	// $value is the accumulator's value as the rule found it. It is bound as
 	// an ordinary variable so that a rule body can read it from anywhere in a
 	// sequence constructor, not only from @select.
-	sub := withFocusCurrent(ctx, n, 1, 1).
+	sub := withFocusCurrent(ctx, n, 1, 1, hostDepth(hostOf(ctx))).
 		WithVar(xdm.QName{Local: "value"}, cur)
 
 	var out xdm.Sequence
