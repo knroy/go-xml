@@ -1,9 +1,11 @@
 package xslt
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -347,6 +349,37 @@ func TestStreamGroupByEventCopies(t *testing.T) {
 <xsl:template match="text()" mode="s"/>
 </xsl:stylesheet>`
 				coreCheck(t, sheet, dir, name+": "+by+c.body, c.stream, TransformOptions{})
+			}
+		}
+	}
+}
+
+// TestStreamForkGroupByMaxNodes: the members a group-by in xsl:fork copies
+// off the cursor (streamcopy_l3group.go) stand for the source's, which the
+// tree does not charge to MaxNodes (A2-3): TransformReader succeeds where the
+// tree does, and a body copying the members meets the tree's bound.
+func TestStreamForkGroupByMaxNodes(t *testing.T) {
+	var d strings.Builder
+	d.WriteString("<doc>")
+	for i := 0; i < 500; i++ {
+		fmt.Fprintf(&d, `<rec k="%c" v="%d"><c>x</c></rec>`, 'a'+i%4, i)
+	}
+	d.WriteString("</doc>")
+	for _, body := range []string{
+		`<g k="{current-grouping-key()}" s="{sum(current-group()/@v)}"/>`,
+		`<g><xsl:copy-of select="current-group()"/></g>`,
+	} {
+		sheet := mainSheet(`<xsl:mode streamable="yes"/><xsl:template match="/doc"><o><xsl:fork>` +
+			`<xsl:for-each-group select="rec" group-by="@k">` + body + `</xsl:for-each-group></xsl:fork></o></xsl:template>`)
+		for _, max := range []int{500, 5000} {
+			opts := TransformOptions{MaxNodes: max}
+			so, st := mainRun(sheet, d.String(), true, opts)
+			to, _ := mainRun(sheet, d.String(), false, opts)
+			if so != to {
+				t.Errorf("MaxNodes %d, %s:\nstream %.200s\ntree   %.200s", max, body, so, to)
+			}
+			if st.Streamed() == 0 || st.Guards != 0 {
+				t.Errorf("MaxNodes %d, %s: streamed %d, guards %d", max, body, st.Streamed(), st.Guards)
 			}
 		}
 	}
