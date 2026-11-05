@@ -201,6 +201,9 @@ type streamSplit struct {
 	// cursor; docText that it is the document's string value, read off it
 	// (streamcopy_l3.go).
 	docCopy, docText bool
+	// typedFold says a min or max below the document node folds values of
+	// one type, by the schema (streamsplit_schema.go).
+	typedFold bool
 }
 
 // splitStream splits e, an expression whose context item is the document

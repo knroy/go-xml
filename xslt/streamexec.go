@@ -67,6 +67,7 @@ import (
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // traceRerun, when set, is told of the failure behind each re-run.
@@ -135,6 +136,11 @@ type streamExec struct {
 	frameRoot *streamExec
 	planning  map[*xdm.Node]bool
 	code      *frameCode
+	// schema is the stylesheet's, for a rule's body: what a min or max
+	// below the document node folds may be typed by it (streamsplit_schema.go),
+	// whose element names are schemaFold's.
+	schema     *xsd.Schema
+	schemaFold map[xdm.QName]bool
 }
 
 func newStreamExec() *streamExec {
@@ -1252,6 +1258,9 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 		return ""
 	}
 	s.copiedOut = copies // streamfn_copies.go: what the instruction outputs is copied
+	if (s.red == "min" || s.red == "max") && (minD > 0 || s.group) && x.schema != nil {
+		s.typedFold = s.schemaOne(x.schema, x.schemaNames()) // streamsplit_schema.go
+	}
 	if why := s.memory(minD); why != "" {
 		return elName(op.el) + " " + why + ": " + op.sel.Source()
 	}
@@ -1315,7 +1324,7 @@ func (s *streamSplit) memory(minD int) string {
 		s.holdAt() // streamhold.go: held, capped at the tree's records
 	case (c == "nodes" || c == "subtree") && minD < 2:
 		return "collects grounded copies (" + c + ") of the document element"
-	case (s.red == "min" || s.red == "max") && (minD > 0 || s.group) && !s.oneTake(): // streamsplit_onetake.go
+	case (s.red == "min" || s.red == "max") && (minD > 0 || s.group) && !s.oneTake() && !s.typedFold: // streamsplit_onetake.go, streamsplit_schema.go
 		return s.red + "() below the document node cannot fall back to the tree"
 	}
 	return ""

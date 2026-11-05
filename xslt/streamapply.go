@@ -396,6 +396,7 @@ func (c *compiler) planRule(el *xdm.Node, p *Pattern, from int) *rulePlan {
 		}
 		x := newStreamExec()
 		x.class, x.modes, x.rule = cl, templateModeNames(el), true
+		x.schema = c.sheet.schema // streamsplit_schema.go
 		b := &streamBuilder{pl: rs.pl, x: x, ops: &x.top, kinds: &x.kinds, noIdent: cl == classLeaf, up: cl == classLeaf}
 		f := vElem
 		switch cl {
@@ -456,7 +457,9 @@ func (c *compiler) readyRule(r *rulePlan, el *xdm.Node) {
 		if x == nil {
 			continue
 		}
-		if why := x.ready(); why != "" {
+		why := x.ready()
+		c.sheet.noteSchemaFolds(x) // streamsplit_schema.go
+		if why != "" {
 			// Several consumers found as the plan readies (a split's): the
 			// rule may run on a grounded copy, as one its body refused.
 			if gx := groundRuleExec(el, nodeClass(cl), why); gx != nil && !x.groundRule { // streamtee_ground.go

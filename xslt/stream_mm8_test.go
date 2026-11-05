@@ -136,3 +136,54 @@ func leafTopShape(t *testing.T, sheet, doc string, streamed bool, opts Transform
 	}
 	return b.String()
 }
+
+// TestStreamSchemaTypedMax: max() below the document node over elements
+// whose schema type is a list of one built-in atomic type
+// (streamable-055) streams where the document is validated strictly or not
+// at all (streamsplit_schema.go), with the tree's answer; a lax validation,
+// an atomic type, a wildcard or two item types keep it on the tree.
+func TestStreamSchemaTypedMax(t *testing.T) {
+	schema := func(v, extra string) string {
+		return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+ <xs:element name="acct"><xs:complexType><xs:sequence>
+  <xs:element name="t" maxOccurs="unbounded"><xs:complexType><xs:sequence>` + v + `</xs:sequence></xs:complexType></xs:element>` + extra + `
+ </xs:sequence></xs:complexType></xs:element>
+ <xs:simpleType name="decs"><xs:list itemType="xs:decimal"/></xs:simpleType>
+ <xs:simpleType name="dbls"><xs:list itemType="xs:double"/></xs:simpleType>
+</xs:schema>`
+	}
+	list := `<xs:element name="v" type="decs"/>`
+	schemas := []struct {
+		name, schema string
+		streams      bool
+	}{
+		{"list", schema(list, ""), true},
+		{"atomic", schema(`<xs:element name="v" type="xs:decimal"/>`, ""), false},
+		{"wildcard", schema(list, `<xs:any processContents="lax" minOccurs="0"/>`), false},
+		{"two", schema(list, `<xs:element name="u" minOccurs="0"><xs:complexType><xs:sequence><xs:element name="v" type="dbls"/></xs:sequence></xs:complexType></xs:element>`), false},
+	}
+	doc := `<acct><t><v>1.5 2</v></t><t><v>-3 2.00</v></t><t><v>0.25</v></t></acct>`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, sc := range schemas {
+		for _, attrs := range []string{`validation="strict"`, `validation="strip"`, `validation="lax"`} {
+			sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:import-schema>` + sc.schema + `</xsl:import-schema>
+<xsl:mode name="m" streamable="yes"/>
+<xsl:template match="acct" mode="m"><m><xsl:value-of select="max(t/v)"/></m></xsl:template>
+<xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml" ` + attrs +
+				`><xsl:apply-templates select="." mode="m"/></xsl:source-document></top></xsl:template></xsl:stylesheet>`
+			so, se, st := coreRun(sheet, dir, true, TransformOptions{})
+			to, te, _ := coreRun(sheet, dir, false, TransformOptions{})
+			if so != to || se != te {
+				t.Errorf("%s %s:\ncore %q %q\ntree %q %q", sc.name, attrs, so, se, to, te)
+			}
+			want := sc.streams && attrs != `validation="lax"`
+			if streamed := st.Runs[0] > 0; streamed != want || st.Guards != 0 || st.Reruns != 0 && te == "" {
+				t.Errorf("%s %s: streamed %v (want %v), guards %d, re-runs %d", sc.name, attrs, streamed, want, st.Guards, st.Reruns)
+			}
+		}
+	}
+}
