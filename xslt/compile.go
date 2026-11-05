@@ -195,6 +195,10 @@ type compiler struct {
 	// l7Cross is the rules walk over every module, made once (streamtrust_xmod_l7.go).
 	l7Cross     *rulesPlan
 	l7CrossDone bool
+	// l7XMods caches crossModules, made with l7XModsKey (streamtrust_xmod_l7.go).
+	l7XMods    []*xdm.Node
+	l7XModsKey xmodsKey
+	l7XModsOK  bool
 	// l7PkgFrames are the frame packages' states, by package root, and
 	// l7PkgCur the one compiling now (streampkgframe_l7.go).
 	l7PkgFrames map[*xdm.Node]*pkgFrameState

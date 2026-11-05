@@ -139,12 +139,13 @@ func TestParseBurstsSpineStaysSmall(t *testing.T) {
 	if n != 20000 {
 		t.Fatalf("%d bursts", n)
 	}
-	// Left behind: the document node, and the bytes of nothing.
+	// Left behind: the document node, the shared whitespace, and what the
+	// block values go on being appended to holds: at most one block.
 	var bytes int
 	for _, blk := range tree.text.blocks {
 		bytes += len(blk)
 	}
-	if tree.n > 2 || bytes > 0 {
+	if tree.n > 2 || bytes > textBlock+spaceHome {
 		t.Fatalf("the spine kept %d records and %d text bytes", tree.n, bytes)
 	}
 }

@@ -31,6 +31,23 @@ func (c *compiler) crossModules() []*xdm.Node {
 	if c.sheet == nil || c.sheet.source == nil {
 		return nil
 	}
+	// Every module walk below is made once per module set: the static phase
+	// and used packages add modules, and the principal's source becomes its
+	// pruned copy, so those are the key.
+	key := xmodsKey{c.sheet.source, len(c.staticDone)}
+	if !c.l7XModsOK || c.l7XModsKey != key {
+		c.l7XMods, c.l7XModsKey, c.l7XModsOK = c.crossModulesWalk(), key, true
+	}
+	return c.l7XMods
+}
+
+// xmodsKey is what crossModules' result depends on.
+type xmodsKey struct {
+	source *xdm.Node
+	n      int
+}
+
+func (c *compiler) crossModulesWalk() []*xdm.Node {
 	seen := map[*xdm.Node]bool{}
 	var out []*xdm.Node
 	add := func(n *xdm.Node) {
@@ -89,48 +106,65 @@ func (t *declTrust) modeRoots(root *xdm.Node) []*xdm.Node {
 // precedence); otherwise every declaration must agree. known false when
 // none says, or they disagree.
 func (t *declTrust) crossModeStreamable(clark string) (yes, known bool) {
-	vals := map[bool]bool{}
+	st := t.crossModeStates()[clark]
+	return st.yes, st.known
+}
+
+// crossModeSt is crossModeStreamable's answer for one mode.
+type crossModeSt struct{ yes, known bool }
+
+// crossModeStates is crossModeStreamable for every mode declared with
+// @streamable, read in one walk of the modules and kept.
+func (t *declTrust) crossModeStates() map[string]crossModeSt {
+	if t.xmodeSt != nil {
+		return t.xmodeSt
+	}
+	principal := map[string]bool{} // the principal's last declaration
+	vals := map[string]map[bool]bool{}
 	for i, r := range t.xmods {
-		var here []bool
 		walkElements(r, func(el *xdm.Node) bool {
 			if isXSL(el, "mode") && el.Attr("", "streamable") != nil {
+				v := isYes(el.AttrValue("streamable"))
 				for _, m := range modeNamesOf(el) {
-					if m == clark {
-						here = append(here, isYes(el.AttrValue("streamable")))
+					if i == 0 {
+						principal[m] = v
+						continue
 					}
+					if vals[m] == nil {
+						vals[m] = map[bool]bool{}
+					}
+					vals[m][v] = true
 				}
 			}
 			return true
 		})
-		if i == 0 && len(here) > 0 {
-			return here[len(here)-1], true // the principal's
-		}
-		for _, v := range here {
-			vals[v] = true
+	}
+	out := map[string]crossModeSt{}
+	for m, v := range vals {
+		if len(v) == 1 {
+			out[m] = crossModeSt{v[true], true}
 		}
 	}
-	if len(vals) != 1 {
-		return false, false
+	for m, v := range principal {
+		out[m] = crossModeSt{v, true}
 	}
-	return vals[true], true
+	t.xmodeSt = out
+	return out
 }
 
 // crossStreamableModes is streamableModeNames over every module, each mode
-// read by crossModeStreamable.
+// read by crossModeStreamable. Callers only read it.
 func (t *declTrust) crossStreamableModes() map[string]bool {
-	out := map[string]bool{}
-	for _, r := range t.xmods {
-		walkElements(r, func(el *xdm.Node) bool {
-			if isXSL(el, "mode") {
-				for _, m := range modeNamesOf(el) {
-					if yes, known := t.crossModeStreamable(m); yes && known {
-						out[m] = true
-					}
-				}
-			}
-			return true
-		})
+	if t.xstreamable != nil {
+		return t.xstreamable
 	}
+	out := map[string]bool{}
+	for m, st := range t.crossModeStates() {
+		if st.yes && st.known {
+			out[m] = true
+		}
+	}
+	t.xstreamable = out
 	return out
 }
 
