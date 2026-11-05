@@ -292,6 +292,12 @@ var mainCases = []struct {
 		`<xsl:template match="doc"><o><xsl:sequence select="p:f(snapshot(.))"/></o></xsl:template>`, true},
 	{`<xsl:mode streamable="yes"/><xsl:function name="p:f"><xsl:param name="d"/><xsl:value-of select="$d/rec/@k, unparsed-entity-public-id('pic', $d)"/></xsl:function>` +
 		`<xsl:template match="doc"><o><xsl:value-of select="p:f(snapshot(.))"/></o></xsl:template>`, true},
+	// perform-sort over copy-of(P), P child steps, read as P ! copy-of():
+	// each match copied as its tail, its ground let go (streamsort_copies.go;
+	// si-perform-sort-001); a path that may nest stays refused.
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="rec"><xsl:copy><xsl:perform-sort select="copy-of(sub)"><xsl:sort select="@x" order="descending"/></xsl:perform-sort></xsl:copy></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="doc"><o><xsl:perform-sort select="snapshot(rec)"><xsl:sort select="@k" order="descending"/></xsl:perform-sort></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="doc"><o><xsl:perform-sort select="copy-of(.//sub)"><xsl:sort select="@x"/></xsl:perform-sort></o></xsl:template>`, false},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

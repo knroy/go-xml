@@ -921,7 +921,9 @@ func (c *compiler) noteStreamSelect(n *xdm.Node, instr Instruction, sel *xpath.C
 		// unchecked (streamcopy_l3leaf.go, laxAtomize).
 		leafText := isXSL(n, "comment") || isXSL(n, "processing-instruction")
 		simple := isXSL(n, "value-of") || isXSL(n, "attribute") || leafText
-		if op.split, op.dead = c.splitForDoc(sel, ns, op.doc, simple, op.inGroup, op.key); op.dead != "" { // streamcopy_l3.go
+		if s := c.sortCopiesSplit(n, sel, ns, op); s != nil { // streamsort_copies.go
+			op.split, op.dead = s, ""
+		} else if op.split, op.dead = c.splitForDoc(sel, ns, op.doc, simple, op.inGroup, op.key); op.dead != "" { // streamcopy_l3.go
 			continue
 		}
 		if leafText {
