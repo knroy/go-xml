@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
 )
 
 // TestStreamGroupCopiesParam: a parameter copy-of(current-group()) of an
@@ -64,5 +66,40 @@ func TestStreamSnapshotClimb(t *testing.T) {
 		`<n><xsl:value-of select="count(snapshot(//*:id)/ancestor::*/namespace::*)"/></n>`,
 	} {
 		coreCheck(t, coreSheet(body), dir, fmt.Sprint("row ", i), true, TransformOptions{})
+	}
+}
+
+// TestStreamInstrBodyBurst: a call in a tail on a function whose body is
+// instructions, given the match itself, runs on the match's grounded copy
+// when the body sets no focus and reads its parameters only downward
+// (function-5012); one climbing from its parameter, or setting a focus,
+// leaves the rule on the tree.
+func TestStreamInstrBodyBurst(t *testing.T) {
+	const head = `<xsl:mode streamable="yes"/><xsl:template match="/">`
+	const fn = `<xsl:function name="p:f" as="node()*" streamability="absorbing"><xsl:param name="n"/>`
+	rows := []struct {
+		name, decls string
+		stream      bool
+	}{
+		{"absorbing", head + `<o><xsl:copy-of select="(d/rec/p:f(.)[self::new]/v)[1]"/></o></xsl:template>` +
+			fn + `<new><xsl:copy-of select="$n/v"/></new></xsl:function>`, true},
+		{"choose and value-of", head + `<o><xsl:copy-of select="d/rec/p:f(.)/self::*"/></o></xsl:template>` +
+			fn + `<xsl:choose><xsl:when test="true()"><w><xsl:value-of select="$n//text()"/></w></xsl:when>` +
+			`<xsl:otherwise><xsl:element name="e"/></xsl:otherwise></xsl:choose></xsl:function>`, true},
+		{"climbs", head + `<o><xsl:copy-of select="d/rec/p:f(.)/self::*"/></o></xsl:template>` +
+			fn + `<u><xsl:value-of select="$n/../@k"/></u></xsl:function>`, false},
+		{"sets a focus", head + `<o><xsl:copy-of select="d/rec/p:f(.)/self::*"/></o></xsl:template>` +
+			fn + `<xsl:for-each select="$n/v"><u><xsl:value-of select="."/></u></xsl:for-each></xsl:function>`, false},
+	}
+	for _, r := range rows {
+		sheet := mainSheet(r.decls)
+		so, st := mainRun(sheet, mm5Doc, true, TransformOptions{})
+		to, _ := mainRun(sheet, mm5Doc, false, TransformOptions{})
+		if so != to {
+			t.Errorf("%s:\nstreamed %s\ntree     %s", r.name, so, to)
+		}
+		if got := st.Runs[streamtrace.Main] != 0; got != r.stream {
+			t.Errorf("%s: streamed %v, want %v", r.name, got, r.stream)
+		}
 	}
 }

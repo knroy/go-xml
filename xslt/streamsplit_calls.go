@@ -54,8 +54,9 @@ type sheetCall struct {
 	// atomizes that argument (streamfn_inline.go).
 	atomicArg []bool
 	// copies says the body is instructions that may be given copies and
-	// values only (streamsplit_copies.go).
-	copies bool
+	// values only (streamsplit_copies.go); instrBurst that it may be given
+	// a grounded copy too (streamfn_instrburst_mm7.go).
+	copies, instrBurst bool
 }
 
 var sheetCalls sync.Map // weak.Pointer[xpath.FuncCall] -> sheetCall
@@ -106,7 +107,7 @@ func judgeSheetCall(x *xpath.FuncCall, fns map[funcKey]*streamFunc) (sheetCall, 
 			return sc, true
 		}
 		if copiesOnlyBody(f.body) && plainParams(f.body) { // streamsplit_copies.go
-			return sheetCall{copies: true, atomicArg: paramAtomics(f.body)}, true
+			return sheetCall{copies: true, instrBurst: instrBurstBody(f.body), atomicArg: paramAtomics(f.body)}, true
 		}
 	}
 	bodies := map[*streamFunc]xpath.Expr{}
@@ -255,7 +256,7 @@ func plainParams(fn *xdm.Node) bool {
 // function: marked, and its arguments burstSafe.
 func sheetCallSafe(x *xpath.FuncCall, noPos bool) bool {
 	sc, ok := sheetCallOf(x)
-	return ok && (sc.values || sc.burst || sc.copies && copiedArgs(x.Args)) && !sc.up && allBurstSafe(x.Args, noPos) // streamsplit_copies.go
+	return ok && (sc.values || sc.burst || sc.copies && (sc.instrBurst || copiedArgs(x.Args))) && !sc.up && allBurstSafe(x.Args, noPos) // streamsplit_copies.go
 }
 
 // sheetCallAtomic is atomicValued for a call outside the fn namespace.
