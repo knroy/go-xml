@@ -226,6 +226,16 @@ var mainCases = []struct {
 	// pkgDocParam; function-5002).
 	{`<xsl:mode streamable="yes"/><xsl:function name="p:abs" streamability="absorbing"><xsl:param name="n" as="node()"/>` +
 		`<xsl:copy-of select="$n/*/rec[1]/sub"/></xsl:function><xsl:template match="/"><o><xsl:copy-of select="p:abs(.)"/></o></xsl:template>`, true},
+	// A call on a function whose body is instructions, given only a copy of
+	// the match (streamsplit_copies.go): in a loop's select over snapshot(.);
+	// in a tail over copy-of(.) (function-5011); not given the node itself.
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:f"><xsl:param name="n"/><r k="{$n/@k}" up="{name($n/..)}">` +
+		`<xsl:value-of select="count($n/sub)"/></r></xsl:function>` +
+		`<xsl:template match="/*"><o><xsl:for-each select="rec"><xsl:sequence select="p:f(snapshot(.))"/></xsl:for-each></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:g" as="node()"><xsl:param name="n"/><new><xsl:copy-of select="$n/sub"/></new></xsl:function>` +
+		`<xsl:template match="/"><o><xsl:copy-of select="(*/rec/p:g(copy-of(.))[self::new]/sub)[1]"/></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:function name="p:f"><xsl:param name="n"/><r k="{$n/@k}" up="{name($n/..)}"/></xsl:function>` +
+		`<xsl:template match="/*"><o><xsl:for-each select="rec"><xsl:sequence select="p:f(.)"/></xsl:for-each></o></xsl:template>`, false},
 	// unparsed-entity-uri#1 and -public-id#1 at an element's view: its
 	// tree's DTD is the document's (sf-unparsed-entity-02).
 	{`<xsl:mode streamable="yes"/><xsl:template match="doc"><o><xsl:value-of select="unparsed-entity-uri('pic'), unparsed-entity-public-id('pic')"/></o></xsl:template>`, true},
