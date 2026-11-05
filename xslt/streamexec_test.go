@@ -319,6 +319,10 @@ func TestStreamCoreMemory(t *testing.T) {
 		// Values collected: their own strings, not ones into the parse's
 		// text blocks, each of which would keep its block.
 		{`<out><xsl:value-of select="string-length(string-join(//rec/@k, ','))"/></out>`, 0.27},
+		// The document built off the stream is the snapshot of its
+		// element: one copy, where the tree holds its document and the
+		// snapshot (audit A2-7: the built document and a snapshot of it).
+		{`<out><xsl:value-of select="count(snapshot(/*)//sub)"/></out>`, 0.9},
 	} {
 		sheet := coreSheet(c.body)
 		var st streamtrace.Counts

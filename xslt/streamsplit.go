@@ -204,6 +204,10 @@ type streamSplit struct {
 	// cursor; docText that it is the document's string value, read off it
 	// (streamcopy_l3.go).
 	docCopy, docText bool
+	// wholeSole is outer with its one snapshot(/E) read as E of the built
+	// document, for a document whose only child is its element: that
+	// document is then the snapshot (streamcopy_whole.go).
+	wholeSole *xpath.Compiled
 	// typedFold says a min or max below the document node folds values of
 	// one type, by the schema (streamsplit_schema.go).
 	typedFold bool
