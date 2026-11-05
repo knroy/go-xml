@@ -40,6 +40,7 @@ func init() {
 		}
 		return step, release
 	}
+	xdmburst.NewTreeID = func() int64 { return int64(nextTreeID()) }
 	xdmburst.FromStream = func(n any) bool { return n.(*Node).flags&fOrigin != 0 }
 }
 
@@ -66,6 +67,9 @@ func driver(c xdmburst.Client) *burster {
 		default:
 			c.Watch(n, d, false, b.ordOf(n))
 		}
+	}
+	if i, ok := c.(xdmburst.Identified); ok {
+		b.origin = &streamOrigin{id: i.TreeID()}
 	}
 	if o, ok := c.(xdmburst.Originating); ok {
 		o.Originator(func(n any) (uint64, bool) {

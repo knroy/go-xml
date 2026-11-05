@@ -118,6 +118,8 @@ type Cursor struct {
 	teed bool
 	// handoff is Handoff's.
 	handoff func() func()
+	// id is the document's tree id, reserved by Open (xdmburst.Identified).
+	id int64
 }
 
 // A Filter says which events NextTag and SkipTag report. What they pass
@@ -157,9 +159,11 @@ var errNotAtLeaf = errors.New("xdmstream: not at a leaf")
 var errNotAtStart = errors.New("xdmstream: not at a start tag")
 
 // Open returns a cursor over r, parsed with opts. Nothing is read until the
-// first call. Close releases it.
+// first call, but the document's place among other trees is fixed now, as a
+// tree-mode parse made now would have it: copies out of it order before a
+// document loaded after Open and before the first read. Close releases it.
 func Open(r io.Reader, opts xdm.ParseOptions) *Cursor {
-	return &Cursor{src: r, opts: opts}
+	return &Cursor{src: r, opts: opts, id: xdmburst.NewTreeID()}
 }
 
 // Handoff has f called where the cursor's parse waits for another
@@ -543,5 +547,7 @@ func (k *client) Watch(n any, d int, end bool, ord uint64) {
 		o(n.(*xdm.Node), d, end, ord)
 	}
 }
+
+func (k *client) TreeID() int64 { return k.c.id }
 
 func (k *client) Originator(ord func(n any) (uint64, bool)) { k.c.ordinal = ord }

@@ -60,6 +60,12 @@ var l7Rows = []struct {
 		`<out><xsl:value-of select="count(/doc/rec intersect $g)"/></out>`, false},
 	// doc() of another URI: another tree in both modes, so it streams.
 	{`<xsl:variable name="g" select="doc('other.xml')/doc/rec"/>`, `<out><xsl:value-of select="count(/doc/rec union $g)"/></out>`, true},
+	// ... and orders after the streamed document, as the tree's source
+	// does, though the body loads it before the stream reaches a match
+	// (A1-F2: the stream's tree id is fixed when its cursor opens).
+	{``, `<xsl:variable name="v" select="doc('other.xml')/*"/><o><xsl:for-each select="doc/rec"><e><xsl:value-of select="(* union $v)/name()"/></e></xsl:for-each></o>`, true},
+	{``, `<xsl:variable name="v" select="doc('other.xml')/*/*"/><o><xsl:for-each select="doc/rec ! (sub union $v)"><e n="{name()}"/></xsl:for-each></o>`, true},
+	{``, `<xsl:variable name="v" select="doc('other.xml')/*"/><o><xsl:for-each select="doc/rec"><e b="{. &lt;&lt; $v}"/></xsl:for-each></o>`, true},
 	// A call given values only, its body instructions (j:escape's shape;
 	// streamvaluefn_l7.go): run as itself.
 	{`<xsl:function name="p:esc" as="xs:string"><xsl:param name="s" as="xs:string"/><xsl:value-of><xsl:for-each select="string-to-codepoints($s)"><xsl:choose><xsl:when test=". = 97">\a</xsl:when><xsl:otherwise><xsl:value-of select="codepoints-to-string(.)"/></xsl:otherwise></xsl:choose></xsl:for-each></xsl:value-of></xsl:function>`,

@@ -210,7 +210,10 @@ type mainInput struct {
 // transformStream is TransformReader streaming r.
 func (s *Stylesheet) transformStream(ctx context.Context, r io.Reader, opts TransformOptions) (*Result, error) {
 	po := opts.SourceParseOptions
-	main := &mainInput{c: xdmstream.Open(r, po), root: xdm.NewTree().Root}
+	// The stand-in's tree first: the document node orders before the
+	// copies out of the cursor, whose tree id Open reserves next.
+	root := xdm.NewTree().Root
+	main := &mainInput{c: xdmstream.Open(r, po), root: root}
 	defer main.c.Close()
 	main.root.SetBaseURI(po.BaseURI)
 	main.root.SetDocumentURI(po.DocumentURI)
