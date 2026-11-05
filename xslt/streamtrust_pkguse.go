@@ -9,7 +9,7 @@ import "github.com/knroy/go-xml/v2/xdm"
 // xsl:use-package of xsl:accept children only, that reaches no other module
 // (streampkgframe_l7.go's terms for a frame package), has no declaration
 // another module can replace: overriding runs only through xsl:override in
-// the user (§3.6.2), its accumulators and modes are its own (§3.5.5,
+// the user (§3.5.3.3; formerly cited as 3.6.2), its accumulators and modes are its own (§3.5.5,
 // §3.5.2), and an xsl:accept changes only who may name a component from
 // outside. Its own declarations are then the ones in force for its code, as
 // the top-level package's are for its own. A streamed run of its container

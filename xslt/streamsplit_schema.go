@@ -16,8 +16,9 @@ package xslt
 //     could admit one unassessed, so an E element's type is the type of one
 //     of E's declarations -- global or local -- or one derived from it by
 //     restriction (xsi:type). Each of them is a list of one built-in atomic
-//     item type X, which every restriction of a list keeps (XSD 1.1 Part 2
-//     §4.1.2.2, {item type definition}): each value is an X.
+//     item type X, which every restriction of a list keeps (XSD 1.1 Part 2,
+//     the list's {item type definition}; not vendored here, so cited by
+//     property, not section): each value is an X.
 //
 // A lax validation may leave an E element unassessed beside one that is
 // assessed, and a document the harness typed (asRead) carries its own

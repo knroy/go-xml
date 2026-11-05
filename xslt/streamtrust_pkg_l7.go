@@ -17,7 +17,7 @@ import "github.com/knroy/go-xml/v2/xdm"
 // c.sheet.source), a plain xsl:use-package leaves every declaration seen
 // here the one in force. So does an xsl:override of a function, variable,
 // parameter, named template or attribute set: the overriding declaration
-// belongs to the using package (§3.6.2), sits in this module, and its body's
+// belongs to the using package (§3.5.3.3; formerly cited as 3.6.2), sits in this module, and its body's
 // names resolve in this package -- as an inlined copy of it does
 // (streamcall.go). su-filter-102 (f:filter-001 overridden) and
 // override-misc-007's principal container are the cases.
