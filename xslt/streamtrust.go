@@ -58,6 +58,9 @@ type declTrust struct {
 	// are verified across them although the module is shared
 	// (streamtrust_xmod_l7.go).
 	xmods []*xdm.Node
+	// xmodeSt caches crossModeStates and xstreamable crossStreamableModes.
+	xmodeSt     map[string]crossModeSt
+	xstreamable map[string]bool
 }
 
 type trustState int8
