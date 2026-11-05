@@ -267,17 +267,18 @@ func (i *applyTemplatesInstr) executeCopies(rt *runtime, out *outputBuilder, run
 	return err
 }
 
-// groundLastWhy is why el, an xsl:for-each whose body was not planned (it
+// groundLastWhy is why el, an xsl:for-each or xsl:iterate whose body was not planned (it
 // runs on the tree's code over grounded copies or values: op.grounded), may
 // not run streamed: its body may read last(). §19.8.9.14 makes last()
 // motionless over a grounded population, so the analysis admits it, but the
 // streamed loop hands its items one at a time with no context size
-// (forEachInstr.Execute, size 0: XPDY0002 where the tree gives the count).
+// (forEachInstr.Execute, iterateInstr.Execute: size 0, XPDY0002 where the
+// tree gives the count).
 // Conservatively: "last(" anywhere in the body's attributes or text, in a
 // named template it calls (which keeps the focus), or an attribute set it
 // uses (evaluated with the instruction's focus).
 func groundLastWhy(el *xdm.Node) string {
-	if !isXSL(el, "for-each") {
+	if !isXSL(el, "for-each") && !isXSL(el, "iterate") {
 		return ""
 	}
 	seen := map[*xdm.Node]bool{}

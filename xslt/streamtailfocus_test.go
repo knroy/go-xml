@@ -40,3 +40,16 @@ func TestStreamTailFocusPosition(t *testing.T) {
 		`<v><xsl:value-of select="(doc/rec[position() lt 3]/sub[1]) ! name()" separator="|"/></v>`,
 	})
 }
+
+// TestStreamIterateLast: xsl:iterate over copies of the stream reading
+// last() streams with its population's size, or is refused at plan time:
+// never XPDY0002 or a rerun (A1-F4).
+func TestStreamIterateLast(t *testing.T) {
+	tailFocusCheck(t, `<doc><rec k="a"><sub/></rec><other/><rec k="b"/></doc>`, []string{
+		`<xsl:iterate select="copy-of(doc/rec)"><e p="{position()}" l="{last()}" k="{@k}"/></xsl:iterate>`,
+		`<xsl:iterate select="doc/rec/copy-of(.)"><e l="{last()}"/></xsl:iterate>`,
+		`<xsl:iterate select="snapshot(doc/rec)"><e l="{last()}"/></xsl:iterate>`,
+		`<xsl:iterate select="copy-of(doc/rec)"><xsl:param name="n" select="0"/><xsl:on-completion><done n="{$n}"/></xsl:on-completion>` +
+			`<xsl:next-iteration><xsl:with-param name="n" select="$n + last()"/></xsl:next-iteration></xsl:iterate>`,
+	})
+}

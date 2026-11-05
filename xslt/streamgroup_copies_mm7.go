@@ -47,14 +47,14 @@ func copyOfMap(e xpath.Expr) (*xpath.FuncCall, bool) {
 	return &xpath.FuncCall{Name: f.Name, Args: []xpath.Expr{m.Left}}, true
 }
 
-// sizedLoop reports whether op, an xsl:for-each whose body may read last()
+// sizedLoop reports whether op, an xsl:for-each or xsl:iterate whose body may read last()
 // (groundLastWhy), runs over fresh copies of the stream's matches
 // (copy-of(P), P/copy-of(), P!copy-of()): then it marks it sized, its
 // population collected whole before the body runs, as the tree evaluates
 // the select first and runs the body with its size.
 func sizedLoop(op *streamOp) bool {
 	p := op.pop
-	if !isXSL(op.el, "for-each") || p == nil || p.cond != nil || !p.ground || p.fn == nil || p.post != nil {
+	if !isXSL(op.el, "for-each") && !isXSL(op.el, "iterate") || p == nil || p.cond != nil || !p.ground || p.fn == nil || p.post != nil {
 		return false
 	}
 	if f, ok := p.fn.Expr().(*xpath.FuncCall); !ok || !isFn(f, "copy-of", 1) {

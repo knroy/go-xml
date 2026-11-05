@@ -68,7 +68,8 @@ type burstFeed struct {
 	// its grouping and body run off the stream (streamgroup_pruned.go).
 	offBody bool
 	// size, set by a sized feed's read before it hands its first item, is
-	// the context size of an xsl:for-each it drives (streamgroup_copies_mm7.go).
+	// the context size of an xsl:for-each or xsl:iterate it drives
+	// (streamgroup_copies_mm7.go).
 	size int
 }
 
