@@ -112,7 +112,7 @@ func (pb *popBuilder) part(x xpath.Expr) *xpath.Compiled {
 
 // motionless reports whether x reads of the loop's focus only what it has.
 func (pb *popBuilder) motionless(x xpath.Expr) bool {
-	return (viewCheck{key: pb.key}).safe(x, pb.focus, true)
+	return !(pb.group && readsGroup(x)) && (viewCheck{key: pb.key}).safe(x, pb.focus, true) // streamgroup_copies_mm7.go
 }
 
 // popFor normalises the select of a loop op whose split is not a bare path,
@@ -296,6 +296,9 @@ func (pb *popBuilder) stream(p *streamPop, e xpath.Expr) bool {
 		return pb.snapshot(p, x)
 	}
 	if x, ok := copyOfTail(e); ok { // streamsplit_l6.go
+		return pb.stream(p, x)
+	}
+	if x, ok := copyOfMap(e); ok { // streamgroup_copies_mm7.go
 		return pb.stream(p, x)
 	}
 	if x := rangeWindow(e); x != nil { // streampop_snapshot.go

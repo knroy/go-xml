@@ -155,6 +155,9 @@ type streamOp struct {
 	// copies says a copy-of hands each item over as it is read (its split
 	// would collect grounded copies): copyOfInstr copies it and lets go.
 	copies bool
+	// sized says a loop over fresh copies reads last(): its items are
+	// collected first (streamgroup_copies_mm7.go).
+	sized bool
 	// For a loop: inner are the consuming instructions of the body, kinds
 	// its sNodes, planned whether every one is one the core runs, and
 	// grounded whether the body may run on a grounded copy instead.
@@ -1154,7 +1157,7 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 		if !op.planned || op.pop != nil && op.pop.off {
 			// Unplanned, or a population's items handed one at a time off
 			// the cursor: either way no context size (streamsplit_l6.go).
-			if why := groundLastWhy(op.el); why != "" { // streamsplit_l6.go
+			if why := groundLastWhy(op.el); why != "" && !sizedLoop(op) { // streamsplit_l6.go, streamgroup_copies_mm7.go
 				return why
 			}
 		}
@@ -1437,6 +1440,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 	}
 	if !op.loop {
 		return &burstFeed{instr: instr, eval: func(rt *runtime) (xdm.Sequence, error) { return run.evalOp(rt, op) }}
+	}
+	if op.pop != nil && op.sized {
+		return run.sizedFeed(run.popFeed(instr, rt, op, g)) // streamgroup_copies_mm7.go
 	}
 	if op.pop != nil {
 		return run.popFeed(instr, rt, op, g)

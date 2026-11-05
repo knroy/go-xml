@@ -1725,7 +1725,7 @@ func (i *forEachInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 			pos++
 			live.begin(rt, out)
-			if err := execSequence(i.body, rt.withCurrent(it, pos, 0).clearCurrentRule(), out); err != nil {
+			if err := execSequence(i.body, rt.withCurrent(it, pos, f.size).clearCurrentRule(), out); err != nil {
 				return err
 			}
 			live.end(rt, out, nil)

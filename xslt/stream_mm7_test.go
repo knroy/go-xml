@@ -19,3 +19,22 @@ func TestStreamGroupCopiesParam(t *testing.T) {
 			`</xsl:for-each-group></o></xsl:template>` + tail},
 	})
 }
+
+// TestStreamLoopCopiesSized: an xsl:for-each over copies of the stream's
+// matches whose body reads last() collects the copies before the body
+// runs, as the tree evaluates the select whole (si-group-065:
+// current-group()!copy-of(), a group of the document element's children
+// too); P!copy-of() is copy-of(P).
+func TestStreamLoopCopiesSized(t *testing.T) {
+	const mode = `<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`
+	const body = `<i n="{name()}" p="{position()}" l="{last()}"><xsl:copy-of select="node()"/></i>`
+	mm5Rows(t, mm5Doc, []struct{ name, decls string }{
+		{"group of the document element's children", mode + `<xsl:template match="/*"><o><xsl:for-each-group select="*" group-adjacent="name()">` +
+			`<g><xsl:for-each select="current-group()!copy-of()">` + body + `</xsl:for-each></g></xsl:for-each-group></o></xsl:template>`},
+		{"copy-of of the group", mode + `<xsl:template match="/*"><o><xsl:for-each-group select="*" group-starting-with="x">` +
+			`<g><xsl:for-each select="copy-of(current-group())">` + body + `</xsl:for-each></g></xsl:for-each-group></o></xsl:template>`},
+		{"a path's copies", mode + `<xsl:template match="/"><o><xsl:for-each select="d/rec!copy-of()">` + body + `</xsl:for-each></o></xsl:template>`},
+		{"an error after last()", mode + `<xsl:template match="/"><o><xsl:for-each select="d/rec/copy-of()">` +
+			`<i l="{last()}" v="{xs:integer(@k)}"/></xsl:for-each></o></xsl:template>`},
+	})
+}
