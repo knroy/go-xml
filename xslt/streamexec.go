@@ -92,6 +92,9 @@ type streamExec struct {
 	drainFirst bool
 	// promoted are the instructions promote took as consuming.
 	promoted map[*xdm.Node]bool
+	// whole are the local variables bound at the document node to a copy
+	// of the whole document or its element (streamexec_whole.go).
+	whole map[xdm.QName]*streamOp
 	// exprOps are the ops of consuming expressions that are not an
 	// instruction's select: a value template's part, an xsl:with-param's
 	// select (byExpr, once compiled).
@@ -876,7 +879,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := b.loopRead(parseAt(el, src)) // streamfn_loop.go
 	peek := b.kidsAt(el, e, f)        // streamkids_l6.go
-	vc := viewCheck{pos: true, last: b.last, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek}
+	vc := viewCheck{pos: true, last: b.last, noIdent: b.noIdent, up: b.up, key: b.key, acc: !b.noIdent && !b.grp, after: b.after, globals: el, curOK: f != vNone, cur: f, peek: peek, whole: b.x.wholeAt(el)}
 	if e == nil || !vc.safe(e, f, nodeOK) && !b.docEntities(e, vc, f, nodeOK) && !b.inlinedSafe(el, src, vc, f, nodeOK) { // streamcopy_l3doc.go, streamlast_mm2.go
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
 	}
@@ -928,7 +931,9 @@ func (c *compiler) noteStreamSelect(n *xdm.Node, instr Instruction, sel *xpath.C
 		// unchecked (streamcopy_l3leaf.go, laxAtomize).
 		leafText := isXSL(n, "comment") || isXSL(n, "processing-instruction")
 		simple := isXSL(n, "value-of") || isXSL(n, "attribute") || leafText
-		if op.split, op.dead = c.splitForDoc(sel, ns, op.doc, simple, op.inGroup, op.key); op.dead != "" { // streamcopy_l3.go
+		if s := c.sortCopiesSplit(n, sel, ns, op); s != nil { // streamsort_copies.go
+			op.split, op.dead = s, ""
+		} else if op.split, op.dead = c.splitForDoc(sel, ns, op.doc, simple, op.inGroup, op.key); op.dead != "" { // streamcopy_l3.go
 			continue
 		}
 		if leafText {
@@ -1110,6 +1115,9 @@ func (x *streamExec) ready() string {
 	if why := x.readyDocCopy(); why != "" { // streamcopy_l3.go
 		return why
 	}
+	if why := x.readyWhole(); why != "" { // streamexec_whole.go
+		return why
+	}
 	if why := x.readyOps(x.top, minD, &x.kinds); why != "" {
 		return why
 	}
@@ -1252,6 +1260,10 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 		return ""
 	}
 	s.copiedOut = copies // streamfn_copies.go: what the instruction outputs is copied
+	// streamexec_whole.go
+	if wholeMatch(x, s, minD) {
+		return ""
+	}
 	if why := s.memory(minD); why != "" {
 		return elName(op.el) + " " + why + ": " + op.sel.Source()
 	}

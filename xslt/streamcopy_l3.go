@@ -256,6 +256,9 @@ func (c *compiler) splitForDoc(sel *xpath.Compiled, ns xpath.NamespaceResolver, 
 			if s := docCopySplit(e, sel, false); s != nil {
 				return s, ""
 			}
+			if s := c.wholeDocSplit(sel, ns); s != nil { // streamcopy_whole.go
+				return s, ""
+			}
 		}
 	}
 	return c.splitFor(sel, ns, doc, simple, group, key)
@@ -338,7 +341,9 @@ func (run *streamRun) docCopyFeed(instr Instruction, rt *runtime, op *streamOp) 
 		eval: func(rt *runtime) (xdm.Sequence, error) { return run.docCopyEval(rt, op) },
 		read: func(func(xdm.Item) error) error { return errStreamPlan },
 		readOut: func(out *outputBuilder, each func(xdm.Item) error) error {
-			if out.Open() != nil && out.Open().Kind() == xdm.KindElement && eventCopier(op.instr, run.typed) {
+			// The copy itself, not a select run on it (streamcopy_whole.go).
+			plain := isVarRef(op.split.outer.Expr(), splitItems)
+			if plain && out.Open() != nil && out.Open().Kind() == xdm.KindElement && eventCopier(op.instr, run.typed) {
 				if run.used || run.d != 0 {
 					return errStreamPlan
 				}
@@ -351,7 +356,7 @@ func (run *streamRun) docCopyFeed(instr Instruction, rt *runtime, op *streamOp) 
 			}
 			ci, _ := op.instr.(*copyOfInstr)
 			for _, it := range seq {
-				if n, ok := it.(*xdm.Node); ok && ci != nil && n.Kind() == xdm.KindDocument {
+				if n, ok := it.(*xdm.Node); ok && plain && ci != nil && n.Kind() == xdm.KindDocument {
 					err = ci.copyBuilt(rt, out, n)
 				} else {
 					err = each(it)
