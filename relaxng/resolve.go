@@ -113,9 +113,7 @@ func (r *FileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 		// Compare the parent on the same resolved spelling as Root (macOS /var
 		// commonly aliases /private/var); leave the leaf unresolved so OpenRoot
 		// remains the enforcement against a symlink escape.
-		if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
-			abs = filepath.Join(dir, filepath.Base(abs))
-		}
+		abs = filepath.Join(uripath.EvalExisting(filepath.Dir(abs)), filepath.Base(abs))
 		rel, err := filepath.Rel(root, abs)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("relaxng: schema URI %q resolves outside root", href)
