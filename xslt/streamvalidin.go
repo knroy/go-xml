@@ -353,7 +353,7 @@ func (r *FileResolver) prologMayHaveDTD(href, base string) bool {
 		return false // the stream reports it as the tree would
 	}
 	may := true
-	_ = r.openConfined(path, func(f *os.File) error {
+	_ = r.openConfined(path, href, func(f *os.File) error {
 		may = prologDTD(bufio.NewReaderSize(io.LimitReader(f, 1<<16), 1<<12))
 		return nil
 	})

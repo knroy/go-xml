@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -68,7 +69,7 @@ func (r *FileResolver) ResolveExternal(systemID, publicID, base string) (io.Read
 	// beforehand. A symlink swapped in between the two — which resolvePath
 	// cannot see, having already returned — is refused here instead of
 	// followed. resolvePath keeps the earlier check because it decides WHICH
-	// path is being named and produces the error that names Root; this is the
+	// path is being named and produces the refusal; this is the
 	// enforcement. Matches xslt/resolver.go readConfined and xsd.FileResolver.
 	rt, err := os.OpenRoot(root)
 	if err != nil {
@@ -90,8 +91,8 @@ func (r *FileResolver) ResolveExternal(systemID, publicID, base string) (io.Read
 		data, err = io.ReadAll(io.LimitReader(f, max+1))
 		if err == nil && int64(len(data)) > max {
 			return nil, "", fmt.Errorf(
-				"%s is larger than the %d byte limit (FileResolver.MaxBytes)",
-				path, max)
+				"%q is larger than the %d byte limit (FileResolver.MaxBytes)",
+				systemID, max)
 		}
 	}
 	if err != nil {
@@ -173,10 +174,23 @@ func (r *FileResolver) resolvePath(systemID, base string) (root, rel string, err
 	rel, err = filepath.Rel(root, abs)
 	if err != nil || rel == ".." ||
 		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", "", fmt.Errorf("%q is outside the permitted directory %q", abs, root)
+		return "", "", &outsideRootError{systemID: systemID}
 	}
 	return root, rel, nil
 }
+
+// outsideRootError refuses a system identifier that resolves outside Root.
+// It names the identifier as written and nothing more: the resolved path and
+// the root would tell the document's author where the root lies, as
+// xslt.FileResolver's refusal does not (A4-F3, R5). errors.Is(err,
+// fs.ErrPermission) recognises it.
+type outsideRootError struct{ systemID string }
+
+func (e *outsideRootError) Error() string {
+	return fmt.Sprintf("%q is outside the permitted directory", e.systemID)
+}
+
+func (e *outsideRootError) Unwrap() error { return fs.ErrPermission }
 
 // fileURIToPath turns a file: URI into a filesystem path, leaving anything
 // that is not one alone.

@@ -1,7 +1,9 @@
 package dtd
 
 import (
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,5 +134,36 @@ func TestFileResolverAdmitsPathsInsideRoot(t *testing.T) {
 			continue
 		}
 		rc.Close()
+	}
+}
+
+// A refusal names the system identifier as written, not the resolved path or
+// Root (R5, as xslt.FileResolver after A4-F3); the outside one is
+// fs.ErrPermission to errors.Is.
+func TestFileResolverErrorsNameOnlyTheSystemID(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "big.dtd"), []byte("<!ELEMENT big EMPTY>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &FileResolver{Root: root, MaxBytes: 4}
+	base := fileURIOf(filepath.Join(root, "doc.xml"))
+	resolved, _ := filepath.EvalSymlinks(root)
+	for _, id := range []string{"../outside.dtd", "big.dtd"} {
+		_, _, err := r.ResolveExternal(id, "", base)
+		if err == nil {
+			t.Fatalf("%s: no error", id)
+		}
+		msg := err.Error()
+		if !strings.HasPrefix(msg, `"`+id+`" is `) {
+			t.Errorf("%s: %q does not name the identifier first", id, msg)
+		}
+		for _, leak := range []string{root, resolved, filepath.ToSlash(root)} {
+			if strings.Contains(msg, leak) {
+				t.Errorf("%s: %q names the root %s", id, msg, leak)
+			}
+		}
+		if outside := id == "../outside.dtd"; errors.Is(err, fs.ErrPermission) != outside {
+			t.Errorf("%s: errors.Is(fs.ErrPermission) = %v", id, !outside)
+		}
 	}
 }

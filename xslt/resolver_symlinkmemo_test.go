@@ -60,7 +60,7 @@ func TestFileResolverRemembersSymlinks(t *testing.T) {
 	if err := os.Symlink(secret, target); err != nil {
 		t.Fatal(err)
 	}
-	if data, err := r.readConfined(again); err == nil && strings.Contains(string(data), "secret") {
+	if data, err := r.readConfined(again, again); err == nil && strings.Contains(string(data), "secret") {
 		t.Fatal("a remembered resolution read a file outside the root")
 	}
 }
