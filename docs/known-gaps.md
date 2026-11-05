@@ -167,12 +167,6 @@ Measured on branches in 2026-11 and not adopted, each with the reason:
 - **Template-driven shallow-copy does not share source text.** Deep copies
   (`xsl:copy-of`, `xdm.Copy` of 4,096+ records) borrow the source's text
   blocks; a template-built copy adds each value as a string.
-- **With any accumulator declared, every `fn:copy-of`/`fn:snapshot` copy is kept
-  until the transform ends**, with its original: §18.2.2 and §18.2.10 make the
-  copy answer with the original's accumulator values, and the copy-to-original
-  table is how it finds them. Weak references would not free them, since the
-  accumulator value cache holds every tree an accumulator was evaluated over.
-  With no accumulator in any package the table is not made.
 - **Holding millions of namespace nodes costs a sweep per collection.**
   Namespace nodes are held weakly since v2.2.0; while a tree's table is not
   empty, every GC cycle sweeps it.
@@ -643,7 +637,8 @@ ancestors whose body reads more than their views; a set operator with an operand
 stream (a loop over a union with a variable's nodes, `intersect` or `except`
 of paths with a downward tail, which do not distribute; two climbing tails stream since L5) or whose
 predicates may fail; `last()` (but in a motionless loop, a filter of the
-context item's values, or a loop over fresh copies), `reverse`, `sort`;
+context item's values, or a for-each or iterate over fresh copies), a path
+tail reading `position()` or `last()` of the path's focus, `reverse`, `sort`;
 `group-by` or `xsl:sort`
 over a streamed population outside `xsl:fork` (§19.8.4.19 makes them
 free-ranging), and in a fork in a rule body under `TransformReader` (no tree to
@@ -736,9 +731,14 @@ tree's.
   element grounded whole for a tail;
 - `si-apply-templates-008`, `-009`, `si-try-200`, and any main-mode run whose
   built-in copy may put a leaf at the top of `Result.Nodes`: the document is
-  built as it is read.
+  built as it is read;
+- an `xsl:fork`, or several consumers, in a rule for the document element
+  (A2-8): the rule runs on a grounded copy of the element, 436 MB against the
+  tree's 436 MB at 50 MB. The low-memory tee needs the fork at the document
+  node; in a container it streams in 4 MB.
 
-Memory below the tree's is the claim for the rest. Measured for the one
+Memory below the tree's is the claim for the rest (measured exceptions: A2-7
+and A4-F4, in the next section). Measured for the one
 grouping that holds most (`si-fork-815`, `group-by` over the document
 element's children, 200,000 transactions, 10 MB): peak live heap 73.5 MB
 streamed against 80.1 MB on the tree with the case's body, whose result is
@@ -781,7 +781,8 @@ Also:
   and are stopped by the context deadline, before and after v2.3.0.
 - **Any error re-runs the container on the tree** (a container: see the
   `TransformReader` bullet for a streamed principal input), so errors are the tree's,
-  in the tree's order. The cost is a second read of the document, and the
+  in the tree's order. A cancelled context is the exception: since 383ed3d4 the
+  stream returns the context's error within one input read, with no re-run. The cost is a second read of the document, and the
   1 GiB string budget charges the strings both attempts built. Under
   `xsl:try rollback-output="no"`, output already written can turn a caught
   error into `XTDE3530` where the tree fails before writing; no case shows it
@@ -817,6 +818,96 @@ Also:
   The streamed document is not cached, so a later `fn:doc` of it reads it again.
 - **The `FileResolver` limits apply to the whole file**: raise `MaxBytes` and
   `MaxNodes` to stream a document past 64 MB or 10M nodes.
+
+### Streaming: what audit round A left open (XSLT 3.0, performance, security)
+
+Audit round A (four lanes at 32e31c6f: streaming correctness, memory,
+profiling, security) found 25 items; fix round R closed 17 of them (see the
+changelog). These are what remain, with the audit's number.
+
+Memory above the tree, or equal to it:
+
+- **A2-7: two strategies measure above the tree's peak.** A `group-by` in
+  `xsl:fork` over event copies: heap 1.22× the tree at 50 MB and 1.07× at
+  200 MB, RSS 1.21× and 1.27× (1,990 against 1,568 MB), live heap 1.02× and
+  0.98×; it allocates 2.5× the tree's bytes, so GC pacing puts the process
+  above it. `snapshot(/*)`: live heap 1.32× at 50 MB and 1.26× at 200 MB
+  (1,742 against 1,388 MB), heap and RSS equal; the hold cap counts records,
+  not bytes. The `si-fork-815` figure above is live heap with attribute-only
+  members. A fix caps by bytes and compacts event members.
+- **A2-8: an `xsl:fork` in a rule for the document element grounds the whole
+  document**, at the tree's cost; listed under *Whole-document memory* above.
+- **A4-F4: a very deep streamed document holds about 2.7× the tree.** 1M nested
+  elements (7 MB): 147 MB streamed against 54 MB; depth 200,000: 27 against
+  13 MB. Reachable only with `SourceParseOptions.MaxDepth` raised (the default
+  1,000 makes it negligible). The cause is unverified (read from the code: a
+  parse record, an open-state entry and a run frame per open element).
+- **A4-F7: a deep `copy-of` is quadratic in depth, in both modes.** The tree
+  takes 0.54 s at depth 10,000 and 1.65 s at 20,000, the stream 0.26 and
+  0.80 s. Only with `MaxDepth` raised; not a streaming regression, and not
+  profiled.
+- **R3: apply-templates over `snapshot(P)` or `copy-of(P)`, other than
+  `copy-of(.)`, keeps every node's accumulator values by ordinal for the run**
+  (`sa.kept`, `xslt/streamaccum_l6.go`, never pruned). It grows linearly,
+  still below the tree: 62.5 MB against 79.2 MB at 40,000 records.
+
+CPU and allocation:
+
+- **A3-2 remainder: the streamed reader is still about 1.75× `xdm.Parse`.**
+  edd49236 took a 111 MB XMark drain from 786 to 713 ms and 3.33M allocations
+  to 2.9k, against a parse of 408 ms; the rest of the gap is not text-store
+  churn. End to end, streaming is 1.3–2.1× the CPU of Parse + Transform
+  (identity 2.1 s against 1.6–1.7 s, a fork with `group-by` 0.87 against
+  0.42 s).
+- **A3-3: a built-in rule builds three objects per node, in both modes**
+  (`withCurrent` per child whenever the mode has any rule, even for a no-op
+  built-in): 15.2M of the tree's 15.77M allocations on two accumulators over
+  XMark. Pre-existing, unchanged since v2.1.1.
+- **A3-4: a streamed identity allocates as much as building the tree**
+  (568 MB and 5.0M allocations against 591 MB and 1.68M, measured before
+  edd49236 removed the text-store share): the built-in shallow-copy builds an
+  element per output element and copies each text, then serializes and drops
+  them. Sending the events straight to the serializer under `Output` would
+  remove it.
+- **A3-5: a fork's `group-by` with a count-only body copies every member**
+  (342 MB of event copies; peak 217 against the tree's 281 MB, 0.87 against
+  0.42 s), and `xml-to-json()` holds its whole string (106–133 MB peak for a
+  34 MB result). Folding aggregates per key, and writing a whole-content
+  `xml-to-json` straight to `Output`, would fix them.
+- **An `xsl:iterate` carrying an unchanged 20,000-item `xs:string*` takes about
+  16 s, in both modes**: the `as` conversion appears to run every iteration.
+
+Errors and host detail:
+
+- **R5: parse and byte-limit errors from `FileResolver` still name in-root
+  absolute paths** (`parsing <path>: ...`, `<path> exceeds the N byte limit`,
+  `xslt/resolver.go` `parseUncached`): they reveal where the roots are, not
+  whether outside files exist. xdm parse errors may carry the base URI too, so
+  dropping the prefix alone would not close it. `dtd/resolve.go:176` has the
+  refusal pattern 2f825daf removed from `xslt` (`%q is outside the permitted
+  directory %q`, with the resolved path and the root).
+- **A4-F3: a host cannot learn the resolved path of a refusal.** Since
+  2f825daf the error names the href as written and satisfies
+  `errors.Is(err, fs.ErrPermission)`; the resolved path and the roots would
+  need a new exported error type, which was not added.
+- **R5: in tree mode the template-depth counter is not carried across an XPath
+  function call.** `runtimeFrom` grafts the call's context onto the runtime
+  bound at transform start, so templates applied inside a deep function nest
+  start from depth about 1. The XPath call depth still bounds it.
+- **R3: possibly a tree-mode bug, unverified against Saxon.** After
+  `<xsl:variable name="v"><xsl:copy-of select="." copy-accumulators="yes"/></xsl:variable>`,
+  `$v/rec/accumulator-before('n')` gives 1 for every `rec`, in both modes and
+  before R3; §18.2.10 suggests the original's values (1, 2, 3). The row
+  `copy-of-instr-variable` in `xslt/streamcopyaccum_test.go` pins only that the
+  stream equals the tree.
+
+Untested:
+
+- **R2: `TransformReader`'s stand-in document node takes its tree id before
+  the cursor opens**, so the principal input's copies order after its
+  document node and before anything the transform loads. No test exercises
+  that ordering through `TransformReader`; 0824c9c9's rows in `l7Rows`
+  (`xslt/streaml7_test.go`) cover containers.
 
 ### `fn:replace` charges a backtracking or backreference result after building it (XPath, resource limits)
 
