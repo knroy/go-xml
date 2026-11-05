@@ -64,6 +64,10 @@ type mainBuild struct {
 	// their built nodes (note).
 	kept     map[*xdm.Node]*xdm.Node
 	stripped bool
+	// written says the principal result is serialized to
+	// TransformOptions.Output, and Result.Nodes is nil: nothing reads a
+	// kept leaf's identity, so its copy serves and nothing is built.
+	written bool
 }
 
 // buildMain makes the tree of m's document, a document node with root's
@@ -126,6 +130,9 @@ func buildMain(m *mainInput, stripped bool) *mainBuild {
 // leaf of the stream the cursor c is at, as standing for n's built node; it
 // reports whether n is that node's (the last leaf the observer built).
 func (b *mainBuild) note(c *xdmstream.Cursor, n, cp *xdm.Node) bool {
+	if b.written {
+		return true
+	}
 	ev := c.At()
 	if ev.Kind < xdmstream.Text || ev.Kind > xdmstream.PI || ev.Node != b.src || b.leaf == nil ||
 		b.leaf.Kind() != n.Kind() || b.leaf.Value() != n.Value() || b.leaf.Name() != n.Name() {

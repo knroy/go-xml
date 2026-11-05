@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
@@ -55,7 +56,10 @@ func (run *streamRun) eventPopEval(rt *runtime, op *streamOp) (xdm.Sequence, err
 		return nil, errStreamPlan
 	}
 	run.used = true
-	b := newOutputBuilder(rt)
+	// The copies stand for the members the tree reads in its source, which
+	// the parse budget counted: they are not charged to MaxNodes, the
+	// result's budget, which the tree never charges for them.
+	b := xdmbuild.New(xsltPolicy{})
 	err := op.split.loopAt(rt.ctx, run.c, run.d, g, nil, func(v *xdm.Node, md int) (bool, error) {
 		if v.Kind() != xdm.KindElement {
 			return false, errStreamPlan // eventPopulation admits elements only

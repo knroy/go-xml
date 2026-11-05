@@ -218,7 +218,11 @@ func (s *Stylesheet) transformStream(ctx context.Context, r io.Reader, opts Tran
 	main.root.SetBaseURI(po.BaseURI)
 	main.root.SetDocumentURI(po.DocumentURI)
 	if m, err := s.initialModeOf(opts); err == nil && s.mainBuilds[m] {
-		main.build = buildMain(main, len(s.strip) > 0) // streammain_leaftop.go
+		if opts.Output != nil {
+			main.build = &mainBuild{written: true} // streammain_leaftop.go
+		} else {
+			main.build = buildMain(main, len(s.strip) > 0) // streammain_leaftop.go
+		}
 	}
 	if len(s.strip) > 0 {
 		main.c.StripWhitespace(s.whitespaceStripper(0))
