@@ -26,7 +26,8 @@ package xslt
 // hold both a stream's node and an aliasing load's is what refuses. Literal
 // attribute text (separator="|") and string literals are not operators any
 // more, and an operator over a load's nodes alone, or a stream's alone, does
-// not refuse. Copies (copy-of, snapshot, constructed nodes) are new nodes in
+// not refuse. An xsl:evaluate given a stream's node is such a use: what it
+// evaluates is not known until run time. Copies (copy-of, snapshot, constructed nodes) are new nodes in
 // both modes. A stylesheet that uses a package keeps the stylesheet-wide
 // rule: its modules may compile after the question is asked.
 //
@@ -112,8 +113,6 @@ type aliasFlow struct {
 	accRes     abits
 	allLoad    abits
 	gen        abits // joined arguments of generate-id
-	evalFed    abits // joined context items and parameters of xsl:evaluate
-	evalIdent  bool  // an xsl:evaluate's xpath text writes an identity operator
 	changed    bool
 
 	sd, main, identAny bool
@@ -251,9 +250,6 @@ func (c *compiler) aliasScanOf() *aliasScan {
 		}
 	}
 	a.meet(a.gen)
-	if a.evalIdent || a.identAny {
-		a.meet(a.evalFed | aTA | aTL)
-	}
 	sc := &aliasScan{sd: a.sd, main: a.main}
 	if a.usePkg {
 		sc = &aliasScan{sd: a.identAny, main: a.identAny}
@@ -527,13 +523,26 @@ func (a *aliasFlow) instr(el *xdm.Node, en aenv) abits {
 		a.attrs(el, en, "")
 		return a.seq(el, aenv{group: en.group, el: el})
 	case "evaluate":
-		fed := a.attrs(el, en, "")
-		fed |= a.seq(el, en)
-		// Its expression may load anything and compare it with what it is
-		// given: an identity operator written in it, or anywhere, counts.
+		// The evaluated expression is data (§10.4.2): it may doc() the
+		// streamed URI and compare what it loads with what it is given, so
+		// a stream's node given to it, as its context item or a parameter,
+		// is an identity use of both kinds.
+		a.attrs(el, en, "")
+		var fed abits
+		for _, n := range []string{"context-item", "with-params"} {
+			if el.Attr("", n) != nil {
+				fed |= a.expr(el.AttrValue(n), en)
+			}
+		}
+		for _, ch := range el.ChildElements() {
+			v := a.instr(ch, en)
+			if isXSL(ch, "with-param") {
+				v |= a.vars[a.qname(ch, ch.AttrValue("name"))]
+			}
+			fed |= v
+		}
 		v := a.load(aTA | aTL)
-		a.evalFed |= fed
-		a.evalIdent = a.evalIdent || identityOpsRE.MatchString(strings.ReplaceAll(el.AttrValue("xpath"), "||", ""))
+		a.meet(fed | v)
 		return fed | v
 	case "merge":
 		var g abits
