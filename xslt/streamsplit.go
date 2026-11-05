@@ -1549,6 +1549,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 			// tag (sf-unparsed-entity-02).
 			return vc.safe(x.Args[0], f, false)
 		}
+		if accumResolveQNameOK(vc, x, f) { // streamaccum_own.go
+			return vc.safe(x.Args[0], f, false)
+		}
 		if viewLeafCopyOK(x, f) { // streamview_l7.go
 			return true
 		}

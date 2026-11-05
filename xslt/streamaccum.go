@@ -107,7 +107,7 @@ func accumStreamWhyIn(def *accumulatorDef, pkg int) (string, []string) {
 		}
 		for _, x := range exprs {
 			e := parseAt(x.at, x.src)
-			if e == nil || x.held && !accumValueSafe(e) {
+			if e == nil || x.held && !accumValueSafe(e) && !accumOwnValue(e, def) { // streamaccum_own.go
 				return name + ": a rule's value may hold a node: " + x.src, nil
 			}
 			if !accumReadsOK(e, r.post, &deps) {
