@@ -174,6 +174,10 @@ func (pb *popBuilder) pop(e xpath.Expr) *streamPop {
 		if p := pb.filteredCopies(x); p != nil { // streampop_l6.go
 			return p
 		}
+	case *xpath.ArrayConstructor:
+		if p := pb.arrayOfCopies(x); p != nil { // streamlast_mm2.go
+			return p
+		}
 	case *xpath.SequenceExpr:
 		p := &streamPop{at: -1}
 		for _, it := range x.Items {

@@ -312,3 +312,37 @@ func lastPreds(preds []xpath.Expr) bool {
 	}
 	return ok
 }
+
+// arrayOfCopies builds [M1, ..., Mn] where one member is a population of
+// copies (P/snapshot(), copy-of(P)) and the others are motionless: the
+// population is that member's; the array is made on the tree's code over
+// the whole sequence of copies once it is collected (executeCopies, as
+// filteredCopies' predicates run), and is the one item dispatched
+// (sx-square-array-019).
+func (pb *popBuilder) arrayOfCopies(x *xpath.ArrayConstructor) *streamPop {
+	if pb.split != nil || x.Curly {
+		return nil
+	}
+	at := -1
+	for i, m := range x.Members {
+		if pb.motionless(m) {
+			continue
+		}
+		if at >= 0 {
+			return nil
+		}
+		at = i
+	}
+	if at < 0 {
+		return nil
+	}
+	p := pb.pop(x.Members[at])
+	if p == nil || !groundApply(p) || p.post != nil {
+		pb.split = nil
+		return nil
+	}
+	members := append([]xpath.Expr(nil), x.Members...)
+	members[at] = &xpath.VarRef{Name: splitItems}
+	p.post = pb.part(&xpath.ArrayConstructor{Members: members})
+	return p
+}

@@ -249,6 +249,13 @@ var mainCases = []struct {
 	// last() in a filter of values made of the context item's string: the
 	// outer has them all (lastPreds, streamlast_mm2.go; streamable-130).
 	{`<xsl:mode streamable="yes" on-no-match="shallow-skip"/><xsl:template match="rec"><t><xsl:value-of select="tokenize(., '\s+')[position() * 2 gt last()]"/></t></xsl:template>`, true},
+	// apply-templates to an array holding snapshots of the stream: the array
+	// made over the copies once collected (arrayOfCopies, streamlast_mm2.go;
+	// sx-square-array-019).
+	{`<xsl:mode streamable="yes"/><xsl:mode name="m" streamable="yes" on-no-match="deep-skip"/>` +
+		`<xsl:template match="/"><o><xsl:apply-templates select="[doc/rec[1]/*/snapshot(), 'x']" mode="a"/></o></xsl:template>` +
+		`<xsl:template match=".[. instance of array(*)]" mode="a"><in n="{count(?*)}"><xsl:apply-templates select="?*" mode="m"/></in></xsl:template>` +
+		`<xsl:template match="*" mode="m"><v><xsl:value-of select="name(..), ."/></v></xsl:template>`, true},
 	// A predicate of a node() or text() step reading its parent's attribute:
 	// a leaf's open ancestors, as views (sf-xml-to-json-005).
 	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:copy-of select="descendant::node()[../@k = 'a']"/></o></xsl:template>`, true},
