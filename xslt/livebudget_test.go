@@ -268,3 +268,33 @@ func TestSignatureIsConstant(t *testing.T) {
 		t.Errorf("signature over 100,000 children takes %v, over 10 %v", large, small)
 	}
 }
+
+// A streamed xsl:iterate measures what it carries after every item. Walking
+// each carried tree in full every time made a loop carrying a large tree
+// quadratic (audit A4-F1); a tree is walked once while it stays carried.
+func TestLiveCarriedTreeMeasuredOnce(t *testing.T) {
+	doc, err := xdm.ParseString("<e>"+strings.Repeat("<x/>", 1000)+"</e>", xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := doc.Root.FirstChild()
+	var l liveLoop
+	want, _, _ := l.measure([]xdm.Sequence{{e}})
+	if want != 1002 {
+		t.Fatalf("measured %d nodes, want 1002", want)
+	}
+	for range 100 {
+		// A new slice each time, a node of the same tree.
+		if n, _, ok := l.measure([]xdm.Sequence{{e.FirstChild()}, {xdm.NewString("s")}}); !ok || n != want {
+			t.Fatalf("measured %d, %v; want %d", n, ok, want)
+		}
+	}
+	if l.walked != want {
+		t.Errorf("walked %d nodes over 101 items, want %d: the carried tree was walked again", l.walked, want)
+	}
+	// A tree no longer carried is forgotten; a new one is walked.
+	other, _ := xdm.ParseString("<f/>", xdm.ParseOptions{})
+	if n, _, _ := l.measure([]xdm.Sequence{{other.Root}}); n != 2 || len(l.sizes) != 1 {
+		t.Errorf("new tree: %d nodes, %d trees kept; want 2, 1", n, len(l.sizes))
+	}
+}

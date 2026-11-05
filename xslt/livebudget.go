@@ -71,6 +71,16 @@ type liveLoop struct {
 	n0, b0 int64
 	forced int
 	sig    outSig
+	// What measure measured at the last item: the carried values (last),
+	// their size (lastN, lastB) and each carried tree's, by root (sizes).
+	// A tree does not change once built, so an item carrying the same
+	// values, or nodes of the same trees, is not walked again; only the
+	// last item's trees are kept, so none outlives what is carried.
+	last         []xdm.Sequence
+	lastN, lastB int64
+	sizes        map[*xdm.Node][2]int64
+	// walked counts the nodes treeSize visited, for the tests.
+	walked int64
 }
 
 // outSig is what an item could change by writing to its output. end is
@@ -120,11 +130,16 @@ func (l *liveLoop) end(rt *runtime, out *outputBuilder, carried []xdm.Sequence) 
 		return
 	}
 	n1, b1 := xpathleaf.Charged(rt.ctx)
-	cn, cb, ok := carriedSize(carried)
-	if !ok || n1 < l.n0 || b1 < l.b0 || rt.globalsForced != l.forced || signature(out) != l.sig {
+	ok := n1 >= l.n0 && b1 >= l.b0 && rt.globalsForced == l.forced && signature(out) == l.sig
+	var cn, cb int64
+	if ok {
+		cn, cb, ok = l.measure(carried)
+	}
+	if !ok {
 		// Everything it built stays charged, and so does what the previous
 		// items left carried: none of it is known to be dropped.
 		l.nodes, l.bytes = 0, 0
+		l.last, l.sizes = nil, nil
 		return
 	}
 	an, ab := int64(liveNodeAllowance), int64(liveByteAllowance)
@@ -151,11 +166,16 @@ func settle(built int64, held *int64, need, allow int64) int64 {
 	return r
 }
 
-// carriedSize measures the iteration parameters an item carries on: nodes and
+// measure measures the iteration parameters an item carries on: nodes and
 // string bytes, each tree counted once in full. ok is false for an item it
-// cannot see into.
-func carriedSize(carried []xdm.Sequence) (nodes, bytes int64, ok bool) {
-	var seen map[*xdm.Node]bool
+// cannot see into. Walking every carried tree at every item made a loop
+// carrying a large tree quadratic, so a tree the last item carried is not
+// walked again, nor anything when the values are the last item's own.
+func (l *liveLoop) measure(carried []xdm.Sequence) (nodes, bytes int64, ok bool) {
+	if sameSequences(carried, l.last) {
+		return l.lastN, l.lastB, true
+	}
+	var seen map[*xdm.Node][2]int64
 	for _, seq := range carried {
 		for _, it := range seq {
 			switch v := it.(type) {
@@ -166,21 +186,42 @@ func carriedSize(carried []xdm.Sequence) (nodes, bytes int64, ok bool) {
 				for p := r.Parent(); p != nil; p = p.Parent() {
 					r = p
 				}
-				if seen[r] {
+				if _, dup := seen[r]; dup {
 					continue
 				}
 				if seen == nil {
-					seen = map[*xdm.Node]bool{}
+					seen = map[*xdm.Node][2]int64{}
 				}
-				seen[r] = true
-				n, b := treeSize(r)
-				nodes, bytes = nodes+n, bytes+b
+				sz, known := l.sizes[r]
+				if !known {
+					sz[0], sz[1] = treeSize(r)
+					l.walked += sz[0]
+				}
+				seen[r] = sz
+				nodes, bytes = nodes+sz[0], bytes+sz[1]
 			default:
+				l.last, l.sizes = nil, nil
 				return 0, 0, false
 			}
 		}
 	}
+	l.last, l.sizes = append(l.last[:0], carried...), seen
+	l.lastN, l.lastB = nodes, bytes
 	return nodes, bytes, true
+}
+
+// sameSequences reports whether a and b hold the same sequences: the same
+// slices, which hold the same items, as values are not changed in place.
+func sameSequences(a, b []xdm.Sequence) bool {
+	if len(a) != len(b) || a == nil || b == nil {
+		return false
+	}
+	for k := range a {
+		if len(a[k]) != len(b[k]) || len(a[k]) > 0 && &a[k][0] != &b[k][0] {
+			return false
+		}
+	}
+	return true
 }
 
 // treeSize is the nodes of n's subtree, counted as the builder charges them
