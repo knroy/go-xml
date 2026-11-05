@@ -135,6 +135,9 @@ func (c *compiler) popFor(op *streamOp, ns xpath.NamespaceResolver) (*streamPop,
 	if s := op.split; s.valuesOnly() || sheetCopiesPop(s, op.el) { // streamfn_copies.go
 		return &streamPop{values: true, off: true}, s, ""
 	}
+	if s := op.split; groundTailPop(s, op.el) { // streamfn_instrburst_mm7.go
+		return &streamPop{at: 0, parts: []*xpath.Compiled{nil}, off: true}, s, ""
+	}
 	return nil, nil, pb.why
 }
 

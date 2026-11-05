@@ -157,8 +157,10 @@ func TestBurstsMatchTreeOn(t *testing.T) {
 			`<doc><rec x="hello" a="  "/><rec x="abcdefg" a="  "/><rec x="zz" a="  "/></doc>`, true},
 		{"space attributes on the spine", `<xsl:for-each select="doc/g/rec"><v a="[{../@a}]" b="[{@b}]"/></xsl:for-each>`,
 			`<doc><g a=" "><rec b=" "/><rec x="qqqq" b=" "/></g><g a=" "><rec b=" "/></g></doc>`, true},
+		// The predicate is positional: the path is doc, the rest a tail run
+		// on the document element's grounded copy (streamfn_instrburst_mm7.go).
 		{"numeric path predicate", `<xsl:for-each select="doc/rec[@k/xs:integer(.)]"><xsl:copy-of select="."/></xsl:for-each>`,
-			`<doc><rec k="1"/><rec k="2"/><rec k="3"/></doc>`, false},
+			`<doc><rec k="2"/><rec k="1"/><rec k="3"/></doc>`, true},
 		{"axis path predicate", `<xsl:for-each select="doc/rec[@k]"><xsl:copy-of select="."/></xsl:for-each>`,
 			`<doc><rec k="1"/><rec/></doc>`, true},
 	} {

@@ -6,13 +6,14 @@ package xslt
 //
 // A burst call (streamsplit_calls.go) is one whose one-xsl:sequence body
 // reads of the nodes it is given nothing a grounded copy lacks (burstSafe).
-// A body of instructions is the same when it has no focus of its own --
-// no instruction that sets one (xsl:for-each and the like), xsl:number,
-// templates -- so that every expression in it reads only through the
-// parameters, and every such expression is burstSafe and goes only down
-// (no step climbing or beside the node given, whose grounded copy has its
-// ancestors as names and attributes only). Then on a match's grounded copy
-// the call returns what the tree's returns on the match.
+// A body of instructions is the same when its instructions read nodes only
+// by their expressions (no xsl:number, templates, grouping or sorting), the
+// one focus they set being xsl:for-each's, and every expression is
+// burstSafe and goes only down (no step climbing or beside the node given,
+// whose grounded copy has its ancestors as names and attributes only): so
+// every node the body reads, and every focus, lies within the parameters'
+// subtrees. Then on a match's grounded copy the call returns what the
+// tree's returns on the match.
 
 import (
 	"github.com/knroy/go-xml/v2/xdm"
@@ -25,6 +26,9 @@ var instrBurstNames = map[string]bool{
 	"param": true, "variable": true, "sequence": true, "copy-of": true, "value-of": true,
 	"if": true, "choose": true, "when": true, "otherwise": true, "element": true,
 	"attribute": true, "text": true, "comment": true, "processing-instruction": true,
+	// Its focus is what its select gives, downward from a parameter's
+	// node like every expression here (function-5006).
+	"for-each": true,
 }
 
 // instrBurstBody reports whether fn, an xsl:function whose body is not one
@@ -84,4 +88,49 @@ func downOnly(e xpath.Expr) bool {
 		}
 	})
 	return ok
+}
+
+// oneMatchTail takes outermost(P/T) or innermost(P/T), where P has one
+// match at most -- one child step to an element from the document node,
+// which has one element child -- as P/outermost(T): over one match's T the
+// two are the same nodes in the same order (function-5006:
+// outermost(doc/sf:deep-descent(section[1]))). T then runs as any tail, on
+// the match (the document element) as the split decides.
+func (w *splitter) oneMatchTail(x *xpath.FuncCall, inner *splitPathParts) bool {
+	if !w.doc || inner.oi != "" || inner.ctxItem || inner.group || inner.br != nil || inner.mapR != nil ||
+		inner.skip > 0 || len(inner.steps) != 1 || len(inner.tail) == 0 {
+		return false
+	}
+	st := inner.steps[0]
+	if st.Axis != xpath.AxisChild {
+		return false
+	}
+	switch t := st.Test.(type) {
+	case *xpath.NameTest:
+	case *xpath.KindTest:
+		if t.Any || t.Kind != xdm.KindElement {
+			return false // node(): a text or comment child matches too
+		}
+	default:
+		return false
+	}
+	var arg xpath.Expr = &xpath.PathExpr{Steps: inner.tail}
+	if len(inner.tail) == 1 {
+		arg = inner.tail[0]
+	}
+	inner.tail = []xpath.Expr{&xpath.FuncCall{Name: x.Name, Args: []xpath.Expr{arg}}}
+	return true
+}
+
+// groundTailPop reports whether the loop el's select, split as s, is a
+// path whose tail runs on each match's grounded copy (matchGround), its
+// items what the tails give, and el's body reads of them only what such a
+// copy has (burstBody): the items are handed one by one off the cursor
+// (pop.off), as the tree's loop runs over the select's value. The split
+// grounds one match at a time; a match that is the document element is
+// copied whole, which costs what its tree costs (function-5006).
+func groundTailPop(s *streamSplit, el *xdm.Node) bool {
+	return isXSL(el, "for-each") && s.cond == nil && s.mode == matchGround && s.tail != nil && s.tailText == "" &&
+		s.red == "" && !s.nests && !s.group && !s.ctxItem && !s.hasBranches() && s.outer != nil &&
+		isVarRef(s.outer.Expr(), splitItems) && burstBody(el)
 }

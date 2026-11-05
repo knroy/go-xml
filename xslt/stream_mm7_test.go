@@ -72,8 +72,8 @@ func TestStreamSnapshotClimb(t *testing.T) {
 // TestStreamInstrBodyBurst: a call in a tail on a function whose body is
 // instructions, given the match itself, runs on the match's grounded copy
 // when the body sets no focus and reads its parameters only downward
-// (function-5012); one climbing from its parameter, or setting a focus,
-// leaves the rule on the tree.
+// (function-5012); one climbing from its parameter or from the focus an
+// xsl:for-each sets leaves the rule on the tree.
 func TestStreamInstrBodyBurst(t *testing.T) {
 	const head = `<xsl:mode streamable="yes"/><xsl:template match="/">`
 	const fn = `<xsl:function name="p:f" as="node()*" streamability="absorbing"><xsl:param name="n"/>`
@@ -88,8 +88,8 @@ func TestStreamInstrBodyBurst(t *testing.T) {
 			`<xsl:otherwise><xsl:element name="e"/></xsl:otherwise></xsl:choose></xsl:function>`, true},
 		{"climbs", head + `<o><xsl:copy-of select="d/rec/p:f(.)/self::*"/></o></xsl:template>` +
 			fn + `<u><xsl:value-of select="$n/../@k"/></u></xsl:function>`, false},
-		{"sets a focus", head + `<o><xsl:copy-of select="d/rec/p:f(.)/self::*"/></o></xsl:template>` +
-			fn + `<xsl:for-each select="$n/v"><u><xsl:value-of select="."/></u></xsl:for-each></xsl:function>`, false},
+		{"climbs from its focus", head + `<o><xsl:copy-of select="d/rec/p:f(.)/self::*"/></o></xsl:template>` +
+			fn + `<xsl:for-each select="$n/v"><u><xsl:value-of select="name(..)"/></u></xsl:for-each></xsl:function>`, false},
 	}
 	for _, r := range rows {
 		sheet := mainSheet(r.decls)
@@ -102,4 +102,18 @@ func TestStreamInstrBodyBurst(t *testing.T) {
 			t.Errorf("%s: streamed %v, want %v", r.name, got, r.stream)
 		}
 	}
+}
+
+// TestStreamOneMatchTail: outermost(D/T), D the document element, is
+// D/outermost(T), T a tail run on D's grounded copy; a call there on a
+// function whose body is an xsl:for-each over its node() parameter raises
+// the tree's type error when the argument is absent (function-5006).
+func TestStreamOneMatchTail(t *testing.T) {
+	const decls = `<xsl:mode streamable="yes"/><xsl:template match="/"><o>` +
+		`<xsl:for-each select="outermost(d/p:f(s[1]))/text()"><xsl:copy-of select="self::text()"/></xsl:for-each></o></xsl:template>` +
+		`<xsl:function name="p:f" as="node()*" streamability="deep-descent"><xsl:param name="n" as="node()"/>` +
+		`<xsl:for-each select="$n"><xsl:sequence select="self::node()//s//p"/></xsl:for-each></xsl:function>`
+	rows := []struct{ name, decls string }{{"deep descent", decls}}
+	mm5Rows(t, `<d><s><s><p>a<p>in</p></p><p>b</p></s></s><s><s><p>c</p></s></s></d>`, rows)
+	mm5Rows(t, `<d><x/></d>`, rows)
 }

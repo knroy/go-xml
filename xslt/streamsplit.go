@@ -1152,6 +1152,9 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 			if ok && climbedOuter(inner) { // streamsplit_foreign.go
 				return pp, false
 			}
+			if ok && w.oneMatchTail(x, &inner) { // streamfn_instrburst_mm7.go
+				return inner, true
+			}
 			if ok {
 				w.refuse(x.Name.Local + "() of a path with a tail")
 			}
@@ -1190,7 +1193,7 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 					if !ok {
 						return pp, false
 					}
-					inner.tail = list[1:]
+					inner.tail = append(inner.tail, list[1:]...) // oneMatchTail's own, then these
 					return inner, true
 				}
 			}
