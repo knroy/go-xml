@@ -1070,6 +1070,11 @@ func (run *streamRun) leaf(focus focuser, pos int, n *xdm.Node, mode string,
 		return err
 	}
 	if t == nil {
+		if !s.modeWarnNoMatch[mode] {
+			// The built-in rule of a leaf reads no focus (builtIn): disp's
+			// runtime is as good as the leaf's, which is not made.
+			return run.builtIn(focus.disp, n, mode, params, tunnels, out)
+		}
 		if ctx == nil {
 			ctx = focus.focusCtx(n, pos, 0)
 		}
