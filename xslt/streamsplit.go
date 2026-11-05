@@ -1018,10 +1018,19 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 			}
 		}
 		// The predicates see each item, positioned in the whole sequence.
+		last := false
 		if !allBurstSafe(x.Predicates, false) {
-			return w.refuse("filter " + e.String())
+			if last = lastPreds(x.Predicates); !last { // streamlast_mm2.go
+				return w.refuse("filter " + e.String())
+			}
 		}
-		return w.slot(x.Base, func(y xpath.Expr) { x.Base = y }, useKeep)
+		if !w.slot(x.Base, func(y xpath.Expr) { x.Base = y }, useKeep) {
+			return false
+		}
+		if last && (!w.path.ctxItem || w.red != "") {
+			return w.refuse("filter " + e.String() + ": last() of items not all at hand")
+		}
+		return true
 	case *xpath.SimpleMap:
 		if !burstSafe(x.Right, false) && w.mapClimb(x, put, use) {
 			return true

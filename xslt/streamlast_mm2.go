@@ -285,3 +285,30 @@ func flatSteps(steps []xpath.Expr) []xpath.Expr {
 	}
 	return steps
 }
+
+// lastPreds reports whether preds, refused by burstSafe, would pass were
+// each fn:last() fn:position(): last() of the filtered sequence, which the
+// split's outer has whole when the consuming part is the context item, a
+// value taken once (streamable-130: tokenize(., '\s+')[position() * 2 gt
+// last()]).
+func lastPreds(preds []xpath.Expr) bool {
+	var calls []*xpath.FuncCall
+	for i := range preds {
+		exprWalk(reflect.ValueOf(&preds[i]).Elem(), func(v reflect.Value) {
+			if f, ok := v.Interface().(*xpath.FuncCall); ok && f.Name.URI == fnNS && f.Name.Local == "last" && len(f.Args) == 0 {
+				calls = append(calls, f)
+			}
+		})
+	}
+	if len(calls) == 0 {
+		return false
+	}
+	for _, f := range calls {
+		f.Name.Local = "position"
+	}
+	ok := allBurstSafe(preds, false)
+	for _, f := range calls {
+		f.Name.Local = "last"
+	}
+	return ok
+}

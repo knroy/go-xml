@@ -246,6 +246,9 @@ var mainCases = []struct {
 		`<xsl:sequence select="$n/ancestor-or-self::*[last()]"/></xsl:function>` +
 		`<xsl:template match="/"><o><xsl:copy-of select="*/rec[1][p:a(.)/local-name() = 'doc']/sub"/></o></xsl:template>`, true},
 	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:copy-of select="*/rec[ancestor::*[last()]/local-name() = 'doc']/sub"/></o></xsl:template>`, true},
+	// last() in a filter of values made of the context item's string: the
+	// outer has them all (lastPreds, streamlast_mm2.go; streamable-130).
+	{`<xsl:mode streamable="yes" on-no-match="shallow-skip"/><xsl:template match="rec"><t><xsl:value-of select="tokenize(., '\s+')[position() * 2 gt last()]"/></t></xsl:template>`, true},
 	// A predicate of a node() or text() step reading its parent's attribute:
 	// a leaf's open ancestors, as views (sf-xml-to-json-005).
 	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:copy-of select="descendant::node()[../@k = 'a']"/></o></xsl:template>`, true},
