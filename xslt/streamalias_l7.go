@@ -31,10 +31,12 @@ package xslt
 // both modes. A stylesheet that uses a package keeps the stylesheet-wide
 // rule: its modules may compile after the question is asked.
 //
+// A path of two or more steps sorts and dedupes what each step gives, and
+// outermost() and innermost() what they are given: those are identity uses
+// too (`($s, $t)/.`, `$v/..`, A1-F3).
+//
 // ponytail: names are joined stylesheet-wide (no scopes, no call contexts)
-// and a dynamic call or inline function parameter may hold anything; a path
-// that sorts and dedupes a mixed sequence (`($s, $t)/.`) is not counted, as
-// before.
+// and a dynamic call or inline function parameter may hold anything.
 
 import (
 	"reflect"
@@ -610,6 +612,12 @@ func (a *aliasFlow) eval(e xpath.Expr, en aenv) abits {
 				a.preds(st.Predicates, aenv{focus: cur, cur: en.cur, group: en.group, el: en.el})
 			} else {
 				cur = a.eval(s, aenv{focus: cur, cur: en.cur, group: en.group, el: en.el})
+				// What a step gives is put in document order, deduplicated.
+				// Axis steps from one node stay in its tree; only another
+				// expression can bring nodes of two trees together.
+				if _, dot := s.(*xpath.ContextItem); !dot && len(x.Steps) > 1 {
+					a.sorts(cur)
+				}
 			}
 		}
 		return cur
@@ -672,6 +680,17 @@ func (a *aliasFlow) eval(e xpath.Expr, en aenv) abits {
 		v |= en.focus
 	}
 	return v
+}
+
+// sorts meets b as an identity use: a path or outermost()/innermost() puts
+// nodes that may be b's in document order and drops duplicates. It counts
+// for a used package's rule only when b may mix a stream's node and a
+// load's, not for every path.
+func (a *aliasFlow) sorts(b abits) {
+	a.meet(b)
+	if b&aS != 0 && b&aTL != 0 {
+		a.identAny = true
+	}
 }
 
 func (a *aliasFlow) preds(ps []xpath.Expr, en aenv) {
@@ -757,6 +776,9 @@ func (a *aliasFlow) call(x *xpath.FuncCall, en aenv) abits {
 			a.args(k, nil, k.arity)
 		}
 		return 0
+	case "outermost", "innermost":
+		a.sorts(v)
+		return v
 	case "copy-of", "snapshot":
 		return 0 // new nodes in both modes
 	case "generate-id":

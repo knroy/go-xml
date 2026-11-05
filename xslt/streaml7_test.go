@@ -66,6 +66,17 @@ var l7Rows = []struct {
 	{``, `<xsl:variable name="v" select="doc('other.xml')/*"/><o><xsl:for-each select="doc/rec"><e><xsl:value-of select="(* union $v)/name()"/></e></xsl:for-each></o>`, true},
 	{``, `<xsl:variable name="v" select="doc('other.xml')/*/*"/><o><xsl:for-each select="doc/rec ! (sub union $v)"><e n="{name()}"/></xsl:for-each></o>`, true},
 	{``, `<xsl:variable name="v" select="doc('other.xml')/*"/><o><xsl:for-each select="doc/rec"><e b="{. &lt;&lt; $v}"/></xsl:for-each></o>`, true},
+	// A path's sort and dedupe, outermost() and innermost() are identity
+	// uses: over the stream's nodes and doc() of the streamed URI they stay
+	// on the tree (A1-F3); with another URI's, not.
+	{``, `<o><xsl:for-each select="doc/rec"><e n="{count((sub, doc('doc.xml')//sub)/.)}"/></xsl:for-each></o>`, false},
+	{``, `<o><xsl:for-each select="doc/rec"><e n="{count((sub, doc('doc.xml')//sub)/self::*)}"/></xsl:for-each></o>`, false},
+	{``, `<o><xsl:for-each select="doc/rec"><e n="{count((sub, doc('doc.xml')//sub)/..)}"/></xsl:for-each></o>`, false},
+	{``, `<o><xsl:for-each select="doc/rec"><e n="{count((sub, doc('doc.xml')//sub)/./@x)}"/></xsl:for-each></o>`, false},
+	{``, `<o><xsl:for-each select="doc/rec"><e n="{count(outermost((sub, doc('doc.xml')//sub)))}"/></xsl:for-each></o>`, false},
+	{``, `<o><xsl:for-each select="doc/rec"><e n="{count(innermost((sub, doc('doc.xml')//sub)))}"/></xsl:for-each></o>`, false},
+	{``, `<o><xsl:for-each select="doc/rec"><xsl:variable name="m" select="(sub, doc('doc.xml')//sub)"/><e n="{count($m/.)}"/></xsl:for-each></o>`, false},
+	{``, `<o><xsl:for-each select="doc/rec"><e n="{count((sub, doc('other.xml')//sub)/.)}"/></xsl:for-each></o>`, true},
 	// A call given values only, its body instructions (j:escape's shape;
 	// streamvaluefn_l7.go): run as itself.
 	{`<xsl:function name="p:esc" as="xs:string"><xsl:param name="s" as="xs:string"/><xsl:value-of><xsl:for-each select="string-to-codepoints($s)"><xsl:choose><xsl:when test=". = 97">\a</xsl:when><xsl:otherwise><xsl:value-of select="codepoints-to-string(.)"/></xsl:otherwise></xsl:choose></xsl:for-each></xsl:value-of></xsl:function>`,
