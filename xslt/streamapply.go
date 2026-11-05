@@ -445,13 +445,20 @@ func (b *streamBuilder) ruleBody(el *xdm.Node, kids []*xdm.Node, from int, f vfo
 	return b.members(el, kids[from:], f)
 }
 
-// readyRule finishes the plans of r once the rule's body has compiled.
-func (c *compiler) readyRule(r *rulePlan) {
+// readyRule finishes the plans of r, the rule el's, once its body has
+// compiled.
+func (c *compiler) readyRule(r *rulePlan, el *xdm.Node) {
 	for cl, x := range r.x {
 		if x == nil {
 			continue
 		}
 		if why := x.ready(); why != "" {
+			// Several consumers found as the plan readies (a split's): the
+			// rule may run on a grounded copy, as one its body refused.
+			if gx := groundRuleExec(el, nodeClass(cl), why); gx != nil && !x.groundRule { // streamtee_ground.go
+				r.x[cl] = gx
+				continue
+			}
 			r.x[cl], r.why[cl] = nil, why
 		}
 	}
@@ -1150,7 +1157,7 @@ func (run *streamRun) rule(rt *runtime, t *Template, node *xdm.Node, params, tun
 	}
 	defer rt.leaveFrame(rt.enterFrame())
 	if x.groundRule {
-		return run.groundRule(rt, t, params, tunnels, out) // streamtee_ground.go
+		return run.groundRule(rt, t, params, tunnels, out, x.groundAccums) // streamtee_ground.go
 	}
 	prev := run.x
 	run.x = x

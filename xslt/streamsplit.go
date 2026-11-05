@@ -1247,6 +1247,8 @@ type viewCheck struct {
 	// answers by a Peek at its start tag (streamkids_l6.go); set only where
 	// every such call is of the focus itself (topKids).
 	peek bool
+	// inlined says the expression is a call's inlined body (streamview_leafcall.go).
+	inlined bool
 }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
@@ -1276,6 +1278,17 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 	case *xpath.FilterExpr:
 		if freeFilter(x) { // streamsplit_fns.go
 			return true
+		}
+		if atomicValued(x.Base) {
+			// The predicates' focus is the base's atomic values, never a
+			// view: they read of the stream only what a leaf's value would
+			// (si-iterate-037: tokenize(., ' ')[matches(., 'x')]).
+			for _, p := range x.Predicates {
+				if !vc.safe(p, vLeaf, true) {
+					return false
+				}
+			}
+			return vc.safe(x.Base, f, nodeOK)
 		}
 		for _, p := range x.Predicates {
 			if !vc.safe(p, vElem, true) || !vc.safe(p, vLeaf, true) {
@@ -1781,6 +1794,9 @@ type splitRun struct {
 	// the match to its end.
 	each func(it xdm.Item) error
 	body func(v *xdm.Node, d int) (bool, error)
+	// groundRoot grounds a match that is the document element, as any
+	// other, for a principal input (streammain_rootground.go).
+	groundRoot bool
 	// src, for a group split, hands over the members: the walk's context is
 	// then a stand-in at the depth above them, whose children they are.
 	src memberSource
@@ -2205,7 +2221,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					return err
 				}
 			case matchGround:
-				if s.noRoot && ev.Depth == 1 {
+				if s.noRoot && ev.Depth == 1 && !r.groundRoot {
 					if r.skipOne() {
 						break // tail(*): the document element is left out, as take leaves it
 					}

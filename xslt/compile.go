@@ -991,7 +991,7 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 	}
 	body, err := c.compileSequenceFrom(el, el, i)
 	if rp != nil {
-		c.readyRule(rp)
+		c.readyRule(rp, el)
 		t.stream = rp
 	}
 	if err != nil {

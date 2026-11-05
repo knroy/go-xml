@@ -19,7 +19,8 @@ package xslt
 // streamed run never holds more records than the tree would, and in the
 // usual case (the matches are a part of the document) holds a part of them.
 // A principal input has no tree to fall back to: such a split gives up
-// (givesUp) and the main plan refuses it, as before.
+// (givesUp) and the main plan refuses it, as before, unless it can match
+// one node only (streammain_onematch.go).
 
 import "github.com/knroy/go-xml/v2/xdm"
 

@@ -26,7 +26,8 @@ package xslt
 // mode is verified streamable (link), so the body, and the rules it reaches
 // through streamable modes, read no siblings and nothing below the root but
 // the element; the document-level state is ruled out by refusing any module
-// that names it, or that has templates in other modules (an xsl:import,
+// that names it (accumulators aside: the copy carries their values,
+// streamtee_ground_accum.go), or that has templates in other modules (an xsl:import,
 // xsl:include or xsl:use-package), whose text the scan cannot see.
 
 import (
@@ -45,17 +46,21 @@ var groundReasons = []string{
 	"two consuming tests in xsl:choose",
 	"two consuming parts of a text value template",
 	"several prongs consume an element",
+	"current-group() outside the consuming path", // streamsplit.go: the group read beside its path
+	"a second consuming operand",                 // streamsplit.go: map { "a": string(A), "b": string(B) }
 }
 
 // groundRuleExec returns the plan of the rule el for an element when its
 // body was refused (why) for several consumers and may run on a grounded
 // copy of the element; nil otherwise.
 func groundRuleExec(el *xdm.Node, cl nodeClass, why string) *streamExec {
-	if cl != classElem || !groundReason(why) || !groundModuleOK(documentElementOf(el)) {
+	root := documentElementOf(el)
+	if cl != classElem || !groundReason(why) || !groundModuleOK(root) {
 		return nil
 	}
 	x := newStreamExec()
 	x.class, x.modes, x.rule, x.groundRule = cl, templateModeNames(el), true, true
+	x.groundAccums = !moduleCallsNone(root, groundAccumFns) // streamtee_ground_accum.go
 	x.groundTop = groundTopKeeps(el)
 	x.kinds[streamtrace.KindGround]++
 	return x
@@ -92,8 +97,7 @@ func groundReason(why string) bool {
 
 // groundUnsafe are the names of what a grounded copy answers otherwise than
 // the tree: document-level state, and positions among siblings.
-var groundUnsafe = []string{"accumulator-before", "accumulator-after",
-	"key", "id", "idref", "element-with-id", "path", "root"}
+var groundUnsafe = []string{"key", "id", "idref", "element-with-id", "path", "root"}
 
 // groundModuleOK reports whether root, the module of a rule, is the whole
 // stylesheet and names nothing of groundUnsafe as a function call.
@@ -103,9 +107,15 @@ func groundModuleOK(root *xdm.Node) bool {
 			return false
 		}
 	}
+	return moduleCallsNone(root, groundUnsafe)
+}
+
+// moduleCallsNone reports whether root's module names nothing of names as a
+// function call.
+func moduleCallsNone(root *xdm.Node, names []string) bool {
 	ok := true
 	check := func(s string) {
-		if ok && callsAny(s, groundUnsafe) {
+		if ok && callsAny(s, names) {
 			ok = false
 		}
 	}
@@ -159,12 +169,12 @@ func nameChar(c byte) bool {
 // groundRule runs t, a rule whose plan is groundRuleExec's, for the element
 // at the cursor's start tag: on a grounded copy of it, off the cursor. rt is
 // the rule's runtime, its focus the element's view.
-func (run *streamRun) groundRule(rt *runtime, t *Template, params, tunnels paramValues, out *outputBuilder) error {
+func (run *streamRun) groundRule(rt *runtime, t *Template, params, tunnels paramValues, out *outputBuilder, accums bool) error {
 	if run.used || run.d == 0 || run.c.At().Kind != xdmstream.StartElement {
 		return errStreamPlan
 	}
 	run.used = true
-	g, err := run.c.Ground()
+	g, err := run.groundRuleCopy(accums) // streamtee_ground_accum.go
 	if err != nil {
 		return err
 	}

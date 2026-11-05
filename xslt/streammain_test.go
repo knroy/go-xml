@@ -199,6 +199,51 @@ var mainCases = []struct {
 	// past the leaves before it (streamtee_docnode.go; sf-unparsed-entity-05).
 	{`<xsl:mode streamable="yes"/><xsl:template match="/"><out><a><xsl:value-of select="unparsed-entity-uri('pic')"/></a>` +
 		`<b><xsl:value-of select="unparsed-entity-public-id('pic')"/></b><xsl:copy-of select="*"/></out></xsl:template>`, true},
+	// A held select at the document node with at most one match never
+	// gives up, so a principal input streams it (streammain_onematch.go;
+	// accumulator-046s/047s); one with many matches still may, and is refused.
+	{`<xsl:mode streamable="yes" on-no-match="shallow-skip"/><xsl:template match="/"><o><xsl:apply-templates select="copy-of(/doc/rec[2])"/></o></xsl:template>` +
+		`<xsl:template match="rec"><r k="{@k}"><xsl:copy-of select="."/></r></xsl:template>`, true},
+	{`<xsl:accumulator name="n" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>` +
+		`<xsl:mode streamable="yes" on-no-match="shallow-skip" use-accumulators="n"/><xsl:template match="/"><o><xsl:apply-templates select="snapshot(/doc/rec[2])"/></o></xsl:template>` +
+		`<xsl:template match="rec"><r n="{accumulator-before('n')}"/></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-skip"/><xsl:template match="/"><o><xsl:apply-templates select="copy-of(/doc/rec)"/></o></xsl:template>`, false},
+	// A filter over tokenize()'s strings: the predicates read those, never
+	// the stream (si-iterate-037).
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:value-of select="//text()!tokenize(., ' ')[matches(., 't')]"/></o></xsl:template>`, true},
+	// A group read beside its consuming path, as a map's two copies: refused
+	// as the plan readies, the rule runs on a grounded copy of its element
+	// (streamtee_ground.go; sx-MapExpr-101, su-absorbing-201).
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="rec"><xsl:copy><xsl:for-each-group select="*" group-starting-with="sub">` +
+		`<xsl:variable name="m" select="map{1: copy-of(.), 2: copy-of(current-group()[position() gt 1])}"/><g n="{count($m?2)}"><xsl:copy-of select="$m?1"/></g></xsl:for-each-group></xsl:copy></xsl:template>`, true},
+	// A map of two consuming values: the rule runs on a grounded copy of
+	// its element (streamtee_ground.go; sx-MapExpr-008).
+	{`<xsl:mode streamable="yes"/><xsl:template match="rec"><xsl:variable name="m" select="map{'a': string(sub[1]), 'b': count(sub)}"/><r a="{$m?a}" b="{$m?b}"/></xsl:template>`, true},
+	// A rule on a grounded copy (xsl:fork) that reads accumulators: the
+	// copy carries the document's values, before and after
+	// (streamtee_ground_accum.go; si-fork-816).
+	{`<xsl:accumulator name="n" initial-value="0" streamable="yes"><xsl:accumulator-rule match="sub" select="$value + 1"/></xsl:accumulator>` +
+		`<xsl:mode streamable="yes" use-accumulators="n"/><xsl:template match="rec"><r n="{accumulator-before('n')}"><xsl:fork><xsl:sequence><xsl:value-of select="string(sub[1])"/></xsl:sequence>` +
+		`<xsl:sequence><xsl:for-each select="sub"><s b="{accumulator-before('n')}" a="{accumulator-after('n')}"/></xsl:for-each></xsl:sequence></xsl:fork></r></xsl:template>`, true},
+	// A copy-of at the document node whose tail runs on a grounded copy of
+	// the document element: a principal input grounds it, as the tree holds
+	// it (streammain_rootground.go; function-5004). <doc/> raises XPTY0004
+	// in both legs.
+	{`<xsl:function name="p:f" as="node()" streamability="filter"><xsl:param name="n" as="node()"/><xsl:sequence select="$n[self::rec]"/></xsl:function>` +
+		`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:copy-of select="doc/p:f(rec[1])/sub"/></o></xsl:template>`, true},
+	// A rule for a leaf returning a stylesheet function of it, declared
+	// atomic: its body, inlined, reads the copy's value only
+	// (streamview_leafcall.go, streamcopy_l3leaf.go; su-absorbing-016).
+	{`<xsl:function name="p:len" as="xs:integer" streamability="absorbing"><xsl:param name="n" as="node()"/><xsl:sequence select="string-length($n)"/></xsl:function>` +
+		`<xsl:mode streamable="yes"/><xsl:template match="sub/text()"><xsl:sequence select="p:len(.)"/></xsl:template>`, true},
+	// Each member of a group copied: a grounded member copied by the tail and
+	// let go, the copies what the tree makes too (streamgroup_copies.go;
+	// si-group-064). The rule's element may be the document element.
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:mode name="c" on-no-match="shallow-copy"/>` +
+		`<xsl:template match="rec"><xsl:copy><xsl:for-each-group select="*" group-adjacent="node-name()"><xsl:apply-templates select="current-group()!copy-of()" mode="c"/></xsl:for-each-group></xsl:copy></xsl:template>` +
+		`<xsl:template match="*[not(parent::*)]" mode="c"><e n="{name()}" p="{position()}" l="{last()}" b="{base-uri()}"><xsl:copy-of select="@*, node()"/></e></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:mode name="c" on-no-match="shallow-copy"/>` +
+		`<xsl:template match="rec"><xsl:copy><xsl:for-each-group select="*" group-adjacent="node-name()"><xsl:apply-templates select="current-group()!(copy-of(), .)" mode="c"/></xsl:for-each-group></xsl:copy></xsl:template>`, false},
 	// Not a streamable mode, or a rule the core does not take.
 	{`<xsl:template match="rec"><r/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},

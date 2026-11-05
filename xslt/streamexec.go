@@ -110,6 +110,8 @@ type streamExec struct {
 	// groundRule says it is a rule's body that runs on a grounded copy of
 	// its element (streamtee_ground.go).
 	groundRule bool
+	// groundAccums says the copy carries its accumulator values (streamtee_ground_accum.go).
+	groundAccums bool
 	// groundTop says that body may return a node of the copy as it is, an
 	// item of the rule's result (groundTopKeeps).
 	groundTop bool
@@ -1397,7 +1399,10 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 			}
 			run.used = true
 			s, err := op.split.choose(rt.ctx, run.c, run.d) // streamcopy_l3choice.go
-			if err == nil {
+			switch {
+			case err == nil && run.d == 0 && run.i == nil && rootGround(op): // streammain_rootground.go
+				err = s.loopGroundRoot(rt, run.c, g, each)
+			case err == nil:
 				err = s.loopAt(rt.ctx, run.c, run.d, g, each, nil)
 			}
 			if err == errSplitGiveUp && run.d == 0 && run.i != nil {

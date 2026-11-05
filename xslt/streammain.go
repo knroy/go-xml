@@ -119,7 +119,7 @@ func (s *Stylesheet) mainRefusal() string {
 // may give up (errSplitGiveUp) for the tree to answer.
 func (x *streamExec) mayGiveUp() bool {
 	for _, op := range x.top {
-		if op.apply == applyNone && !op.loop && op.split != nil && op.split.givesUp() && !rootEvents(op) { // streamtee_docnode.go
+		if op.apply == applyNone && !op.loop && op.split != nil && op.split.givesUp() && !rootEvents(op) && !rootGround(op) { // streamtee_docnode.go
 			return true
 		}
 	}
@@ -132,7 +132,7 @@ func (s *streamSplit) givesUp() bool {
 	if s.cond != nil {
 		return s.then.givesUp() || s.els.givesUp()
 	}
-	return s.noRoot || s.hold || s.fold != nil && s.red != "sum" && s.red != "avg" && !s.oneTake()
+	return s.noRoot || s.hold && !s.oneMatch() || s.fold != nil && s.red != "sum" && s.red != "avg" && !s.oneTake()
 }
 
 // atTop reports whether what the instruction el writes may be an item of
