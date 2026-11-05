@@ -118,6 +118,8 @@ type Cursor struct {
 	teed bool
 	// handoff is Handoff's.
 	handoff func() func()
+	// cancel is Cancel's.
+	cancel func() error
 }
 
 // A Filter says which events NextTag and SkipTag report. What they pass
@@ -176,6 +178,30 @@ func (c *Cursor) Handoff(f func() func()) { c.handoff = f }
 // is open in the parse's tree, with its ancestors. Such text is not an event,
 // nor in a copy, nor in Text's value. It must be set before the first call.
 func (c *Cursor) StripWhitespace(strip func(el *xdm.Node) bool) { c.strip = strip }
+
+// Cancel has the parse stop once cancel returns an error (a context's Err):
+// it is asked at each read of the input, so a parse that reads on inside
+// one step -- through a skipped element or events a filter passes over --
+// stops too, and the error the cursor then returns is cancel's. A Tee's
+// cursors have c's. It must be set before the first call.
+func (c *Cursor) Cancel(cancel func() error) {
+	c.cancel = cancel
+	c.src = cancelReader{c.src, cancel}
+}
+
+// cancelReader is Cancel's reader: r, failing with cancel's error once there
+// is one.
+type cancelReader struct {
+	r      io.Reader
+	cancel func() error
+}
+
+func (r cancelReader) Read(p []byte) (int, error) {
+	if err := r.cancel(); err != nil {
+		return 0, err
+	}
+	return r.r.Read(p)
+}
 
 // Close stops the parse. The cursor is spent.
 func (c *Cursor) Close() {
@@ -452,6 +478,11 @@ func (c *Cursor) resume(act xdmburst.Action) (Event, error) {
 		}
 		return Event{Kind: EndDocument, Closed: c.closed}, nil
 	default:
+		if c.cancel != nil {
+			if cerr := c.cancel(); cerr != nil {
+				err = cerr // not the parse error a cut-off read became
+			}
+		}
 		c.done()
 		c.err = err
 		return Event{}, err

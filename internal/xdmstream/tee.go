@@ -121,7 +121,7 @@ type teeBlock struct {
 func (t *tee) start(k int, c *Cursor, run func(int, *Cursor) error, errs []error) {
 	r := &teeReader{t: t, k: k, handoff: c.handoff}
 	sub := Open(r, c.opts)
-	sub.strip, sub.handoff = c.strip, c.handoff
+	sub.strip, sub.handoff, sub.cancel = c.strip, c.handoff, c.cancel
 	go func() {
 		defer func() {
 			if p := recover(); p != nil {

@@ -1852,6 +1852,7 @@ func (r *FileResolver) streamDocAs(ctx *xpath.Context, uri, base string, docURI 
 		cr := &countedReader{r: src}
 		c := xdmstream.Open(cr, opts)
 		defer c.Close()
+		c.Cancel(ctx.Err)
 		if err := fn(c); err != nil {
 			return err
 		}

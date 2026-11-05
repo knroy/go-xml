@@ -186,6 +186,9 @@ func applyToNode(rt *runtime, node *xdm.Node, mode string,
 	// xsl:apply-templates of its own: the document node it starts from
 	// carries no type annotation to object to, and only the descent into
 	// <book> reaches an element that does.
+	if err := rt.ctx.Err(); err != nil {
+		return err // the built-in rules recurse through here
+	}
 	if err := rt.sheet.checkModeTyped(node, mode); err != nil {
 		return err
 	}

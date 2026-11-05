@@ -1291,7 +1291,7 @@ type builtInRun struct {
 
 // kids applies the mode to the node's children.
 func (b builtInRun) kids(out *outputBuilder) error {
-	return b.run.children(nil, out, b.mode, b.params, b.tunnel, focuser{b.rt, b.mode, true})
+	return b.run.children(b.rt, out, b.mode, b.params, b.tunnel, focuser{b.rt, b.mode, true})
 }
 
 // descend is builtInDescend's: rt.descend around the children.
