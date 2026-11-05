@@ -80,8 +80,12 @@ func elemCopySplit(sel *xpath.Compiled, doc bool) *streamSplit {
 
 // treeApplyFeed is the feed of op, a treeApply op, for instr.
 func (run *streamRun) treeApplyFeed(instr Instruction, op *streamOp) *burstFeed {
-	return &burstFeed{instr: instr, treeApply: true, keep: run,
+	f := &burstFeed{instr: instr, treeApply: true,
 		eval: func(rt *runtime) (xdm.Sequence, error) { return run.evalOp(rt, op) }}
+	if op.split == nil || !op.split.docCopy { // a built copy carries its values (recordCopy)
+		f.keep = run
+	}
+	return f
 }
 
 // executeTreeApply runs i, a treeApply op of the plan running, whose feed is

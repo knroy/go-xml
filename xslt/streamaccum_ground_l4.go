@@ -16,6 +16,7 @@ package xslt
 // the whole document.
 
 import (
+	"slices"
 	"sync"
 
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
@@ -96,6 +97,81 @@ func groundAccums(c *xdmstream.Cursor) (_ *xdm.Node, ok bool, _ error) {
 	}
 	if err := m.attach(sa.rt, g, g); err != nil {
 		return nil, true, err
+	}
+	return g, true, nil
+}
+
+// recordCopy is build, which copies the node the cursor is at (at depth d:
+// the document node at 0) off its events, with the accumulator values of the
+// original's nodes recorded as the cursor passes them and paired with the
+// copy's nodes (accumHeld), as groundAccums pairs a grounded copy: §18.2.10
+// gives a copy its original's values, where the copy's own tree would
+// compute others (audit A2-1). ok false, nothing read, when the run computes
+// no accumulators at c's depth.
+func recordCopy(rt *runtime, c *xdmstream.Cursor, d int, build func() (*xdm.Node, error)) (_ *xdm.Node, ok bool, _ error) {
+	v, ok := cursorAccums.Load(c)
+	if !ok {
+		return nil, false, nil
+	}
+	sa := v.(*streamAccums)
+	if d >= len(sa.frames) {
+		return nil, false, nil
+	}
+	f := &sa.frames[d]
+	// es are the subtree's values in document order; open, per depth below
+	// d, the entry of the element open there.
+	es := []heldAccum{{sa: sa, before: slices.Clone(f.before), beforeAt: f.beforeAt}}
+	open := []int{0}
+	prev := sa.onStep
+	sa.onStep = func(n *xdm.Node, nd int, post bool, ord uint64, cur []xdm.Sequence) {
+		if prev != nil {
+			prev(n, nd, post, ord, cur)
+		}
+		k := nd - d
+		if k < 0 || k == 0 && !post {
+			return
+		}
+		vals, at := slices.Clone(cur), sa.rd.phase
+		switch el := n.Kind() == xdm.KindElement; {
+		case !post:
+			es = append(es, heldAccum{sa: sa, before: vals, beforeAt: at})
+			if el {
+				open = append(open[:k], len(es)-1)
+			}
+		case el:
+			es[open[k]].after, es[open[k]].afterAt = vals, at
+		default:
+			es[len(es)-1].after, es[len(es)-1].afterAt = vals, at
+		}
+	}
+	g, err := build()
+	sa.onStep = prev
+	if err != nil {
+		return nil, true, err
+	}
+	if d == 0 { // the document's end steps no onStep
+		if f = &sa.frames[0]; !f.closed { // the frames may have moved
+			return nil, true, errAccumOffStream
+		}
+		es[0].after, es[0].afterAt = slices.Clone(f.after), f.afterAt
+	}
+	tbl, i := rt.accumHeld.at(g.Root()), 0
+	var pair func(a *xdm.Node) bool
+	pair = func(a *xdm.Node) bool {
+		if i == len(es) {
+			return false
+		}
+		tbl[a.Index()] = &es[i]
+		i++
+		for ch := a.FirstChild(); ch != nil; ch = ch.NextSibling() {
+			if !pair(ch) {
+				return false
+			}
+		}
+		return true
+	}
+	if !pair(g) || i != len(es) {
+		return nil, true, errAccumOffStream
 	}
 	return g, true, nil
 }

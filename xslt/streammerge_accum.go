@@ -169,9 +169,7 @@ func (m *mergeAccums) attach(rt *runtime, it, snap xdm.Item) error {
 			if l.entries[ei].ord != ord {
 				continue
 			}
-			if rt.accumHeld == nil {
-				rt.accumHeld = map[*xdm.Node]*heldAccum{}
-			}
+			tbl := rt.accumHeld.at(s.Root())
 			es := l.entries[ei:]
 			var pair func(a *xdm.Node) bool
 			pair = func(a *xdm.Node) bool {
@@ -179,7 +177,7 @@ func (m *mergeAccums) attach(rt *runtime, it, snap xdm.Item) error {
 					return false
 				}
 				e := es[0]
-				rt.accumHeld[a] = &heldAccum{sa: m.sa, before: e.before, after: e.after, beforeAt: e.beforeAt, afterAt: e.afterAt}
+				tbl[a.Index()] = &heldAccum{sa: m.sa, before: e.before, after: e.after, beforeAt: e.beforeAt, afterAt: e.afterAt}
 				es = es[1:]
 				for ch := a.FirstChild(); ch != nil; ch = ch.NextSibling() {
 					if !pair(ch) {
