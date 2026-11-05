@@ -16,12 +16,12 @@ package xslt
 // (planMainStreams, linkMain), and the run itself has nothing to fall back
 // to:
 //
-//   - the global context item is the tree's document node, which a global
-//     variable may read in any order (section 5.3.3 makes it grounded): a
-//     global whose value may depend on it, an xsl:global-context-item with
-//     a type, and
-//     an accumulator are refused, as are input-type-annotations="strip"
-//     and a stylesheet of more than one module (streamtrust.go);
+//   - the global context item: TransformReader makes it absent for a
+//     streamable initial mode (§2.3.2, streamglobal_l7.go), so a global
+//     reads no focus; an xsl:global-context-item with a type and
+//     input-type-annotations="strip" are refused (mainRefusal), and an
+//     accumulator only where accumRefusal says (mainAccumRefusal); rules
+//     are verified across the stylesheet's modules (streamtrust.go);
 //   - a node of the stream at the top of the principal result (a built-in
 //     rule's copy of a leaf or an attribute, a deep-copy's grounded element,
 //     an attribute rule's): Result.Nodes would hold a copy where the tree's
