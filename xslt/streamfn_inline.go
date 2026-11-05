@@ -841,7 +841,17 @@ func (i *inlineCallInstr) output(rt *runtime, out *outputBuilder, f *burstFeed, 
 // left unbound.
 func (i *inlineCallInstr) run(rt *runtime, vals []xdm.Sequence, body []Instruction, s0 xdm.Sequence, bind0 bool) (xdm.Sequence, error) {
 	defer rt.leaveFrame(rt.enterFrame())
-	sub := rt.globalBindings()
+	// The tree's call is bounded by FuncCall.Eval's depth count, whose
+	// XPDY0001 a runaway recursion raises there: its body's template depth
+	// is the runtime's bound to the context (runtimeFrom), which a nest of
+	// calls does not raise.
+	c, err := rt.ctx.Descend()
+	if err != nil {
+		return nil, err
+	}
+	d := *rt
+	d.ctx = c
+	sub := d.globalBindings()
 	for k, p := range i.params {
 		if k == 0 && !bind0 {
 			continue
@@ -865,10 +875,6 @@ func (i *inlineCallInstr) run(rt *runtime, vals []xdm.Sequence, body []Instructi
 	if i.clear {
 		sub = sub.clearFunctionContext()
 	}
-	if err := sub.descend(); err != nil {
-		return nil, err
-	}
-	defer sub.ascend()
 	sub.temporary = true
 	if rl, ok := sub.ctx.Funcs.(restrictedLibrary); ok {
 		c := *sub.ctx

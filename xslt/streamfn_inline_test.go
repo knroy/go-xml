@@ -3,6 +3,7 @@ package xslt
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -108,5 +109,43 @@ func TestStreamInlinedCallsMatchTree(t *testing.T) {
 	}
 	if n == 0 {
 		t.Fatal("nothing streamed")
+	}
+}
+
+// TestStreamInlinedRecursionLimit: an inlined absorbing function recursing
+// on the streamed group (su-absorbing-203's shape) is bounded as the tree's
+// call is, by the XPath call depth (A4-F5): a nest at the limit succeeds and
+// one past it raises the tree's XPDY0001, not the template depth's error.
+func TestStreamInlinedRecursionLimit(t *testing.T) {
+	sheet := mainSheet(`<xsl:mode streamable="yes" on-no-match="shallow-copy"/>` +
+		`<xsl:function name="p:group" as="element(Item)*" streamability="absorbing">` +
+		`<xsl:param name="items" as="element(Item)*"/><xsl:param name="level" as="xs:integer"/>` +
+		`<xsl:for-each-group select="$items" group-starting-with="Item[string-length(@Value) eq $level]"><xsl:choose>` +
+		`<xsl:when test="self::Item[string-length(@Value) eq $level]"><xsl:copy><xsl:copy-of select="@*"/>` +
+		`<xsl:sequence select="p:group(tail(current-group()), $level + 1)"/></xsl:copy></xsl:when>` +
+		`<xsl:otherwise><xsl:apply-templates select="p:group(current-group(), $level + 1)"/></xsl:otherwise>` +
+		`</xsl:choose></xsl:for-each-group></xsl:function>` +
+		`<xsl:template match="Items"><xsl:copy><xsl:sequence select="p:group(Item, 2)"/></xsl:copy></xsl:template>`)
+	for _, levels := range []int{49, 50, 51} {
+		var d strings.Builder
+		d.WriteString("<Items>")
+		for i := 2; i <= levels; i++ {
+			d.WriteString(`<Item Value="` + strings.Repeat("1", i) + `"/>`)
+		}
+		d.WriteString("</Items>")
+		opts := TransformOptions{MaxDepth: 50}
+		so, st := mainRun(sheet, d.String(), true, opts)
+		to, _ := mainRun(sheet, d.String(), false, opts)
+		if so != to || st.Streamed() == 0 {
+			t.Errorf("%d levels, streamed %d:\nstream %.200s\ntree   %.200s", levels, st.Streamed(), so, to)
+		}
+		if failed := strings.Contains(to, "XPDY0001"); failed != (levels > 50) {
+			t.Errorf("%d levels: tree %.200s", levels, to)
+		}
+	}
+	// No Item matches a level: the recursion runs away.
+	so, _ := mainRun(sheet, `<Items><Item Value="1"/></Items>`, true, TransformOptions{})
+	if to, _ := mainRun(sheet, `<Items><Item Value="1"/></Items>`, false, TransformOptions{}); so != to || !strings.Contains(so, "XPDY0001") {
+		t.Errorf("unbounded:\nstream %.200s\ntree   %.200s", so, to)
 	}
 }
