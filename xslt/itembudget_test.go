@@ -79,3 +79,16 @@ func TestFunctionMemoCountsHeldItems(t *testing.T) {
 		}
 	}
 }
+
+// Key indexes are kept until the transform ends, so the entries of every
+// index built count against the item bound together: one index per temporary
+// tree must not each get a fresh allowance.
+func TestKeyIndexesShareItemBound(t *testing.T) {
+	decls := `<xsl:key name="k" match="e" use="1 to 300"/>
+		<xsl:template match="/"><xsl:for-each select="1 to 10"><xsl:variable name="t"><e/></xsl:variable><xsl:value-of select="count(key('k', 1, $t))"/></xsl:for-each></xsl:template>`
+	out, err := budgetRun(t, decls, 1000)
+	wantItemsRefused(t, "ten temporary trees", out, err)
+	if out, err := budgetRun(t, decls, 0); err != nil || out != "1111111111" {
+		t.Fatalf("default limits: out=%q err=%v, want ten 1s", out, err)
+	}
+}
