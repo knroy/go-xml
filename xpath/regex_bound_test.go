@@ -78,3 +78,18 @@ func TestLongKeysAreNotCached(t *testing.T) {
 		t.Errorf("charAtomCache cached a long atom")
 	}
 }
+
+// An XSD facet is compiled anchored, so regexp builds a onepass program for
+// it, and that copies a class's rune table into every instruction that uses
+// it: \A(?:\pL{990})\z passed the instruction count and retained 8 MB per
+// facet. CompileBounded now charges those copies.
+func TestCompileBoundedChargesOnepassClassCopies(t *testing.T) {
+	if _, err := CompileBounded(`\A(?:\pL{990})\z`); !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf(`\pL{990} anchored: got %v, want a resource-limit refusal`, err)
+	}
+	for _, ok := range []string{`\A(?:\pL{100})\z`, `\pL{990}`, `\A(?:[a-z]{990})\z`} {
+		if _, err := CompileBounded(ok); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+}
