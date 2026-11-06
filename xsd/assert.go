@@ -233,10 +233,20 @@ func (p *parser) readAlternative(el *xdm.Node) *TypeAlternative {
 // exactly that confinement, and without it an assertion on a deeply nested
 // element could walk the whole document, making validation quadratic.
 func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
-	if len(t.Assertions) == 0 {
+	// A stopped or cancelled run returns before the copy, not after it:
+	// this runs from a defer as the walk unwinds, so every asserted
+	// ancestor of the element that tripped the stop would otherwise still
+	// copy its whole subtree for a verdict nobody reads.
+	if len(t.Assertions) == 0 || v.stopped || v.checkCancelled() {
 		return
 	}
-	scoped := v.scopeForAssertion(el)
+	scoped, err := v.scopeForAssertion(el)
+	if err != nil {
+		v.failLimit(el, "cvc-assertion.3",
+			"the assertions could not be evaluated: %v", err)
+		v.stopped = true
+		return
+	}
 	annotateForAssertion(scoped, t)
 
 	// $value is in scope in every assertion, not only those on a simple
@@ -332,25 +342,42 @@ func (v *validator) assertionValue(el *xdm.Node, t *ComplexType) xdm.Sequence {
 // attributes its type and its descendants' types supplied by default, without
 // the ignorable whitespace already stripped from it, and with the typing
 // recorded on its descendants.
-func (v *validator) scopeForAssertion(el *xdm.Node) *xdm.Node {
+//
+// Every node copied is charged to the episode's node budget (xpath.MaxNodes).
+// Nested asserted elements each copy their own subtree, so the copying is
+// depth times nodes, and the instance author controls both factors; the
+// charge is what bounds the product. The error is the budget's refusal.
+func (v *validator) scopeForAssertion(el *xdm.Node) (*xdm.Node, error) {
 	clone := xdm.NewNode(xdm.KindElement, el.Name(), el.Value())
 	clone.SetBaseURI(el.BaseURI())
 	clone.ApplyTyping(v.typingOf(el))
-	for ns := range v.namespaceDecls(el) {
-		clone.AddNamespace(ns.prefix, ns.uri)
-	}
 	// The copy is rooted at the element, so namespace declarations made by
 	// an ancestor are out of scope in it. They still apply to the element
 	// in the real document, and a QName-valued attribute cannot be expanded
 	// without them, so the whole in-scope set is copied onto the root of
-	// the confined tree.
+	// the confined tree. The frame is built in one pass and set once: one
+	// AddNamespace per binding copies and interns the frame built so far,
+	// which is quadratic in the declarations an instance can put on el.
+	var pairs []string
+	declared := map[string]bool{}
+	for ns := range v.namespaceDecls(el) {
+		declared[ns.prefix] = true
+		pairs = append(pairs, ns.prefix, ns.uri)
+	}
 	for prefix, uri := range v.inScopeNamespaces(el) {
-		if _, declared := clone.LookupPrefix(prefix); !declared {
-			clone.AddNamespace(prefix, uri)
+		if !declared[prefix] {
+			pairs = append(pairs, prefix, uri)
 		}
 	}
-	v.fillScopeCopy(clone, el)
-	return clone
+	clone.AddNamespaces(pairs...)
+	ctx := v.assertEpisode()
+	if err := ctx.ChargeNodes(1); err != nil {
+		return nil, err
+	}
+	if err := v.fillScopeCopy(ctx, clone, el); err != nil {
+		return nil, err
+	}
+	return clone, nil
 }
 
 // fillScopeCopy completes dst, the scope copy of src, with src's attributes
@@ -382,7 +409,7 @@ func (v *validator) scopeForAssertion(el *xdm.Node) *xdm.Node {
 // a LIST: the union's own name carries no item type, so without the member
 // the typed value collapsed from a sequence of tokens to one string
 // holding all of them.
-func (v *validator) fillScopeCopy(dst, src *xdm.Node) {
+func (v *validator) fillScopeCopy(ctx *xpath.Context, dst, src *xdm.Node) error {
 	for a := range v.attrs(src) {
 		dst.AppendAttr(a.Name(), a.Value()).ApplyTyping(v.typingOf(a))
 	}
@@ -390,13 +417,21 @@ func (v *validator) fillScopeCopy(dst, src *xdm.Node) {
 		if isCommentOrPI(c) || v.dropped[c] {
 			continue
 		}
+		if err := ctx.ChargeNodes(1); err != nil {
+			return err
+		}
 		cc := dst.AppendShallowCopy(c)
 		cc.ApplyTyping(v.typingOf(c))
+		var pairs []string
 		for ns := range v.namespaceDecls(c) {
-			cc.AddNamespace(ns.prefix, ns.uri)
+			pairs = append(pairs, ns.prefix, ns.uri)
 		}
-		v.fillScopeCopy(cc, c)
+		cc.AddNamespaces(pairs...)
+		if err := v.fillScopeCopy(ctx, cc, c); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func isCommentOrPI(n *xdm.Node) bool {
@@ -441,11 +476,14 @@ func (v *validator) scopeForAlternative(el *xdm.Node) *xdm.Node {
 	// Namespace bindings an ancestor declared are still in scope for the
 	// element, and a QName-valued attribute cannot be expanded without
 	// them, so the whole in-scope set is copied onto the clone.
+	// The clone has no bindings of its own yet and the map's prefixes are
+	// distinct, so the frame is built in one pass and set once rather than
+	// copied and interned per binding (see scopeForAssertion).
+	var pairs []string
 	for prefix, uri := range v.inScopeNamespaces(el) {
-		if _, declared := clone.LookupPrefix(prefix); !declared {
-			clone.AddNamespace(prefix, uri)
-		}
+		pairs = append(pairs, prefix, uri)
 	}
+	clone.AddNamespaces(pairs...)
 	// An inheritable attribute from an ancestor is visible to the test, but
 	// only where the element does not carry one of the same name: the
 	// nearest declaration wins.

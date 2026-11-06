@@ -1,10 +1,13 @@
 package xsd
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/knroy/go-xml/v2/internal/fileuri"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -198,5 +201,131 @@ func TestInstanceLocationKeyStatsOnlySchemaDirs(t *testing.T) {
 	if got, want := instanceLocationKey(&c, []string{abs}, filepath.Join(dir, ".", "main.xsd")),
 		canonicalLocation(main); got != want {
 		t.Errorf("the schema's own document keyed as %q, want its identity %q", got, want)
+	}
+}
+
+// A document the instance names must define the namespace it was named for.
+// The policy allows namespaces, and the check ran on the pair's namespace
+// text alone, so pairing an allowed namespace with a document defining
+// another let the instance supply declarations the policy never allowed.
+// xs:import makes the same check (src-import.3.1).
+func TestInstanceLocationMustDefineItsNamespace(t *testing.T) {
+	dir, main := writeSchemaSet(t)
+	if err := os.WriteFile(filepath.Join(dir, "evil.xsd"), []byte(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           targetNamespace="urn:secret">
+	  <xs:element name="c" type="xs:string"/>
+	</xs:schema>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "none.xsd"), []byte(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="c" type="xs:string"/>
+	</xs:schema>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFiles([]string{main}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := InstanceLocationPolicy{
+		AllowNamespace:   func(ns string) bool { return ns == "urn:other" },
+		AllowNoNamespace: true,
+	}
+	for _, doc := range []string{
+		// An allowed namespace paired with a document defining urn:secret.
+		`<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"` +
+			` xsi:schemaLocation="urn:other evil.xsd"><c xmlns="urn:secret">x</c></doc>`,
+		// No namespace, naming a document that has one.
+		`<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"` +
+			` xsi:noNamespaceSchemaLocation="evil.xsd"><c xmlns="urn:secret">x</c></doc>`,
+		// An allowed namespace, naming a document that has none.
+		`<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"` +
+			` xsi:schemaLocation="urn:other none.xsd"><c>x</c></doc>`,
+	} {
+		tree, err := xdm.ParseString(doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ext, err := s.WithInstanceLocations(tree.Root, policy, Options{})
+		if err == nil {
+			t.Errorf("%s: extended without error; Validate = %v",
+				doc, ext.Validate(tree.Root, ValidateOptions{}))
+			continue
+		}
+		if !strings.Contains(err.Error(), "target namespace") {
+			t.Errorf("%s: error %q is not the namespace mismatch", doc, err)
+		}
+	}
+	// The matching pair is still followed.
+	tree, err := xdm.ParseString(instDoc, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ext, err := s.WithInstanceLocations(tree.Root, policy, Options{})
+	if err != nil {
+		t.Fatalf("a matching location was refused: %v", err)
+	}
+	if err := ext.Validate(tree.Root, ValidateOptions{}); err != nil {
+		t.Errorf("the matching location was not used: %v", err)
+	}
+}
+
+// A local location the instance names must lie inside the schema's own
+// directories whatever resolver is supplied. An unrooted FileResolver stands
+// in here for xsdnet.HTTPResolver with no Files, which reads every local
+// location through one.
+func TestInstanceLocationConfinedWhateverResolver(t *testing.T) {
+	_, main := writeSchemaSet(t)
+	outside := t.TempDir()
+	evil := filepath.Join(outside, "evil.xsd")
+	if err := os.WriteFile(evil, []byte(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="x" type="xs:string"/>
+	</xs:schema>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFiles([]string{main}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(filepath.Dir(main), evil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, loc := range []string{evil, rel, fileuri.Of(evil)} {
+		doc := `<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"` +
+			` xsi:noNamespaceSchemaLocation="` + loc + `"><x>1</x></doc>`
+		tree, err := xdm.ParseString(doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.WithInstanceLocations(tree.Root, InstanceLocationPolicy{
+			AllowNoNamespace: true,
+			Resolver:         &FileResolver{},
+		}, Options{})
+		if !errors.Is(err, errRefusedByPolicy) {
+			t.Errorf("%s: WithInstanceLocations = %v, want the confinement refusal", loc, err)
+		}
+	}
+}
+
+// The confinement check runs on the string before the filesystem for a
+// network path, on every OS.
+func TestInstanceLocalPathRefusesNetworkPaths(t *testing.T) {
+	dirs := []string{t.TempDir()}
+	for _, loc := range []string{`\\host\share\x.xsd`, `//host/share/x.xsd`,
+		`\??\UNC\host\share\x.xsd`, "file://host/share/x.xsd"} {
+		if _, err := instanceLocalPath(loc, dirs[0], dirs); err == nil {
+			t.Errorf("instanceLocalPath(%q) was admitted", loc)
+		}
+	}
+	if got, err := instanceLocalPath("a.xsd", dirs[0], dirs); err != nil ||
+		got != filepath.Join(dirs[0], "a.xsd") {
+		t.Errorf("instanceLocalPath(a.xsd) = %q, %v", got, err)
+	}
+	if got, err := instanceLocalPath("https://e.example/a.xsd", dirs[0], dirs); err != nil ||
+		got != "https://e.example/a.xsd" {
+		t.Errorf("a remote location is the resolver's to judge: %q, %v", got, err)
 	}
 }

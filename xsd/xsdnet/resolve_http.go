@@ -101,8 +101,11 @@ type HTTPResolver struct {
 	AllowPrivateAddresses bool
 
 	// Files handles locations that are not remote. When nil, an
-	// xsd.FileResolver with no root is used. A local location referenced
-	// from a remotely fetched schema is refused before Files is consulted.
+	// xsd.FileResolver with no root is used, which reads any path it is
+	// given. A local location referenced from a remotely fetched schema is
+	// refused before Files is consulted, and Schema.WithInstanceLocations
+	// refuses a local location outside the schema's own directories before
+	// this resolver is asked, so neither reaches the unrooted default.
 	Files xsd.Resolver
 }
 

@@ -87,8 +87,8 @@ func IsDriveLetterPath(s string) bool {
 
 // IsForeignNetworkPath reports whether p, a filesystem path a resolver is
 // about to hand to the filesystem, names a Windows network or device path --
-// `\\host\share\x`, `//host/share/x`, `\\?\UNC\host\share\x`, `\\.\pipe\x`
-// -- on a volume that none of roots is on.
+// `\\host\share\x`, `//host/share/x`, `\\?\UNC\host\share\x`, `\\.\pipe\x`,
+// `\??\UNC\host\share\x` -- on a volume that none of roots is on.
 //
 // On Windows any filesystem call on a UNC path, a stat or a readlink as much
 // as an open, connects to the named host over SMB and offers it the process's
@@ -102,8 +102,11 @@ func IsDriveLetterPath(s string) bool {
 //
 // A root may itself be a share. A path on the same `\\host\share` volume as a
 // root names a host the caller already granted, so it is admitted here and
-// left to the containment check. Device paths (`\\?\`, `\\.\`) name no host
-// that a root could grant and are always refused.
+// left to the containment check. Device paths (`\\?\`, `\\.\`) and NT
+// object-namespace paths (`\??\`) name no host that a root could grant and are
+// always refused. Windows passes a `\??\` path to the object manager as
+// written, so `\??\UNC\host\share` reaches the host exactly as a UNC path does,
+// and `\??\C:\x` names a local file by a spelling no root is written in.
 func IsForeignNetworkPath(p string, roots ...string) bool {
 	v, ok := networkVolume(p)
 	if !ok {
@@ -121,10 +124,16 @@ func IsForeignNetworkPath(p string, roots ...string) bool {
 }
 
 // networkVolume reports whether p begins with two separators, which Windows
-// reads as a UNC or device path, and returns its `host\share` volume. The
+// reads as a UNC or device path, or with `\??\`, the NT object namespace, and
+// returns its `host\share` volume. The
 // volume is "" when no root could grant it: a device path, or a missing host
 // or share.
 func networkVolume(p string) (string, bool) {
+	// `\??\` begins with one separator, not two, so it is matched on its
+	// own: an NT object-namespace path, which is a device path to a root.
+	if len(p) >= 4 && isSep(p[0]) && p[1] == '?' && p[2] == '?' && isSep(p[3]) {
+		return "", true
+	}
 	if len(p) < 2 || strings.Trim(p[:2], `/\`) != "" {
 		return "", false
 	}
@@ -141,3 +150,5 @@ func networkVolume(p string) (string, bool) {
 	}
 	return host + `\` + share, true
 }
+
+func isSep(c byte) bool { return c == '/' || c == '\\' }

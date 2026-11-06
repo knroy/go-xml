@@ -397,7 +397,14 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 	case 1:
 		return LoadFile(paths[0], opts)
 	}
+	return loadFiles(paths, opts, nil)
+}
 
+// loadFiles is LoadFiles for two or more paths. wantNS, keyed by index into
+// paths, names the target namespace a document must declare ("" for none):
+// WithInstanceLocations sets it for each document an instance named, so the
+// namespace its policy allowed is the one the document actually defines.
+func loadFiles(paths []string, opts Options, wantNS map[int]string) (*Schema, error) {
 	if opts.Resolver == nil {
 		// As in LoadFile, confined to what the caller named. Several
 		// paths may sit in several directories, so the grant is the set
@@ -421,7 +428,10 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		p:         &parser{schema: s, attrsDone: map[*ComplexType]bool{}, assembled: true},
 	}
 
-	for _, path := range paths {
+	for i, path := range paths {
+		if err := a.admitFetch(); err != nil {
+			return nil, err
+		}
 		rc, resolved, err := opts.Resolver.Resolve("", path, "")
 		if err != nil {
 			return nil, err
@@ -433,6 +443,16 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		rc.Close()
 		if err != nil {
 			return nil, fmt.Errorf("parsing schema %q: %w", path, err)
+		}
+		// The check src-import.3.1 makes for an xs:import: without it an
+		// instance could pair a namespace its policy allows with a
+		// document defining components in one it does not.
+		if want, ok := wantNS[i]; ok {
+			if got, has := targetNSOf(tree.Root); has != (want != "") || got != want {
+				return nil, fmt.Errorf(
+					"the instance names %q for namespace %q, but the "+
+						"document has target namespace %q", path, want, got)
+			}
 		}
 		// A document named directly by the caller adopts no namespace, so
 		// its key carries an empty adoptedNS; a later chameleon include of
@@ -626,6 +646,10 @@ type assembler struct {
 	queue  []pending
 	p      *parser
 	count  int
+
+	// limitErr is the MaxDocuments refusal admitFetch made inside queueRef,
+	// which has no error result; run returns it after the document.
+	limitErr error
 
 	// rootBases holds the locations of the documents the caller named
 	// directly. Faults in those are reported without naming the file — the
@@ -838,10 +862,7 @@ func (a *assembler) run() error {
 
 		a.count++
 		if a.count > a.opts.MaxDocuments {
-			return fmt.Errorf(
-				"schema assembly read more than %d documents; raise "+
-					"Options.MaxDocuments if this is legitimate",
-				a.opts.MaxDocuments)
+			return a.tooManyDocuments()
 		}
 
 		root := item.root
@@ -861,8 +882,29 @@ func (a *assembler) run() error {
 		if err := a.readOne(root, item); err != nil {
 			return err
 		}
+		if a.limitErr != nil {
+			return a.limitErr
+		}
 	}
 	return nil
+}
+
+// admitFetch reports the MaxDocuments refusal when the documents already read
+// or queued fill the allowance. It runs before every fetch: counting only as a
+// document is dequeued let every reference of the document read last, and
+// every path given to LoadFiles, be fetched and parsed past the limit first.
+func (a *assembler) admitFetch() error {
+	if a.count+len(a.queue) >= a.opts.MaxDocuments {
+		return a.tooManyDocuments()
+	}
+	return nil
+}
+
+func (a *assembler) tooManyDocuments() error {
+	return fmt.Errorf(
+		"schema assembly read more than %d documents; raise "+
+			"Options.MaxDocuments if this is legitimate",
+		a.opts.MaxDocuments)
 }
 
 // readOne reads one document's components and queues what it references.
@@ -1022,6 +1064,14 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 
 // queueRef resolves and queues a referenced document.
 func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location string, isInclude, redefining bool) {
+	if location != "" || !isInclude {
+		if a.limitErr == nil {
+			a.limitErr = a.admitFetch()
+		}
+		if a.limitErr != nil {
+			return
+		}
+	}
 	if location == "" {
 		if !isInclude {
 			// An import with no schemaLocation declares a dependency

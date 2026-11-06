@@ -2,9 +2,12 @@ package xsd
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/fileuri"
+	"github.com/knroy/go-xml/v2/internal/uripath"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -48,10 +51,16 @@ type InstanceLocationPolicy struct {
 	AllowNoNamespace bool
 
 	// Resolver fetches the documents the instance names. When nil the
-	// schema's own resolver is used — but note that a FileResolver will
-	// read whatever path the instance gives it, relative to the base, so a
-	// caller following untrusted documents should supply a MapResolver or
-	// an xsdnet.HTTPResolver with AllowHost.
+	// schema's own resolver is used, and when that is nil too, a
+	// FileResolver rooted at the directories the schema was loaded from.
+	//
+	// Whatever the resolver, a location that is not remote must lie inside
+	// those directories, or WithInstanceLocations refuses it before the
+	// resolver is asked: an HTTPResolver with no Files reads local
+	// locations through an unrooted FileResolver, and would otherwise open
+	// any path the instance named. A caller following untrusted documents
+	// should still supply a MapResolver, or an xsdnet.HTTPResolver whose
+	// AllowHost decides which remote locations may be fetched.
 	Resolver Resolver
 
 	// MaxDocuments bounds how many documents the instance may pull in.
@@ -71,6 +80,11 @@ type InstanceLocationPolicy struct {
 // Locations the policy refuses are ignored. §4.3.2 makes the attribute a hint,
 // so declining to take it is not a fault in the document; a reference that
 // really needed the components still fails, at the reference.
+//
+// Each document must define the namespace it was named for: one named in an
+// xsi:schemaLocation pair must have that pair's namespace as its target
+// namespace, and one named by xsi:noNamespaceSchemaLocation must have none.
+// The policy allows namespaces, so a document defining any other is refused.
 func (s *Schema) WithInstanceLocations(root *xdm.Node, policy InstanceLocationPolicy, opts Options) (*Schema, error) {
 	locs := instanceLocations(root, policy)
 	if len(locs) == 0 {
@@ -151,23 +165,89 @@ func (s *Schema) WithInstanceLocations(root *xdm.Node, policy InstanceLocationPo
 			dirs = append(dirs, d)
 		}
 	}
-	for _, loc := range locs {
-		full := loc
-		if !filepath.IsAbs(loc) && !strings.Contains(loc, "://") {
-			full = filepath.Join(base, loc)
+	wantNS := map[int]string{}
+	for _, l := range locs {
+		full, err := instanceLocalPath(l.location, base, dirs)
+		if err != nil {
+			return nil, err
 		}
 		if key := instanceLocationKey(&canon, dirs, full); have[key] {
 			continue
 		} else {
 			have[key] = true
 		}
+		wantNS[len(paths)] = l.namespace
 		paths = append(paths, full)
 	}
 	if len(paths) == len(s.sourcePaths) {
 		// Every location named a document already loaded.
 		return s, nil
 	}
-	return LoadFiles(paths, opts)
+	return loadFiles(paths, opts, wantNS)
+}
+
+// instanceLocalPath returns the location LoadFiles is given for loc, an
+// instance-supplied location, and refuses one that is not remote and does not
+// lie inside dirs, the absolute directories the schema was loaded from.
+//
+// The check is made here rather than left to the resolver because the
+// resolver may not be confined: HTTPResolver with no Files reads local
+// locations through an unrooted FileResolver, and every path LoadFiles is
+// given resolves against an empty base, so its refusal of a local location
+// under a remote base never applies. A remote location is the resolver's to
+// judge. A file: URL is passed on as written and checked as the path it names.
+func instanceLocalPath(loc, base string, dirs []string) (string, error) {
+	if isRemote(loc) {
+		return loc, nil
+	}
+	p, full := loc, ""
+	if u, err := url.Parse(loc); err == nil && u.Scheme == "file" {
+		if u.Host != "" && u.Host != "localhost" {
+			return "", fmt.Errorf(
+				"schemaLocation %q names the remote host %q; only local "+
+					"files are permitted", loc, u.Host)
+		}
+		p, full = fileuri.ToPath(loc), loc
+	}
+	// A network spelling is refused as written as well as once joined: on
+	// Unix `\\host\share` is relative and the join hides it, and deciding it
+	// on the string keeps the Windows rule exercised everywhere.
+	foreign := uripath.IsForeignNetworkPath(p, dirs...)
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(base, p)
+	}
+	if full == "" {
+		full = p
+	}
+	if foreign || !insideDirs(p, dirs) {
+		return "", fmt.Errorf(
+			"schemaLocation %q in the instance resolves outside the "+
+				"directories the schema was loaded from: %w", loc, errRefusedByPolicy)
+	}
+	return full, nil
+}
+
+// insideDirs reports whether p lies inside one of dirs once both are resolved,
+// the final component of p included, so that a link inside a directory does
+// not admit its target outside it. A network path is refused before anything
+// touches the filesystem; see uripath.IsForeignNetworkPath.
+func insideDirs(p string, dirs []string) bool {
+	if uripath.IsForeignNetworkPath(p, dirs...) {
+		return false
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return false
+	}
+	abs = uripath.EvalExisting(abs)
+	for _, d := range dirs {
+		rel, err := filepath.Rel(uripath.EvalExisting(d), abs)
+		if err == nil && rel != ".." &&
+			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // instanceLocationKey is the deduplication key for an instance-supplied
@@ -190,13 +270,19 @@ func instanceLocationKey(canon *canonCache, dirs []string, full string) string {
 	return full
 }
 
+// instanceLocation is a location an instance offers, with the namespace it
+// offers it for ("" for xsi:noNamespaceSchemaLocation).
+type instanceLocation struct {
+	namespace, location string
+}
+
 // instanceLocations reads the locations an instance offers, keeping the ones
 // the policy allows.
 //
 // The attributes may appear on any element, not only the root — a document may
 // introduce a namespace partway down — so the whole tree is walked.
-func instanceLocations(root *xdm.Node, policy InstanceLocationPolicy) []string {
-	var out []string
+func instanceLocations(root *xdm.Node, policy InstanceLocationPolicy) []instanceLocation {
+	var out []instanceLocation
 	seen := map[string]bool{}
 
 	var walk func(*xdm.Node)
@@ -221,7 +307,7 @@ func instanceLocations(root *xdm.Node, policy InstanceLocationPolicy) []string {
 					}
 					if !seen[loc] {
 						seen[loc] = true
-						out = append(out, loc)
+						out = append(out, instanceLocation{ns, loc})
 					}
 				}
 			}
@@ -230,7 +316,7 @@ func instanceLocations(root *xdm.Node, policy InstanceLocationPolicy) []string {
 				for _, loc := range splitFields(a.Value()) {
 					if !seen[loc] {
 						seen[loc] = true
-						out = append(out, loc)
+						out = append(out, instanceLocation{"", loc})
 					}
 				}
 			}
