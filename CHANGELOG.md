@@ -367,6 +367,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Particle Valid (Restriction) flattened a group-ref DAG to one member per path | Flattened lengths are memoised per group and refused past the position budget. | [`df96ba9`][df96ba9] |
 | XSD 1.1 assertions ignored the `ValidateContext` deadline and returned a verdict | The assertion carries the run's context; a cut-short evaluation returns `ctx.Err()`. | [`f065ab2`][f065ab2] |
 | Each union member reference kept its own `{namespace}local` copy in the never-evicted global type tables | Duplicate members are dropped and one string is shared per name. | [`9e39b51`][9e39b51] |
+| Each distinct XSD type kept its whole `{namespace}local` name in the global type tables: 49 MB for 10,000 types under a 4 KB namespace | The namespace is interned once per table: 0.64 MB. | [`6e51253`][6e51253] |
 | `WithInstanceLocations` statted instance-named paths before the resolver saw them | Its dedup asks the filesystem only inside the schema's own directories. | [`aeae707`][aeae707] |
 | `xsdnet.HTTPResolver` passed a `file:` location in a remote schema to an unrooted `FileResolver`, so a remote author read local files | It is refused before `Files` is asked. | [`a85f40a`][a85f40a] |
 | `c14n.FromXPath` and `FromXPathFilter` ran XML-DSig XPath 1.0 transforms by 2.0 rules, so `"10" < "9"` was true | They evaluate in XPath 1.0 compatibility mode. | [`0c70a04`][0c70a04] |
@@ -2625,6 +2626,7 @@ here so every entry in this file sits under a release.
 [df96ba9]: https://github.com/knroy/go-xml/commit/df96ba9
 [f065ab2]: https://github.com/knroy/go-xml/commit/f065ab2
 [9e39b51]: https://github.com/knroy/go-xml/commit/9e39b51
+[6e51253]: https://github.com/knroy/go-xml/commit/6e51253
 [aeae707]: https://github.com/knroy/go-xml/commit/aeae707
 [a85f40a]: https://github.com/knroy/go-xml/commit/a85f40a
 [0c70a04]: https://github.com/knroy/go-xml/commit/0c70a04

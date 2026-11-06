@@ -1715,15 +1715,15 @@ and facets still apply to the substituted type.
   retain 2,000 entries and about 0.20 MB after GC.
   `xsd.TestSchemaTypeRegistryRetainsPerType` pins both facts. A caller who can
   be made to load unbounded *distinct* schemas grows this without bound; one
-  that replays the same schemas does not. The figure assumes short names: each
-  entry holds its expanded name `{namespace}local`, so the cost is the
-  qualified-name length per distinct type. A union's duplicate members are
-  dropped and every occurrence of one name within a load shares one string, so
-  references no longer multiply it (88 KB of `memberTypes="t:a t:a …"` under a
-  4 KB namespace used to retain 97 MB). Still open: many *distinct* types under
-  one long namespace retain namespace length × type count (49 MB from a 783 KB
-  schema of 10,000 types under a 4 KB namespace); see
-  [known gaps](known-gaps.md).
+  that replays the same schemas does not. The figure assumes short local
+  names: each entry holds its local name, and each distinct namespace is held
+  once. A union's duplicate members are dropped, so references no longer
+  multiply it (88 KB of `memberTypes="t:a t:a …"` under a
+  4 KB namespace used to retain 97 MB). The tables hold each name split, with
+  one interned copy of each namespace, so many *distinct* types under one long
+  namespace no longer pay its length per type: 10,000 types under a 4 KB
+  namespace retain 0.64 MB, where they retained 49 MB
+  (`xsd.TestManyTypesUnderLongNamespaceRetention`).
 - The semantic risk of a shared registry — two schemas defining `{uri}T`
   differently, so a node atomises as whichever loaded last — is closed in two
   layers. The first records the resolved typing on the node at validation
@@ -1904,6 +1904,10 @@ already found.
 Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
+
+**Twenty-second pass (round SB) — the gaps round SA left open, 2026-11-06.**
+
+- **Distinct XSD types under one long namespace retained its length per type** — cost, process-wide: the global type tables kept `{namespace}local` whole, 49 MB from a 783 KB schema of 10,000 types under a 4 KB namespace. Names are stored split with the namespace interned once per table: 0.64 MB. See CHANGELOG.
 
 **Twenty-first pass — a security audit at `e728478a`, 2026-11-06.** One line per fixed finding; the open ones are in [known gaps](known-gaps.md).
 

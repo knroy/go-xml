@@ -167,12 +167,6 @@ reason:
   `ModuleResolver` serving untrusted modules; the candidate fix is a
   per-`Compile` module-visit ceiling, whose value is an owner decision to be
   measured against xslTNG and XSpec first.
-- **Many distinct XSD types under one long namespace still retain
-  namespace length × type count process-wide.** Union references no longer
-  multiply an entry, but each distinct type keeps its `{namespace}local` name
-  in the never-evicted global type tables: 49 MB from a 783 KB schema of
-  10,000 types under a 4 KB namespace. Closing it changes the global tables'
-  behaviour.
 - **The text store's block ceiling still panics** (`xdm/record.go`
   `newBlock`, 1<<17 blocks). One string now reuses its block and values are
   packed past half the block space, so reaching it needs about 1 GiB of
