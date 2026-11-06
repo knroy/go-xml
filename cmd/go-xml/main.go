@@ -505,6 +505,11 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 	// An empty path is a transform with no source document, which is how a
 	// run that starts at a named template is expressed. Transform takes a nil
 	// source for exactly that case, so the parse is simply skipped.
+	//
+	// The -timeout context starts here, before the parse, so that it covers
+	// the XInclude pass as well as the transform.
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
+	defer cancel()
 	var root *xdm.Node
 	if inPath != "" {
 		// Streamed, as the stylesheet is (see compileStylesheet).
@@ -545,7 +550,8 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 				// including one: an inclusion becomes part of the document,
 				// so it must not be a way around a bound the document itself
 				// was held to.
-				Parse: popts,
+				Parse:   popts,
+				Context: ctx,
 			})
 			if err != nil {
 				return err
@@ -559,9 +565,6 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 			}
 		}
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
-	defer cancel()
 
 	res, err := sheet.Transform(ctx, root, xslt.TransformOptions{
 		Params:           cfg.params,

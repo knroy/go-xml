@@ -65,7 +65,15 @@ func registerSeqFuncs(l *Library) {
 		// Checked, because atomising a function item is FOTY0013 rather than
 		// something to skip over: fn:data is the one function whose whole job
 		// is atomisation, so it must be the one that reports it.
-		out, err := xdm.AtomizeChecked(in)
+		//
+		// The arrays are flattened first, under the evaluation's context, so
+		// that a host deadline stops a large flatten; AtomizeChecked then sees
+		// no array and flattens nothing again.
+		flat, err := xdm.FlattenContext(ctx.ev().Ctx, in)
+		if err != nil {
+			return nil, err
+		}
+		out, err := xdm.AtomizeChecked(flat)
 		if err != nil {
 			return nil, err
 		}

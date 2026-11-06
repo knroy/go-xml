@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"testing"
@@ -339,5 +340,26 @@ func TestFlattenRefusesSharedExpansion(t *testing.T) {
 	}
 	if n := len(Flatten(Sequence{b})); n != 16 {
 		t.Fatalf("Flatten of a 16-leaf shared array gave %d items", n)
+	}
+}
+
+// FlattenContext stops a shared-member expansion when its context is done,
+// and returns the step ceiling as an error, neither by panicking.
+func TestFlattenContextStopsOnCancel(t *testing.T) {
+	a := NewArray(Sequence{NewArray()})
+	for i := 0; i < 30; i++ {
+		a = NewArray(Sequence{a}, Sequence{a})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := FlattenContext(ctx, Sequence{a}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("FlattenContext under a cancelled context: err=%v, want context.Canceled", err)
+	}
+	if _, err := FlattenContext(context.Background(), Sequence{a}); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("FlattenContext of a 2^30-leaf shared array: err=%v, want ErrResourceLimit", err)
+	}
+	// A cancelled context does not stop a flatten too small to reach a check.
+	if out, err := FlattenContext(ctx, Sequence{NewArray(Sequence{NewInteger(1)})}); err != nil || len(out) != 1 {
+		t.Fatalf("FlattenContext of [1]: %v, %v", out, err)
 	}
 }

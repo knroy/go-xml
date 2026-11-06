@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -284,5 +285,67 @@ func TestXIncludeLocalSearchesShareTheNodeBudget(t *testing.T) {
 	}
 	if n := out.Root.FirstChild(); n == nil {
 		t.Fatal("no result")
+	}
+}
+
+// errAfter is a context whose Err is nil for its first n calls and
+// context.Canceled from then on: it cancels the pass at a chosen check, with
+// no clock involved.
+type errAfter struct {
+	context.Context
+	n int
+}
+
+func (c *errAfter) Err() error {
+	if c.n > 0 {
+		c.n--
+		return nil
+	}
+	return context.Canceled
+}
+
+// XIncludeOptions.Context stops the pass between inclusions, inside a local
+// xpointer search, and before a fetch, and no xi:fallback recovers from it.
+func TestXIncludeContextCancels(t *testing.T) {
+	const xi = `<r xmlns:xi="http://www.w3.org/2001/XInclude">`
+	parse := func(src string) *Tree {
+		tree, err := ParseString(src, ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tree
+	}
+	wantCancelled := func(what string, out *Tree, err error) {
+		t.Helper()
+		if !errors.Is(err, context.Canceled) || out != nil {
+			t.Fatalf("%s: out=%v err=%v, want context.Canceled and no tree", what, out != nil, err)
+		}
+	}
+
+	// Between inclusions: many href-less includes, a pre-cancelled context.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	in := parse(xi + strings.Repeat(`<xi:include xpointer="z"><xi:fallback/></xi:include>`, 500) +
+		`<t xml:id="z"/></r>`)
+	out, err := ProcessXInclude(in, XIncludeOptions{Context: ctx})
+	wantCancelled("pre-cancelled", out, err)
+	if n := in.Root.FirstChild().NumChildren(); n != 501 {
+		t.Fatalf("the input tree changed: %d children, want 501", n)
+	}
+
+	// Inside the search walk: one include, 3000 elements to walk past, a
+	// context that is first done at the walk's first check.
+	in = parse(xi + `<xi:include xpointer="z"/>` + strings.Repeat(`<a/>`, 3000) + `<t xml:id="z"/></r>`)
+	out, err = ProcessXInclude(in, XIncludeOptions{Context: &errAfter{context.Background(), 1}})
+	wantCancelled("mid-search", out, err)
+
+	// Before a fetch: the resolver is never asked once the context is done
+	// at the fetch check.
+	res := &mapResolver{files: map[string]string{"mem:x.xml": `<x/>`}}
+	in = parse(xi + `<xi:include href="mem:x.xml"/></r>`)
+	out, err = ProcessXInclude(in, XIncludeOptions{Resolver: res, Context: &errAfter{context.Background(), 1}})
+	wantCancelled("before fetch", out, err)
+	if len(res.reads) != 0 {
+		t.Fatalf("the resolver read %v after cancellation", res.reads)
 	}
 }

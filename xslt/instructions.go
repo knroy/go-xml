@@ -110,6 +110,12 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// A map, an array of non-atomizable items or a function item has no typed
 	// value, so building simple content out of one is FOTY0013 rather than
 	// the empty string the joiner would otherwise produce.
+	// Flattened once here, under the transform's context, so that a host
+	// deadline stops a large flatten; the calls below find no array left.
+	seq, err := xdm.FlattenContext(rt.goCtx, seq)
+	if err != nil {
+		return err
+	}
 	if err := checkAtomizable(seq); err != nil {
 		return err
 	}
@@ -251,7 +257,9 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// The switch below matches *xdm.Node and *xdm.Atomic; an *ArrayItem
 	// matched neither and fell off the end, so copy-of over an array produced
 	// nothing at all.
-	seq = xdm.Flatten(seq)
+	if seq, err = xdm.FlattenContext(rt.goCtx, seq); err != nil {
+		return err
+	}
 	for _, it := range seq {
 		if err := i.copyItem(rt, out, it); err != nil {
 			return err
@@ -1538,7 +1546,7 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err != nil {
 			return err
 		}
-		if value, err = constructedTextChecked(seq, sep); err != nil {
+		if value, err = constructedTextChecked(rt.goCtx, seq, sep); err != nil {
 			return err
 		}
 	} else {
@@ -1546,7 +1554,7 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
-		if value, err = constructedTextChecked(sub.Sequence(), sep); err != nil {
+		if value, err = constructedTextChecked(rt.goCtx, sub.Sequence(), sep); err != nil {
 			return err
 		}
 	}

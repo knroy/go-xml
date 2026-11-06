@@ -535,7 +535,7 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 | `-allow-dir` | open `xsl:include`/`xsl:import`/`xsl:import-schema`/`doc()`/`document()` to further directories, each covering its subdirectories to any depth; the stylesheet's own directory is always readable. It says *where*, not *what*: raw text, external entities and XInclude each need their own flag as well |
 | `-allow-doctype` | permit a `DOCTYPE` in the source |
 | `-catalog DIR` | answer `xsl:import-schema`'s references to the W3C schemas (`XMLSchema.xsd`, `xml.xsd`) from local copies in `DIR` instead of leaving them unresolved; see [validation.md](docs/validation.md#resolving-schemalocation) |
-| `-timeout` | bound the transform (default 60s) |
+| `-timeout` | bound the transform, and the `-xinclude` pass before it (default 60s) |
 | `-max-items N` | items the transform may materialise (default 5,000,000; `-1` removes the bound) |
 | `-max-bytes N` | largest input document (default 64 MB; `-1` removes the limit) |
 | `-initial-template` | start at a named template instead of matching the root; no input document is then needed |

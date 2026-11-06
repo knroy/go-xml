@@ -122,7 +122,7 @@ syntax error does *not* carry the sentinel.
 | `backtrackBudget` | `xpath/regex_backtrack.go` | `FORX0002` | the regular expression is invalid |
 | `backrefAnalysisMax` (4M steps) | `xpath/regex_backref.go` | `FORX0002` | as above; bounds the backreference fixed-width analysis at compile |
 | `backtrackMaxDepth` (50,000) | `xpath/regex_backtrack.go` | `FORX0002` | as above; nested matcher calls of the opt-in backtracking engine, so a long subject is an error, not a stack overflow |
-| `maxFlattenSteps` (1<<24) | `xdm/maparray.go` | `XPDY0130` | items and arrays one `xdm.Flatten` visits inside arrays; `array:flatten` and `fn:data` also charge `MaxItems` |
+| `maxFlattenSteps` (1<<24) | `xdm/maparray.go` | `XPDY0130` | items and arrays one `xdm.Flatten` visits inside arrays; `array:flatten` and `fn:data` also charge `MaxItems`. `xdm.FlattenContext(ctx, seq)` returns this refusal as an error rather than an `internal/xdmlimit` panic, and checks `ctx` every 1024 items (`flattenCheckEvery`); `array:flatten`, `fn:data`, `xsl:copy-of`, `xsl:value-of` and `xsl:attribute` flatten under the evaluation's context, so a host deadline stops a large flatten |
 | range bound | `xpath/operators.go` | `FOAR0002` | a numeric operation overflowed |
 | `maxNestDepth` | `xquery/nested.go` | `XPDY0130` | as the XPath caps; it borrowed `XPST0003` until 2026-09-14 |
 | `maxConstructorDepth` | `xquery/enclosed.go` | `XPDY0130` | as above |
@@ -900,6 +900,7 @@ if err != nil { return err }
 tree, err = xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
     Resolver: resolver, // an *xslt.FileResolver, or your own
     Parse:    opts,     // the included documents get the same limits
+    Context:  ctx,      // optional: cancellation, nil for none
 })
 ```
 
@@ -907,6 +908,12 @@ tree, err = xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
 top-down as every tree is; the tree it is given is left as it was, and node
 identities do not carry over. A parsed tree with no XInclude element has
 nothing to replace and is returned as it is.
+
+| `XIncludeOptions` field | Meaning |
+|---|---|
+| `Resolver` | reads each `href`; nil refuses every inclusion (see below) |
+| `Parse` | the `ParseOptions` included XML resources are parsed with; `BaseURI` and `DocumentURI` are set per resource |
+| `Context` | cancellation, checked before each inclusion, before each fetch and every 1024 nodes (`xincludeCheckEvery`) a local xpointer search visits. Once it is done the pass returns an error wrapping `ctx.Err()` and no tree; no `xi:fallback` recovers from it, and the input tree is never modified. Nil means no cancellation |
 
 **The resolver is the whole of the confinement.** `xdm` has no filesystem and
 no network; it can read only what a resolver hands it. `xslt.FileResolver`
@@ -949,7 +956,8 @@ pass of an opt-in transformation, and the switch that decides whether
 inclusions happen at all is the resolver the caller supplies.
 
 The `go-xml` command exposes this as `-xinclude`, reading from the
-`-allow-dir` roots.
+`-allow-dir` roots; its `-timeout` covers the XInclude pass as well as the
+transform.
 
 ### Regular-expression backreferences
 

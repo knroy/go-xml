@@ -705,7 +705,14 @@ func stringJoin(seq xdm.Sequence, sep string) string {
 // fourteen call sites — and its switch matched neither arm for a function
 // item, so the item was dropped in silence and select="1, 2, false#0" built
 // a="1 2" instead of failing.
-func constructedTextChecked(seq xdm.Sequence, sep string) (string, error) {
+//
+// The arrays are flattened first under ctx, the transform's context, so that
+// a host deadline stops a large flatten.
+func constructedTextChecked(ctx context.Context, seq xdm.Sequence, sep string) (string, error) {
+	seq, err := xdm.FlattenContext(ctx, seq)
+	if err != nil {
+		return "", err
+	}
 	if _, err := xdm.AtomizeChecked(nonTextItems(seq)); err != nil {
 		return "", err
 	}
