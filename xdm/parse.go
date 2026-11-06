@@ -389,6 +389,14 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 				// completed in cur, or while a batch waits (its own tests,
 				// without the call at every start tag).
 				if bs != nil && (bs.batch != nil || ps.cur.v1 != noIdx && tree.rec(ps.cur.v1).isLeaf()) {
+					// The end tag of cur, written as its start tag was: the
+					// EndElement case below then fails at nothing before it
+					// tells the burster (xdmburst.EndAhead).
+					bs.closing = false
+					if e, ok := tok.(*xml.EndElement); ok && ps.cur != tree.Root {
+						cn := ps.cur.Name()
+						bs.closing = e.Name.Space == cn.Prefix && e.Name.Local == cn.Local
+					}
 					if err := bs.trimLeaves(ps.cur, ps.depth, &ps.spaces, names); err != nil {
 						if err == errPause {
 							ps.held, ps.heldStart = tok, start

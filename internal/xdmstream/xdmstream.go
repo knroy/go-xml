@@ -112,6 +112,13 @@ type Cursor struct {
 	quiet, hide bool
 	open        openStates
 	closed      int
+	// endAhead says the parse paused at a leaf whose parent's end tag it
+	// has read (xdmburst.EndAhead): Next may report that end without a step.
+	// endTold says it did, and the parse's End for it is still to come;
+	// settling, that the step running is only to bring the parse there.
+	endAhead, endTold, settling bool
+	// noAhead turns endAhead off, for the tests that compare the two.
+	noAhead bool
 	// resumes counts the steps of the parse, for the tests.
 	resumes int
 	// src and opts are what Open was given, for Tee; teed says Tee has
@@ -239,6 +246,7 @@ func (c *Cursor) At() Event { return c.ev }
 
 // Observe adds o to the cursor's observers, from the next element on.
 func (c *Cursor) Observe(o Observer) {
+	c.settle() // not to be told of an end tag already reported
 	c.obs = append(c.obs, o)
 	if c.watchOn != nil {
 		c.watchOn()
@@ -268,9 +276,42 @@ func (c *Cursor) Next() (Event, error) {
 		c.ev, c.viewed = *p, nil
 		return c.ev, nil
 	}
+	if c.endAhead {
+		if ev, ok := c.ahead(nil); ok {
+			c.ev, c.viewed = ev, nil
+			return ev, nil
+		}
+	}
 	ev, err := c.resume(xdmburst.Keep)
 	c.ev, c.viewed = ev, nil
 	return ev, err
+}
+
+// ahead returns the end tag the parse has read after the leaf it paused at
+// (endAhead), when the consumer, reading with f, is to be told of it now: it
+// is reported without a step, the parse's End for it then going on without
+// a pause (endTold). Otherwise the parse goes on to tell it as usual.
+func (c *Cursor) ahead(f *Filter) (Event, bool) {
+	c.endAhead = false
+	d := c.ev.Depth - 1
+	if len(c.obs) > 0 || c.open.at(d) != openKept || f != nil && d > f.Depth && !f.Ends {
+		return Event{}, false
+	}
+	c.endTold = true
+	ev := Event{Kind: EndElement, Depth: d, Node: c.ev.Node.Parent(), Closed: c.closed}
+	c.closed = 0
+	return ev, true
+}
+
+// settle brings the parse to the end tag Next reported ahead of it, if any,
+// for Observe: the observer is not to be told of it.
+func (c *Cursor) settle() {
+	if c.endTold {
+		c.settling = true
+		ev := c.ev
+		c.resume(xdmburst.Keep) // an error is the next call's
+		c.ev = ev
+	}
 }
 
 // View returns the view of the current element, a start tag Next just
@@ -324,6 +365,7 @@ func (c *Cursor) Peek() (Event, error) {
 			// The view can be made only while the parse is at the tag.
 			c.View()
 		}
+		c.endAhead = false // told by the parse, as usual
 		ev, err := c.resume(xdmburst.Keep)
 		c.peeked, c.peekErr = &ev, err
 	}
@@ -354,6 +396,13 @@ func (c *Cursor) NextTag(f *Filter) (Event, error) {
 		default:
 			c.ev, c.viewed = *p, nil
 			return c.ev, nil
+		}
+		c.endAhead = false // ahead of the event passed over, not of c.ev
+	}
+	if c.endAhead {
+		if ev, ok := c.ahead(f); ok {
+			c.ev, c.viewed = ev, nil
+			return ev, nil
 		}
 	}
 	c.filt = f
@@ -437,6 +486,8 @@ func (c *Cursor) Flush() error {
 	if c.ev.Kind != EndElement || c.peeked != nil || c.peekErr != nil {
 		return errNotAtEnd
 	}
+	// At an end tag reported ahead (endTold) nothing is held: the parse
+	// reports ends ahead only while no GroundLater copy waits.
 	return c.flush()
 }
 
@@ -469,6 +520,7 @@ func (c *Cursor) resume(act xdmburst.Action) (Event, error) {
 		return Event{}, errTeed
 	}
 	c.resumes++
+	c.endAhead = false
 	if !c.begun {
 		c.begun = true
 		c.step, c.done = xdmburst.Steps(c.src, c.opts, &client{c})
@@ -561,6 +613,16 @@ func (k *client) Leaf(n any, d int) error {
 
 func (k *client) End(el any, d int, grounded any) error {
 	c := k.c
+	if c.endTold {
+		// Reported ahead (Cursor.ahead): on, unless the parse was only to
+		// be brought here (settle).
+		c.endTold = false
+		if c.settling {
+			c.settling = false
+			return xdmburst.ErrPause
+		}
+		return nil
+	}
 	if grounded != nil {
 		c.grounded = grounded.(*xdm.Node)
 	}
@@ -581,6 +643,12 @@ func (k *client) End(el any, d int, grounded any) error {
 	}
 	k.send(Event{Kind: EndElement, Depth: d, Node: el.(*xdm.Node)})
 	return xdmburst.ErrPause
+}
+
+func (k *client) LeafEnd(n any, d int) error {
+	err := k.Leaf(n, d)
+	k.c.endAhead = err == xdmburst.ErrPause && !k.c.noAhead
+	return err
 }
 
 func (k *client) Later(g any) error {

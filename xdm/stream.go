@@ -117,6 +117,9 @@ func driver(c xdmburst.Client) *burster {
 	if v, ok := c.(xdmburst.LeafViewing); ok {
 		v.LeafViewer(func(n any, d int) any { return b.leafView(n.(*Node), d) })
 	}
+	if e, ok := c.(xdmburst.EndAhead); ok {
+		b.ahead = e
+	}
 	if f, ok := c.(xdmburst.Flushing); ok {
 		f.Flusher(b.flush)
 	}

@@ -153,6 +153,16 @@ type Watching interface {
 	Watcher(on func())
 }
 
+// EndAhead is a Client that can be told, with a leaf, that the next token
+// is its parent's end tag: Drive calls LeafEnd in place of Leaf for such a
+// leaf, when nothing is watched and no GroundLater copy waits, and then the
+// parent's End is the next call, with nothing between that can fail. So a
+// client that pauses at the leaf may report the end tag too before going
+// on, and need not pause at it then.
+type EndAhead interface {
+	LeafEnd(n any, d int) error
+}
+
 // NewTreeID reserves the next tree id, the order a tree made now takes among
 // the others. Set by xdm's init.
 var NewTreeID func() int64

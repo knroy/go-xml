@@ -146,6 +146,11 @@ type burster struct {
 	// elemDrops counts the elements dropElement took back, for the test
 	// that keeps them off it too.
 	elemDrops int
+	// closing says the token after the leaves trimLeaves is told of is the
+	// end tag of the element they are in, as written (the parse loop sets
+	// it); ahead is the client as an xdmburst.EndAhead, or nil.
+	closing bool
+	ahead   xdmburst.EndAhead
 	// trims counts the calls of trimLeaves, and leafWalks the leaves told
 	// by its general walk (tellFrom), for the test that keeps the common
 	// case off both.
@@ -534,7 +539,13 @@ func (b *burster) trimLeaves(cur *Node, d int, spaces *spaceTable, names *nameCa
 		// pause taken back with nothing more to tell (pausedLeafOne).
 		if t, i := cur.tree, cur.v1; i != noIdx && i+1 == t.n && b.watch == nil {
 			if n := t.rec(i); n.isLeaf() && (n.prev == noIdx || !t.rec(n.prev).isLeaf()) {
-				if err := b.c.leaf(n, d+1); err != nil {
+				var err error
+				if b.closing && b.ahead != nil && b.batch == nil && d > 0 {
+					err = b.ahead.LeafEnd(n, d+1) // its parent's End comes next, and nothing between fails
+				} else {
+					err = b.c.leaf(n, d+1)
+				}
+				if err != nil {
 					if err == errPause {
 						b.paused, b.pel, b.pd = pausedLeafOne, n, d
 						b.pcur, b.pspaces, b.pnames = cur, spaces, names
