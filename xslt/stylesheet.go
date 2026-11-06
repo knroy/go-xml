@@ -1111,6 +1111,11 @@ type CompileOptions struct {
 	// it, and one it could read or reset would not be a bound. A nested
 	// compilation inherits the outer one's -- see compileLocked.
 	moduleBudget *xdm.EntityBudget
+	// nestedDepth and nestedMaxDepth seed the static phase's fn:transform
+	// nesting count and its bound (0 means DefaultMaxDepth) for a
+	// compilation started by fn:transform. Unexported like moduleBudget:
+	// only a nested compilation sets them.
+	nestedDepth, nestedMaxDepth int
 	// BaseURI of the stylesheet, for resolving relative include paths.
 	BaseURI string
 	// StaticParams supplies values for static stylesheet parameters — a

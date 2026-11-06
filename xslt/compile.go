@@ -60,6 +60,9 @@ type compiler struct {
 	// module compiled, and a used package compiles last, so the number alone
 	// says the opposite of what section 3.5 requires.
 	usedPackageDepth int
+	// activePackages holds the packages being read or compiled on the
+	// current path, keyed by packageKey, for XTSE3005.
+	activePackages map[string]bool
 	// schemaHoisted records that the xsl:import-schema pre-pass has run, so
 	// that the recursion for each included module does not repeat it from a
 	// root that sees less than the first one did.

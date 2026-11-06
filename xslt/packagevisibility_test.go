@@ -220,3 +220,61 @@ func TestOverridingDeclarationDoesNotHideFromUsedPackage(t *testing.T) {
 			"must reach the overriding declaration", got)
 	}
 }
+
+// guardedPackages is fixedPackages with a call cap, so a use-package cycle
+// the compiler fails to refuse ends in an error rather than a stack overflow.
+type guardedPackages struct {
+	fixedPackages
+	calls int
+}
+
+func (g *guardedPackages) ResolvePackage(name, versionMatch string) (*xdm.Node, error) {
+	if g.calls++; g.calls > 50 {
+		return nil, errNoSuchTestPackage
+	}
+	return g.fixedPackages.ResolvePackage(name, versionMatch)
+}
+
+// A package that depends on itself, directly or through another package, is
+// XTSE3005 (3.5.2). Before, nothing tracked the packages on the path and the
+// recursion through readUsePackage and reExportedComponents ran until a fatal
+// stack overflow. A diamond -- two packages using one -- is not a cycle.
+func TestUsePackageCycleIsXTSE3005(t *testing.T) {
+	pkg := func(name string, uses ...string) string {
+		s := `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform" name="` + name +
+			`" package-version="1.0" version="3.0">`
+		for _, u := range uses {
+			s += `<xsl:use-package name="` + u + `"/>`
+		}
+		return s + `</xsl:package>`
+	}
+	top := func(uses ...string) string {
+		s := pkg("urn:top", uses...)
+		return s[:len(s)-len(`</xsl:package>`)] +
+			`<xsl:template name="xsl:initial-template" visibility="public"/></xsl:package>`
+	}
+	compile := func(src string, pkgs fixedPackages) (int, error) {
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := &guardedPackages{fixedPackages: pkgs}
+		_, err = Compile(tree.Root, CompileOptions{PackageResolver: g})
+		return g.calls, err
+	}
+	for name, pkgs := range map[string]fixedPackages{
+		"self": {"urn:a": pkg("urn:a", "urn:a")},
+		"pair": {"urn:a": pkg("urn:a", "urn:b"), "urn:b": pkg("urn:b", "urn:a")},
+	} {
+		calls, err := compile(top("urn:a"), pkgs)
+		if err == nil || !strings.Contains(err.Error(), "XTSE3005") || calls > 50 {
+			t.Errorf("%s: got %v after %d resolutions, want XTSE3005", name, err, calls)
+		}
+	}
+	diamond := fixedPackages{
+		"urn:b": pkg("urn:b", "urn:d"), "urn:c": pkg("urn:c", "urn:d"), "urn:d": pkg("urn:d"),
+	}
+	if _, err := compile(top("urn:b", "urn:c"), diamond); err != nil {
+		t.Errorf("diamond: %v", err)
+	}
+}

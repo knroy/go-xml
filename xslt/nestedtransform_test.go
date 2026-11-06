@@ -241,3 +241,39 @@ func TestNestedTransformInheritsTheByteBudget(t *testing.T) {
 		t.Errorf("message %q is not the byte-budget refusal", err)
 	}
 }
+
+// A static variable that passes the stylesheet's own text to fn:transform
+// starts a nested compilation whose static phase does the same again. That
+// nesting is bounded by DefaultMaxDepth like runtime nesting; before, each
+// level's static runtime started at zero with no bound, and the unguarded
+// form recursed to a fatal stack overflow. The $n guard caps the recursion
+// at 1100 levels so the test never drives a real overflow.
+func TestStaticTransformNestingIsBounded(t *testing.T) {
+	const src = `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+		`<xsl:param name="t" static="yes" required="yes"/>` +
+		`<xsl:param name="n" static="yes" required="yes"/>` +
+		`<xsl:variable name="r" static="yes" select="if ($n gt 0) then ` +
+		`transform(map{'stylesheet-text':$t,'static-params':map{QName('','t'):$t,QName('','n'):$n - 1},` +
+		`'initial-template':QName('http://www.w3.org/1999/XSL/Transform','initial-template'),` +
+		`'delivery-format':'raw'}) else ()"/>` +
+		`<xsl:template name="xsl:initial-template"/>` +
+		`</xsl:stylesheet>`
+	tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compile := func(n int64) error {
+		_, err := Compile(tree.Root, CompileOptions{StaticParams: map[string]xdm.Sequence{
+			"t": {xdm.NewString(src)},
+			"n": {xdm.NewInteger(n)},
+		}})
+		return err
+	}
+	if err := compile(5); err != nil {
+		t.Fatalf("five static levels: %v", err)
+	}
+	err = compile(DefaultMaxDepth + 100)
+	if !errors.Is(err, xdm.ErrResourceLimit) || !strings.Contains(err.Error(), "XPDY0001: fn:transform nesting exceeded") {
+		t.Fatalf("got %v, want the XPDY0001 nesting refusal", err)
+	}
+}
