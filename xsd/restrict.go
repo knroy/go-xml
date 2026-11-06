@@ -48,6 +48,17 @@ func (p *parser) checkParticleRestriction() error {
 	// anonymously — which is how the suite writes most of them. The slice
 	// is in document order, so the errors below stay stable between runs
 	// where a map walk would not.
+	// recurse flattens nested same-compositor groups with
+	// inlineSameCompositor, and group refs share one *ModelGroup, so a
+	// flattened list is as long as the number of paths through the group
+	// DAG — 2^(n-1) for n groups each referencing the next twice. The
+	// lengths are measured first, memoised per group, against the position
+	// budget the content-model compile applies anyway.
+	limit := p.schema.maxPositions
+	if limit <= 0 {
+		limit = maxPositions
+	}
+	inlined := map[*ModelGroup]int{}
 	for _, ct := range p.schema.allComplexTypes {
 		if ct.DerivationMethod != DerivationRestriction {
 			continue
@@ -123,6 +134,15 @@ func (p *parser) checkParticleRestriction() error {
 						"base %s has none", typeLabel(name, ct), typeLabel(base.Name, base)))
 			}
 			continue
+		}
+		if inlinedTooLong(ct.Particle, limit, inlined) || inlinedTooLong(base.Particle, limit, inlined) {
+			// Returned at once rather than collected: the list below is
+			// rebuilt from its text, which would strip the sentinel.
+			return fmt.Errorf(
+				"%s: Particle Valid (Restriction) cannot be checked: a model group "+
+					"flattens to more than %d particles; the schema is refused because "+
+					"the restriction is undecided, not because it is known to be invalid: %w",
+				typeLabel(name, ct), limit, xdm.ErrResourceLimit)
 		}
 		if err := particleValidRestrictionVersion(ct.Particle, base.Particle, p.schema.Version); err != nil {
 			errs = append(errs, fmt.Errorf(
@@ -592,6 +612,43 @@ func inlineSameCompositor(g *ModelGroup) []*Particle {
 		out = append(out, p)
 	}
 	return out
+}
+
+// inlinedTooLong reports whether inlineSameCompositor would return more than
+// limit particles for some model group reachable from p. memo holds each
+// group's flattened length, capped at limit+1, so a group-ref DAG is walked in
+// graph time.
+func inlinedTooLong(p *Particle, limit int, memo map[*ModelGroup]int) bool {
+	long := false
+	var size func(g *ModelGroup) int
+	size = func(g *ModelGroup) int {
+		if n, ok := memo[g]; ok {
+			return n
+		}
+		memo[g] = 0 // a cycle is reported elsewhere; do not follow it
+		flat := g.Compositor == CompositorSequence || g.Compositor == CompositorChoice
+		n := 0
+		for _, q := range g.Particles {
+			mg, ok := q.Term.(*ModelGroup)
+			if !ok {
+				n++
+				continue
+			}
+			if m := size(mg); flat && inlinable(q, g.Compositor) {
+				n += m
+			} else {
+				n++
+			}
+			n = min(n, limit+1)
+		}
+		memo[g] = n
+		long = long || n > limit
+		return n
+	}
+	if g, ok := p.Term.(*ModelGroup); ok {
+		size(g)
+	}
+	return long
 }
 
 // inlinable reports whether a member particle is a pointless wrapper of the
