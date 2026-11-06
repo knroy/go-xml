@@ -343,6 +343,14 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 			(ps.opts.StripSpace != nil && stripsWhitespaceIn(el, ps.opts.StripSpace)) ||
 			(bs != nil && bs.strip != nil && bs.strip(el))
 	}
+	// charge counts n nodes the parse has built against MaxNodes.
+	charge := func(n int) error {
+		ps.nodes += n
+		if maxNodes > 0 && ps.nodes > maxNodes {
+			return fmt.Errorf("parse XML: document exceeds %d nodes: %w", maxNodes, ErrResourceLimit)
+		}
+		return nil
+	}
 
 	step = func() (*Tree, error) {
 		if ps.inner != nil {
@@ -384,7 +392,16 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 			// hold its value before anything -- whitespace stripping at an end
 			// tag, a new sibling -- can look at it.
 			if _, text := tok.(*xml.CharData); !text {
-				ps.run.flush(&ps.spaces, stripSpaceAt)
+				// A text run that is not all white space is a node. One that
+				// is costs nothing: it lies between two nodes that are
+				// counted, and whether it is stripped here or later (a tree
+				// a stylesheet strips, against a stream it strips as it
+				// reads) must not change what the limit refuses.
+				if ps.run.flush(&ps.spaces, stripSpaceAt) {
+					if err := charge(1); err != nil {
+						return nil, err
+					}
+				}
 				// trimLeaves has something to do only once a leaf has been
 				// completed in cur, or while a batch waits (its own tests,
 				// without the call at every start tag).
@@ -505,11 +522,8 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 				// Attributes and namespaces are nodes too, and a document made
 				// of elements carrying many attributes allocates most of its
 				// memory in them, so they count against the limit.
-				ps.nodes += 1 + el.NumAttrs() + decls
-				if maxNodes > 0 && ps.nodes > maxNodes {
-					return nil, fmt.Errorf(
-						"parse XML: document exceeds %d nodes: %w",
-						maxNodes, ErrResourceLimit)
+				if err := charge(1 + el.NumAttrs() + decls); err != nil {
+					return nil, err
 				}
 				ps.cur = el
 				if bs != nil {
@@ -564,6 +578,10 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 			case *xml.Comment:
 				t := *tok
 				ps.sawPrologToken = true
+				// Counted before a burst skips it, as a tree counts it.
+				if err := charge(1); err != nil {
+					return nil, err
+				}
 				if bs != nil && ps.cur == tree.Root && !bs.leaves {
 					continue // a burst's tree holds no prolog (see bursts.go)
 				}
@@ -591,6 +609,9 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 					return nil, fmt.Errorf("parse XML: processing-instruction target %q contains a colon", t.Target)
 				}
 				ps.sawPrologToken = true
+				if err := charge(1); err != nil {
+					return nil, err
+				}
 				if bs != nil && ps.cur == tree.Root && !bs.leaves {
 					continue
 				}
@@ -1117,24 +1138,27 @@ func (r *textRun) add(parent *Node, b []byte, dec *xml.Decoder) {
 // flush stores the value of the node being built, if any, and ends the run.
 // A whitespace-only run inside an element strip selects is taken back out:
 // it is the last record appended, so dropping it leaves the tree as if it
-// had never been made.
-func (r *textRun) flush(spaces *spaceTable, strip func(*Node) bool) {
+// had never been made. It reports whether the run held anything but white
+// space.
+func (r *textRun) flush(spaces *spaceTable, strip func(*Node) bool) bool {
 	if r.node == nil {
-		return
+		return false
 	}
 	n := r.node
 	r.node = nil
 	if r.stored {
 		r.stored = false
-		return
+		return true
 	}
 	t := n.tree
-	if onlySpace(r.buf) && strip(n.Parent()) {
+	space := onlySpace(r.buf)
+	if space && strip(n.Parent()) {
 		t.rec(n.parent).v1 = n.prev
 		t.n--
-		return
+		return false
 	}
 	n.v0, n.v1 = spaces.text(&t.text, r.buf)
+	return !space
 }
 
 // spaceTable shares one stored value among the whitespace-only text runs of a

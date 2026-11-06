@@ -439,24 +439,27 @@ func requireQName(n xml.Name) error {
 // declared NMTOKEN and written " urn:x " binds urn:x — and p:a, b:a collide.
 func normalizeAttTokens(t xml.StartElement, types []attDeclaredType, ix declIndex) xml.StartElement {
 	var attrs []xml.Attr
-	for _, i := range ix.at(t.Name.Space, t.Name.Local) {
+	at := ix.at(t.Name.Space, t.Name.Local)
+	name := func(i int) (string, string) {
+		return t.Attr[i].Name.Space, t.Attr[i].Name.Local
+	}
+	by := attrsByName(len(at), len(t.Attr), name)
+	for _, i := range at {
 		d := types[i]
-		for i, a := range t.Attr {
-			if !lexicalIs(a.Name.Space, a.Name.Local, d.attr) && a.Name.Local != d.attr {
-				continue
-			}
+		eachAttrNamed(by, len(t.Attr), name, d.attr, func(i int) {
+			a := t.Attr[i]
 			// A value already collapsed is left as it is, so that a default
 			// keeps the storage the text store shares.
 			c := strings.Join(strings.FieldsFunc(a.Value, func(r rune) bool { return r == ' ' }), " ")
 			if c == a.Value {
-				continue
+				return
 			}
 			if attrs == nil {
 				// Copy: the tokeniser's attribute slice is not ours to write.
 				attrs = append([]xml.Attr(nil), t.Attr...)
 			}
 			attrs[i].Value = c
-		}
+		})
 	}
 	if attrs != nil {
 		t.Attr = attrs

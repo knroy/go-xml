@@ -1779,6 +1779,10 @@ type textAux struct {
 	// shared maps a string registered by share to where it is stored, so that
 	// add hands the same range to every value that is that string.
 	shared map[sharedKey][2]uint32
+	// kept maps a string add kept as a block of its own to that block, so
+	// that adding the very string again, as a loop copying one long text
+	// node does, takes no block more.
+	kept map[sharedKey][2]uint32
 	// ws shares one stored value among the whitespace-only values add is
 	// given, as a parse does.
 	ws spaceTable
@@ -1812,6 +1816,15 @@ const (
 	textMask    = 1<<textShift - 1
 	textBlock   = 1 << textShift // largest ordinary block
 	textOwnFrom = textBlock / 4  // values this long get a block of their own
+	// textCopyFrom is the block count past which a value is copied rather
+	// than kept as a block of its own, and one that fits an ordinary block
+	// is packed into one: blocks are addressed by 32-textShift bits, and
+	// keeping a string costs no bytes, so values aliasing one string ran
+	// the store out of blocks. Past it a block holds 16 KB of copied bytes
+	// on average, so the remaining half of them takes a gigabyte.
+	// ponytail: the ceiling itself still panics (newBlock); an error needs a
+	// recover at the entry points or an error return through the builders.
+	textCopyFrom = 1 << (31 - textShift)
 )
 
 // str returns the value at (off, n).
@@ -1845,8 +1858,20 @@ func (s *textStore) add(v string) (uint32, uint32) {
 	// than copied: its capacity is its length, so nothing appends into it.
 	// Every unsafe.String in the module is over append-only bytes (the
 	// tokeniser's arena, this store), which keeps that true.
-	if len(v) >= textOwnFrom {
-		return s.keep(unsafe.Slice(unsafe.StringData(v), len(v)))
+	if len(v) >= textOwnFrom && len(s.blocks) < textCopyFrom {
+		k := sharedKey{unsafe.StringData(v), len(v)}
+		if s.aux == nil {
+			s.aux = new(textAux)
+		}
+		if r, ok := s.aux.kept[k]; ok {
+			return r[0], r[1]
+		}
+		if s.aux.kept == nil {
+			s.aux.kept = map[sharedKey][2]uint32{}
+		}
+		off, n := s.keep(unsafe.Slice(unsafe.StringData(v), len(v)))
+		s.aux.kept[k] = [2]uint32{off, n}
+		return off, n
 	}
 	return s.addBytes(unsafe.Slice(unsafe.StringData(v), len(v)), 0)
 }
@@ -1972,6 +1997,9 @@ func (s *textStore) lend(blk []byte, create bool) *lendState {
 
 // keep stores b, which nothing else writes to, as a block of its own.
 func (s *textStore) keep(b []byte) (uint32, uint32) {
+	if len(s.blocks) >= textCopyFrom {
+		return s.addBytes(b, 0)
+	}
 	s.newBlock(b)
 	return uint32(len(s.blocks)-1) << textShift, uint32(len(b))
 }
@@ -1980,7 +2008,7 @@ func (s *textStore) keep(b []byte) (uint32, uint32) {
 // while nothing else has been stored behind it.
 func (s *textStore) addBytes(b []byte, extra int) (uint32, uint32) {
 	need := len(b) + extra
-	if need >= textOwnFrom {
+	if need >= textOwnFrom && (len(s.blocks) < textCopyFrom || need > textBlock) {
 		blk := make([]byte, len(b), need)
 		copy(blk, b)
 		s.newBlock(blk)

@@ -165,6 +165,42 @@ type includeProc struct {
 	// processing has finished to its processed copy, which an href-less
 	// xpointer selects from in its place. See selectLocal.
 	done map[*Node]*Node
+	// nodes counts the nodes the pass's inclusions have copied in, against
+	// opts.Parse.MaxNodes: an href-less xpointer copies an element already
+	// expanded, so siblings each including the one before doubled the
+	// result per level, and fetches and depth never see it.
+	nodes int
+}
+
+// charge counts the nodes of picked, about to be copied in by an inclusion,
+// against the pass's node budget.
+func (p *includeProc) charge(picked []*Node) error {
+	limit := p.opts.Parse.MaxNodes
+	if limit == 0 {
+		limit = DefaultMaxNodes
+	}
+	if limit < 0 {
+		return nil
+	}
+	for _, n := range picked {
+		p.nodes += subtreeNodes(n)
+	}
+	if p.nodes > limit {
+		return fatalInclude{fmt.Errorf(
+			"resource limit exceeded: inclusions exceed %d nodes: %w",
+			limit, ErrResourceLimit)}
+	}
+	return nil
+}
+
+// subtreeNodes counts n and its descendants, attributes and namespace
+// declarations, as a parse counts them.
+func subtreeNodes(n *Node) int {
+	c := 1 + n.NumAttrs() + n.NumNamespaceDecls()
+	for k := range n.Children() {
+		c += subtreeNodes(k)
+	}
+	return c
 }
 
 // mentionsXInclude reports whether t could hold an XInclude-namespace element.
@@ -462,7 +498,6 @@ func (p *includeProc) selectLocal(inc *Node, xptr, base string) (*Node, error) {
 	if len(picked) == 0 {
 		return nil, fmt.Errorf("xpointer %q selected nothing in the including document", xptr)
 	}
-	holder := newHolder()
 	for _, n := range picked {
 		// Section 4.5.1: an inclusion of the include element itself, or of
 		// one of its ancestors, is an inclusion loop and a fatal error. It
@@ -472,6 +507,12 @@ func (p *includeProc) selectLocal(inc *Node, xptr, base string) (*Node, error) {
 			return nil, fatalInclude{fmt.Errorf(
 				"xpointer %q selects the include element or an ancestor of it", xptr)}
 		}
+	}
+	if err := p.charge(picked); err != nil {
+		return nil, err
+	}
+	holder := newHolder()
+	for _, n := range picked {
 		copySubtree(holder, n, base)
 	}
 	return holder, nil
@@ -657,6 +698,9 @@ func (p *includeProc) fetch(dst *Node, target, base, parse, xptr, encoding strin
 		}
 	}
 
+	if err := p.charge(picked); err != nil {
+		return err
+	}
 	for _, n := range picked {
 		copyFixedUp(dst, n, base)
 	}

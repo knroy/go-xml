@@ -1116,6 +1116,7 @@ func (s *textStore) rewind(m textMark) {
 	if s.aux != nil {
 		s.aux.ws.forget(m.blocks)
 		s.aux.lent, s.aux.last = nil, nil
+		s.aux.kept = nil
 	}
 }
 
