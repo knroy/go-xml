@@ -1915,6 +1915,10 @@ type splitRun struct {
 	// rootCopy, when set, copies a match that is the document element as
 	// events instead of giving up (noRoot; streamcopy_l3.go).
 	rootCopy func() error
+	// jsonErr is the first match's error, and jsonMore the matches below
+	// it, for xml-to-json of a path (streamfn_json.go).
+	jsonErr  error
+	jsonMore int
 }
 
 // read is the walk's next event: the cursor's, through the filter f
@@ -2500,7 +2504,7 @@ func (s *streamSplit) textAtomic(t string) *xdm.Atomic {
 func (r *splitRun) leaf(n *xdm.Node, d int) error {
 	s := r.s
 	if s.json != nil {
-		return errJSONStream // streamfn_json.go: not an element or document node
+		return r.jsonLeaf(n) // streamfn_json.go: not an element or document node
 	}
 	switch {
 	case s.mode == matchCount || s.red == "nth" && !s.atomize && s.tailText == "" && s.tail == nil && r.idx+1 < s.nth:
@@ -2763,6 +2767,11 @@ func (r *splitRun) fold() error {
 func (r *splitRun) finish() (xdm.Sequence, error) {
 	if err := r.climbFinish(); err != nil {
 		return nil, err
+	}
+	if r.s.json != nil && !r.s.ctxItem {
+		if err := r.jsonFinish(); err != nil { // streamfn_json.go
+			return nil, err
+		}
 	}
 	b := func(v bool) (xdm.Sequence, error) { return xdm.One(xdm.NewBoolean(v)), nil }
 	switch r.s.red {
