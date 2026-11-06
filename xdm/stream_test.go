@@ -250,3 +250,78 @@ func TestDriveDropsLeavesInPlace(t *testing.T) {
 		}
 	}
 }
+
+// quietWatch is keepAll with a watch it never turns on (xdmburst.Watching).
+type quietWatch struct {
+	keepAll
+	watched int
+}
+
+func (c *quietWatch) Watcher(func())               {}
+func (c *quietWatch) Watch(any, int, bool, uint64) { c.watched++ }
+
+// A client whose watch is off is not called for every node: a stream with no
+// observer paid a call and an ordinal per node for nothing.
+func TestDriveWatchOffCostsNothing(t *testing.T) {
+	src := "<a>" + strings.Repeat("<r i='1'>t<!--c--><s/></r>\n", 100) + "</a>"
+	c := &quietWatch{}
+	if _, err := parse(strings.NewReader(src), "", ParseOptions{bursts: driver(c)}); err != nil {
+		t.Fatal(err)
+	}
+	if c.watched != 0 || c.leaves == 0 {
+		t.Fatalf("watch called %d times with the watch off (%d leaves told)", c.watched, c.leaves)
+	}
+}
+
+// A leaf in a kept element, the one thing told before the next tag, is told
+// (with no watch on) and taken back without the walk that finds a run of leaves (tellFrom), and
+// a tag that completes no leaf does not call trimLeaves at all: the common
+// case paid for the general one at every event.
+func TestDriveLeafTakesTheShortWay(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<a>")
+	for i := range 1000 {
+		fmt.Fprintf(&b, "<r i='%d'><s>t%d</s><!--c--><e/><?p x?></r>", i, i)
+	}
+	b.WriteString("</a>")
+	c := &quietWatch{}
+	bs := driver(c)
+	if _, err := parse(strings.NewReader(b.String()), "", ParseOptions{bursts: bs}); err != nil {
+		t.Fatal(err)
+	}
+	// Per r: the ends of s, the comment, e and the PI's end tag (r's) each
+	// follow a leaf or a tag; trimLeaves is called after the three leaves,
+	// and once at the document's end.
+	if c.leaves != 3*1000 || bs.leafWalks != 0 || bs.trims != 3*1000+1 {
+		t.Fatalf("%d leaves told, %d by the walk, %d trimLeaves calls", c.leaves, bs.leafWalks, bs.trims)
+	}
+}
+
+// Every element a stream read element by element is told the end of is taken
+// back in place (dropElement): its content is gone by then, so it is the
+// tree's last records, and RemoveLastChild's clean-up (map deletes, the
+// namespace table's lock) has nothing to do. With positions tracked there
+// are source tables to clear, and every element goes the general way.
+func TestDriveDropsElementsInPlace(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<a xmlns:p='urn:p'>")
+	for i := range 1000 {
+		fmt.Fprintf(&b, "<r i='%d' p:j='x'><s>t</s><p:e/></r>\n", i)
+	}
+	b.WriteString("</a>")
+	for _, track := range []bool{false, true} {
+		c := &keepAll{}
+		bs := driver(c)
+		tree, err := parse(strings.NewReader(b.String()), "", ParseOptions{bursts: bs, TrackPositions: track})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 3*1000 + 1
+		if track {
+			want = 0
+		}
+		if bs.elemDrops != want || tree.n > 1 {
+			t.Fatalf("track=%v: %d elements dropped in place (want %d), %d records left", track, bs.elemDrops, want, tree.n)
+		}
+	}
+}

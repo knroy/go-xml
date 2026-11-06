@@ -122,3 +122,53 @@ func TestObserverSeesEverything(t *testing.T) {
 		}
 	}
 }
+
+// TestObserverAddedLate: an observer added at any event, after a Peek or
+// not, is told what one added at the start is told from there on, ordinals
+// too: the parse's watch is off until the first observer, and is turned on
+// there knowing the elements then open.
+func TestObserverAddedLate(t *testing.T) {
+	desc := func(into *[]string) Observer {
+		return func(n *xdm.Node, d int, end bool, ord uint64) {
+			s := fmt.Sprintf("%d end-doc", d)
+			if n != nil {
+				s = fmt.Sprintf("%d %v %v %q #%d", d, end, n.Kind(), n.Name(), ord)
+			}
+			*into = append(*into, s)
+		}
+	}
+	// read drains src, adding o before event at (-1: before the first).
+	read := func(src string, at int, peek bool, o Observer) int {
+		c := Open(strings.NewReader(src), opts)
+		defer c.Close()
+		for i := 0; ; i++ {
+			if i == at {
+				if peek {
+					c.Peek()
+				}
+				c.Observe(o)
+			}
+			ev, err := c.Next()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ev.Kind == EndDocument {
+				return i + 1
+			}
+		}
+	}
+	for di, src := range observeDocs {
+		var all []string
+		n := read(src, 0, false, desc(&all))
+		for at := 1; at < n; at++ {
+			for _, peek := range []bool{false, true} {
+				var late []string
+				read(src, at, peek, desc(&late))
+				if len(late) > len(all) || len(late) == 0 && !peek {
+					t.Fatalf("doc %d at %d: %d observations of %d", di, at, len(late), len(all))
+				}
+				same(t, late, all[len(all)-len(late):])
+			}
+		}
+	}
+}
