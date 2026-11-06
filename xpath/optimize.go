@@ -385,6 +385,13 @@ func isClosedUncached(e Expr, f *exprFacts) bool {
 	case *Literal:
 		return true
 	case *BinaryOp:
+		// A comparison reads the default collation, which is set after
+		// compilation (see foldConstant), so it is not closed: an ancestor
+		// that took it as closed folded it, and not('a' eq 'A') was frozen
+		// under codepoint order whatever collation the run then used.
+		if isComparisonOp(v.Op) {
+			return false
+		}
 		return isClosed(v.Left, f) && isClosed(v.Right, f)
 	case *UnaryOp:
 		return isClosed(v.Operand, f)

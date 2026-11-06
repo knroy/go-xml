@@ -75,3 +75,32 @@ func TestDefaultCollationReportsStaticDefault(t *testing.T) {
 		}
 	}
 }
+
+// A comparison is never folded itself, because its answer depends on the
+// default collation, which WithDefaultCollation sets after compilation. Its
+// ancestors must not fold it either: not('a' eq 'A') was evaluated at compile
+// time under the codepoint collation and frozen as true.
+func TestFoldLeavesCollationSensitiveComparisonsToRuntime(t *testing.T) {
+	coll, err := ResolveCollation(HTMLASCIICaseInsensitive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ expr, want string }{
+		{`'a' eq 'A'`, "true"},
+		{`not('a' eq 'A')`, "false"},
+		{`boolean('a' = 'A')`, "true"},
+		{`concat(string('a' eq 'A'), '')`, "true"},
+	} {
+		c, err := Compile(tc.expr, nil)
+		if err != nil {
+			t.Fatalf("compile %q: %v", tc.expr, err)
+		}
+		seq, err := c.WithDefaultCollationURI(coll, HTMLASCIICaseInsensitive).Eval(NewContext(nil, Builtins()))
+		if err != nil || len(seq) != 1 {
+			t.Fatalf("eval %q: %v, %d items", tc.expr, err, len(seq))
+		}
+		if got := seq[0].(interface{ String() string }).String(); got != tc.want {
+			t.Errorf("%s under a case-insensitive default = %s, want %s", tc.expr, got, tc.want)
+		}
+	}
+}
