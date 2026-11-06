@@ -173,11 +173,14 @@ reason:
   in the never-evicted global type tables: 49 MB from a 783 KB schema of
   10,000 types under a 4 KB namespace. Closing it changes the global tables'
   behaviour.
-- **The text store's block ceiling still panics** (`xdm/record.go`
-  `newBlock`, 1<<17 blocks). One string now reuses its block and values are
-  packed past half the block space, so reaching it needs about 1 GiB of
-  genuinely copied text in one tree. Turning it into an error needs a recover
-  at the public entry points or an error return through the builders.
+- **The text store's block ceiling panics under methods with no error
+  return** (`xdm/record.go` `newBlock`, 1<<17 blocks, about 1 GiB of copied
+  text in one tree). Every entry point that returns an error (xdm parse,
+  `ParseBursts`, `ProcessXInclude`, `xpath.Compiled.Eval`, `xquery.Query.Eval`,
+  `xslt.Compile`/`Transform`/`TransformReader`, xsd typed copies) returns
+  `xdm.ErrResourceLimit` and no result; a host calling `Node.SetValue`,
+  `AppendCopy` or `xdmbuild` methods directly still gets a panic, whose value
+  is an error matching `ErrResourceLimit`.
 - **Synchronous streamed grounding still copies ancestor attributes per
   record.** A one-at-a-time `Ground` cannot share ancestor copies (each copy
   is a tree of its own, and a tree that grows after it is handed out is not

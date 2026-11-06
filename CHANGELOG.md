@@ -343,6 +343,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `ParseOptions.MaxNodes` charged only start tags, so a document of PIs or comments passed any bound | Text that is not all white space, comments and PIs now count one node each. | [`9e9a6f9`][9e9a6f9], [`089c346`][089c346] |
 | k ATTLIST defaults on one tag cost k×k comparisons, reachable from `fn:parse-xml` | A tag whose declarations times attributes pass 64 indexes its attributes by name. | [`43ca7b2`][43ca7b2] |
 | Copying one long text node into many elements used up the text store's blocks and panicked | One string reuses its block; past half the block space values are copied and packed. | [`ad032d1`][ad032d1] |
+| A tree whose text needed over 1<<17 store blocks (~1 GiB copied) panicked the host | Parse, XPath, XQuery, XSLT and XSD entry points return `xdm.ErrResourceLimit` and no result. | [`91f30c9`][91f30c9] |
 | Href-less `xi:include xpointer` copies doubled per level, with no fetch or depth charged | One pass's inclusions count what they copy in against `Parse.MaxNodes`. | [`eb4d0ae`][eb4d0ae] |
 | A date plus `xs:yearMonthDuration` built a year the parser refuses, which compared wrongly and hung `format-date` `[W]` | It raises FODT0001; the ISO week-year search tests ±1 only. | [`734f53c`][734f53c], [`e720aa3`][e720aa3] |
 | `format-number` found an exponent picture's exponent one power of ten per step, quadratic in digits | It is estimated from the digit counts. | [`eb5b289`][eb5b289] |
@@ -378,6 +379,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | What it means | Commit |
 |---|---|---|
 | `dtd.Validate` reports undeclared attributes | A document that validated before may now fail; `Options.AllowUndeclared` skips them, as it skips undeclared elements. | [`915eb63`][915eb63] |
+| A tree past the text store's block ceiling is an error, not a panic | Entry points that return an error return `xdm.ErrResourceLimit`; `xdm`/`xdmbuild` methods with no error return still panic, with an error value that matches it. | [`91f30c9`][91f30c9] |
 | `ParseOptions.MaxNodes` counts text that is not all white space, comments and PIs | A document near the bound may now be refused; whitespace-only text is still not counted. | [`9e9a6f9`][9e9a6f9], [`089c346`][089c346] |
 | One XInclude pass shares a node budget | Everything its inclusions copy in counts against `Parse.MaxNodes`, once per level it is copied through. | [`eb4d0ae`][eb4d0ae] |
 | An `xsl:use-package` cycle is XTSE3005 | A package that uses itself, directly or through another, is a static error, not a crash. | [`dce8830`][dce8830] |
@@ -2600,6 +2602,7 @@ here so every entry in this file sits under a release.
 [089c346]: https://github.com/knroy/go-xml/commit/089c346
 [43ca7b2]: https://github.com/knroy/go-xml/commit/43ca7b2
 [ad032d1]: https://github.com/knroy/go-xml/commit/ad032d1
+[91f30c9]: https://github.com/knroy/go-xml/commit/91f30c9
 [eb4d0ae]: https://github.com/knroy/go-xml/commit/eb4d0ae
 [734f53c]: https://github.com/knroy/go-xml/commit/734f53c
 [e720aa3]: https://github.com/knroy/go-xml/commit/e720aa3
