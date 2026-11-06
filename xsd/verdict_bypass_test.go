@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -81,5 +82,25 @@ func TestWildcardChildKeepsIdentityTables(t *testing.T) {
 		vbCheck(t, kind+" via undeclared wrapper", s, `<R><x id="1"/><W><R><x id="1"/></R></W></R>`, false, code)
 		vbCheck(t, kind+" via xsi:type wrapper", s, `<R`+vbXSI+` xmlns:xs="http://www.w3.org/2001/XMLSchema"><x id="1"/><W xsi:type="xs:anyType"><R><x id="1"/></R></W></R>`, false, code)
 		vbCheck(t, kind+" distinct via wrapper", s, `<R><x id="1"/><W><R><x id="2"/></R></W></R>`, true, "")
+	}
+}
+
+// A field selecting a recursive complex-typed element is refused at its end
+// tag; until then the stream must not keep the text below every open one.
+func TestStreamComplexFieldTextNotBuffered(t *testing.T) {
+	s := vbLoad(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType><xs:sequence><xs:element ref="t"/></xs:sequence></xs:complexType><xs:unique name="u"><xs:selector xpath=".//t"/><xs:field xpath="."/></xs:unique></xs:element><xs:element name="t"><xs:complexType mixed="true"><xs:sequence><xs:element ref="t" minOccurs="0"/></xs:sequence></xs:complexType></xs:element></xs:schema>`, Version11)
+	const depth = 200
+	doc := "<r>" + strings.Repeat("<t>", depth) + strings.Repeat("a", 16<<10) + strings.Repeat("</t>", depth) + "</r>"
+	runtime.GC()
+	var a, b runtime.MemStats
+	runtime.ReadMemStats(&a)
+	_, err := svRun(t, s, doc, xsdstream.Mode{Root: xsdstream.Strict}, false)
+	runtime.ReadMemStats(&b)
+	if err == nil || !strings.Contains(err.Error(), "cvc-identity-constraint.3") {
+		t.Fatalf("stream error %v, want cvc-identity-constraint.3", err)
+	}
+	// Kept per open field, the text alone is depth x 16 KiB = 3.2 MiB.
+	if got := b.TotalAlloc - a.TotalAlloc; got > 1<<20 {
+		t.Errorf("streaming allocated %d bytes for a %d-byte document", got, len(doc))
 	}
 }
