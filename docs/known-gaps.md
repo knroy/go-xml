@@ -180,8 +180,9 @@ reason:
   races), the XPath constant-folding budgets (`evalToLiteral` mints a fresh
   default-budget context per fold), and RELAX NG validation-time cost
   (`textDeriv`/`listDeriv` against `MaxPatternSize`).
-- **UNC paths on Windows in `xslt.FileResolver.resolvePath`** were flagged
-  needs-validation and are untested on Windows.
+- **UNC paths on Windows in `xslt.FileResolver.resolvePath`** (and the
+  relaxng, xsd and dtd resolvers): closed in round SC. A UNC or device path
+  is refused before any filesystem call; see security.md, twenty-third pass.
 
 ### Memory: what the footprint round left open (performance)
 

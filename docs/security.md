@@ -1629,6 +1629,14 @@ dropped the authority and silently read the same-named local file — not a
 confinement escape (the path still met the root check), but a read the caller
 never asked for and a refusal that never happened.
 
+A UNC or device path — `//host/share/x`, `\\host\share\x`,
+`file:////host/share/x`, `file://localhost//host/share/x`, `\\?\…` — carries
+no authority for that check to see, and on Windows the `EvalSymlinks` below
+would already reach the host over SMB. All four refuse it ("names a network
+path") before any filesystem call, unless a root is on the same `\\host\share`
+(`internal/uripath.IsForeignNetworkPath`); `relaxng` and `xsd` only when `Root`
+is set.
+
 Each still performs the earlier `EvalSymlinks` and prefix comparison, and that
 is deliberate: it is the **diagnosis**, not the enforcement. It decides which
 root a path belongs to, produces the refusal (in `xslt` since 2f825daf
@@ -1904,6 +1912,10 @@ already found.
 Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
+
+**Twenty-third pass (round SC, audit run-2), 2026-11-06.**
+
+- **Rooted file resolvers touched a UNC path before containment** — host contact, driven by document data: `//host/share/x`, `file:////host/share/x` and `file://localhost//host/share/x` carry no `file:` authority, so on Windows the symlink walk before the root check (xslt, relaxng, xsd, dtd) connected to the named host over SMB. `uripath.IsForeignNetworkPath` refuses UNC and device paths first, unless a root is on the same share. Pinned on every OS by `TestIsForeignNetworkPath` and a `…RefusesUNCBeforeFilesystem` test per resolver. Also: `xslt.FileResolver.loadTracked` releases an in-flight parse by defer, so a panic no longer strands its waiters.
 
 **Twenty-second pass (round SB) — what round SA left open, 2026-11-06.**
 
