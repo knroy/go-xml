@@ -398,6 +398,9 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 			"XPDY0001: fn:transform nesting exceeded %d levels: %w",
 			rt.maxDepth, xdm.ErrResourceLimit)
 	}
+	// The charged depth also travels into the nested COMPILATION, whose
+	// static phase can call fn:transform again; see compileNested.
+	rt.depth = depth
 
 	// xslt-version selects the processor, and a 2.0 one ignores the options
 	// 3.0 added; see transformXSLTVersion.
@@ -917,8 +920,15 @@ func compileNested(
 		// xpath.Context.AdoptBudget: a nested operation may spend the parent's
 		// remainder, never reset it.
 		moduleBudget: ctx.EntityBudget(),
-		StaticParams: static,
-		MaxVersion:   maxVersion,
+		// The nested static phase continues this call's nesting count under
+		// its bound. Without it each level's static runtime started at zero
+		// with no bound, and a stylesheet passing its own text to
+		// fn:transform from a static variable recursed to a fatal stack
+		// overflow.
+		nestedDepth:    rt.depth,
+		nestedMaxDepth: rt.maxDepth,
+		StaticParams:   static,
+		MaxVersion:     maxVersion,
 	}
 	// A transform reached from the static phase is running INSIDE a Compile
 	// that holds compileMu, so it must not ask for the lock again. rt.static
