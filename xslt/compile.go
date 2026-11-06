@@ -44,6 +44,9 @@ type compiler struct {
 	// module twice.
 	seen       map[string]bool
 	schemaSeen map[string]bool
+	// moduleVisits counts the xsl:include and xsl:import occurrences this
+	// compilation has resolved, over both module walks; see maxModuleVisits.
+	moduleVisits int
 	// importDepth counts how many xsl:import declarations the compiler is
 	// currently inside.
 	//
@@ -2010,6 +2013,9 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 	if i := strings.IndexByte(href, '#'); i >= 0 {
 		fragment, href = href[i+1:], href[:i]
 	}
+	if err := c.visitModule(el, href); err != nil {
+		return err
+	}
 	doc, resolved, err := resolveModule(c.opts.Resolver, c.opts.moduleBudget, href, base)
 	if err != nil {
 		// XTSE0165: the processor could not retrieve the resource the href
@@ -2068,6 +2074,29 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 	c.importDepth++
 	defer func() { c.importDepth-- }()
 	return c.compileDocument(doc, precedence)
+}
+
+// maxModuleVisits bounds the xsl:include and xsl:import occurrences one
+// compilation resolves, counted over every route rather than per chain. A
+// module reached on several paths is resolved and compiled once per path --
+// each import occurrence has its own precedence (3.11.3), so the compiled
+// result cannot be shared -- and a chain where each module imports the next
+// twice costs 2^N. Both walks charge it, the static phase and the compile, so
+// an occurrence counts twice; the largest real stylesheets measured (DocBook
+// XSL 1.79 fo, xslTNG, XSpec) need about 120. A nested compilation started by
+// fn:transform counts afresh: its nesting is already bounded by maxDepth.
+const maxModuleVisits = 10_000
+
+// visitModule charges one module visit against maxModuleVisits.
+func (c *compiler) visitModule(el *xdm.Node, href string) error {
+	if c.moduleVisits >= maxModuleVisits {
+		return fmt.Errorf(
+			"%s %q: resource limit exceeded: compiling this stylesheet "+
+				"needs more than %d xsl:include/xsl:import module visits: %w",
+			el.Name().Lexical(), href, maxModuleVisits, xdm.ErrResourceLimit)
+	}
+	c.moduleVisits++
+	return nil
 }
 
 // importHref is the resource half of an xsl:import href, without the fragment

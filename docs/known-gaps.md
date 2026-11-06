@@ -159,14 +159,6 @@ The audit's findings were fixed in round SA (see the changelog and the
 Twenty-first pass in [security](security.md)). These remain, each with the
 reason:
 
-- **Shared `xsl:import` targets are recompiled per path**
-  (`xslt/compile.go` `compileIncludeImpl`). A module imported on several paths
-  is resolved, parsed and compiled once per path, so a chain where each module
-  imports the next twice costs 2^N. Caching a compiled module is unsafe: each
-  import occurrence gets its own import precedence (§3.11.3). Needs a
-  `ModuleResolver` serving untrusted modules; the candidate fix is a
-  per-`Compile` module-visit ceiling, whose value is an owner decision to be
-  measured against xslTNG and XSpec first.
 - **Many distinct XSD types under one long namespace still retain
   namespace length × type count process-wide.** Union references no longer
   multiply an entry, but each distinct type keeps its `{namespace}local` name
