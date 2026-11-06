@@ -647,7 +647,7 @@ type assembler struct {
 	p      *parser
 	count  int
 
-	// limitErr is the MaxDocuments refusal admitFetch made inside queueRef,
+	// limitErr is the MaxDocuments refusal admitFetch made inside parseAndQueue,
 	// which has no error result; run returns it after the document.
 	limitErr error
 
@@ -890,9 +890,11 @@ func (a *assembler) run() error {
 }
 
 // admitFetch reports the MaxDocuments refusal when the documents already read
-// or queued fill the allowance. It runs before every fetch: counting only as a
-// document is dequeued let every reference of the document read last, and
-// every path given to LoadFiles, be fetched and parsed past the limit first.
+// or queued fill the allowance. It runs before a new document is parsed:
+// counting only as a document is dequeued let every reference of the document
+// read last, and every path given to LoadFiles, be fetched and parsed past the
+// limit first. A reference to a document already read is not charged; see
+// parseAndQueue.
 func (a *assembler) admitFetch() error {
 	if a.count+len(a.queue) >= a.opts.MaxDocuments {
 		return a.tooManyDocuments()
@@ -1064,13 +1066,8 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 
 // queueRef resolves and queues a referenced document.
 func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location string, isInclude, redefining bool) {
-	if location != "" || !isInclude {
-		if a.limitErr == nil {
-			a.limitErr = a.admitFetch()
-		}
-		if a.limitErr != nil {
-			return
-		}
+	if a.limitErr != nil {
+		return
 	}
 	if location == "" {
 		if !isInclude {
@@ -1180,6 +1177,24 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 }
 
 func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespace string, doc *schemaDoc, isInclude, redefining bool) {
+	// MaxDocuments counts documents read, so only a document not read yet is
+	// charged, and it is charged here, before it is parsed. Charging every
+	// reference before it was resolved refused a set of exactly MaxDocuments
+	// documents as soon as one of them referred back to another: an import
+	// cycle, a second include of one file, or an import naming no location.
+	// Which document a reference names is known only once it is resolved,
+	// so this is the earliest the two can be told apart.
+	//
+	// The key read below also carries the namespace a chameleon include
+	// adopts, which only the parsed document settles. A reference whose
+	// location is already read under either key it could have is parsed
+	// first and charged after, exactly; any other is charged now.
+	loc := a.canon.location(resolved)
+	if !a.seen[docKey{location: loc}] && !a.seen[docKey{location: loc, adoptedNS: doc.targetNS}] {
+		if a.limitErr = a.admitFetch(); a.limitErr != nil {
+			return
+		}
+	}
 	tree, err := xdm.Parse(rc, schemaParseOptions(rc, a.opts.ParseOptions))
 	if err != nil {
 		a.p.errs = append(a.p.errs, errorAt(el, "src-resolve",
@@ -1270,6 +1285,9 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 	// second override's children must still be checked against what that
 	// document declares.
 	if alreadySeen {
+		return
+	}
+	if a.limitErr = a.admitFetch(); a.limitErr != nil {
 		return
 	}
 
