@@ -44,10 +44,6 @@ type compiler struct {
 	// module twice.
 	seen       map[string]bool
 	schemaSeen map[string]bool
-	// moduleVisits counts the xsl:include and xsl:import occurrences this
-	// compilation has resolved, over both module walks, and the packages it
-	// has read or compiled; see maxModuleVisits.
-	moduleVisits int
 	// importDepth counts how many xsl:import declarations the compiler is
 	// currently inside.
 	//
@@ -2069,6 +2065,9 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 				"stylesheet module; a package is referenced with "+
 				"xsl:use-package", el.Name().Lexical(), href)
 	}
+	if err := c.compileModuleNodes(el, href, doc); err != nil {
+		return err
+	}
 	if forcePrecedence {
 		// xsl:include: the module's declarations take the includer's
 		// precedence, so its own allocation is overridden afterwards. The
@@ -2092,19 +2091,62 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 // XSL 1.79 fo, xslTNG, XSpec) need about 120. A package used on several paths
 // is likewise compiled once per path, since each use may override it
 // differently (3.5.2), so every package read and compile is charged too. A
-// nested compilation started by fn:transform counts afresh: its nesting is
-// already bounded by maxDepth.
+// nested compilation started by fn:transform from the static phase spends the
+// outer compilation's remainder (see compileBudget), and is charged one visit
+// for its principal module, so a stylesheet that transforms itself B times
+// per level cannot multiply the bound by B^K.
 const maxModuleVisits = 10_000
+
+// maxModuleNodes bounds the tree nodes of the modules one compilation
+// compiles, counted once per compile of each module, so that the work is
+// bounded by size and not only by occurrences. maxModuleVisits alone let a
+// principal module import one large module 4,999 times and compile it in full
+// each time. The largest real stylesheets measured compile about 40,000
+// nodes in total (xslTNG docbook.xsl and epub.xsl; XSpec's compiler about
+// 7,000), and the bound leaves more than tenfold headroom above that. A
+// compilation's principal module is the host's own input and is not charged;
+// a nested one's is.
+const maxModuleNodes = 500_000
+
+// compileBudget is what one top-level compilation may spend on modules: the
+// visits maxModuleVisits bounds and the nodes maxModuleNodes bounds. It is
+// minted by compileLocked and shared with every compilation fn:transform
+// starts from the static phase, which runs inside it under the same
+// compileMu: the house rule that a nested operation spends the parent's
+// remainder rather than restarting it.
+type compileBudget struct {
+	visits, nodes int
+}
 
 // visitModule charges one module visit against maxModuleVisits.
 func (c *compiler) visitModule(el *xdm.Node, href string) error {
-	if c.moduleVisits >= maxModuleVisits {
+	b := c.opts.budget
+	if b.visits >= maxModuleVisits {
 		return fmt.Errorf(
 			"%s %q: resource limit exceeded: compiling this stylesheet "+
 				"needs more than %d xsl:include/xsl:import/xsl:use-package module visits: %w",
 			el.Name().Lexical(), href, maxModuleVisits, xdm.ErrResourceLimit)
 	}
-	c.moduleVisits++
+	b.visits++
+	return nil
+}
+
+// compileModuleNodes charges the nodes of a module about to be compiled
+// against maxModuleNodes. el and href name it in the refusal.
+func (c *compiler) compileModuleNodes(el *xdm.Node, href string, doc *xdm.Node) error {
+	b := c.opts.budget
+	if doc == nil {
+		return nil
+	}
+	if n := doc.SubtreeEnd() - doc.Index(); n > 0 {
+		b.nodes += n
+	}
+	if b.nodes > maxModuleNodes {
+		return fmt.Errorf(
+			"%s %q: resource limit exceeded: compiling this stylesheet "+
+				"needs more than %d module nodes: %w",
+			el.Name().Lexical(), href, maxModuleNodes, xdm.ErrResourceLimit)
+	}
 	return nil
 }
 

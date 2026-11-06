@@ -31,6 +31,13 @@ import (
 // stylesheet-location and the source it names resolve through the same
 // (possibly nil) resolvers the caller supplied.
 func registerTransformFunc(l *xpath.Library) {
+	registerTransformFuncWith(l, nil)
+}
+
+// registerTransformFuncWith is registerTransformFunc for the static phase,
+// whose nested compilations spend budget, the outer compilation's module
+// budget, rather than minting their own. See compileBudget.
+func registerTransformFuncWith(l *xpath.Library, budget *compileBudget) {
 	l.Add(xpath.Function{
 		Name:  xdm.QName{URI: xdm.NSFN, Local: "transform"},
 		Arity: 1,
@@ -49,7 +56,9 @@ func registerTransformFunc(l *xpath.Library) {
 			if err != nil {
 				return nil, err
 			}
-			return runNestedTransform(ctx, callerOf(rt), opts)
+			caller := callerOf(rt)
+			caller.budget = budget
+			return runNestedTransform(ctx, caller, opts)
 		},
 	})
 }
@@ -69,6 +78,9 @@ type transformCaller struct {
 	// cache is the outer stylesheet's compiled-stylesheet cache, or nil for
 	// a caller with no stylesheet and for the static phase.
 	cache *nestedCache
+	// budget is the module budget of the Compile a static-phase caller runs
+	// inside, which its nested compilations share; nil otherwise.
+	budget *compileBudget
 }
 
 // callerOf is the caller a running (or static-phase) stylesheet makes.
@@ -927,8 +939,13 @@ func compileNested(
 		// overflow.
 		nestedDepth:    rt.depth,
 		nestedMaxDepth: rt.maxDepth,
-		StaticParams:   static,
-		MaxVersion:     maxVersion,
+		// And it spends the outer compilation's module budget, so that
+		// breadth is bounded as well as depth: a static variable calling
+		// fn:transform B times on its own stylesheet, K levels deep, used to
+		// run B^K compilations each counting its modules afresh.
+		budget:       rt.budget,
+		StaticParams: static,
+		MaxVersion:   maxVersion,
 	}
 	// A transform reached from the static phase is running INSIDE a Compile
 	// that holds compileMu, so it must not ask for the lock again. rt.static
@@ -954,8 +971,10 @@ func compileNested(
 					Message: "fn:transform: compiling the stylesheet: " + msg}
 			}
 		}
-		return nil, xdm.Errorf("FOXT0002",
-			"fn:transform: compiling the stylesheet: %v", err)
+		// The cause is kept, so that a resource-limit refusal from the nested
+		// compilation still answers errors.Is(err, xdm.ErrResourceLimit).
+		return nil, &xdm.Error{Code: "FOXT0002", Err: err,
+			Message: "fn:transform: compiling the stylesheet: " + msg}
 	}
 	return sheet, nil
 }

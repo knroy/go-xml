@@ -899,6 +899,13 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	if opts.moduleBudget == nil {
 		opts.moduleBudget = xdm.NewEntityBudget()
 	}
+	// The module budget has the same boundary. A nested compilation spends
+	// the outer one's and is charged for its own principal module too, which
+	// no xsl:import reached; see compileBudget.
+	nested := opts.budget != nil
+	if !nested {
+		opts.budget = &compileBudget{}
+	}
 	c := &compiler{
 		opts: opts,
 		sheet: &Stylesheet{
@@ -933,6 +940,14 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// a schema into the next.
 	compileSchema = nil
 	defer func() { compileSchema = nil }()
+	if root := firstElement(doc); nested && root != nil {
+		if err := c.visitModule(root, opts.BaseURI); err != nil {
+			return nil, err
+		}
+		if err := c.compileModuleNodes(root, opts.BaseURI, doc); err != nil {
+			return nil, err
+		}
+	}
 	compilePackage = 0
 	defer func() { compilePackage = 0 }()
 	// The record of which package wrote each overriding declaration is
@@ -1118,6 +1133,10 @@ type CompileOptions struct {
 	// compilation started by fn:transform. Unexported like moduleBudget:
 	// only a nested compilation sets them.
 	nestedDepth, nestedMaxDepth int
+	// budget is the module visits and nodes this compilation may still
+	// spend. Unexported and minted by compileLocked like moduleBudget; a
+	// compilation fn:transform starts from the static phase inherits it.
+	budget *compileBudget
 	// BaseURI of the stylesheet, for resolving relative include paths.
 	BaseURI string
 	// StaticParams supplies values for static stylesheet parameters — a

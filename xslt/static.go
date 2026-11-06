@@ -961,7 +961,7 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 	var staticRT *runtime
 	if processorAtLeast30() {
 		staticRT = p.staticRuntime()
-		registerTransformFunc(lib)
+		registerTransformFuncWith(lib, p.c.opts.budget)
 	} else {
 		// A 2.0 processor runs no nested transformation. Left to the xpath
 		// stub, the call would reach the processor this package's init
