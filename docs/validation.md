@@ -249,7 +249,8 @@ always works.
 * **Large schemas can still exceed the derivative bound.** Validation does not
   intern patterns, so a deeply mixed content model can grow past
   `ValidateOptions.MaxPatternSize`, which ends validation with an error that
-  says so; a few DocBook documents with nested inlines do.
+  says so; a few DocBook documents with nested inlines do. The bound is also
+  checked between the tokens of a `<list>`.
 
 ## XSD
 

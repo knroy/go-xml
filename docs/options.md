@@ -121,6 +121,8 @@ syntax error does *not* carry the sentinel.
 | `Env.MaxDepth` | `xpath/context.go` | `XPDY0001` | no context item is defined |
 | `backtrackBudget` | `xpath/regex_backtrack.go` | `FORX0002` | the regular expression is invalid |
 | `backrefAnalysisMax` (4M steps) | `xpath/regex_backref.go` | `FORX0002` | as above; bounds the backreference fixed-width analysis at compile |
+| `backtrackMaxDepth` (50,000) | `xpath/regex_backtrack.go` | `FORX0002` | as above; nested matcher calls of the opt-in backtracking engine, so a long subject is an error, not a stack overflow |
+| `maxFlattenSteps` (1<<24) | `xdm/maparray.go` | `XPDY0130` | items and arrays one `xdm.Flatten` visits inside arrays; `array:flatten` and `fn:data` also charge `MaxItems` |
 | range bound | `xpath/operators.go` | `FOAR0002` | a numeric operation overflowed |
 | `maxNestDepth` | `xquery/nested.go` | `XPDY0130` | as the XPath caps; it borrowed `XPST0003` until 2026-09-14 |
 | `maxConstructorDepth` | `xquery/enclosed.go` | `XPDY0130` | as above |
@@ -128,7 +130,10 @@ syntax error does *not* carry the sentinel.
 | `MaxSchemaBytes` | `xquery/schemaimport.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the schema is not there |
 | `ValidateOptions.MaxDepth` | `xsd/validate.go` | `cvc-elt.1` | the element is invalid against its declaration |
 | `maxSchemaFetches` (10,000) | `relaxng/resolve.go` | *(none)* | include/externalRef fetches per RELAX NG compilation, all routes; the refusal names the budget |
+| fetched-document budget | `relaxng/compile.go` | *(none)* | the nodes and text bytes of every fetched include/externalRef document per compilation, at xdm's single-document `DefaultMaxNodes` and `DefaultMaxBytes`; wraps `xdm.ErrResourceLimit` |
+| `maxSequenceMatcherEdges` (1<<20) | `xsd/automaton.go` | *(none)* | follow edges one DTD content model may build in `dtd.Validate`; XSD models keep the `maxUPAStateWidth` (256) cap |
 | `maxModuleVisits` (10,000) | `xslt/compile.go` | *(none)* | `xsl:include`/`xsl:import` resolutions per `Compile`, all routes, static phase and compile both counting, plus each `xsl:use-package` read and compile; the refusal names the budget and wraps `xdm.ErrResourceLimit` |
+| `maxModuleNodes` (500,000) | `xslt/compile.go` | *(none)* | tree nodes compiled across every imported, included and used module per `Compile`, static-phase `fn:transform` compiles included; wraps `xdm.ErrResourceLimit` |
 | `fn:transform` nesting | `xslt/fntransform.go` | `XPDY0001` | no context item is defined; the depth is `TransformOptions.MaxDepth`, charged from the call so that a stylesheet transforming itself accumulates it, including across nested compilations; `DefaultMaxDepth` in the static phase |
 
 The XSD case reaches a caller through `xsd.ValidationErrors`, which now
@@ -1045,7 +1050,7 @@ seq, err := q.Eval(xpath.NewContext(nil, xpath.Builtins()))
 | `Schemas` | `[]Schema` | *(the schema store)* | Schemas `import schema` may find, registered by target namespace with their source or their assembled `*xsd.Schema` components. Consulted before `SchemaResolver`, and reads nothing. |
 | `SchemaResolver` | `xsd.Resolver` | *(none)* | Locates a schema `Schemas` does not have. **Nil by default: with no resolver an `at` location is never opened** and an import that cannot be answered is `XQST0059`. The same resolver is handed to `xsd` for the imported schema's own `xs:include` and `xs:import`. |
 | `SchemaParseOptions` | `xdm.ParseOptions` | refuses a DOCTYPE | Parser options for every schema document `import schema` reads, from the store's source text or a resolver, and for its includes and imports; shared by library modules and `fn:load-xquery-module`. A document a `CatalogResolver` answers from its own table may carry a DOCTYPE regardless. |
-| `MaxSchemaBytes` | `int64` | *(none)* | Total schema source one compilation may read, cumulatively across every import. Zero means `DefaultMaxSchemaBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
+| `MaxSchemaBytes` | `int64` | *(none)* | Total schema source one compilation may read, cumulatively across every import, every document its `xs:include`/`xs:import`/`xs:redefine` closure reaches, and every library module. Zero means `DefaultMaxSchemaBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
 
 Nine prefixes are bound before `Namespaces` is consulted and never need to be
 listed: `xml`, `xs`, `xsi`, `fn`, `local`, `math`, `map` and `array` from

@@ -380,6 +380,47 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Rooted file resolvers statted a `//host/share` or `file:////host/...` path before containment, reaching the host over SMB on Windows | It is refused first, unless a root is on that share. | [`60fed8a`][60fed8a] |
 | A panic while `xslt.FileResolver` parsed a file left other callers waiting on it blocked forever | The in-flight entry is released by a defer and its waiters get an error. | [`60fed8a`][60fed8a] |
 | A package used on several paths was read and compiled once per path, so a layered `xsl:use-package` DAG cost 2^N | Its read is shared per `Compile`; each read and compile counts against the 10,000 module visits. | [`4c5c3ee`][4c5c3ee] |
+| `array:flatten` over an array doubled with `[$a,$a]` walked 2^k leaves with no charge or cancellation | `xdm.Flatten` refuses past 1<<24 items inside arrays; `array:flatten` and `fn:data` charge their growth to `MaxItems`. | [`9c19935`][9c19935], [`0d82e86`][0d82e86] |
+| `Node.AddNamespace` copied and interned the whole frame per binding, so an element of K declarations kept K(K+1)/2 bindings | A frame of 8+ bindings that ends its tree is extended in place; assertion, alternative and copy scopes build their frame in one pass. | [`93f91ae`][93f91ae], [`952e6d2`][952e6d2], [`9999789`][9999789] |
+| Href-less XInclude xpointers were charged by node count only (9 KB copied 65 MB of text), and each walked the tree from its root | One pass's copied values share `MaxBytes`, and its local searches share a visit budget of `MaxNodes`. | [`ed500f2`][ed500f2] |
+| DTD and entity scanners searched for `;` again at every `&` or `%`, so a run without one was quadratic (200k `%`: 2.5 s) | Each `;` is found once per scan, in `xdm` and in `dtd.Load`. | [`e9e1442`][e9e1442], [`b9aebdf`][b9aebdf] |
+| `dtd.Load`: parameter-entity references that expanded to nothing were free, so a doubling ladder over an empty entity ran without bound | Each reference is charged at least its own length against `MaxEntityBytes`. | [`b9aebdf`][b9aebdf] |
+| `dtd.Validate` accepted a root other than the element the DOCTYPE names, skipping that element's attributes and model | It checks XML 1.0 VC Root Element Type. | [`a543265`][a543265] |
+| `dtd.Validate` built a dense content model's n²/2 follow edges in full before refusing it, for every element: 36 s and 4 GB per element | The DTD matcher stops at 2²⁰ follow edges; XSD models keep the 256-width cap in the shared build. | [`e21d0c1`][e21d0c1], [`0c7f0eb`][0c7f0eb] |
+| Each nested repeated group ref kept another copy of the inner model's edges: 216 MB retained from a 14.6 KB schema | Each follow edge is recorded once, against its innermost scope. | [`f856400`][f856400], [`6bb84b2`][6bb84b2] |
+| Particle Valid (Restriction) walked parallel group-ref chains once per path, 2^n calls for an 11 KB schema | Each particle pair is decided once per check; subsumption state sets use `slices.Sort`. | [`282aec6`][282aec6], [`fce2d5e`][fce2d5e] |
+| Each restriction of a union re-stored the whole member list in the never-evicted global type table, N×K names | Unions with identical member lists share one stored list, in `RegisterUnion` and `Merge`. | [`ed4a60f`][ed4a60f] |
+| An XSD date year past about 2.9e11 wrapped in int64 or was refused, and then passed facets, enumerations and keyrefs | Temporal values compare with an unbounded year, in 400-year eras. | [`7b3b8cf`][7b3b8cf] |
+| xs:gYear and xs:gYearMonth accepted any int64 year, so `daysFromCivil` wrapped and different years compared equal | The year is held to the xs:date range: FODT0001. | [`75039ea`][75039ea] |
+| An element with `xsi:nil="true"` skipped the keys and keyrefs on its own declaration, tree and stream | Both validators evaluate a nilled element's identity constraints and pass its tables up. | [`ee8aaa2`][ee8aaa2] |
+| Each nested asserted element deep-copied its subtree outside every budget, even after cancellation | The copy checks stop and cancel first and charges every node to the assertion node budget. | [`952e6d2`][952e6d2] |
+| `WithInstanceLocations` checked only a pair's namespace text, so a document defining another namespace was loaded | An instance-named document must declare the namespace it was named for (src-import.3.1). | [`c767803`][c767803] |
+| With `xsdnet.HTTPResolver`'s nil `Files`, an instance location could open any readable host file as its schema | Local instance locations must lie inside the schema's directories, whatever the resolver. | [`c767803`][c767803] |
+| `MaxDocuments` was counted as documents were dequeued, so references past the limit were fetched first | The count is checked before each fetch. | [`429b9c6`][429b9c6] |
+| `IsForeignNetworkPath` missed the NT `\??\` prefix, so `\??\UNC\host\share` could reach the host on Windows | `\??\` paths are device paths, refused whatever the roots. | [`639bcb4`][639bcb4] |
+| `fn:parse-ietf-date` panicked out of Eval on seconds 00–09 with a fraction below 1e-9 | The one-digit seconds string is padded without indexing past it. | [`8211a76`][8211a76] |
+| JSON fallback replacements, `fn:json-to-xml` nodes and `fn:xml-to-json` text (amplified 2×depth by indent) were built uncharged | Fallback uses and output text are charged to `MaxBytes`, built nodes to `MaxNodes`, streamed and tree alike. | [`406c6e1`][406c6e1], [`5423f40`][5423f40] |
+| `unparsed-text`, `unparsed-text-lines` and `json-doc` returned resolver text uncharged, so repeated reads kept unbounded copies | Every read is charged to `MaxBytes`. | [`3251f40`][3251f40] |
+| `fn:serialize`'s map form took a doctype-system with both quote kinds, breaking out of the literal into live DTD markup | It is checked like the element form: SEPM0016. | [`2f9d010`][2f9d010] |
+| `format-number` padding added one zero per step and exponent splitting rescanned the prefix per separator, O(n²) in the picture | Both are linear. | [`d5e2b0f`][d5e2b0f] |
+| A closed subtree whose constant fold failed was re-evaluated by every ancestor, so `() + 1 + 1 …` was quadratic in Compile | A declined fold is recorded and never retried. | [`42ac077`][42ac077] |
+| The operator chain bound was counted per loop, so nested sub-limit chains composed into a spine that overflowed the stack | The parser bounds the chained height of each path at 10,000, postfix and lookup chains included (XPDY0130). | [`e965b1f`][e965b1f] |
+| The opt-in backtracking regex recursed once per consumed character, so a long subject overflowed the stack | Recursion depth is capped at 50,000; past it is the FORX0002 budget error. | [`a97ac65`][a97ac65] |
+| Go's onepass copy duplicates a class per instruction, so `^\p{L}{990}$` cached about 8 MB and a facet kept as much | The cache gate and `CompileBounded` charge every use against the program size. | [`d258054`][d258054], [`6ad619f`][6ad619f] |
+| `group by` concatenated non-grouping variables uncharged, and sliding windows copied n(n+1)/2 items past `MaxItems` | Merged values and window copies are charged to the item budget; the window boundary scan observes cancellation. | [`11da206`][11da206] |
+| An imported schema's include closure was read uncharged, and each library module got a fresh `MaxSchemaBytes` | The closure is read through a charging resolver, and one schema byte counter spans every module of a compile. | [`4fafb61`][4fafb61] |
+| A module imported thousands of times was recompiled per import, since only the number of imports was capped | Module compiles charge their node count against 500,000 per `Compile` (`ErrResourceLimit`). | [`d0591ae`][d0591ae] |
+| A static variable calling `fn:transform` on its own stylesheet ran B^K nested compiles, each with its own counts | Static-phase nested compiles share the outer `Compile`'s visit and node budget. | [`d0591ae`][d0591ae] |
+| A global param bound to `accumulator-after#1`, and a used package's frame function, pinned every compiled stylesheet forever | Both global records are weak and die with their stylesheet. | [`69648fe`][69648fe] |
+| `fn:transform` from bare XPath zeroed the caller's byte counter, so each call reset the bound | An adopted byte counter arrives held, so the nested run continues the count. | [`8aa67d3`][8aa67d3] |
+| `xsl:sequence` into an as-typed variable charged no items, so sibling variables doubled to 10× `MaxItems` | A sequence constructor's held items are checked against `MaxItems` after each append. | [`5423f40`][5423f40] |
+| Nested streamed merges each held 64 inputs open, about 128 descriptors per level, with no total | Open merge inputs are counted across the nest; a merge past 64 runs on the tree. | [`c1836df`][c1836df] |
+| Streaming copied every spine element per burst but charged only attributes | The burst refusal counts every copied ancestor record against the same floor and rate. | [`b2fcde5`][b2fcde5] |
+| c14n under `Func`/`FromXPath` sets rescanned every in-scope binding and ancestor attribute at each apex, with no output | An apex considers only bindings that differ from those rendered; inherited `xml:*` is computed once per parent. | [`94aa606`][94aa606] |
+| RELAX NG §7 checks re-walked a definition per `<ref>`: a 1.9 KB diamond chain took 8.7 s to compile | Each definition is checked once per relevant context. | [`5734988`][5734988] |
+| RELAX NG list tokens skipped `MaxPatternSize`: 20 tokens in a nested-oneOrMore list cost 25 s and 224 MB | The bound is checked between list tokens. | [`f6079cf`][f6079cf] |
+| Repeated RELAX NG includes were parsed and kept per fetch, so one 256 KB leaf held about 2.6 GB | Fetched documents share one compile-wide node and byte budget. | [`aff6564`][aff6564] |
+| `not('a' eq 'A')` and other foldable parents of a comparison were folded under codepoint order, ignoring the default collation | A comparison is not closed to the folder, so its ancestors run under the collation in force. | [`967b27a`][967b27a] |
 
 ### Changed — behaviour
 
@@ -399,6 +440,20 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `xsl:key` entries are bounded per transform | They are totalled across every index against `MaxItems`, so many keyed temporary trees can raise XPDY0130. | [`d06d0f3`][d06d0f3] |
 | c14n XPath transforms use XPath 1.0 rules | A relational comparison of two strings converts both to numbers, as XML-DSig requires. | [`0c70a04`][0c70a04] |
 | Rooted file resolvers refuse UNC and device paths | `//host/…`, `\\host\…`, `file:////host/…` and `\\?\…` fail with "names a network path" on every OS unless a root is on that `\\host\share`. | [`60fed8a`][60fed8a] |
+| `dtd.Validate` checks the root element against the DOCTYPE name | A document whose root is another declared element is now invalid, as XML 1.0 requires. | [`a543265`][a543265] |
+| XPath refuses a chained-operator path over 10,000 nodes deep | XPDY0130 where a deeper expression used to overflow the stack; the longest real chain seen is 190. | [`e965b1f`][e965b1f] |
+| The backtracking regex refuses subjects needing over 50,000 nested calls | FORX0002 (`ErrResourceLimit`), about 25,000 characters under `.*`; only with the backtracker enabled. | [`a97ac65`][a97ac65] |
+| Anchored regexes with large class payloads are refused or not cached | A pattern with more than about 760 copies of `\pL` fails `MaxRegexpProgram`, in facets and XPath alike. | [`d258054`][d258054], [`6ad619f`][6ad619f] |
+| `Flatten` refuses over 16.7M items inside arrays | Even with `MaxItems` raised or -1; `array:flatten` and `fn:data` also charge the host's `MaxItems`. | [`9c19935`][9c19935], [`0d82e86`][0d82e86] |
+| Resource text, JSON, sequence constructors, group-by and windows count against the item, node and byte budgets | Large results can now raise XPDY0130; `unparsed-text-available` raises the budget error instead of answering false. | [`406c6e1`][406c6e1], [`3251f40`][3251f40], [`5423f40`][5423f40], [`11da206`][11da206] |
+| XInclude passes share byte and visit budgets | A pass whose inclusions copy over `MaxBytes`, or whose local searches visit over `MaxNodes`, is refused. | [`ed500f2`][ed500f2] |
+| `Compile` refuses stylesheets whose modules total over 500,000 nodes | Counted across imports, includes, packages and static `fn:transform`; xslTNG needs about 40,000. | [`d0591ae`][d0591ae] |
+| `WithInstanceLocations` binds documents to their namespace and the schema directories | A mismatched namespace, or a local location outside the schema's directories, is an error whatever the resolver. | [`c767803`][c767803] |
+| `\??\` paths are refused as device paths | A local `\??\C:\…` spelling is refused too, as `\\?\C:\` already was. | [`639bcb4`][639bcb4] |
+| XSD `MaxDocuments` is checked before each fetch | A schema set of exactly `MaxDocuments` that repeats a reference after the last is queued is now refused. | [`429b9c6`][429b9c6] |
+| Nilled elements enforce their own identity constraints | A nilled element breaking a key on its own declaration is now invalid, tree and stream. | [`ee8aaa2`][ee8aaa2] |
+| RELAX NG list derivatives and fetched documents are bounded | A list derivative past `MaxPatternSize`, or fetched documents totalling over xdm's single-document limits, are refused. | [`f6079cf`][f6079cf], [`aff6564`][aff6564] |
+| `fn:serialize` map-form doctype parameters are checked | Values the element form refuses (SEPM0016) are refused in the map form too. | [`2f9d010`][2f9d010] |
 
 ## v2.2.0 — 2026-11-01
 
@@ -2650,3 +2705,48 @@ here so every entry in this file sits under a release.
 [77c3c5d]: https://github.com/knroy/go-xml/commit/77c3c5d
 [60fed8a]: https://github.com/knroy/go-xml/commit/60fed8a
 [4c5c3ee]: https://github.com/knroy/go-xml/commit/4c5c3ee
+[0c7f0eb]: https://github.com/knroy/go-xml/commit/0c7f0eb
+[0d82e86]: https://github.com/knroy/go-xml/commit/0d82e86
+[11da206]: https://github.com/knroy/go-xml/commit/11da206
+[282aec6]: https://github.com/knroy/go-xml/commit/282aec6
+[2f9d010]: https://github.com/knroy/go-xml/commit/2f9d010
+[3251f40]: https://github.com/knroy/go-xml/commit/3251f40
+[406c6e1]: https://github.com/knroy/go-xml/commit/406c6e1
+[429b9c6]: https://github.com/knroy/go-xml/commit/429b9c6
+[42ac077]: https://github.com/knroy/go-xml/commit/42ac077
+[4fafb61]: https://github.com/knroy/go-xml/commit/4fafb61
+[5423f40]: https://github.com/knroy/go-xml/commit/5423f40
+[5734988]: https://github.com/knroy/go-xml/commit/5734988
+[639bcb4]: https://github.com/knroy/go-xml/commit/639bcb4
+[69648fe]: https://github.com/knroy/go-xml/commit/69648fe
+[6ad619f]: https://github.com/knroy/go-xml/commit/6ad619f
+[6bb84b2]: https://github.com/knroy/go-xml/commit/6bb84b2
+[75039ea]: https://github.com/knroy/go-xml/commit/75039ea
+[7b3b8cf]: https://github.com/knroy/go-xml/commit/7b3b8cf
+[8211a76]: https://github.com/knroy/go-xml/commit/8211a76
+[8aa67d3]: https://github.com/knroy/go-xml/commit/8aa67d3
+[93f91ae]: https://github.com/knroy/go-xml/commit/93f91ae
+[94aa606]: https://github.com/knroy/go-xml/commit/94aa606
+[952e6d2]: https://github.com/knroy/go-xml/commit/952e6d2
+[967b27a]: https://github.com/knroy/go-xml/commit/967b27a
+[9999789]: https://github.com/knroy/go-xml/commit/9999789
+[9c19935]: https://github.com/knroy/go-xml/commit/9c19935
+[a543265]: https://github.com/knroy/go-xml/commit/a543265
+[a97ac65]: https://github.com/knroy/go-xml/commit/a97ac65
+[aff6564]: https://github.com/knroy/go-xml/commit/aff6564
+[b2fcde5]: https://github.com/knroy/go-xml/commit/b2fcde5
+[b9aebdf]: https://github.com/knroy/go-xml/commit/b9aebdf
+[c1836df]: https://github.com/knroy/go-xml/commit/c1836df
+[c767803]: https://github.com/knroy/go-xml/commit/c767803
+[d0591ae]: https://github.com/knroy/go-xml/commit/d0591ae
+[d258054]: https://github.com/knroy/go-xml/commit/d258054
+[d5e2b0f]: https://github.com/knroy/go-xml/commit/d5e2b0f
+[e21d0c1]: https://github.com/knroy/go-xml/commit/e21d0c1
+[e965b1f]: https://github.com/knroy/go-xml/commit/e965b1f
+[e9e1442]: https://github.com/knroy/go-xml/commit/e9e1442
+[ed4a60f]: https://github.com/knroy/go-xml/commit/ed4a60f
+[ed500f2]: https://github.com/knroy/go-xml/commit/ed500f2
+[ee8aaa2]: https://github.com/knroy/go-xml/commit/ee8aaa2
+[f6079cf]: https://github.com/knroy/go-xml/commit/f6079cf
+[f856400]: https://github.com/knroy/go-xml/commit/f856400
+[fce2d5e]: https://github.com/knroy/go-xml/commit/fce2d5e

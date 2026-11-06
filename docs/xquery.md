@@ -388,7 +388,8 @@ twice and risking the two disagreeing.
 imported schema's own `xs:include` and `xs:import`, so an imported schema can
 reach no further than the query's import was granted. `MaxSchemaBytes` bounds
 the total schema text one compilation reads, cumulatively across every import,
-and exceeding it **fails** the compilation with an error wrapping
+the include and import closure of each, and every library module, and
+exceeding it **fails** the compilation with an error wrapping
 `xdm.ErrResourceLimit` rather than compiling against a truncated schema.
 
 **Not implemented on this path.** Automatic validation of the input: a source

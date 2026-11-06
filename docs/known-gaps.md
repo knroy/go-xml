@@ -167,8 +167,8 @@ reason:
   `xdm.ErrResourceLimit` and no result; a host calling `Node.SetValue`,
   `AppendCopy` or `xdmbuild` methods directly still gets a panic, whose value
   is an error matching `ErrResourceLimit`.
-- **Synchronous streamed grounding still copies ancestor attributes per
-  record.** A one-at-a-time `Ground` cannot share ancestor copies (each copy
+- **Synchronous streamed grounding still copies ancestors per record**
+  (elements and attributes, both counted since round SD). A one-at-a-time `Ground` cannot share ancestor copies (each copy
   is a tree of its own, and a tree that grows after it is handed out is not
   safe), so it is bounded by a refusal past 16M copies at over 64 per record,
   not cured. A cure needs shared growing trees or a `Ground` contract change.
@@ -182,15 +182,46 @@ reason:
   Closing it needs a context-taking variant, which is new exported API (an
   owner decision); it matters only to a verifier that evaluates the filter
   before authenticating the signature.
-- **Audit run-2 (scoped, at `67d70cbc`) left three units deferred:** RELAX NG
-  validation-time cost (`textDeriv`/`listDeriv` run with no `MaxPatternSize`
-  check, `relaxng/derive.go`), the RELAX NG compile-time restriction walk
-  (`followRef` in `relaxng/restrict.go` re-expands a define per `<ref>` with
-  no memo), and a re-check of the sibling resolvers' UNC handling (closed in
-  round SC, untested on a Windows host). Run-1's other deferred units, the
-  lazy caches on concurrency-safe objects and the XPath constant-folding
-  budgets, were reviewed in run-2: the caches are synchronised, and folding
-  was fixed in round SC (see [security](security.md)).
+- **Audit run-2 (scoped, at `67d70cbc`) left three units deferred**, all
+  closed since: the RELAX NG list-derivative `MaxPatternSize` check and the
+  §7 restriction-walk memo in round SD, and the sibling resolvers' UNC
+  handling in round SC (untested on a Windows host). Run-1's other deferred
+  units, the lazy caches on concurrency-safe objects and the XPath
+  constant-folding budgets, were reviewed in run-2: the caches are
+  synchronised, and folding was fixed in round SC (see [security](security.md)).
+
+### Security audit run-3 at `1ef2de62`: what round SD left open (security, resource limits)
+
+Run-3's 46 confirmed findings were fixed in round SD (see the changelog and the
+Twenty-fourth pass in [security](security.md)). These remain, each with the
+reason:
+
+- **`xsl:import-schema` reads its include and import closure uncharged**
+  (`xslt/importschema.go`): XSLT has no schema byte budget, so a fix needs a
+  new `CompileOptions` field, which is new exported API. Each document is
+  still capped by `SchemaParseOptions.MaxBytes`. This was also one of run-3's
+  deferred units.
+- **`xdm.Flatten` and `xdm.ProcessXInclude` take no context**, so neither can
+  be cancelled mid-walk; both are bounded (1<<24 items; pass-wide `MaxBytes`
+  and `MaxNodes`). The CLI's `-timeout` starts after the XInclude pass.
+- **Streamed spine copies are refused only past 16M copies.** Round SD counts
+  elements as well as attributes, but run-3's own example (about 1.8M copies)
+  is still below the floor; lowering it risks a hard error after output has
+  been written, where today a run backs off to the tree.
+- **Other `xdm.Flatten` and `AtomizeChecked` callers** (XSLT serialization and
+  stream paths, `xquery/eval.go`, general comparisons) are bounded by xdm's
+  ceiling, not the host's `MaxItems`; only `array:flatten` and `fn:data`
+  charge it.
+- **`scopeBindings` and `declares` in `xslt/instructions.go` are quadratic in
+  an element's in-scope namespaces** (time only, no retention).
+- **XSD 1.1 subsumption on a long group-ref chain still costs about 1 s per
+  restriction type** after the sort fix.
+- **Withheld and deferred from run-3, still open:** the NT `\??\` prefix fix
+  is untested on a Windows host (string-level tests only); the run-3 deferred
+  units (RELAX NG compact parser and `dtd.Parse` panic review, array walkers
+  in serialize and deep-equal, UTF-16 decoding, RELAX NG XSD-datatype pattern
+  recompile, `xsl:import-schema` limits) need a run-4. `compileMu` and the
+  `c14n.FromXPathFilter` context remain owner decisions (above).
 
 ### Memory: what the footprint round left open (performance)
 
