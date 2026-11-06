@@ -2094,8 +2094,8 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 // XSL 1.79 fo, xslTNG, XSpec) need about 120. A package used on several paths
 // is likewise compiled once per path, since each use may override it
 // differently (3.5.2), so every package read and compile is charged too. A
-// nested compilation started by fn:transform from the static phase spends the
-// outer compilation's remainder (see compileBudget), and is charged one visit
+// nested compilation started by fn:transform spends the remainder of the
+// outer compilation or transform (see compileBudget), and is charged one visit
 // for its principal module, so a stylesheet that transforms itself B times
 // per level cannot multiply the bound by B^K.
 const maxModuleVisits = 10_000
@@ -2116,7 +2116,9 @@ const maxModuleNodes = 500_000
 // minted by compileLocked and shared with every compilation fn:transform
 // starts from the static phase, which runs inside it under the same
 // compileSlot: the house rule that a nested operation spends the parent's
-// remainder rather than restarting it.
+// remainder rather than restarting it. A running transform likewise mints one
+// for the compilations its fn:transform calls start, shared with the
+// transforms those start (transformState.compileBudget).
 //
 // The schema bytes are here for the same reason: a nested compilation spends
 // the outer one's MaxSchemaBytes remainder, under the outer one's bound,

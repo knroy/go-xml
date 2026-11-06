@@ -919,6 +919,9 @@ func (p *staticPhase) staticRuntime() *runtime {
 		sheet:    p.c.sheet,
 		goCtx:    p.c.goCtx(),
 		maxDepth: maxDepth,
+		// A transform this static expression starts spends the Compile's
+		// module budget at run time too. See transformState.compileBudget.
+		compileBudget: p.c.opts.budget,
 	}, depth: p.c.opts.nestedDepth}
 	// Only a ModuleResolver that is also a DocumentResolver can answer
 	// stylesheet-location, which is the same pairing eval already requires
@@ -960,7 +963,7 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 	var staticRT *runtime
 	if processorAtLeast30() {
 		staticRT = p.staticRuntime()
-		registerTransformFuncWith(lib, p.c.opts.budget)
+		registerTransformFunc(lib)
 	} else {
 		// A 2.0 processor runs no nested transformation. Left to the xpath
 		// stub, the call would reach the processor this package's init

@@ -94,6 +94,16 @@ type transformState struct {
 	// under the EvalLock, which nested transforms share. Nil counts nothing.
 	mergeOpen *int
 
+	// compileBudget is the module budget (see compileBudget) that every
+	// stylesheet fn:transform compiles during this transform spends, shared
+	// with the transform that started this one by fn:transform, and with the
+	// Compile a static-phase runtime runs inside. One per transform, not one
+	// per call: a fresh budget per nested compile bounded a stylesheet that
+	// transforms B distinct stylesheets per level, MaxDepth levels deep, by
+	// time alone. A cache hit (nestedCache) compiles nothing and spends
+	// nothing. Read and written under the EvalLock, like mergeOpen.
+	compileBudget *compileBudget
+
 	// accumHeld holds the accumulator values of the snapshots of streamed
 	// merge items (streammerge_accum.go) and of copies of streamed nodes
 	// (streamaccum_ground_l4.go), each while the copy lives (copyTable).
@@ -813,6 +823,17 @@ func mergeOpenOf(ctx *xpath.Context) *int {
 	return new(int)
 }
 
+// compileBudgetOf is the nested-compile budget of the transform whose
+// evaluation ctx is, or a fresh one.
+func compileBudgetOf(ctx *xpath.Context) *compileBudget {
+	if ctx != nil {
+		if p := runtimeOf(ctx); p != nil && p.compileBudget != nil {
+			return p.compileBudget
+		}
+	}
+	return &compileBudget{maxSchemaBytes: DefaultMaxSchemaBytes}
+}
+
 // newRuntime builds a runtime for one transform.
 func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts TransformOptions) (*runtime, error) {
 	maxDepth := opts.MaxDepth
@@ -821,14 +842,16 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	}
 	rt := &runtime{
 		transformState: &transformState{
-			sheet:       s,
-			evalLock:    opts.nestedLock,
-			noGlobal:    opts.noGlobalItem,
-			mergeOpen:   mergeOpenOf(opts.nestedBudget),
-			maxDepth:    maxDepth,
-			keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
-			keyBuilding: map[keyCacheKey]bool{},
-			steps:       xpathleaf.NewStepMemo(),
+			sheet:     s,
+			evalLock:  opts.nestedLock,
+			noGlobal:  opts.noGlobalItem,
+			mergeOpen: mergeOpenOf(opts.nestedBudget),
+			// compileBudget is the caller's when fn:transform started this.
+			compileBudget: compileBudgetOf(opts.nestedBudget),
+			maxDepth:      maxDepth,
+			keyIndex:      map[keyCacheKey]map[string]xdm.Sequence{},
+			keyBuilding:   map[keyCacheKey]bool{},
+			steps:         xpathleaf.NewStepMemo(),
 
 			accumValues:   map[accumCacheKey]*accumulatorValues{},
 			accumBuilding: map[accumCacheKey]*accumulatorValues{},
