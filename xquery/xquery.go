@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xdmbuild"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -327,14 +328,15 @@ func Eval(src string, ctx *xpath.Context, opts Options) (xdm.Sequence, error) {
 // ctx supplies the context item, the variable bindings and the function
 // library, exactly as it does for an XPath expression. A nil function library
 // is legal and means the query may not call anything.
-func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
+func (q *Query) Eval(ctx *xpath.Context) (_ xdm.Sequence, err error) {
+	defer xdmlimit.Recover(&err) // a node constructed past a tree's text blocks
 	if ctx == nil {
 		ctx = xpath.NewContext(nil, xpath.Builtins())
 	}
 	if err := q.checkBodyVars(ctx); err != nil {
 		return nil, err
 	}
-	ctx, err := q.prepare(ctx)
+	ctx, err = q.prepare(ctx)
 	if err != nil {
 		return nil, err
 	}

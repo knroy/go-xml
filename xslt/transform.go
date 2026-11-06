@@ -9,6 +9,7 @@ import (
 	"time"
 	"weak"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
@@ -416,9 +417,9 @@ type Result struct {
 //
 // The Stylesheet is not mutated, so one compiled stylesheet may be used from
 // many goroutines concurrently.
-func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts TransformOptions) (*Result, error) {
+func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts TransformOptions) (_ *Result, err error) {
+	defer xdmlimit.Recover(&err) // a node constructed past a tree's text blocks
 	if opts.SourceValidation != 0 {
-		var err error
 		if source, err = s.validatedSource(source, opts.SourceValidation); err != nil { // streamvalidin.go
 			return nil, err
 		}
@@ -491,7 +492,8 @@ const (
 // the document are those of SourceParseOptions (BaseURI, DocumentURI), as
 // for xdm.Parse; set them for fn:base-uri, fn:document-uri and relative
 // fn:doc references from the document to answer.
-func (s *Stylesheet) TransformReader(ctx context.Context, r io.Reader, opts TransformOptions) (*Result, error) {
+func (s *Stylesheet) TransformReader(ctx context.Context, r io.Reader, opts TransformOptions) (_ *Result, err error) {
+	defer xdmlimit.Recover(&err) // a node constructed past a tree's text blocks
 	// The input is supplied in streamable form, streamed or not (accumdyn_l4.go).
 	opts.readerInput = true
 	opts.noGlobalItem = s.streamedSourceMode(opts)                                 // streamglobal_l7.go

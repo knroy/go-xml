@@ -11,6 +11,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
 
@@ -162,7 +163,8 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 // parse is Parse. whole, when not "", is the text r reads (ParseString's
 // string): if decoding leaves it unchanged it is the source kept for
 // positions and for an entity re-parse, and no copy is made.
-func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
+func parse(r io.Reader, whole string, opts ParseOptions) (_ *Tree, err error) {
+	defer xdmlimit.Recover(&err)
 	step, done := parseSteps(r, whole, opts)
 	defer done()
 	return step()

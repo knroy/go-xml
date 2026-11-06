@@ -2,6 +2,7 @@ package xdm
 
 import (
 	"bytes"
+	"fmt"
 	"iter"
 	"maps"
 	"math"
@@ -13,6 +14,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 	"weak"
+
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 )
 
 // The node record.
@@ -1822,10 +1825,12 @@ const (
 	// keeping a string costs no bytes, so values aliasing one string ran
 	// the store out of blocks. Past it a block holds 16 KB of copied bytes
 	// on average, so the remaining half of them takes a gigabyte.
-	// ponytail: the ceiling itself still panics (newBlock); an error needs a
-	// recover at the entry points or an error return through the builders.
 	textCopyFrom = 1 << (31 - textShift)
 )
+
+// textBlocks is the number of blocks a store addresses (32-textShift bits),
+// a variable so that a test can reach it with small input.
+var textBlocks = 1 << (32 - textShift)
 
 // str returns the value at (off, n).
 func (s *textStore) str(off, n uint32) string {
@@ -2038,8 +2043,11 @@ func (s *textStore) trim() {
 }
 
 func (s *textStore) newBlock(b []byte) {
-	if len(s.blocks) >= 1<<(32-textShift) {
-		panic("xdm: a tree's text exceeds the text store's addressable blocks")
+	if len(s.blocks) >= textBlocks {
+		// The builders have no error return: the entry points recover this
+		// (internal/xdmlimit) and return it.
+		xdmlimit.Refuse(fmt.Errorf("xdm: a tree's text exceeds the text store's %d blocks: %w",
+			textBlocks, ErrResourceLimit))
 	}
 	s.blocks = append(s.blocks, b)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/knroy/go-xml/v2/internal/xdmclone"
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -61,7 +62,8 @@ func (s *Schema) ValidateCopyContext(ctx context.Context, root *xdm.Node,
 // The edits are recorded rather than made because a built tree is never
 // edited: see the defaults, fixups and dropped fields of validator.
 func (s *Schema) typedCopy(ctx context.Context, root *xdm.Node, opts ValidateOptions,
-	check func(*validator, *xdm.Node) error) (*xdm.Node, error) {
+	check func(*validator, *xdm.Node) error) (_ *xdm.Node, err error) {
+	defer xdmlimit.Recover(&err) // a copy past a tree's text blocks
 	whole := root.Kind() == xdm.KindDocument || root.Parent() == nil ||
 		root.Parent().Kind() == xdm.KindDocument
 	v := s.newValidator(ctx, opts)
@@ -76,7 +78,7 @@ func (s *Schema) typedCopy(ctx context.Context, root *xdm.Node, opts ValidateOpt
 	c := copier{root: root, whole: whole, track: true}
 	c.copyTree(topOf(root))
 	v.twins = c.twins
-	err := check(v, c.twin)
+	err = check(v, c.twin)
 	return v.typedResult(c.twin, whole), err
 }
 

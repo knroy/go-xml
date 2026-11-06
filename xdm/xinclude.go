@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 )
 
 // XInclude processing, per XML Inclusions (XInclude) Version 1.0 (Second
@@ -102,7 +104,8 @@ type XIncludeOptions struct {
 // another, and that is what this does: the result is built top-down, in
 // document order, as any tree is, and tree itself is left as it was. Callers
 // use the returned tree; node identities in tree do not carry over.
-func ProcessXInclude(tree *Tree, opts XIncludeOptions) (*Tree, error) {
+func ProcessXInclude(tree *Tree, opts XIncludeOptions) (_ *Tree, err error) {
+	defer xdmlimit.Recover(&err)
 	if tree == nil || tree.Root == nil {
 		return tree, nil
 	}

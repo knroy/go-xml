@@ -40,3 +40,12 @@ func TestTextStorePacksPastHalfTheBlocks(t *testing.T) {
 		t.Errorf("%d distinct 8 KB values took %d blocks, want them packed (at most %d)", k, got, k/3)
 	}
 }
+
+// SetTextBlocks sets the number of blocks a text store addresses, for
+// textceiling_test.go (package xdm_test, which imports xslt and xquery), and
+// returns the function that restores it.
+func SetTextBlocks(n int) func() {
+	old := textBlocks
+	textBlocks = n
+	return func() { textBlocks = old }
+}
