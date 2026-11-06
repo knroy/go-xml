@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -392,8 +393,8 @@ func formatNumberImpl(num *xdm.Atomic, pic string, df *DecimalFormat, v Version)
 		}
 		digits := strconv.Itoa(exp)
 		digits = strings.TrimPrefix(digits, "-")
-		for len(digits) < p.minExp {
-			digits = "0" + digits
+		if len(digits) < p.minExp {
+			digits = strings.Repeat("0", p.minExp-len(digits)) + digits
 		}
 		sb.WriteString(translateDigits(digits, df.ZeroDigit))
 		sb.WriteString(p.expSuffix)
@@ -491,21 +492,17 @@ func splitExponent(runes []rune, df *DecimalFormat) (mantissa, exp []rune, has b
 			r == df.Digit || r == df.PatternSeparator ||
 			r == df.ExponentSeparator || isDigitOfFamily(r, df.ZeroDigit)
 	}
+	// seenActive records whether runes[:i] holds an active character. It is
+	// carried forward rather than rescanned per separator, which made a
+	// picture of many separators quadratic.
+	seenActive := false
 	for i, r := range runes {
-		if r != df.ExponentSeparator {
-			continue
-		}
 		// The separator is a sign only when an active character precedes it
 		// somewhere in the sub-picture. Without this the mantissa handed on
 		// can be empty or digit-free.
-		precededByActive := false
-		for _, q := range runes[:i] {
-			if isActive(q) {
-				precededByActive = true
-				break
-			}
-		}
-		if !precededByActive {
+		precededByActive := seenActive
+		seenActive = seenActive || isActive(r)
+		if r != df.ExponentSeparator || !precededByActive {
 			continue
 		}
 		rest := runes[i+1:]
@@ -840,8 +837,10 @@ func padInt(s string, minInt int, df *DecimalFormat, keepZero bool) string {
 		// so ".5" formats as ".5" rather than "0.5".
 		s = ""
 	}
-	for len([]rune(s)) < minInt {
-		s = "0" + s
+	// One Repeat rather than a "0" per step: the width is the picture's count
+	// of zero-digit signs, and prepending one at a time is quadratic in it.
+	if n := utf8.RuneCountInString(s); n < minInt {
+		s = strings.Repeat("0", minInt-n) + s
 	}
 	return translateDigits(s, df.ZeroDigit)
 }
