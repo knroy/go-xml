@@ -554,3 +554,24 @@ func TestHandBuiltDTDWithoutNameSets(t *testing.T) {
 		t.Errorf("nil name sets must not make everything undeclared: %v", err)
 	}
 }
+
+// SECURITY. XML 1.0 §2.8 VC Root Element Type: the root must be the element
+// the DOCTYPE names. Without the check a document could send any other
+// declared element as its root and skip the named one's required attribute
+// and content model.
+func TestRootElementTypeIsChecked(t *testing.T) {
+	const subset = `<!ELEMENT envelope (item)><!ATTLIST envelope sig CDATA #REQUIRED><!ELEMENT item EMPTY>`
+	if err := check(t, `<!DOCTYPE envelope [`+subset+`]><item/>`); err == nil ||
+		!strings.Contains(err.Error(), "DOCTYPE") {
+		t.Errorf("a root other than the DOCTYPE's was accepted: %v", err)
+	}
+	if err := check(t, `<!DOCTYPE envelope [`+subset+`]><envelope sig="s"><item/></envelope>`); err != nil {
+		t.Errorf("the named root was refused: %v", err)
+	}
+	// Load records the name too.
+	err := loadCheck(t, `<!DOCTYPE envelope SYSTEM "e.dtd"><item/>`,
+		mapOpts(map[string]string{"e.dtd": subset}))
+	if err == nil || !strings.Contains(err.Error(), "DOCTYPE") {
+		t.Errorf("Load: a root other than the DOCTYPE's was accepted: %v", err)
+	}
+}

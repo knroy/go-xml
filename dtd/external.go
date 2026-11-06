@@ -216,6 +216,7 @@ func Load(directive string, opts LoadOptions) (*DTD, error) {
 		}
 		if d != nil {
 			d.HasExternalSubset = hasExternal
+			d.name = doctypeName(head)
 		}
 		return d, nil
 	}
@@ -263,6 +264,7 @@ func Load(directive string, opts LoadOptions) (*DTD, error) {
 	if d != nil {
 		d.HasExternalSubset = true
 		d.ExternalSubset = expandedExternal
+		d.name = doctypeName(head)
 	}
 	return d, nil
 }
