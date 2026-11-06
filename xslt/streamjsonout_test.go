@@ -74,9 +74,14 @@ func TestStreamedJSONWritesThrough(t *testing.T) {
 			ratio := float64(m1.TotalAlloc-m0.TotalAlloc) / float64(got.Len())
 			t.Logf("%d bytes written, %.2f allocated per byte", got.Len(), ratio)
 			// The rest is the cursor's and the writer's own: the xml method,
-			// which holds the string, allocates 8.5.
-			if c.name != "xml" && c.name != "charmap" && ratio > 6 {
-				t.Errorf("%.2f bytes allocated per byte written, want <= 6", ratio)
+			// which holds the string, allocates 8.5. The race detector adds
+			// its own allocations, so the bound doubles under -race.
+			bound := 6.0
+			if raceEnabled {
+				bound *= 2
+			}
+			if c.name != "xml" && c.name != "charmap" && ratio > bound {
+				t.Errorf("%.2f bytes allocated per byte written, want <= %.0f", ratio, bound)
 			}
 		})
 	}
