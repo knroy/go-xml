@@ -71,29 +71,48 @@ const maxCachedProgram = 4096
 // it (a 1 KB key) passed the gate and retained 4 MB per entry. The class
 // payload is therefore added, at ten runes to an instruction (a rune is 4
 // bytes, an instruction about 40).
+//
+// A shared class is counted once, as the ordinary program shares its table,
+// except where regexp also builds a onepass program: that copies the table
+// into every instruction that uses it, so there each use is counted. Counted
+// once, ^\p{L}{990}$ passed the gate and retained 8 MB per entry, and 1024
+// such entries could pin 8 GB in the process-wide cache.
 func cachedProgramTooBig(re *regexp.Regexp) bool {
 	p, err := syntax.Parse(re.String(), syntax.Perl)
 	if err != nil {
 		return false
 	}
 	s := p.Simplify()
-	return progSize(s, map[*syntax.Regexp]int{})+classRunes(s, map[*syntax.Regexp]bool{})/10 > maxCachedProgram
+	return progSize(s, map[*syntax.Regexp]int{})+
+		classRunes(s, map[*syntax.Regexp]int{}, onepassEligible(s))/10 > maxCachedProgram
 }
 
-// classRunes sums the rune tables of the distinct classes in re. A node that
-// Simplify shares between the copies of x{n} is counted once, as the compiled
-// program shares its table.
-func classRunes(re *syntax.Regexp, seen map[*syntax.Regexp]bool) int {
-	if seen[re] {
+// onepassEligible reports whether regexp may build a onepass program for s:
+// one anchored at the start of the text and under 1000 instructions, which
+// are the conditions regexp's compileOnePass checks before it tries.
+func onepassEligible(s *syntax.Regexp) bool {
+	prog, err := syntax.Compile(s)
+	return err == nil && len(prog.Inst) < 1000 &&
+		prog.StartCond()&syntax.EmptyBeginText != 0
+}
+
+// classRunes sums the rune tables of the classes in re. With perUse false a
+// node that Simplify shares between the copies of x{n} is counted once;
+// with perUse true it is counted at every use.
+func classRunes(re *syntax.Regexp, memo map[*syntax.Regexp]int, perUse bool) int {
+	if n, ok := memo[re]; ok {
+		if perUse {
+			return n
+		}
 		return 0
 	}
-	seen[re] = true
 	n := 0
 	if re.Op == syntax.OpCharClass {
 		n = len(re.Rune)
 	}
 	for _, s := range re.Sub {
-		n += classRunes(s, seen)
+		n += classRunes(s, memo, perUse)
 	}
+	memo[re] = n
 	return n
 }
