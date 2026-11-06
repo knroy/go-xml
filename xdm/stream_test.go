@@ -296,3 +296,32 @@ func TestDriveLeafTakesTheShortWay(t *testing.T) {
 		t.Fatalf("%d leaves told, %d by the walk, %d trimLeaves calls", c.leaves, bs.leafWalks, bs.trims)
 	}
 }
+
+// Every element a stream read element by element is told the end of is taken
+// back in place (dropElement): its content is gone by then, so it is the
+// tree's last records, and RemoveLastChild's clean-up (map deletes, the
+// namespace table's lock) has nothing to do. With positions tracked there
+// are source tables to clear, and every element goes the general way.
+func TestDriveDropsElementsInPlace(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<a xmlns:p='urn:p'>")
+	for i := range 1000 {
+		fmt.Fprintf(&b, "<r i='%d' p:j='x'><s>t</s><p:e/></r>\n", i)
+	}
+	b.WriteString("</a>")
+	for _, track := range []bool{false, true} {
+		c := &keepAll{}
+		bs := driver(c)
+		tree, err := parse(strings.NewReader(b.String()), "", ParseOptions{bursts: bs, TrackPositions: track})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 3*1000 + 1
+		if track {
+			want = 0
+		}
+		if bs.elemDrops != want || tree.n > 1 {
+			t.Fatalf("track=%v: %d elements dropped in place (want %d), %d records left", track, bs.elemDrops, want, tree.n)
+		}
+	}
+}

@@ -143,6 +143,9 @@ type burster struct {
 	// leafDrops counts the leaves dropLeaf took back, for the test that
 	// keeps them off RemoveLastChild's general path.
 	leafDrops int
+	// elemDrops counts the elements dropElement took back, for the test
+	// that keeps them off it too.
+	elemDrops int
 	// trims counts the calls of trimLeaves, and leafWalks the leaves told
 	// by its general walk (tellFrom), for the test that keeps the common
 	// case off both.
@@ -646,6 +649,8 @@ func (b *burster) discardLast(p *Node, spaces *spaceTable, names *nameCache) {
 	n := p.tree.n
 	if dropLeaf(p) {
 		b.leafDrops++
+	} else if dropElement(p) {
+		b.elemDrops++
 	} else {
 		p.RemoveLastChild()
 	}
@@ -687,6 +692,39 @@ func dropLeaf(p *Node) bool {
 	}
 	p.v1 = c.prev
 	t.n--
+	return true
+}
+
+// dropElement takes back p's last child, as RemoveLastChild does, when that
+// is an element closed with all its records the tree's last, p is the deepest
+// node being built, and nothing outside the array holds any of those records:
+// no source tables, no base URI, typing or many-attribute count, and no
+// namespace node made for the tree. It reports whether it did; a stream parse
+// drops every element it is told the end of here.
+func dropElement(p *Node) bool {
+	t := p.tree
+	if t.source != nil || t.frozen || p.flags&fSide != 0 || p.v1 == noIdx ||
+		len(t.open) == 0 || t.open[len(t.open)-1] != p.self {
+		return false
+	}
+	c := t.rec(p.v1)
+	if c.kind != uint8(KindElement) || c.end != t.n {
+		return false
+	}
+	for i := c.self; i < t.n; i++ {
+		r := t.rec(i)
+		if r.flags&(fBase|fTyped|fManyAttrs) != 0 || r.kind == uint8(KindDocument) {
+			return false
+		}
+	}
+	t.sideMu.Lock() // the sweep cleanup writes t.side
+	side := t.side != nil
+	t.sideMu.Unlock()
+	if side {
+		return false
+	}
+	p.v1 = c.prev
+	t.n = c.self
 	return true
 }
 
