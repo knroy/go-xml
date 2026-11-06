@@ -400,11 +400,14 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 	return loadFiles(paths, opts, nil)
 }
 
-// loadFiles is LoadFiles for two or more paths. wantNS, keyed by index into
-// paths, names the target namespace a document must declare ("" for none):
-// WithInstanceLocations sets it for each document an instance named, so the
-// namespace its policy allowed is the one the document actually defines.
-func loadFiles(paths []string, opts Options, wantNS map[int]string) (*Schema, error) {
+// loadFiles is LoadFiles for two or more paths. named, keyed by index into
+// paths, marks the documents WithInstanceLocations added for an instance, with
+// the location and namespace the instance gave. Such a document is a hint
+// (§4.3.2): one the resolver cannot supply, or that does not define the
+// namespace the policy allowed it for, is declined and skipped, and an error
+// about one quotes the instance's own location rather than the host path it
+// was joined into.
+func loadFiles(paths []string, opts Options, named map[int]instanceLocation) (*Schema, error) {
 	if opts.Resolver == nil {
 		// As in LoadFile, confined to what the caller named. Several
 		// paths may sit in several directories, so the grant is the set
@@ -432,7 +435,16 @@ func loadFiles(paths []string, opts Options, wantNS map[int]string) (*Schema, er
 		if err := a.admitFetch(); err != nil {
 			return nil, err
 		}
+		inst, isInst := named[i]
 		rc, resolved, err := opts.Resolver.Resolve("", path, "")
+		if isInst && (err != nil || rc == nil) {
+			// A hint that cannot be followed is not taken, as for an
+			// xs:import whose location does not resolve.
+			if rc != nil {
+				rc.Close()
+			}
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -442,16 +454,19 @@ func loadFiles(paths []string, opts Options, wantNS map[int]string) (*Schema, er
 		tree, err := xdm.Parse(rc, schemaParseOptions(rc, opts.ParseOptions))
 		rc.Close()
 		if err != nil {
-			return nil, fmt.Errorf("parsing schema %q: %w", path, err)
+			shown := path
+			if isInst {
+				shown = inst.location
+			}
+			return nil, fmt.Errorf("parsing schema %q: %w", shown, err)
 		}
 		// The check src-import.3.1 makes for an xs:import: without it an
 		// instance could pair a namespace its policy allows with a
-		// document defining components in one it does not.
-		if want, ok := wantNS[i]; ok {
-			if got, has := targetNSOf(tree.Root); has != (want != "") || got != want {
-				return nil, fmt.Errorf(
-					"the instance names %q for namespace %q, but the "+
-						"document has target namespace %q", path, want, got)
+		// document defining components in one it does not. Such a
+		// document is declined like a namespace the policy refuses.
+		if isInst {
+			if got, has := targetNSOf(tree.Root); has != (inst.namespace != "") || got != inst.namespace {
+				continue
 			}
 		}
 		// A document named directly by the caller adopts no namespace, so

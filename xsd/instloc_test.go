@@ -1,7 +1,6 @@
 package xsd
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,7 +207,9 @@ func TestInstanceLocationKeyStatsOnlySchemaDirs(t *testing.T) {
 // The policy allows namespaces, and the check ran on the pair's namespace
 // text alone, so pairing an allowed namespace with a document defining
 // another let the instance supply declarations the policy never allowed.
-// xs:import makes the same check (src-import.3.1).
+// xs:import makes the same check (src-import.3.1). The location is a hint
+// (§4.3.2), so a document that fails it is declined, not an error: nothing
+// from it is added, and the rest of the instance's locations still apply.
 func TestInstanceLocationMustDefineItsNamespace(t *testing.T) {
 	dir, main := writeSchemaSet(t)
 	if err := os.WriteFile(filepath.Join(dir, "evil.xsd"), []byte(`
@@ -248,13 +249,15 @@ func TestInstanceLocationMustDefineItsNamespace(t *testing.T) {
 			t.Fatal(err)
 		}
 		ext, err := s.WithInstanceLocations(tree.Root, policy, Options{})
-		if err == nil {
-			t.Errorf("%s: extended without error; Validate = %v",
-				doc, ext.Validate(tree.Root, ValidateOptions{}))
+		if err != nil {
+			t.Errorf("%s: a declined location failed the call: %v", doc, err)
 			continue
 		}
-		if !strings.Contains(err.Error(), "target namespace") {
-			t.Errorf("%s: error %q is not the namespace mismatch", doc, err)
+		if len(ext.Elements) != len(s.Elements) {
+			t.Errorf("%s: the declined document added components: %v", doc, ext.Elements)
+		}
+		if ext.Validate(tree.Root, ValidateOptions{}) == nil {
+			t.Errorf("%s: validated against the declined document", doc)
 		}
 	}
 	// The matching pair is still followed.
@@ -274,7 +277,8 @@ func TestInstanceLocationMustDefineItsNamespace(t *testing.T) {
 // A local location the instance names must lie inside the schema's own
 // directories whatever resolver is supplied. An unrooted FileResolver stands
 // in here for xsdnet.HTTPResolver with no Files, which reads every local
-// location through one.
+// location through one. A location outside is declined like any other the
+// policy refuses (§4.3.2 makes it a hint): the resolver is never asked for it.
 func TestInstanceLocationConfinedWhateverResolver(t *testing.T) {
 	_, main := writeSchemaSet(t)
 	outside := t.TempDir()
@@ -300,13 +304,48 @@ func TestInstanceLocationConfinedWhateverResolver(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = s.WithInstanceLocations(tree.Root, InstanceLocationPolicy{
+		r := &countingResolver{Resolver: &FileResolver{}}
+		ext, err := s.WithInstanceLocations(tree.Root, InstanceLocationPolicy{
 			AllowNoNamespace: true,
-			Resolver:         &FileResolver{},
+			Resolver:         r,
 		}, Options{})
-		if !errors.Is(err, errRefusedByPolicy) {
-			t.Errorf("%s: WithInstanceLocations = %v, want the confinement refusal", loc, err)
+		if err != nil {
+			t.Errorf("%s: a declined location failed the call: %v", loc, err)
+			continue
 		}
+		if r.fetches != 0 {
+			t.Errorf("%s: the resolver was asked %d times", loc, r.fetches)
+		}
+		if ext.Validate(tree.Root, ValidateOptions{}) == nil {
+			t.Errorf("%s: validated against a document outside the schema directory", loc)
+		}
+	}
+}
+
+// An error about a document the instance named quotes the location the
+// instance wrote, never the host path it was joined into.
+func TestInstanceLocationErrorQuotesOnlyTheLocation(t *testing.T) {
+	dir, main := writeSchemaSet(t)
+	if err := os.WriteFile(filepath.Join(dir, "broken.xsd"), []byte("<xs:schema"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFiles([]string{main}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := xdm.ParseString(`<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`+
+		` xsi:noNamespaceSchemaLocation="broken.xsd"><x>1</x></doc>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.WithInstanceLocations(tree.Root, InstanceLocationPolicy{AllowNoNamespace: true}, Options{})
+	if err == nil {
+		t.Fatal("a malformed document the instance named loaded")
+	}
+	abs, _ := filepath.Abs(dir)
+	if !strings.Contains(err.Error(), `"broken.xsd"`) ||
+		strings.Contains(err.Error(), dir) || strings.Contains(err.Error(), abs) {
+		t.Errorf("error %q should quote only the instance's location", err)
 	}
 }
 

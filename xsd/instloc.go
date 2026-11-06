@@ -55,7 +55,7 @@ type InstanceLocationPolicy struct {
 	// FileResolver rooted at the directories the schema was loaded from.
 	//
 	// Whatever the resolver, a location that is not remote must lie inside
-	// those directories, or WithInstanceLocations refuses it before the
+	// those directories, or WithInstanceLocations declines it before the
 	// resolver is asked: an HTTPResolver with no Files reads local
 	// locations through an unrooted FileResolver, and would otherwise open
 	// any path the instance named. A caller following untrusted documents
@@ -81,10 +81,13 @@ type InstanceLocationPolicy struct {
 // so declining to take it is not a fault in the document; a reference that
 // really needed the components still fails, at the reference.
 //
-// Each document must define the namespace it was named for: one named in an
-// xsi:schemaLocation pair must have that pair's namespace as its target
-// namespace, and one named by xsi:noNamespaceSchemaLocation must have none.
-// The policy allows namespaces, so a document defining any other is refused.
+// The same holds for every other location this declines: a local one outside
+// the directories the schema was loaded from, which is never opened; one the
+// resolver cannot supply; and a document that does not define the namespace
+// it was named for. One named in an xsi:schemaLocation pair must have that
+// pair's namespace as its target namespace, and one named by
+// xsi:noNamespaceSchemaLocation must have none. The policy allows namespaces,
+// so a document defining any other is never added.
 func (s *Schema) WithInstanceLocations(root *xdm.Node, policy InstanceLocationPolicy, opts Options) (*Schema, error) {
 	locs := instanceLocations(root, policy)
 	if len(locs) == 0 {
@@ -165,30 +168,32 @@ func (s *Schema) WithInstanceLocations(root *xdm.Node, policy InstanceLocationPo
 			dirs = append(dirs, d)
 		}
 	}
-	wantNS := map[int]string{}
+	named := map[int]instanceLocation{}
 	for _, l := range locs {
 		full, err := instanceLocalPath(l.location, base, dirs)
 		if err != nil {
-			return nil, err
+			// Declined, like a namespace the policy refuses.
+			continue
 		}
 		if key := instanceLocationKey(&canon, dirs, full); have[key] {
 			continue
 		} else {
 			have[key] = true
 		}
-		wantNS[len(paths)] = l.namespace
+		named[len(paths)] = l
 		paths = append(paths, full)
 	}
 	if len(paths) == len(s.sourcePaths) {
-		// Every location named a document already loaded.
+		// Every location was declined or named a document already loaded.
 		return s, nil
 	}
-	return loadFiles(paths, opts, wantNS)
+	return loadFiles(paths, opts, named)
 }
 
 // instanceLocalPath returns the location LoadFiles is given for loc, an
 // instance-supplied location, and refuses one that is not remote and does not
 // lie inside dirs, the absolute directories the schema was loaded from.
+// WithInstanceLocations declines a refused location rather than failing.
 //
 // The check is made here rather than left to the resolver because the
 // resolver may not be confined: HTTPResolver with no Files reads local
