@@ -506,6 +506,27 @@ func TestFromXPathEnvelopedSignature(t *testing.T) {
 	}
 }
 
+// XML-DSig transforms are XPath 1.0, where a relational comparison of two
+// attribute values converts both to numbers: "10" < "9" is false. Under plain
+// XPath 2.0 the untyped operands compare as strings and it is true.
+func TestXPathTransformsUseXPath10Comparison(t *testing.T) {
+	doc := parse(t, `<r><i p="10" m="9">A</i><i p="5" m="9">B</i></r>`)
+	set, err := FromXPathFilter(doc, `not(ancestor-or-self::i[@p < @m])`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := canonSet(t, set, Inclusive10), `<r><i m="9" p="10">A</i></r>`; got != want {
+		t.Errorf("FromXPathFilter:\n got %q\nwant %q", got, want)
+	}
+	set, err = FromXPath(doc, `//i[@p < @m]`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := canonSet(t, set, Inclusive10), `<i></i>`; got != want {
+		t.Errorf("FromXPath:\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestFromXPathErrors(t *testing.T) {
 	doc := parse(t, `<a xml:lang="en"><b/></a>`)
 	if _, err := FromXPath(doc, "((", nil); err == nil {
