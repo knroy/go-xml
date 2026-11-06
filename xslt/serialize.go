@@ -2718,6 +2718,18 @@ func checkOutputSettings(opts OutputSettings, seq xdm.Sequence) error {
 			"but the output version is 1.0")
 	}
 
+	// standalone is written into the XML declaration as it stands, and an
+	// xsl:result-document AVT computes it at run time, after the static
+	// yes/no/omit check: a value holding `"?>` ended the declaration and
+	// put a document type declaration of the document's choosing in the
+	// prolog. Only the values the parameter has are accepted.
+	switch opts.Standalone {
+	case "", "omit", "yes", "no":
+	default:
+		return fmt.Errorf("SEPM0016: standalone value %q is not yes, no "+
+			"or omit", opts.Standalone)
+	}
+
 	// standalone and a document type declaration both live in the prolog,
 	// which omit-xml-declaration removes. Honouring both would mean writing
 	// a declaration that was asked to be omitted.
