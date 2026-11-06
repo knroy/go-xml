@@ -44,20 +44,22 @@ func (c *groundAt) End(_ any, _ int, g any) error {
 func (c *groundAt) Watch(any, int, bool, uint64) {}
 func (c *groundAt) Later(any) error              { return nil }
 
-// Each grounded copy carries its ancestors' attributes: past the floor, a
-// parse that copies more than spineAttrsPerRecord of them for each record
-// grounded is refused (a ResourceLimit), where one at the rate passes and
-// ancestors of no attributes are not counted.
+// Each grounded copy carries its ancestors and their attributes: past the
+// floor, a parse that copies more than spineCopiesPerRecord of them (the
+// document node, the elements, the attributes) for each record grounded is
+// refused (a ResourceLimit), where one at the rate passes, of attributes or
+// of attribute-free ancestors alike.
 func TestDriveGroundSpineAttrsRefused(t *testing.T) {
-	defer func(f int) { spineAttrsFloor = f }(spineAttrsFloor)
-	spineAttrsFloor = 1000
+	defer func(f int) { spineCopiesFloor = f }(spineCopiesFloor)
+	spineCopiesFloor = 1000
 	for _, c := range []struct {
 		depth, s, n int
 		refused     bool
 	}{
-		{0, spineAttrsPerRecord, 100, false},
-		{0, 4 * spineAttrsPerRecord, 100, true},
-		{50, 0, 100, false},
+		{0, spineCopiesPerRecord - 2, 100, false}, // the document node and r
+		{0, 4 * spineCopiesPerRecord, 100, true},
+		{spineCopiesPerRecord - 2, 0, 100, false},
+		{4 * spineCopiesPerRecord, 0, 100, true},
 	} {
 		g := &groundAt{d: c.depth + 2}
 		bs := driver(g)
@@ -65,8 +67,8 @@ func TestDriveGroundSpineAttrsRefused(t *testing.T) {
 		if refused := errors.Is(err, ErrResourceLimit); refused != c.refused || err != nil && !refused {
 			t.Errorf("depth %d, %d attributes: %v, want refused %v", c.depth, c.s, err, c.refused)
 		}
-		if !c.refused && (g.grounded != c.n || bs.spineAttrs != c.s*c.n) {
-			t.Errorf("depth %d, %d attributes: %d grounded, %d attributes copied", c.depth, c.s, g.grounded, bs.spineAttrs)
+		if want := (c.depth + 2 + c.s) * c.n; !c.refused && (g.grounded != c.n || bs.spineCopies != want) {
+			t.Errorf("depth %d, %d attributes: %d grounded, %d ancestors copied, want %d", c.depth, c.s, g.grounded, bs.spineCopies, want)
 		}
 	}
 }

@@ -108,12 +108,10 @@ type burster struct {
 	gen  uint64
 	// batch holds the small bursts not yet delivered (burstBatch), or is nil.
 	batch *burstBatch
-	// spineCopies counts the records copied as ancestors of a burst, for
-	// the test that keeps it in proportion to the elements read.
-	spineCopies int
-	// spineAttrs counts the attributes copied with those ancestors, and
-	// burstRecs the records of the bursts themselves (spineAttrsPerRecord).
-	spineAttrs, burstRecs int
+	// spineCopies counts the records copied as ancestors of a burst (the
+	// document node, the spine's elements and their attributes), and
+	// burstRecs the records of the bursts themselves (spineCopiesPerRecord).
+	spineCopies, burstRecs int
 	// moved is the first of the parse's chunks the last burst's tree took
 	// over, or 0.
 	moved int
@@ -786,7 +784,7 @@ func (b *burster) take(el *Node) error {
 			return err
 		}
 		g := b.deliver(el)
-		if err := b.spineAttrsCheck(); err != nil {
+		if err := b.spineCopiesCheck(); err != nil {
 			return err
 		}
 		if !b.later {
@@ -796,7 +794,7 @@ func (b *burster) take(el *Node) error {
 		return b.fn(g)
 	}
 	b.add(el)
-	if err := b.spineAttrsCheck(); err != nil {
+	if err := b.spineCopiesCheck(); err != nil {
 		return err
 	}
 	if bt := b.batch; int(bt.t.n) >= max(burstBatchRecords, 4*bt.spine) ||
@@ -807,22 +805,23 @@ func (b *burster) take(el *Node) error {
 }
 
 // Each burst's tree holds copies of its ancestors with their attributes, so
-// bursts under an element of many attributes cost bursts x attributes where
-// the tree costs bursts + attributes. Past spineAttrsFloor attributes so
-// copied, a parse that has copied more than spineAttrsPerRecord for each
-// record of its bursts is refused.
+// bursts under an element of many attributes, or under a deep spine, cost
+// bursts x (depth + attributes) where the tree costs bursts + depth +
+// attributes. Past spineCopiesFloor records so copied, elements and
+// attributes alike, a parse that has copied more than spineCopiesPerRecord
+// for each record of its bursts is refused.
 //
 // ponytail: a refusal, not a cure; sharing the ancestors' copies between
 // trees handed out one by one (Ground) would need trees that grow after.
-const spineAttrsPerRecord = 64
+const spineCopiesPerRecord = 64
 
-var spineAttrsFloor = 1 << 24 // a var for the test
+var spineCopiesFloor = 1 << 24 // a var for the test
 
-func (b *burster) spineAttrsCheck() error {
-	if b.spineAttrs > spineAttrsFloor && b.spineAttrs > spineAttrsPerRecord*b.burstRecs {
+func (b *burster) spineCopiesCheck() error {
+	if b.spineCopies > spineCopiesFloor && b.spineCopies > spineCopiesPerRecord*b.burstRecs {
 		return fmt.Errorf(
-			"parse XML: streaming copied %d ancestor attributes for %d records, more than %d per record: %w",
-			b.spineAttrs, b.burstRecs, spineAttrsPerRecord, ErrResourceLimit)
+			"parse XML: streaming copied %d ancestor nodes for %d records, more than %d per record: %w",
+			b.spineCopies, b.burstRecs, spineCopiesPerRecord, ErrResourceLimit)
 	}
 	return nil
 }
@@ -914,7 +913,6 @@ func (b *burster) add(el *Node) {
 		e.end, e.v1 = openEnd, noIdx
 		bt.path, bt.gens = append(bt.path, j), append(bt.gens, b.gens.at(k))
 		b.spineCopies += 1 + int(s.attrCount())
-		b.spineAttrs += int(s.attrCount())
 		bt.spine += 1 + int(s.attrCount())
 		k++
 	}
@@ -1075,7 +1073,6 @@ func (b *burster) deliver(el *Node) *Node {
 		}
 	}
 	b.spineCopies += int(el.self)
-	b.spineAttrs += int(el.self) - b.gens.len() // less the document node and the elements
 	c.tree.XMLVersion = "1.0"
 	if b.v11 {
 		c.tree.XMLVersion = "1.1"
