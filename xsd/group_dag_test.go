@@ -3,6 +3,7 @@ package xsd
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -154,5 +155,44 @@ func TestGroupCyclesStillDetected(t *testing.T) {
 		if _, err := Load(st.Root, "", Options{}); err == nil {
 			t.Errorf("%s: circular group accepted, want mg-props-correct.2", tc.name)
 		}
+	}
+}
+
+// restrictedDAGSchema is dagSchema with a type R restricting a base B whose
+// content is the same group DAG, so Particle Valid (Restriction) walks it.
+func restrictedDAGSchema(n int) string {
+	return strings.Replace(dagSchema(n), `<xs:element name="root"`,
+		`<xs:complexType name="B"><xs:sequence><xs:group ref="t:g0"/></xs:sequence></xs:complexType>`+
+			`<xs:complexType name="R"><xs:complexContent><xs:restriction base="t:B">`+
+			`<xs:sequence><xs:group ref="t:g0"/></xs:sequence></xs:restriction></xs:complexContent></xs:complexType>`+
+			`<xs:element name="root"`, 1)
+}
+
+// The restriction check flattens nested same-compositor groups, and on a
+// group DAG the flattened list has one member per path: 1.19 GB for the
+// 2.8 KB schema at n=22, allocated before the position budget refused it.
+// It must now be refused, as a resource limit, before that allocation.
+func TestRestrictedGroupDAGRefusedBeforeFlattening(t *testing.T) {
+	st, err := xdm.ParseString(restrictedDAGSchema(8), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(st.Root, "", Options{}); err != nil {
+		t.Fatalf("n=8 restricts its base within the position budget and must load: %v", err)
+	}
+	st, err = xdm.ParseString(restrictedDAGSchema(22), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, lerr := Load(st.Root, "", Options{})
+	runtime.ReadMemStats(&after)
+	if !errors.Is(lerr, xdm.ErrResourceLimit) {
+		t.Fatalf("n=22: Load = %v, want a refusal wrapping ErrResourceLimit", lerr)
+	}
+	if got := after.TotalAlloc - before.TotalAlloc; got > 32<<20 {
+		t.Errorf("n=22: refusing the restriction allocated %d MB, want under 32 MB: "+
+			"the group DAG was flattened before the budget applied", got>>20)
 	}
 }
