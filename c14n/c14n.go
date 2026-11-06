@@ -45,6 +45,7 @@ package c14n
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"hash"
@@ -440,12 +441,18 @@ func Func(root *xdm.Node, f func(*xdm.Node) bool) NodeSet { return funcSet{root,
 // documentation. ExcludeSubtree is faster and should be preferred where it
 // applies.
 func FromXPath(doc *xdm.Node, expr string, ns map[string]string) (NodeSet, error) {
+	return FromXPathContext(context.Background(), doc, expr, ns)
+}
+
+// FromXPathContext is FromXPath with a context.Context: cancelling ctx stops
+// the evaluation, which then returns an error wrapping ctx.Err().
+func FromXPathContext(ctx context.Context, doc *xdm.Node, expr string, ns map[string]string) (NodeSet, error) {
 	c, err := xpath.Compile(expr, prefixMap(ns))
 	if err != nil {
 		return nil, err
 	}
 	c = c.WithCompatMode(true) // XML-DSig transforms are XPath 1.0
-	seq, err := c.Eval(xpath.NewContext(doc, xpath.Builtins()))
+	seq, err := c.Eval(filterContext(ctx, doc))
 	if err != nil {
 		return nil, err
 	}
@@ -489,21 +496,44 @@ type NamespaceSet interface {
 // declarations follow their elements. The filter is compiled as XPath 2.0
 // and evaluated in XPath 1.0 compatibility mode, with ns supplying its prefix
 // bindings; the XML-DSig here() function is not provided.
+//
+// The filter is compiled once, and every per-node evaluation spends one
+// shared item and byte budget (xpath.MaxItems, xpath.MaxBytes), so a filter
+// whose work per node is small but whose total is not is refused with an
+// error carrying xdm.ErrResourceLimit. Use FromXPathFilterContext to bound
+// the time as well.
 func FromXPathFilter(doc *xdm.Node, filter string, ns map[string]string) (NodeSet, error) {
+	return FromXPathFilterContext(context.Background(), doc, filter, ns)
+}
+
+// FromXPathFilterContext is FromXPathFilter with a context.Context: ctx
+// reaches every per-node evaluation, so cancelling it stops the whole filter
+// within one node's evaluation, and the error returned wraps ctx.Err().
+func FromXPathFilterContext(ctx context.Context, doc *xdm.Node, filter string, ns map[string]string) (NodeSet, error) {
 	c, err := xpath.Compile(filter, prefixMap(ns))
 	if err != nil {
 		return nil, err
 	}
 	c = c.WithCompatMode(true) // XML-DSig transforms are XPath 1.0
 	root := top(doc)
-	seq, err := allNodes.Eval(xpath.NewContext(root, xpath.Builtins()))
+	// One context for the whole filter: the per-node evaluations are focus
+	// changes on it, so they share its cancellation and, held, its item and
+	// byte counters, instead of each minting a fresh allowance.
+	base := filterContext(ctx, root).HoldItemBudget().HoldByteBudget()
+	seq, err := allNodes.Eval(base)
 	if err != nil {
 		return nil, err
 	}
 	set := filterSet{root: root, nodes: map[*xdm.Node]bool{}, ns: map[nsKey]bool{}}
 	for _, it := range seq {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("c14n: XPath filter: %w", err)
+		}
 		n := it.(*xdm.Node) // a union of path expressions yields only nodes
-		keep, err := c.EvalBool(xpath.NewContext(n, xpath.Builtins()))
+		if onFilterNode != nil {
+			onFilterNode(n)
+		}
+		keep, err := c.EvalBool(base.WithFocus(n, 1, 1))
 		if err != nil {
 			return nil, err
 		}
@@ -517,6 +547,24 @@ func FromXPathFilter(doc *xdm.Node, filter string, ns map[string]string) (NodeSe
 	}
 	return set, nil
 }
+
+// filterContext is the evaluation context FromXPathContext and
+// FromXPathFilterContext start from, carrying ctx's cancellation.
+func filterContext(ctx context.Context, item *xdm.Node) *xpath.Context {
+	return xpath.NewContext(item, xpath.Builtins(), func(e *xpath.Env) {
+		e.Ctx = ctx
+		if testEnv != nil {
+			testEnv(e)
+		}
+	})
+}
+
+// Test hooks: testEnv adjusts the filter's environment (a smaller budget),
+// onFilterNode observes each node FromXPathFilterContext evaluates.
+var (
+	testEnv      func(*xpath.Env)
+	onFilterNode func(*xdm.Node)
+)
 
 // allNodes is XML-DSig's input node-set for a same-document XPath Filter:
 // every node of the document, namespace nodes included.
