@@ -753,7 +753,7 @@ func fixupNamespacesIn(f *nsFrame, el *xdm.Node) {
 		}
 		el.AddNamespace(prefix, uri)
 	}
-	if el.Name().URI == "" && el.Name().Prefix == "" && scopeIn(f, el, "") != "" {
+	if undeclaresDefault(f, el) {
 		// An unprefixed name in no namespace UNDECLARES the default
 		// namespace when one is in scope: without the undeclaration the name
 		// would read as being in whatever the parent declares. This is the
@@ -900,7 +900,7 @@ func fixupMayBindIn(f *nsFrame, el *xdm.Node, prefix string) bool {
 		return false
 	}
 	if el.Name().URI == "" {
-		return prefix == "" && scopeIn(f, el, "") != ""
+		return prefix == "" && undeclaresDefault(f, el)
 	}
 	return el.Name().URI != xdm.NSXML && scopeIn(f, el, prefix) != el.Name().URI
 }
@@ -1039,7 +1039,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := execBlocking(rt, i.noInherit, i.body, sub, node, shared, local); err != nil {
 			return err
 		}
-		if i.noNamespaces {
+		if i.noNamespaces || node.Name().URI == "" && node.Name().Prefix == "" {
 			// §5.8.3 namespace fixup still applies: dropping the source's
 			// namespace nodes does not license a tree where the copy's own
 			// name, or an attribute name the body wrote, has no namespace
@@ -1049,9 +1049,12 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// namespace axis reads the tree, and in-scope-prefixes() on the
 			// copy answered with only the bindings it inherited from wherever
 			// it landed. si-copy-020 and si-copy-026 ask exactly that.
-			// xsl:element already repairs its result this way; xsl:copy did
-			// not, because with copy-namespaces="yes" the copied nodes cover
-			// every name and there was nothing left to repair.
+			// xsl:element already repairs its result this way. With
+			// copy-namespaces="yes" the copied nodes cover every name but an
+			// unprefixed one in no namespace: the source's xmlns="" is no
+			// namespace node to copy, so the copy must undeclare the default
+			// it would inherit (XDM 3.1 §6.2, element nodes: no default namespace node on
+			// an element whose name is in no namespace).
 			fixupNamespacesIn(rt.ns, sub.Open())
 		}
 		// The copy is assessed once it is complete, since validity is a

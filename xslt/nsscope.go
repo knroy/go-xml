@@ -17,10 +17,17 @@ import (
 // for it and, for a shallow copy, its source's bindings, so that its
 // children read their parent's answers. Shallower results walk as before:
 // their walks are short, and a frame per element would cost each of them.
+//
+// Eight, not 32: a frame costs an allocation (32 B) per element whose body
+// runs, about 3% of a transform's time, but a walk costs a step per level
+// for every element under the frameless levels. 100 000 leaves under 28
+// levels of p:e literal result elements or xsl:copy took 14-18% longer with
+// frames from 32 than from 8; from 8 the two agree to within noise for
+// 1-7 levels, which have no frames, tie at 10 and are 3-11% faster from 13.
 
 // nsFrameDepth is the apply-templates depth from which result elements get
 // frames (a variable for the tests, which give every element one).
-var nsFrameDepth = 32
+var nsFrameDepth = 8
 
 // nsFrame is el, a result element whose body is running; src, for a shallow
 // copy, is the source element copied. x, made only when there is something
@@ -48,8 +55,9 @@ func (f *nsFrame) all() []nsBinding {
 }
 
 const (
-	lookScope  = iota // scopeURI: the innermost binding of the prefix
-	lookSupply        // suppliedAt: the binding a child would inherit
+	lookScope   = iota // scopeURI: the innermost binding of the prefix
+	lookSupply         // suppliedAt: the binding a child would inherit
+	lookDefault        // undeclaresDefault: the default once fixup is done
 )
 
 type nsMemo struct {
@@ -198,4 +206,58 @@ func scopeIn(f *nsFrame, n *xdm.Node, prefix string) string {
 		return xdm.NSXML
 	}
 	return ""
+}
+
+// undeclaresDefault reports whether el, a result element, needs xmlns="":
+// its name is unprefixed and in no namespace, and the default namespace it
+// would inherit once the elements around it are finished is not empty.
+// Those elements' fixup is still to run (each runs once its body is done),
+// so what they declare now is not what el will inherit: an unprefixed
+// ancestor's default will be its own name's namespace, whatever it declares
+// yet (§5.7.3), and only a prefixed one's declarations stand.
+func undeclaresDefault(f *nsFrame, el *xdm.Node) bool {
+	if el.Name().URI != "" || el.Name().Prefix != "" {
+		return false
+	}
+	if r, ok := declaresDefault(el); ok {
+		return r.uri != ""
+	}
+	// The parent decides, mostly: asked first, without the frames, whose
+	// memo would cost each deep level one.
+	p := el.Parent()
+	if p == nil || p.Kind() != xdm.KindElement {
+		return false
+	}
+	if r, ok := defaultAt(p, nil); ok {
+		return r.uri != ""
+	}
+	if f == nil {
+		for cur := p.Parent(); cur != nil && cur.Kind() == xdm.KindElement; cur = cur.Parent() {
+			if r, ok := defaultAt(cur, nil); ok {
+				return r.uri != ""
+			}
+		}
+		return false
+	}
+	return lookUp(f, p, lookDefault, "", true, defaultAt).uri != ""
+}
+
+// defaultAt is undeclaresDefault's step: the default namespace of cur once
+// its fixup is done, if cur decides it.
+func defaultAt(cur *xdm.Node, _ *nsFrame) (nsLook, bool) {
+	if cur.Name().Prefix == "" {
+		return nsLook{found: true, uri: cur.Name().URI}, true
+	}
+	return declaresDefault(cur)
+}
+
+// declaresDefault is the last declaration of the default namespace on cur.
+func declaresDefault(cur *xdm.Node) (nsLook, bool) {
+	r := nsLook{}
+	for p, uri := range cur.DeclaredNamespaces() {
+		if p == "" {
+			r = nsLook{found: true, uri: uri}
+		}
+	}
+	return r, r.found
 }
