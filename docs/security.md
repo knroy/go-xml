@@ -1715,15 +1715,15 @@ and facets still apply to the substituted type.
   retain 2,000 entries and about 0.20 MB after GC.
   `xsd.TestSchemaTypeRegistryRetainsPerType` pins both facts. A caller who can
   be made to load unbounded *distinct* schemas grows this without bound; one
-  that replays the same schemas does not. The figure assumes short names: each
-  entry holds its expanded name `{namespace}local`, so the cost is the
-  qualified-name length per distinct type. A union's duplicate members are
-  dropped and every occurrence of one name within a load shares one string, so
-  references no longer multiply it (88 KB of `memberTypes="t:a t:a …"` under a
-  4 KB namespace used to retain 97 MB). Still open: many *distinct* types under
-  one long namespace retain namespace length × type count (49 MB from a 783 KB
-  schema of 10,000 types under a 4 KB namespace); see
-  [known gaps](known-gaps.md).
+  that replays the same schemas does not. The figure assumes short local
+  names: each entry holds its local name, and each distinct namespace is held
+  once. A union's duplicate members are dropped, so references no longer
+  multiply it (88 KB of `memberTypes="t:a t:a …"` under a
+  4 KB namespace used to retain 97 MB). The tables hold each name split, with
+  one interned copy of each namespace, so many *distinct* types under one long
+  namespace no longer pay its length per type: 10,000 types under a 4 KB
+  namespace retain 0.64 MB, where they retained 49 MB
+  (`xsd.TestManyTypesUnderLongNamespaceRetention`).
 - The semantic risk of a shared registry — two schemas defining `{uri}T`
   differently, so a node atomises as whichever loaded last — is closed in two
   layers. The first records the resolved typing on the node at validation
@@ -1905,16 +1905,17 @@ Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
 
-**Twenty-second pass — what round SA left open, 2026-11-06.**
+**Twenty-second pass (round SB) — what round SA left open, 2026-11-06.**
 
 - **Shared `xsl:import` targets were recompiled per path** — cost: each import occurrence has its own precedence (§3.11.3), so nothing can be shared, and imports doubling per level cost 2^N under `compileMu`. `maxModuleVisits` (10,000) per `Compile`, counted in both module walks; xslTNG, XSpec and the W3C suite peak at 120. Pinned by `TestImportDiamondIsBounded`.
+- **Distinct XSD types under one long namespace retained its length per type** — cost, process-wide: the global type tables kept `{namespace}local` whole, 49 MB from a 783 KB schema of 10,000 types under a 4 KB namespace. Names are stored split with the namespace interned once per table: 0.64 MB. See CHANGELOG.
+- **The text store's block ceiling panicked** — availability: about 1 GiB of copied text in one tree crashed the host. The entry points recover the refusal (`internal/xdmlimit`) and return `xdm.ErrResourceLimit`; any other panic goes on. Pinned by `TestTextBlockCeilingIsAnError` (parse, XSLT, XQuery, XPath). See CHANGELOG.
 
 **Twenty-first pass — a security audit at `e728478a`, 2026-11-06.** One line per fixed finding; the open ones are in [known gaps](known-gaps.md).
 
 - **`ParseOptions.MaxNodes` counted start tags only** — availability, driven by document data: PIs, comments and text were free, so 2,000 PIs parsed under a bound of 100. Text that is not all white space, comments and PIs now count. See CHANGELOG.
 - **ATTLIST defaults were matched to a tag's attributes pairwise** — cost, driven by document data and reachable from `fn:parse-xml`. A large tag indexes its attributes by name. See CHANGELOG.
 - **One long text node copied into many elements used up the text store's blocks** — availability: the host panicked at 45 MB. One string reuses its block, and past half the block space values are copied and packed; the ceiling remains (see known gaps). See CHANGELOG.
-- **The text store's block ceiling panicked** — availability: about 1 GiB of copied text in one tree crashed the host. The entry points recover the refusal (`internal/xdmlimit`) and return `xdm.ErrResourceLimit`; any other panic goes on. Pinned by `TestTextBlockCeilingIsAnError` (parse, XSLT, XQuery, XPath). See CHANGELOG.
 - **Href-less XInclude xpointer copies doubled per level** — availability: no fetch or depth counter saw them. A pass's inclusions count against `Parse.MaxNodes`. See CHANGELOG.
 - **Out-of-range years and quadratic picture work in the date and number builtins** — cost: a year the parser refuses hung `format-date` `[W]`; exponent pictures and irregular grouping were quadratic in digits. FODT0001, ±1 week-year search, estimated exponents, indexed separators. See CHANGELOG.
 - **The regex cache gate and the backreference analysis undercounted** — cost: class rune tables were free to the cache gate, and the width analysis rescanned per reference and per nesting level. See the regex sections above and CHANGELOG.

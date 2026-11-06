@@ -159,12 +159,6 @@ The audit's findings were fixed in round SA (see the changelog and the
 Twenty-first pass in [security](security.md)). These remain, each with the
 reason:
 
-- **Many distinct XSD types under one long namespace still retain
-  namespace length × type count process-wide.** Union references no longer
-  multiply an entry, but each distinct type keeps its `{namespace}local` name
-  in the never-evicted global type tables: 49 MB from a 783 KB schema of
-  10,000 types under a 4 KB namespace. Closing it changes the global tables'
-  behaviour.
 - **The text store's block ceiling panics under methods with no error
   return** (`xdm/record.go` `newBlock`, 1<<17 blocks, about 1 GiB of copied
   text in one tree). Every entry point that returns an error (xdm parse,
