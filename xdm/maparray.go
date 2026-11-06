@@ -8,6 +8,8 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 )
 
 // MapItem is the fourth kind of XDM item, added in XPath 3.1.
@@ -441,8 +443,21 @@ func (a *ArrayItem) AppendMembers(dst []Sequence) []Sequence {
 	return append(dst, a.members...)
 }
 
+// maxFlattenSteps bounds the items and arrays one Flatten visits inside
+// arrays. An array
+// keeps its members by reference, so k doublings ("[$a, $a]" in a fold) cost
+// k charged items but describe 2^k leaves; without a bound the walk grows
+// memory and time as 2^k, past any MaxItems the caller set, with no context
+// to cancel it. 1<<24 is about three times xpath's default MaxItems and holds
+// the out slice under 256 MiB.
+const maxFlattenSteps = 1 << 24
+
 // Flatten replaces every array in a sequence with its members, recursively,
 // which is what array:flatten and the function conversion rules do.
+//
+// A walk past maxFlattenSteps is refused with ErrResourceLimit, raised as an
+// internal/xdmlimit panic that the entry points of xpath, xquery and xslt
+// recover and return.
 func Flatten(seq Sequence) Sequence {
 	out := make(Sequence, 0, len(seq))
 	// An explicit stack rather than recursion: an array nested a million deep
@@ -452,6 +467,7 @@ func Flatten(seq Sequence) Sequence {
 		i    int        // next item within seqs[0]
 	}
 	stack := []frame{{seqs: []Sequence{seq}}}
+	steps := 0
 	for len(stack) > 0 {
 		f := &stack[len(stack)-1]
 		if len(f.seqs) == 0 {
@@ -464,6 +480,15 @@ func Flatten(seq Sequence) Sequence {
 		}
 		it := f.seqs[0][f.i]
 		f.i++
+		// Only what lies inside an array counts: the top-level sequence is
+		// already materialised, and the caller's budget charged it.
+		if len(stack) > 1 {
+			steps++
+		}
+		if steps > maxFlattenSteps {
+			xdmlimit.Refuse(fmt.Errorf("xdm: flattening an array visits more than %d items: %w",
+				maxFlattenSteps, ErrResourceLimit))
+		}
 		if arr, ok := it.(*ArrayItem); ok {
 			stack = append(stack, frame{seqs: arr.members})
 		} else {

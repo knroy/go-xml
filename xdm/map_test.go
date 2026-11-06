@@ -1,8 +1,11 @@
 package xdm
 
 import (
+	"errors"
 	"strconv"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 )
 
 // The map's behaviour as a persistent, insertion-ordered structure. These
@@ -309,5 +312,32 @@ func TestHAMTCollision(t *testing.T) {
 	root.walk(func(*mapEntry) { count++ })
 	if count != 2 {
 		t.Fatalf("walk saw %d entries, want 2", count)
+	}
+}
+
+// An array keeps its members by reference, so doubling one k times costs k
+// steps but describes 2^k leaves. Flatten must refuse such a value rather
+// than walk it: the leaves here are empty arrays, so the walk would add no
+// items and only the visit count shows the cost.
+func TestFlattenRefusesSharedExpansion(t *testing.T) {
+	a := NewArray(Sequence{NewArray()})
+	for i := 0; i < 30; i++ {
+		a = NewArray(Sequence{a}, Sequence{a})
+	}
+	err := func() (err error) {
+		defer xdmlimit.Recover(&err)
+		Flatten(Sequence{a})
+		return nil
+	}()
+	if !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("Flatten of a 2^30-leaf shared array: err=%v, want ErrResourceLimit", err)
+	}
+	// A small shared array still flattens in full.
+	b := NewArray(Sequence{NewInteger(1)})
+	for i := 0; i < 4; i++ {
+		b = NewArray(Sequence{b}, Sequence{b})
+	}
+	if n := len(Flatten(Sequence{b})); n != 16 {
+		t.Fatalf("Flatten of a 16-leaf shared array gave %d items", n)
 	}
 }
