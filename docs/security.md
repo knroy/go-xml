@@ -1905,6 +1905,10 @@ Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
 
+**Twenty-second pass — what round SA left open, 2026-11-06.**
+
+- **Shared `xsl:import` targets were recompiled per path** — cost: each import occurrence has its own precedence (§3.11.3), so nothing can be shared, and imports doubling per level cost 2^N under `compileMu`. `maxModuleVisits` (10,000) per `Compile`, counted in both module walks; xslTNG, XSpec and the W3C suite peak at 120. Pinned by `TestImportDiamondIsBounded`.
+
 **Twenty-first pass — a security audit at `e728478a`, 2026-11-06.** One line per fixed finding; the open ones are in [known gaps](known-gaps.md).
 
 - **`ParseOptions.MaxNodes` counted start tags only** — availability, driven by document data: PIs, comments and text were free, so 2,000 PIs parsed under a bound of 100. Text that is not all white space, comments and PIs now count. See CHANGELOG.

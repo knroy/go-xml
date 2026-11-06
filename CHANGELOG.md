@@ -372,6 +372,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `c14n.FromXPath` and `FromXPathFilter` ran XML-DSig XPath 1.0 transforms by 2.0 rules, so `"10" < "9"` was true | They evaluate in XPath 1.0 compatibility mode. | [`0c70a04`][0c70a04] |
 | `dtd.Validate` ignored undeclared attributes and matched names by local part, missing `xml:lang` | Undeclared attributes are reported and names matched as written. | [`915eb63`][915eb63] |
 | RELAX NG include and externalRef fan-out had no total bound, so a few tiny schemas cost F^depth fetches | One compilation makes at most 10,000 fetches, then `ErrResourceLimit`. | [`cfc090e`][cfc090e] |
+| A module imported on several paths was compiled once per path, so imports doubling per level cost 2^N | One compilation resolves at most 10,000 include/import occurrences, then `ErrResourceLimit`. | [`77c3c5d`][77c3c5d] |
 
 ### Changed — behaviour
 
@@ -381,6 +382,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `ParseOptions.MaxNodes` counts text that is not all white space, comments and PIs | A document near the bound may now be refused; whitespace-only text is still not counted. | [`9e9a6f9`][9e9a6f9], [`089c346`][089c346] |
 | One XInclude pass shares a node budget | Everything its inclusions copy in counts against `Parse.MaxNodes`, once per level it is copied through. | [`eb4d0ae`][eb4d0ae] |
 | An `xsl:use-package` cycle is XTSE3005 | A package that uses itself, directly or through another, is a static error, not a crash. | [`dce8830`][dce8830] |
+| `Compile` refuses a stylesheet needing over 10,000 module visits | Each include/import resolution counts, in the static phase and the compile; real stylesheets need about 120. | [`77c3c5d`][77c3c5d] |
 | A streamed parse refuses over 64 ancestor attributes per record past 16M copies | It returns `ErrResourceLimit` where Parse + Transform succeeds; back off to the tree on `errors.Is`. | [`f90e97d`][f90e97d] |
 | A streamed `xsl:merge` of more than 64 inputs runs on the tree | Output is unchanged; memory is the tree's. | [`e621bf7`][e621bf7] |
 | `Serialize` refuses an `OutputSettings.Standalone` other than "", omit, yes or no | SEPM0016, where a value such as "true" was written raw. | [`877b3af`][877b3af] |
@@ -2630,3 +2632,4 @@ here so every entry in this file sits under a release.
 [0c70a04]: https://github.com/knroy/go-xml/commit/0c70a04
 [915eb63]: https://github.com/knroy/go-xml/commit/915eb63
 [cfc090e]: https://github.com/knroy/go-xml/commit/cfc090e
+[77c3c5d]: https://github.com/knroy/go-xml/commit/77c3c5d
