@@ -91,6 +91,18 @@ func init() {
 		return b, root
 	}
 	xdmsink.Finish = func(out any, seq xdm.Sequence) error { return out.(*Builder).sink.finish(seq) }
+	xdmsink.Detach = func(b any) bool {
+		x := b.(*Builder)
+		if x.sink != nil || x.fwd != nil || x.hold || x.open == nil || x.parent == nil || x.parent.open == nil {
+			return false
+		}
+		x.parent = nil
+		return true
+	}
+	xdmsink.Ascend = func(b any) {
+		x := b.(*Builder)
+		*x = Builder{open: x.open.Parent(), policy: x.policy, refused: x.refused}
+	}
 	xdmsink.Stamp = func(out any) int64 {
 		b := out.(*Builder)
 		if s := b.sink; s != nil {

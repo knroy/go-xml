@@ -156,12 +156,24 @@ func shallowFault(n *Node, what string) {
 type viewBatch struct {
 	t *Tree
 	o *treeOrigin
-	// path[d] is the copy of the open element at depth d (0: the document
-	// node), and gens[d] that element's gen.
-	path []*Node
-	gens []uint64
-	// recs[d] is how many records the copies path[:d+1] hold.
-	recs []int
+	// deep is the copy of the open element at depth n-1 (0: the document
+	// node), under the copies of its ancestors; gens[d] is the gen of the
+	// one at depth d, and recs[d] how many records the copies down to depth
+	// d hold. Runs (ordStack) and the copies' own parents, so that a deep
+	// view costs its ancestors' copies and nothing per level besides.
+	deep *Node
+	n    int
+	gens ordStack
+	recs ordStack
+}
+
+// truncate keeps the copies above depth k.
+func (vb *viewBatch) truncate(k int) {
+	for ; vb.n > k; vb.n-- {
+		vb.deep = vb.deep.Parent()
+	}
+	vb.gens.truncate(k)
+	vb.recs.truncate(k)
 }
 
 // view returns the view of the element the client is being asked about
@@ -171,30 +183,30 @@ func (b *burster) view() *Node {
 	if el == nil {
 		return nil
 	}
-	if v := b.views; v != nil && len(v.gens) == d+1 && v.gens[d] == b.gen {
-		return v.path[d] // asked again
+	if v := b.views; v != nil && v.n == d+1 && v.gens.at(d) == b.gen {
+		return v.deep // asked again
 	}
 	vb := b.viewUnder(el, d)
 	vb.push(el, b.ordOf(el), b.gen)
-	return vb.path[d]
+	return vb.deep
 }
 
 // viewUnder returns the view batch, its path holding copies of the open
 // ancestors of n, a node of the parse at depth d, and nothing below them.
 func (b *burster) viewUnder(n *Node, d int) *viewBatch {
 	vb := b.views
-	if vb == nil || int(vb.t.n) >= max(viewBatchRecords, 4*vb.recs[len(vb.recs)-1]) {
+	if vb == nil || int(vb.t.n) >= max(viewBatchRecords, 4*int(vb.recs.at(vb.n-1))) {
 		vb = b.newViews(n.tree)
 	}
 	// The copies of the open elements this batch already has: a copy that
 	// is of the open element at its depth has its ancestors' copies above
 	// it, so the search goes up from the deepest, over the copies it drops.
-	k := min(len(vb.path), d)
-	for k > 1 && vb.gens[k-1] != b.gens.at(k-1) {
+	k := min(vb.n, d)
+	for k > 1 && vb.gens.at(k-1) != b.gens.at(k-1) {
 		k--
 		b.viewScans++
 	}
-	vb.path, vb.gens, vb.recs = vb.path[:k], vb.gens[:k], vb.recs[:k]
+	vb.truncate(k)
 	anc := make([]*Node, d-k)
 	p := n
 	for i := len(anc) - 1; i >= 0; i-- {
@@ -216,7 +228,7 @@ func (b *burster) viewUnder(n *Node, d int) *viewBatch {
 // with the parse's text, which the copy would pin.
 func (b *burster) leafView(n *Node, d int) *Node {
 	vb := b.viewUnder(n, d)
-	c := vb.path[d-1].appendLeaf(n.Kind(), n.Name(), n.Value())
+	c := vb.deep.appendLeaf(n.Kind(), n.Name(), n.Value())
 	vb.o.add(c.self, b.ordOf(n))
 	c.flags |= fOrigin
 	copyProps(c, n)
@@ -245,7 +257,9 @@ func (b *burster) newViews(t *Tree) *viewBatch {
 		c.source.externalSubset = s.externalSubset
 	}
 	vb.o.add(0, 0)
-	vb.path, vb.gens, vb.recs = append(vb.path, r), append(vb.gens, 0), append(vb.recs, 1)
+	vb.deep, vb.n = r, 1
+	vb.gens.push(0)
+	vb.recs.push(1)
 	b.views = vb
 	return vb
 }
@@ -253,7 +267,7 @@ func (b *burster) newViews(t *Tree) *viewBatch {
 // push appends a shallow copy of s, whose ordinal is ord, under the batch's
 // deepest copy, and makes it the deepest.
 func (vb *viewBatch) push(s *Node, ord, gen uint64) {
-	c := vb.path[len(vb.path)-1].appendChild(KindElement)
+	c := vb.deep.appendChild(KindElement)
 	vb.o.add(c.self, ord)
 	ct := c.tree
 	c.name = ct.intern(s.Name())
@@ -267,8 +281,9 @@ func (vb *viewBatch) push(s *Node, ord, gen uint64) {
 		d.flags |= fOrigin
 		copyProps(d, a)
 	}
-	vb.path, vb.gens = append(vb.path, c), append(vb.gens, gen)
-	vb.recs = append(vb.recs, vb.recs[len(vb.recs)-1]+1+s.NumAttrs())
+	vb.recs.push(vb.recs.at(vb.n-1) + 1 + uint64(s.NumAttrs()))
+	vb.deep, vb.n = c, vb.n+1
+	vb.gens.push(gen)
 }
 
 // copyProps gives d, a copy of s in another tree, s's own base URI and

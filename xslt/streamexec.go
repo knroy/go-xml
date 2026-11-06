@@ -1393,10 +1393,8 @@ type streamRun struct {
 	// pre, for a prong of a fused fork, is what the walk read for its op
 	// (streamfuse.go).
 	pre *fusedValue
-	// applyFeeds and kidFilters are applyFeed's and kidFilter's
-	// (streamlive.go).
+	// applyFeeds are applyFeed's (streamlive.go).
 	applyFeeds map[*streamOp]*burstFeed
-	kidFilters []*xdmstream.Filter
 	// popSplit is the split of the branch a population's choice took, when
 	// it has its own (streampop_l6.go).
 	popSplit *streamSplit

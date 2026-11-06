@@ -1,7 +1,6 @@
 package xslt
 
 import (
-	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -65,18 +64,6 @@ func (run *streamRun) applyFeed(instr Instruction, op *streamOp) *burstFeed {
 		run.applyFeeds[op] = f
 	}
 	return f
-}
-
-// kidFilter is the filter children reads the children of an element at
-// depth d with, made once per run and depth. Never changed once made.
-func (run *streamRun) kidFilter(d int) *xdmstream.Filter {
-	for len(run.kidFilters) <= d {
-		run.kidFilters = append(run.kidFilters, nil)
-	}
-	if run.kidFilters[d] == nil {
-		run.kidFilters[d] = &xdmstream.Filter{Leaves: true, Depth: d}
-	}
-	return run.kidFilters[d]
 }
 
 // dispatchAt is dispatch for node at position pos of a selection of size

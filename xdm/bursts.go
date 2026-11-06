@@ -198,12 +198,11 @@ func (s *markStack) reset(m burstMark) {
 // arithmetic progression.
 type ordStack struct {
 	runs []ordRun
-	n    int
 }
 
-// ordRun holds the depths from at to the next run's: v, v+step, ...
+// ordRun holds the cnt depths from at: v, v+step, ...
 type ordRun struct {
-	at      int
+	at, cnt int32
 	v, step uint64
 }
 
@@ -216,46 +215,54 @@ func ordsOf(vs ...uint64) ordStack {
 	return s
 }
 
-func (s *ordStack) len() int { return s.n }
+func (s *ordStack) len() int {
+	k := len(s.runs)
+	if k == 0 {
+		return 0
+	}
+	r := &s.runs[k-1]
+	return int(r.at + r.cnt)
+}
 
 func (s *ordStack) push(v uint64) {
 	if k := len(s.runs); k > 0 {
 		r := &s.runs[k-1]
-		switch i := uint64(s.n - r.at); {
-		case i == 1:
+		switch {
+		case r.cnt == 1:
 			r.step = v - r.v
-			s.n++
+			r.cnt++
 			return
-		case v == r.v+i*r.step:
-			s.n++
+		case v == r.v+uint64(r.cnt)*r.step:
+			r.cnt++
 			return
 		}
 	}
-	s.runs = append(s.runs, ordRun{s.n, v, 0})
-	s.n++
+	s.runs = append(s.runs, ordRun{at: int32(s.len()), cnt: 1, v: v})
 }
 
 // at is the number at depth i.
 func (s *ordStack) at(i int) uint64 {
 	k := len(s.runs) - 1
-	if s.runs[k].at > i {
-		k = sort.Search(k, func(j int) bool { return s.runs[j+1].at > i })
+	if int(s.runs[k].at) > i {
+		k = sort.Search(k, func(j int) bool { return int(s.runs[j+1].at) > i })
 	}
 	r := s.runs[k]
-	return r.v + uint64(i-r.at)*r.step
+	return r.v + uint64(i-int(r.at))*r.step
 }
 
 // truncate keeps the numbers below depth n.
 func (s *ordStack) truncate(n int) {
-	if n >= s.n {
+	if n >= s.len() {
 		return
 	}
-	s.n = n
 	k := len(s.runs)
-	for k > 0 && s.runs[k-1].at >= n {
+	for k > 0 && int(s.runs[k-1].at) >= n {
 		k--
 	}
 	s.runs = s.runs[:k]
+	if k > 0 {
+		s.runs[k-1].cnt = int32(n) - s.runs[k-1].at
+	}
 }
 
 // streamClient is what a burster asks and tells (see burster). Its nodes
@@ -894,8 +901,8 @@ func (b *burster) deliver(el *Node) *Node {
 		// document node, the spine (each with its attributes), then el.
 		o := c.tree.setOrigin(b.stream(t))
 		o.add(0, 0)
-		for d, i := range t.open[1:] {
-			o.add(i, b.ords.at(d+1))
+		for d := 1; d < t.open.len(); d++ {
+			o.add(uint32(t.open.at(d)), b.ords.at(d))
 		}
 		o.add(el.self, b.ordOf(el))
 		for p := c.Parent(); p != nil; p = p.Parent() {

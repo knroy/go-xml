@@ -263,8 +263,8 @@ func CopyTypeEnvs(dst, src *Node) {
 // index, not through the records, which a burst's tree may have taken over
 // (see cloneMoving).
 func (t *Tree) truncate(i uint32) {
-	for len(t.open) > 0 && t.open[len(t.open)-1] >= i {
-		t.open = t.open[:len(t.open)-1]
+	for k := t.open.len(); k > 0 && t.open.at(k-1) >= uint64(i); k-- {
+		t.open.truncate(k - 1)
 	}
 	for j := i; j < t.n; j++ {
 		r := t.rec(j)

@@ -1,12 +1,15 @@
 package xslt
 
 import (
+	"context"
+	"io"
 	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // deepDoc is d nested elements around a leaf; flatDoc is d sibling elements
@@ -245,5 +248,142 @@ func shallowCopyNamespaceRows(t *testing.T) {
 		if got, err := outRun(sheet, doc, false, false, TransformOptions{}); err != nil || got != r.want {
 			t.Errorf("axis%s (frames from %d):\n got %s %v\nwant %s", r.attr, nsFrameDepth, got, err, r.want)
 		}
+	}
+}
+
+// deepReader reads deepDoc(d) without holding it, and calls mid once the
+// parse has asked for the first end tag: every element is then open.
+type deepReader struct {
+	d, i int
+	mid  func()
+	buf  []byte
+}
+
+func (r *deepReader) Read(p []byte) (int, error) {
+	if len(r.buf) == 0 {
+		switch {
+		case r.i < r.d:
+			n := min(r.d-r.i, 4096)
+			r.buf, r.i = []byte(strings.Repeat("<a>", n)), r.i+n
+		case r.i == r.d:
+			r.buf, r.i = []byte("x"), r.i+1
+		case r.i < 2*r.d+1:
+			if r.i == r.d+1 && r.mid != nil {
+				r.mid()
+			}
+			n := min(2*r.d+1-r.i, 4096)
+			r.buf, r.i = []byte(strings.Repeat("</a>", n)), r.i+n
+		default:
+			return 0, io.EOF
+		}
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
+}
+
+func liveHeap() uint64 {
+	var m goruntime.MemStats
+	goruntime.GC()
+	goruntime.ReadMemStats(&m)
+	return m.HeapAlloc
+}
+
+// TestDeepCopyOfHoldsNoMoreThanTree: a streamed copy-of kept, per open
+// element, the builder of its copy (one per level, each linked to its
+// parent's) and a view of it (a copy of the element in the view batch,
+// with its path, gen and record count): a million deep held 361 MB against
+// the tree's 81. The copy is now written through one builder, detached from
+// its parent's (xdmsink.Detach, Ascend), off the parse's own nodes, and the
+// tree's open path is runs (ordStack). What the stream holds with every
+// element open must stay within a fiftieth of what the tree holds once its
+// copy is made (the run's fixed costs, the cursor's buffers among them).
+func TestDeepCopyOfHoldsNoMoreThanTree(t *testing.T) {
+	const d = 200000
+	sheet := outSheet(t, `<xsl:mode streamable="yes"/>`, `<xsl:template match="/"><xsl:copy-of select="."/></xsl:template>`)
+	var opts TransformOptions
+	opts.SourceParseOptions.MaxDepth = 2 * d
+	opts.MaxNodes, opts.MaxBytes = -1, -1
+	base := liveHeap()
+	src, err := xdm.Parse(&deepReader{d: d}, opts.SourceParseOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := sheet.Transform(context.Background(), src.Root, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := liveHeap() - base
+	want := res.String()
+	goruntime.KeepAlive(src)
+	src, res = nil, nil
+	base = liveHeap()
+	var stream uint64
+	res, err = sheet.TransformReader(context.Background(), &deepReader{d: d, mid: func() { stream = liveHeap() - base }}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.String() != want {
+		t.Fatal("the streamed copy differs from the tree's")
+	}
+	t.Logf("stream %d KB with every element open, tree %d KB", stream>>10, tree>>10)
+	if stream > tree+tree/50 {
+		t.Errorf("the streamed copy-of held %d KB at depth %d, the tree %d KB", stream>>10, d, tree>>10)
+	}
+}
+
+// heapEnv is an environment resolver that reads the live heap whenever
+// environment-variable is called: a probe a stylesheet can run at the
+// point it wants measured.
+type heapEnv struct{ base, peak uint64 }
+
+func (e *heapEnv) LookupEnvironment(string) (string, bool) {
+	e.peak = max(e.peak, liveHeap()-e.base)
+	return "", false
+}
+func (e *heapEnv) EnvironmentNames() []string { return nil }
+
+// TestDeepIdentityHoldsNoMoreThanTree: the streamed identity kept, per open
+// element, the filter it read the element's children with (a run's cache,
+// one per depth); the cursor copies the caller's filter now. Measured by a
+// rule for the leaf that reads the heap, with every element open, the
+// stream must hold no more than the tree does there, within a fiftieth,
+// but for the leaf's view: a node a rule is given may be kept, so it comes
+// with copies of its ancestors, a record (40 bytes) each.
+func TestDeepIdentityHoldsNoMoreThanTree(t *testing.T) {
+	const d = 100000
+	sheet := outSheet(t, `<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`,
+		`<xsl:template match="text()"><xsl:value-of select="environment-variable('m')"/><xsl:value-of select="."/></xsl:template>`)
+	run := func(main bool) (string, uint64) {
+		env := &heapEnv{}
+		var opts TransformOptions
+		opts.MaxDepth = 2 * d
+		opts.SourceParseOptions.MaxDepth = 2 * d
+		opts.MaxNodes, opts.MaxBytes = -1, -1
+		opts.Environment = env
+		env.base = liveHeap()
+		var res *Result
+		var err error
+		if main {
+			res, err = sheet.TransformReader(context.Background(), &deepReader{d: d}, opts)
+		} else {
+			var src *xdm.Tree
+			if src, err = xdm.Parse(&deepReader{d: d}, opts.SourceParseOptions); err == nil {
+				res, err = sheet.Transform(context.Background(), src.Root, opts)
+			}
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.String(), env.peak
+	}
+	want, tree := run(false)
+	got, stream := run(true)
+	t.Logf("at the leaf: stream %d KB, tree %d KB", stream>>10, tree>>10)
+	if got != want {
+		t.Fatal("the streamed identity differs from the tree's")
+	}
+	if stream > tree+tree/50+40*d {
+		t.Errorf("the streamed identity held %d KB at depth %d, the tree %d KB", stream>>10, d, tree>>10)
 	}
 }

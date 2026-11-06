@@ -958,7 +958,7 @@ func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, par
 	}
 	run.used = true
 	d, c := run.d, run.c
-	f := run.kidFilter(d)
+	f := &xdmstream.Filter{Leaves: true, Depth: d} // the cursor copies it
 	pos, skip := 0, false
 	for {
 		var (
