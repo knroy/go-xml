@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"fmt"
 	"io"
 	"sort"
 
@@ -108,6 +109,9 @@ type burster struct {
 	// spineCopies counts the records copied as ancestors of a burst, for
 	// the test that keeps it in proportion to the elements read.
 	spineCopies int
+	// spineAttrs counts the attributes copied with those ancestors, and
+	// burstRecs the records of the bursts themselves (spineAttrsPerRecord).
+	spineAttrs, burstRecs int
 	// moved is the first of the parse's chunks the last burst's tree took
 	// over, or 0.
 	moved int
@@ -774,11 +778,15 @@ func (b *burster) rewind(t *Tree, spaces *spaceTable, names *nameCache) {
 // before it (burstBatch).
 func (b *burster) take(el *Node) error {
 	t := el.tree
+	b.burstRecs += int(t.endOf(el) - el.self)
 	if !b.later || t.endOf(el)-el.self > burstSmall {
 		if err := b.flush(); err != nil {
 			return err
 		}
 		g := b.deliver(el)
+		if err := b.spineAttrsCheck(); err != nil {
+			return err
+		}
 		if !b.later {
 			b.grounded = g
 			return nil
@@ -786,16 +794,40 @@ func (b *burster) take(el *Node) error {
 		return b.fn(g)
 	}
 	b.add(el)
-	if bt := b.batch; int(bt.t.n) >= max(burstBatchRecords, 4*b.gens.len()) ||
+	if err := b.spineAttrsCheck(); err != nil {
+		return err
+	}
+	if bt := b.batch; int(bt.t.n) >= max(burstBatchRecords, 4*bt.spine) ||
 		textSince(t, bt.blocks) >= burstBatchText {
 		return b.flush()
 	}
 	return nil
 }
 
+// Each burst's tree holds copies of its ancestors with their attributes, so
+// bursts under an element of many attributes cost bursts x attributes where
+// the tree costs bursts + attributes. Past spineAttrsFloor attributes so
+// copied, a parse that has copied more than spineAttrsPerRecord for each
+// record of its bursts is refused.
+//
+// ponytail: a refusal, not a cure; sharing the ancestors' copies between
+// trees handed out one by one (Ground) would need trees that grow after.
+const spineAttrsPerRecord = 64
+
+var spineAttrsFloor = 1 << 24 // a var for the test
+
+func (b *burster) spineAttrsCheck() error {
+	if b.spineAttrs > spineAttrsFloor && b.spineAttrs > spineAttrsPerRecord*b.burstRecs {
+		return fmt.Errorf(
+			"parse XML: streaming copied %d ancestor attributes for %d records, more than %d per record: %w",
+			b.spineAttrs, b.burstRecs, spineAttrsPerRecord, ErrResourceLimit)
+	}
+	return nil
+}
+
 // A burst of more than burstSmall records is delivered on its own; smaller
 // ones are batched until the batch holds burstBatchRecords records (or four
-// times the spine's depth), or the parse has stored burstBatchText bytes of
+// times the records its ancestors' copies take, attributes included), or the parse has stored burstBatchText bytes of
 // text since the batch began. The text a spine element's content stored
 // before a child of it opened waits for the element to close: burstFrozen
 // bounds it.
@@ -830,6 +862,8 @@ type burstBatch struct {
 	gens []uint64
 	// els are the bursts, in order.
 	els []uint32
+	// spine is how many records the copies of ancestors take.
+	spine int
 	// blocks is how many text blocks the parse had when the batch began.
 	blocks int
 	src    *Tree
@@ -855,6 +889,7 @@ func (b *burster) add(el *Node) {
 			r.flags |= fShallow
 		}
 		bt.path, bt.gens = append(bt.path, 0), append(bt.gens, 0)
+		bt.spine = 1
 	}
 	d := b.gens.len() - 1 // el's parent
 	k := 1
@@ -877,6 +912,8 @@ func (b *burster) add(el *Node) {
 		e.end, e.v1 = openEnd, noIdx
 		bt.path, bt.gens = append(bt.path, j), append(bt.gens, b.gens.at(k))
 		b.spineCopies += 1 + int(s.attrCount())
+		b.spineAttrs += int(s.attrCount())
+		bt.spine += 1 + int(s.attrCount())
 		k++
 	}
 	j := bt.appendUnder(t, el.self, t.endOf(el))
@@ -1036,6 +1073,7 @@ func (b *burster) deliver(el *Node) *Node {
 		}
 	}
 	b.spineCopies += int(el.self)
+	b.spineAttrs += int(el.self) - b.gens.len() // less the document node and the elements
 	c.tree.XMLVersion = "1.0"
 	if b.v11 {
 		c.tree.XMLVersion = "1.1"
