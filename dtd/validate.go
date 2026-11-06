@@ -43,8 +43,8 @@ type Options struct {
 	// element, which helps nobody and costs memory proportional to the input.
 	MaxErrors int
 
-	// AllowUndeclared skips elements the DTD says nothing about instead of
-	// reporting them.
+	// AllowUndeclared skips elements and attributes the DTD says nothing
+	// about instead of reporting them.
 	//
 	// Strictly, an undeclared element is a validity error: a DTD is a closed
 	// description, unlike a schema where a wildcard may admit the unknown.
@@ -227,14 +227,19 @@ func (v *validator) walk(el *xdm.Node) {
 }
 
 // checkContent applies the element's content model.
+//
+// Names are matched as written, prefix:local, because a DTD predates
+// namespaces and declares "o:order" as that string; matching on the local
+// name alone validated <o:order> as <order>.
 func (v *validator) checkContent(el *xdm.Node) {
-	decl, ok := v.dtd.Elements[el.Name().Local]
+	name := el.Name().Lexical()
+	decl, ok := v.dtd.Elements[name]
 	if !ok {
 		// An undeclared element is a validity error in a DTD-validated
 		// document — unlike XSD, where a wildcard may admit it. A caller
 		// working with a deliberately partial internal subset can say so.
 		if !v.allowUndec {
-			v.fail(el, "element %s is not declared", el.Name().Local)
+			v.fail(el, "element %s is not declared", name)
 		}
 		return
 	}
@@ -245,15 +250,15 @@ func (v *validator) checkContent(el *xdm.Node) {
 		for c := range el.Children() {
 			if c.Kind() == xdm.KindElement || (c.Kind() == xdm.KindText && strings.TrimSpace(c.Value()) != "") {
 				v.fail(el, "element %s is declared EMPTY but has content",
-					el.Name().Local)
+					name)
 				return
 			}
 		}
 	case ContentMixed:
 		for c := range el.Children() {
-			if c.Kind() == xdm.KindElement && !decl.Mixed[c.Name().Local] {
+			if c.Kind() == xdm.KindElement && !decl.Mixed[c.Name().Lexical()] {
 				v.fail(el, "element %s is not permitted in the mixed "+
-					"content of %s", c.Name().Local, el.Name().Local)
+					"content of %s", c.Name().Lexical(), name)
 			}
 		}
 	case ContentChildren:
@@ -262,28 +267,28 @@ func (v *validator) checkContent(el *xdm.Node) {
 		for c := range el.Children() {
 			if c.Kind() == xdm.KindText && strings.TrimSpace(c.Value()) != "" {
 				v.fail(el, "element %s has element-only content but "+
-					"contains character data", el.Name().Local)
+					"contains character data", name)
 				break
 			}
 		}
 		m, err := v.matcherFor(decl)
 		if err != nil {
-			v.fail(el, "content model of %s: %v", el.Name().Local, err)
+			v.fail(el, "content model of %s: %v", name, err)
 			return
 		}
 		names := v.names[:0]
 		for c := range el.Children() {
 			if c.Kind() == xdm.KindElement {
-				names = append(names, xdm.QName{Local: c.Name().Local})
+				names = append(names, xdm.QName{Local: c.Name().Lexical()})
 			}
 		}
 		v.names = names
 		if ok, at := m.Match(names); !ok {
 			if at < len(names) {
 				v.fail(el, "element %s is not permitted here in the "+
-					"content of %s", names[at].Local, el.Name().Local)
+					"content of %s", names[at].Local, name)
 			} else {
-				v.fail(el, "the content of %s is incomplete", el.Name().Local)
+				v.fail(el, "the content of %s is incomplete", name)
 			}
 		}
 	}
@@ -301,22 +306,31 @@ func (v *validator) matcherFor(decl *Element) (*xsd.SequenceMatcher, error) {
 	return m, nil
 }
 
-// checkAttributes applies the ATTLIST declarations for an element.
+// checkAttributes applies the ATTLIST declarations for an element, and
+// reports an attribute the ATTLIST does not declare (XML 1.0 §3.3.1, VC
+// Attribute Value Type). Names are matched as written, so a declared xml:lang
+// or o:x is checked like any other.
 func (v *validator) checkAttributes(el *xdm.Node) {
-	decls := v.dtd.Attributes[el.Name().Local]
+	decls := v.dtd.Attributes[el.Name().Lexical()]
+	if !v.allowUndec {
+		for a := range el.Attrs() {
+			name := a.Name().Lexical()
+			// A DTD predates namespaces and declares "xmlns" as an ordinary
+			// attribute when it declares it at all, so an undeclared
+			// namespace declaration is not reported.
+			if name == "xmlns" || strings.HasPrefix(name, "xmlns:") ||
+				slices.ContainsFunc(decls, func(d *Attribute) bool { return d.Name == name }) {
+				continue
+			}
+			v.fail(el, "attribute %s is not declared", name)
+		}
+	}
 	if len(decls) == 0 {
 		return
 	}
 	present := map[string]string{}
 	for a := range el.Attrs() {
-		name := a.Name().Local
-		if a.Name().URI != "" || strings.HasPrefix(name, "xmlns") {
-			// A DTD predates namespaces and declares "xmlns" as an ordinary
-			// attribute when it declares it at all. Skipping namespace
-			// declarations avoids reporting every one as undeclared.
-			continue
-		}
-		present[name] = a.Value()
+		present[a.Name().Lexical()] = a.Value()
 	}
 
 	for _, d := range decls {
