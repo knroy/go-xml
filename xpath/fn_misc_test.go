@@ -1077,3 +1077,24 @@ func BenchmarkDistinctValuesIntegers(b *testing.B) {
 		})
 	}
 }
+
+// fn:data over atomics with no array among them copies the sequence once, in
+// Atomize, and not a second time in FlattenContext.
+func TestDataWithoutArraysCopiesOnce(t *testing.T) {
+	seq := make(xdm.Sequence, 10000)
+	for i := range seq {
+		seq[i] = xdm.NewInteger(int64(i))
+	}
+	ctx := NewContext(nil, Builtins())
+	n := testing.AllocsPerRun(10, func() {
+		if _, err := callFn(t, ctx, "data", seq); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Logf("fn:data of 10k atomics: %v allocations", n)
+	// 4 before FlattenContext returned an array-free input as it stands: its
+	// copy and its walk stack, beside Atomize's copy and the result slice.
+	if n > 2 {
+		t.Errorf("fn:data of 10k atomics allocated %v times, want 2", n)
+	}
+}
