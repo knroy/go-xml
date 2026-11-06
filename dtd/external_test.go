@@ -441,6 +441,40 @@ func TestParameterEntityRecursionIsRefused(t *testing.T) {
 	}
 }
 
+// SECURITY. A ladder over an empty entity — a0 "" and aN "%aN-1;%aN-1;" —
+// doubles its references a rung while expanding to nothing, so a budget that
+// charged only expanded bytes never moved. Every reference is charged now.
+// The ladder sits in the internal subset, which is expanded before the
+// external one is fetched, so any Resolver reaches it.
+func TestEmptyExpansionLadderIsRefused(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`<!ENTITY % a0 "">`)
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&b, `<!ENTITY %% a%d "%%a%d;%%a%d;">`, i, i-1, i-1)
+	}
+	opts := mapOpts(map[string]string{"r.dtd": "<!ELEMENT r EMPTY>"})
+	opts.MaxEntityBytes = 4096
+	_, err := Load(`<!DOCTYPE r SYSTEM "r.dtd" [`+b.String()+`%a20;]>`, opts)
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Fatalf("error = %v, want an empty-expansion ladder refused with xdm.ErrResourceLimit", err)
+	}
+}
+
+// A run of '%' with no ';' after it holds no reference, and is copied as
+// written. Each '%' used to rescan the tail for a ';', the square of the
+// subset; the tail is now copied once.
+func TestPercentWithoutSemicolonIsCopied(t *testing.T) {
+	l := newLoader(LoadOptions{})
+	in := "<!ELEMENT r EMPTY>" + strings.Repeat("%", 1<<18)
+	out, err := l.expand(in, "", 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != in {
+		t.Errorf("a '%%' run without ';' was not copied verbatim (len %d, want %d)", len(out), len(in))
+	}
+}
+
 // hugeResolver hands back an endless stream, which is what a hostile or merely
 // broken resolver looks like from here.
 type hugeResolver struct{}
