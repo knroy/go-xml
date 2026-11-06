@@ -115,7 +115,7 @@ func TestFrozenTreeDropsBuildIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tree.nameIx != nil || tree.nameHot != nil || tree.frameOne != nil || tree.frameMany != nil || tree.open != nil {
+	if tree.nameIx != nil || tree.nameHot != nil || tree.frameOne != nil || tree.frameMany != nil || tree.open.runs != nil {
 		t.Errorf("a parsed tree kept its build indexes")
 	}
 	e := kids(kids(tree.Root)[0])

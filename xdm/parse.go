@@ -829,7 +829,7 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 		// rebuilds the ones it needs.
 		tree.nameIx, tree.nameHot = nil, nil
 		tree.frameOne, tree.frameMany = nil, nil
-		tree.open = nil
+		tree.open = ordStack{}
 
 		if trackPos {
 			// The decoder stops reading at the end of the root element, so the

@@ -1358,7 +1358,9 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		if out.Open() == nil && sub.Open().BaseURI() == "" {
 			sub.Open().SetBaseURI(node.BaseURI())
 		}
-		copyNamespacesTo(rt, sub, node)
+		var buf [32]nsBinding
+		shared, local := copyShallowScope(rt, sub, node, true, buf[:0]) // nsscope.go
+		defer leaveNS(rt, enterNS(rt, sub.Open(), node, shared, local))
 		// The attributes are processed first so that they reach the element
 		// before any child content closes it to them; section 6.7's rule
 		// selects attributes as well as children.

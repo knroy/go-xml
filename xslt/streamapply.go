@@ -959,7 +959,7 @@ func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, par
 	}
 	run.used = true
 	d, c := run.d, run.c
-	f := run.kidFilter(d)
+	f := &xdmstream.Filter{Leaves: true, Depth: d} // the cursor copies it
 	pos, skip := 0, false
 	for {
 		var (
@@ -1272,7 +1272,9 @@ func (run *streamRun) builtIn(rt *runtime, node *xdm.Node, mode string, params, 
 		if out.Open() == nil && sub.Open().BaseURI() == "" {
 			sub.Open().SetBaseURI(node.BaseURI())
 		}
-		copyNamespacesTo(rt, sub, node)
+		var buf [32]nsBinding
+		shared, local := copyShallowScope(rt, sub, node, true, buf[:0]) // nsscope.go
+		defer leaveNS(rt, enterNS(rt, sub.Open(), node, shared, local))
 		if err := rt.descend(); err != nil {
 			return err
 		}

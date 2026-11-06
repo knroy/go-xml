@@ -1,12 +1,15 @@
 package xslt
 
 import (
+	"context"
+	"io"
 	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // deepDoc is d nested elements around a leaf; flatDoc is d sibling elements
@@ -134,5 +137,253 @@ func TestDeepStreamHoldsNoMoreThanTree(t *testing.T) {
 		if stream > tree+tree/10 {
 			t.Errorf("%s: the streamed run allocated %d KB at depth %d, the tree's %d KB", body, stream>>10, d, tree>>10)
 		}
+	}
+}
+
+// deepNSDoc is d nested elements, the outermost declaring a default
+// namespace and two prefixes when ns; flatNSDoc is as many nodes, shallow.
+func deepNSDoc(d int, ns bool) string {
+	if !ns {
+		return deepDoc(d)
+	}
+	return `<a xmlns="urn:d" xmlns:p="urn:p" xmlns:q="urn:q">` + strings.Repeat("<a>", d-1) + "x" + strings.Repeat("</a>", d)
+}
+
+func flatNSDoc(d int, ns bool) string {
+	if !ns {
+		return flatDoc(d)
+	}
+	return `<r xmlns="urn:d" xmlns:p="urn:p" xmlns:q="urn:q">` + strings.Repeat("<a>x</a>", d-1) + "</r>"
+}
+
+// TestDeepShallowCopyIsLinear: xsl:copy and the shallow-copy built-in rule
+// asked each copied element for its in-scope namespaces, a walk up its
+// ancestors, and asked of each binding whether the result parent supplies
+// it, a walk up the result whose every step could walk up again for the
+// default namespace: an identity transform 50 000 deep took 7 s, and 5 000
+// deep under a default namespace 99 s. Each element now reads its parent's
+// answers (nsscope.go). A deep copy must cost about what a flat one of as
+// many nodes does, in both modes.
+func TestDeepShallowCopyIsLinear(t *testing.T) {
+	sheets := map[string]string{
+		"built-in": `<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`,
+		"xsl:copy": `<xsl:mode streamable="yes"/><xsl:template match="*"><xsl:copy><xsl:apply-templates/></xsl:copy></xsl:template>`,
+	}
+	for name, decls := range sheets {
+		sheet := outSheet(t, decls, ``)
+		for _, c := range []struct {
+			d  int
+			ns bool
+		}{{50000, false}, {3000, true}} {
+			var opts TransformOptions
+			opts.MaxDepth = 2 * c.d
+			opts.SourceParseOptions.MaxDepth = 2 * c.d
+			opts.MaxNodes, opts.MaxBytes = -1, -1
+			run := func(doc string, main bool) (string, time.Duration) {
+				t0 := time.Now()
+				out, err := outRun(sheet, doc, main, false, opts)
+				if err != nil {
+					t.Fatalf("%s main %v: %v", name, main, err)
+				}
+				return out, time.Since(t0)
+			}
+			var outs [2]string
+			for i, main := range []bool{false, true} {
+				_, flat := run(flatNSDoc(c.d, c.ns), main)
+				var deep time.Duration
+				outs[i], deep = run(deepNSDoc(c.d, c.ns), main)
+				if deep > 20*flat && deep > time.Second {
+					t.Errorf("%s main %v ns %v: a copy %d deep took %v, a flat one of as many nodes %v", name, main, c.ns, c.d, deep, flat)
+				}
+			}
+			if outs[0] != outs[1] {
+				t.Errorf("%s ns %v: the streamed copy differs from the tree's", name, c.ns)
+			}
+		}
+	}
+}
+
+// TestShallowCopyNamespaceRows: what the copies' namespaces are, which the
+// frames of nsscope.go must leave as they were: redeclared prefixes, the
+// default namespace undeclared and redeclared, copy-namespaces="no",
+// inherit-namespaces="no", and literal result elements rebinding a prefix
+// between the copies. The rows were taken before the frames were added;
+// they must hold with a frame for every element as with none.
+func TestShallowCopyNamespaceRows(t *testing.T) {
+	defer func(d int) { nsFrameDepth = d }(nsFrameDepth)
+	for _, nsFrameDepth = range []int{0, 1000} {
+		shallowCopyNamespaceRows(t)
+	}
+}
+
+func shallowCopyNamespaceRows(t *testing.T) {
+	const doc = `<a xmlns="urn:d" xmlns:p="urn:p"><b xmlns:p="urn:p2"><p:c><d xmlns=""><e xmlns="urn:e"><p:f xmlns:q="urn:q"><g/></p:f></e></d></p:c><h/></b><p:i/></a>`
+	const decl = `<?xml version="1.0" encoding="UTF-8"?>`
+	rows := []struct{ body, want string }{
+		{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`, "<a xmlns=\"urn:d\" xmlns:p=\"urn:p\"><b xmlns:p=\"urn:p2\"><p:c><d xmlns=\"\"><e xmlns=\"urn:e\"><p:f xmlns:q=\"urn:q\"><g/></p:f></e></d></p:c><h/></b><p:i/></a>"},
+		{`<xsl:mode streamable="yes"/><xsl:template match="*"><xsl:copy><xsl:apply-templates/></xsl:copy></xsl:template>`, "<a xmlns=\"urn:d\" xmlns:p=\"urn:p\"><b xmlns:p=\"urn:p2\"><p:c><d xmlns=\"\"><e xmlns=\"urn:e\"><p:f xmlns:q=\"urn:q\"><g/></p:f></e></d></p:c><h/></b><p:i/></a>"},
+		{`<xsl:mode streamable="yes"/><xsl:template match="*"><xsl:copy copy-namespaces="no"><xsl:apply-templates/></xsl:copy></xsl:template>`, "<a xmlns=\"urn:d\"><b><p:c xmlns:p=\"urn:p2\"><d xmlns=\"\"><e xmlns=\"urn:e\"><p:f><g/></p:f></e></d></p:c><h/></b><p:i xmlns:p=\"urn:p\"/></a>"},
+		{`<xsl:mode streamable="yes"/><xsl:template match="*"><xsl:copy inherit-namespaces="no"><xsl:apply-templates/></xsl:copy></xsl:template>`, "<a xmlns=\"urn:d\" xmlns:p=\"urn:p\"><b xmlns:p=\"urn:p2\"><p:c><d xmlns=\"\"><e xmlns=\"urn:e\"><p:f xmlns:q=\"urn:q\"><g/></p:f></e></d></p:c><h/></b><p:i/></a>"},
+		{`<xsl:template match="*"><xsl:copy><w xmlns:p="urn:w"><xsl:apply-templates/></w></xsl:copy></xsl:template>`, "<a xmlns=\"urn:d\" xmlns:p=\"urn:p\"><w xmlns:p=\"urn:w\" xmlns=\"\"><b xmlns=\"urn:d\" xmlns:p=\"urn:p2\"><w xmlns:p=\"urn:w\" xmlns=\"\"><p:c xmlns=\"urn:d\" xmlns:p=\"urn:p2\"><w xmlns:p=\"urn:w\" xmlns=\"\"><d xmlns:p=\"urn:p2\"><w xmlns:p=\"urn:w\"><e xmlns=\"urn:e\" xmlns:p=\"urn:p2\"><w xmlns:p=\"urn:w\" xmlns=\"\"><p:f xmlns=\"urn:e\" xmlns:p=\"urn:p2\" xmlns:q=\"urn:q\"><w xmlns:p=\"urn:w\" xmlns=\"\"><g xmlns=\"urn:e\" xmlns:p=\"urn:p2\"><w xmlns:p=\"urn:w\" xmlns=\"\"/></g></w></p:f></w></e></w></d></w></p:c><h xmlns=\"urn:d\" xmlns:p=\"urn:p2\"><w xmlns:p=\"urn:w\" xmlns=\"\"/></h></w></b><p:i xmlns=\"urn:d\" xmlns:p=\"urn:p\"><w xmlns:p=\"urn:w\" xmlns=\"\"/></p:i></w></a>"},
+		{`<xsl:template match="*"><xsl:copy copy-namespaces="no"><p:w xmlns:p="urn:w"><xsl:apply-templates/></p:w></xsl:copy></xsl:template>`, "<a xmlns=\"urn:d\"><p:w xmlns:p=\"urn:w\"><b><p:w><p:c xmlns:p=\"urn:p2\"><p:w xmlns:p=\"urn:w\"><d xmlns=\"\"><p:w><e xmlns=\"urn:e\"><p:w><p:f xmlns:p=\"urn:p2\"><p:w xmlns:p=\"urn:w\"><g><p:w/></g></p:w></p:f></p:w></e></p:w></d></p:w></p:c><h><p:w/></h></p:w></b><p:i xmlns:p=\"urn:p\"><p:w xmlns:p=\"urn:w\"/></p:i></p:w></a>"},
+	}
+	for _, r := range rows {
+		sheet := outSheet(t, ``, r.body)
+		for _, main := range []bool{false, true} {
+			got, err := outRun(sheet, doc, main, false, TransformOptions{})
+			if err != nil || got != decl+r.want {
+				t.Errorf("%s (main %v, frames from %d):\n got %s %v\nwant %s", r.body, main, nsFrameDepth, got, err, decl+r.want)
+			}
+		}
+	}
+	// The namespace axis of the copies, in a temporary tree.
+	axis := []struct{ attr, want string }{
+		{``, "a:=urn:d,p=urn:p,;b:=urn:d,p=urn:p2,;p:c:=urn:d,p=urn:p2,;d:=urn:d,p=urn:p2,;e:=urn:e,p=urn:p2,;p:f:=urn:e,p=urn:p2,q=urn:q,;g:=urn:e,p=urn:p2,q=urn:q,;h:=urn:d,p=urn:p2,;p:i:=urn:d,p=urn:p,;"},
+		{` copy-namespaces="no"`, "a:=urn:d,;b:=urn:d,;p:c:=urn:d,p=urn:p2,;d:=urn:d,p=urn:p2,;e:=urn:e,p=urn:p2,;p:f:=urn:e,p=urn:p2,;g:=urn:e,p=urn:p2,;h:=urn:d,;p:i:=urn:d,p=urn:p,;"},
+		{` inherit-namespaces="no"`, "a:=urn:d,p=urn:p,;b:=urn:d,p=urn:p2,;p:c:=urn:d,p=urn:p2,;d:p=urn:p2,;e:=urn:e,p=urn:p2,;p:f:=urn:e,p=urn:p2,q=urn:q,;g:=urn:e,p=urn:p2,q=urn:q,;h:=urn:d,p=urn:p2,;p:i:=urn:d,p=urn:p,;"},
+	}
+	for _, r := range axis {
+		sheet := outSheet(t, `<xsl:output method="text"/>`, `<xsl:template match="*" mode="c"><xsl:copy`+r.attr+`><xsl:apply-templates mode="c"/></xsl:copy></xsl:template>
+<xsl:template match="/"><xsl:variable name="v"><xsl:apply-templates mode="c"/></xsl:variable><xsl:for-each select="$v//*"><xsl:variable name="e" select="."/><xsl:value-of select="name()"/>:<xsl:for-each select="sort(in-scope-prefixes(.)[. ne 'xml'])"><xsl:value-of select=".||'='||namespace-uri-for-prefix(., $e)"/>,</xsl:for-each>;</xsl:for-each></xsl:template>`)
+		if got, err := outRun(sheet, doc, false, false, TransformOptions{}); err != nil || got != r.want {
+			t.Errorf("axis%s (frames from %d):\n got %s %v\nwant %s", r.attr, nsFrameDepth, got, err, r.want)
+		}
+	}
+}
+
+// deepReader reads deepDoc(d) without holding it, and calls mid once the
+// parse has asked for the first end tag: every element is then open.
+type deepReader struct {
+	d, i int
+	mid  func()
+	buf  []byte
+}
+
+func (r *deepReader) Read(p []byte) (int, error) {
+	if len(r.buf) == 0 {
+		switch {
+		case r.i < r.d:
+			n := min(r.d-r.i, 4096)
+			r.buf, r.i = []byte(strings.Repeat("<a>", n)), r.i+n
+		case r.i == r.d:
+			r.buf, r.i = []byte("x"), r.i+1
+		case r.i < 2*r.d+1:
+			if r.i == r.d+1 && r.mid != nil {
+				r.mid()
+			}
+			n := min(2*r.d+1-r.i, 4096)
+			r.buf, r.i = []byte(strings.Repeat("</a>", n)), r.i+n
+		default:
+			return 0, io.EOF
+		}
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
+}
+
+func liveHeap() uint64 {
+	var m goruntime.MemStats
+	goruntime.GC()
+	goruntime.ReadMemStats(&m)
+	return m.HeapAlloc
+}
+
+// TestDeepCopyOfHoldsNoMoreThanTree: a streamed copy-of kept, per open
+// element, the builder of its copy (one per level, each linked to its
+// parent's) and a view of it (a copy of the element in the view batch,
+// with its path, gen and record count): a million deep held 361 MB against
+// the tree's 81. The copy is now written through one builder, detached from
+// its parent's (xdmsink.Detach, Ascend), off the parse's own nodes, and the
+// tree's open path is runs (ordStack). What the stream holds with every
+// element open must stay within a fiftieth of what the tree holds once its
+// copy is made (the run's fixed costs, the cursor's buffers among them).
+func TestDeepCopyOfHoldsNoMoreThanTree(t *testing.T) {
+	const d = 200000
+	sheet := outSheet(t, `<xsl:mode streamable="yes"/>`, `<xsl:template match="/"><xsl:copy-of select="."/></xsl:template>`)
+	var opts TransformOptions
+	opts.SourceParseOptions.MaxDepth = 2 * d
+	opts.MaxNodes, opts.MaxBytes = -1, -1
+	base := liveHeap()
+	src, err := xdm.Parse(&deepReader{d: d}, opts.SourceParseOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := sheet.Transform(context.Background(), src.Root, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := liveHeap() - base
+	want := res.String()
+	goruntime.KeepAlive(src)
+	src, res = nil, nil
+	base = liveHeap()
+	var stream uint64
+	res, err = sheet.TransformReader(context.Background(), &deepReader{d: d, mid: func() { stream = liveHeap() - base }}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.String() != want {
+		t.Fatal("the streamed copy differs from the tree's")
+	}
+	t.Logf("stream %d KB with every element open, tree %d KB", stream>>10, tree>>10)
+	if stream > tree+tree/50 {
+		t.Errorf("the streamed copy-of held %d KB at depth %d, the tree %d KB", stream>>10, d, tree>>10)
+	}
+}
+
+// heapEnv is an environment resolver that reads the live heap whenever
+// environment-variable is called: a probe a stylesheet can run at the
+// point it wants measured.
+type heapEnv struct{ base, peak uint64 }
+
+func (e *heapEnv) LookupEnvironment(string) (string, bool) {
+	e.peak = max(e.peak, liveHeap()-e.base)
+	return "", false
+}
+func (e *heapEnv) EnvironmentNames() []string { return nil }
+
+// TestDeepIdentityHoldsNoMoreThanTree: the streamed identity kept, per open
+// element, the filter it read the element's children with (a run's cache,
+// one per depth); the cursor copies the caller's filter now. Measured by a
+// rule for the leaf that reads the heap, with every element open, the
+// stream must hold no more than the tree does there, within a fiftieth,
+// but for the leaf's view: a node a rule is given may be kept, so it comes
+// with copies of its ancestors, a record (40 bytes) each.
+func TestDeepIdentityHoldsNoMoreThanTree(t *testing.T) {
+	const d = 100000
+	sheet := outSheet(t, `<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`,
+		`<xsl:template match="text()"><xsl:value-of select="environment-variable('m')"/><xsl:value-of select="."/></xsl:template>`)
+	run := func(main bool) (string, uint64) {
+		env := &heapEnv{}
+		var opts TransformOptions
+		opts.MaxDepth = 2 * d
+		opts.SourceParseOptions.MaxDepth = 2 * d
+		opts.MaxNodes, opts.MaxBytes = -1, -1
+		opts.Environment = env
+		env.base = liveHeap()
+		var res *Result
+		var err error
+		if main {
+			res, err = sheet.TransformReader(context.Background(), &deepReader{d: d}, opts)
+		} else {
+			var src *xdm.Tree
+			if src, err = xdm.Parse(&deepReader{d: d}, opts.SourceParseOptions); err == nil {
+				res, err = sheet.Transform(context.Background(), src.Root, opts)
+			}
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.String(), env.peak
+	}
+	want, tree := run(false)
+	got, stream := run(true)
+	t.Logf("at the leaf: stream %d KB, tree %d KB", stream>>10, tree>>10)
+	if got != want {
+		t.Fatal("the streamed identity differs from the tree's")
+	}
+	if stream > tree+tree/50+40*d {
+		t.Errorf("the streamed identity held %d KB at depth %d, the tree %d KB", stream>>10, d, tree>>10)
 	}
 }

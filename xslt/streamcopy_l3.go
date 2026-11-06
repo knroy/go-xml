@@ -30,6 +30,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
@@ -46,16 +47,21 @@ import (
 // otherwise it keeps all of it, as AppendCopy does.
 func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, strip bool, doc func(v *xdm.Node)) error {
 	stack := []*outputBuilder{out}
+	// Below the copy's top, a copy built into a tree is written through one
+	// builder, cur, detached from its parent's and turned into the parent's
+	// when its element ends (xdmsink.Detach, Ascend): the builders of the
+	// open elements are not kept, nor their views -- an element's start is
+	// read off the parse's own node, valid until the cursor moves on, which
+	// is all copyStart reads. detached counts the open elements cur stands
+	// for.
+	var cur *outputBuilder
+	detached := 0
 	// The in-scope bindings of the open elements, an entry only where an
 	// element declares one: each copied element's come from its parent's
 	// and its own declarations, not from a walk up its ancestors, which made
 	// a deep copy quadratic.
 	var scopes []copyScope
-	start := func(top *outputBuilder, depth int) error {
-		v, err := c.View()
-		if err != nil {
-			return err
-		}
+	start := func(top *outputBuilder, v *xdm.Node, depth int) error {
 		var all []nsBinding
 		switch {
 		case len(scopes) == 0:
@@ -71,11 +77,21 @@ func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, str
 		if err != nil {
 			return err
 		}
-		stack = append(stack, sub)
+		// Once one is detached, all below it are: they build into the same tree.
+		if (detached > 0 || len(stack) > 1) && xdmsink.Detach(sub) {
+			cur = sub
+			detached++
+		} else {
+			stack = append(stack, sub)
+		}
 		return nil
 	}
 	if d > 0 {
-		if err := start(out, d); err != nil {
+		v, err := c.View()
+		if err != nil {
+			return err
+		}
+		if err := start(out, v, d); err != nil {
 			return err
 		}
 	} else if err := rt.ctx.ChargeNodes(1); err != nil {
@@ -87,16 +103,30 @@ func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, str
 			return err
 		}
 		top := stack[len(stack)-1]
+		if detached > 0 {
+			top = cur
+		}
 		switch ev.Kind {
 		case xdmstream.EndDocument:
 			return top.Refused()
 		case xdmstream.EndElement:
-			stack = stack[:len(stack)-1]
 			if n := len(scopes); n > 0 && scopes[n-1].depth == ev.Depth {
 				scopes = scopes[:n-1]
 			}
-			if err := top.Refused(); err != nil || ev.Depth == d {
+			if err := top.Refused(); err != nil {
 				return err
+			}
+			if detached > 0 {
+				if detached--; detached > 0 {
+					xdmsink.Ascend(cur)
+				} else {
+					cur = nil
+				}
+				continue
+			}
+			stack = stack[:len(stack)-1]
+			if ev.Depth == d {
+				return nil
 			}
 		case xdmstream.StartElement:
 			if err := rt.ctx.Err(); err != nil {
@@ -109,11 +139,11 @@ func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, str
 				}
 				doc(v)
 			}
-			if err := start(top, ev.Depth); err != nil {
+			if err := start(top, ev.Node, ev.Depth); err != nil {
 				return err
 			}
 		case xdmstream.Text:
-			if len(stack) > 1 { // a document node has no text children
+			if len(stack) > 1 || detached > 0 { // a document node has no text children
 				top.AppendText(ev.Node.Value())
 			}
 		case xdmstream.Comment, xdmstream.PI:
@@ -157,9 +187,9 @@ func overlayScope(parent []nsBinding, v *xdm.Node) []nsBinding {
 }
 
 // copyStart opens, in out, the copy of v, the element whose start tag the
-// cursor is at, as xsl:copy of an element opens it (copyInstr), with its
-// attributes; all is v's in-scope bindings. The builder of its content is
-// returned.
+// cursor is at (its view, or the parse's node), as xsl:copy of an element
+// opens it (copyInstr), with its attributes; all is v's in-scope bindings.
+// The builder of its content is returned.
 func copyStart(rt *runtime, out *outputBuilder, v *xdm.Node, strip bool, all []nsBinding) (*outputBuilder, error) {
 	sub := out.StartElement(v.Name())
 	el := sub.Open()

@@ -109,6 +109,7 @@ type Cursor struct {
 	// what became of the open element there; closed is Event.Closed of the
 	// next event.
 	filt        *Filter
+	filtv       Filter // filt's copy: the caller's need not outlive the call
 	quiet, hide bool
 	open        openStates
 	closed      int
@@ -405,7 +406,8 @@ func (c *Cursor) NextTag(f *Filter) (Event, error) {
 			return ev, nil
 		}
 	}
-	c.filt = f
+	c.filtv = *f
+	c.filt = &c.filtv
 	ev, err := c.resume(xdmburst.Keep)
 	c.filt, c.hide = nil, false
 	c.ev, c.viewed = ev, nil
@@ -418,7 +420,8 @@ func (c *Cursor) SkipTag(f *Filter) (Event, error) {
 	if c.ev.Kind != StartElement || c.peeked != nil || c.peekErr != nil {
 		return Event{}, errNotAtStart
 	}
-	c.filt, c.quiet = f, true
+	c.filtv = *f
+	c.filt, c.quiet = &c.filtv, true
 	ev, err := c.resume(xdmburst.Discard)
 	c.filt, c.quiet = nil, false
 	c.ev, c.viewed = ev, nil

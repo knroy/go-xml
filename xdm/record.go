@@ -119,8 +119,10 @@ type Tree struct {
 
 	chunks [][]Node
 	// open is the path of nodes still being built, outermost first: the
-	// nodes something may be appended to.
-	open []uint32
+	// nodes something may be appended to. Held as runs (ordStack): nested
+	// elements' records step evenly, so a deep tree being built does not
+	// cost a word per level besides its records.
+	open ordStack
 
 	names  []QName
 	nameIx map[QName]uint32
@@ -578,7 +580,7 @@ func (t *Tree) newRoot(kind NodeKind) *Node {
 	r.kind = uint8(kind)
 	if kind == KindElement || kind == KindDocument {
 		r.end = openEnd
-		t.open = append(t.open, r.self)
+		t.open.push(uint64(r.self))
 	} else {
 		r.v1 = 0
 	}
@@ -594,17 +596,17 @@ func NewNode(kind NodeKind, name QName, value string) *Node {
 
 // closeAll closes every node still being built.
 func (t *Tree) closeAll() {
-	for _, i := range t.open {
-		t.rec(i).end = t.n
+	for k := range t.open.len() {
+		t.rec(uint32(t.open.at(k))).end = t.n
 	}
-	t.open = t.open[:0]
+	t.open.truncate(0)
 }
 
 // closeLast closes the innermost node being built.
 func (t *Tree) closeLast() {
-	k := len(t.open) - 1
-	t.rec(t.open[k]).end = t.n
-	t.open = t.open[:k]
+	k := t.open.len() - 1
+	t.rec(uint32(t.open.at(k))).end = t.n
+	t.open.truncate(k)
 }
 
 // openTo closes the nodes being built inside p, which must itself be open.
@@ -612,15 +614,15 @@ func (t *Tree) openTo(p *Node) {
 	if t.frozen {
 		panic("xdm: appending to a parsed document")
 	}
-	for k := len(t.open) - 1; k >= 0; k-- {
-		i := t.open[k]
+	for k := t.open.len() - 1; k >= 0; k-- {
+		i := uint32(t.open.at(k))
 		if i == p.self && p.flags&fSide == 0 {
-			t.open = t.open[:k+1]
+			t.open.truncate(k + 1)
 			return
 		}
 		t.rec(i).end = t.n
 	}
-	t.open = t.open[:0]
+	t.open.truncate(0)
 	panic("xdm: appending to a node that is no longer being built")
 }
 
@@ -635,7 +637,7 @@ func (p *Node) appendChild(kind NodeKind) *Node {
 	p.v1 = c.self
 	if kind == KindElement || kind == KindDocument {
 		c.end = openEnd
-		t.open = append(t.open, c.self)
+		t.open.push(uint64(c.self))
 	} else {
 		c.v1 = 0
 	}

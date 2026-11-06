@@ -125,6 +125,16 @@ var (
 	// It returns the result nodes rolling back left charged that tree mode
 	// would not have charged, for the caller to hand back.
 	TryEnd func(b any, commit bool) int64
+	// Detach unlinks b, a builder StartElement returned for a child of an
+	// element, from its parent's builder, when b builds into a tree (no
+	// streaming, no Try buffer, not held), so that the builders of the
+	// elements above it need not be kept while it is open; it reports
+	// whether it did. Ascend then turns b, once its element is complete,
+	// into the builder of that element's parent, as the parent's own
+	// builder would be after the child: for a copy written as it is read,
+	// whose ancestors' builders would otherwise be kept to the copy's depth.
+	Detach func(b any) bool
+	Ascend func(b any)
 	// Release says b, a builder StartElement made, is no longer used by
 	// its caller: once a streaming builder's sink has written its element
 	// and taken it back, b is reused for a later element.
