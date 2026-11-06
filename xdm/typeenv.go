@@ -143,9 +143,14 @@ func (e *TypeEnvironment) RegisterUnion(name string, members []string) {
 	if e == nil || name == "" || len(members) == 0 {
 		return
 	}
+	// A member listed twice is tried twice to no effect, so only its first
+	// occurrence is kept: memberTypes="t:a t:a ..." would otherwise retain
+	// one name per reference in a table that is never evicted.
 	cp := make([]string, 0, len(members))
+	seen := make(map[string]bool, len(members))
 	for _, m := range members {
-		if m != "" && m != name {
+		if m != "" && m != name && !seen[m] {
+			seen[m] = true
 			cp = append(cp, m)
 		}
 	}

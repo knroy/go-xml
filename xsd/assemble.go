@@ -218,6 +218,18 @@ func registerDerivedTypes(s *Schema) {
 	// and the global holds the last writer, which is the documented behaviour
 	// of the name-only API.
 	env := s.typeEnv
+	// Each annotation name is a fresh "{uri}local" string, and the global
+	// tables outlive the schema. canon makes every occurrence of one name
+	// share one string, so a type referenced from many places retains its
+	// name once rather than once per reference.
+	interned := map[string]string{}
+	canon := func(n string) string {
+		if c, ok := interned[n]; ok {
+			return c
+		}
+		interned[n] = n
+		return n
+	}
 	regDerived := func(name, prim string) {
 		env.RegisterDerived(name, prim)
 		xdm.RegisterDerivedType(name, prim)
@@ -249,8 +261,8 @@ func registerDerivedTypes(s *Schema) {
 			// listItemTypeOf sees through restrictions of a list, which carry
 			// no item type of their own.
 			if item := listItemTypeOf(ct); item != nil {
-				key := xdm.AnnotationName(name.URI, name.Local)
-				if in := annotationName(item); in != "" && in != key {
+				key := canon(xdm.AnnotationName(name.URI, name.Local))
+				if in := canon(annotationName(item)); in != "" && in != key {
 					regList(key, in)
 				}
 			}
@@ -261,10 +273,10 @@ func registerDerivedTypes(s *Schema) {
 			// member list is the only thing that says what such a value can
 			// be, so it is recorded separately, the way a list's item type is.
 			if members := unionMemberTypesOf(ct); len(members) > 0 {
-				key := xdm.AnnotationName(name.URI, name.Local)
+				key := canon(xdm.AnnotationName(name.URI, name.Local))
 				names := make([]string, 0, len(members))
 				for _, m := range members {
-					if mn := annotationName(m); mn != "" && mn != key {
+					if mn := canon(annotationName(m)); mn != "" && mn != key {
 						names = append(names, mn)
 					}
 				}
@@ -288,8 +300,8 @@ func registerDerivedTypes(s *Schema) {
 					if bn := b.Name; bn.Local != "" && bn.URI != NSSchema &&
 						!(bn.URI == name.URI && bn.Local == name.Local) {
 						regDerived(
-							xdm.AnnotationName(name.URI, name.Local),
-							xdm.AnnotationName(bn.URI, bn.Local))
+							canon(xdm.AnnotationName(name.URI, name.Local)),
+							canon(xdm.AnnotationName(bn.URI, bn.Local)))
 					}
 				}
 				continue
@@ -302,10 +314,10 @@ func registerDerivedTypes(s *Schema) {
 			// only reachable through the simple-content path stayed invisible.
 			if sc := ct.SimpleContent; sc != nil {
 				if members := unionMemberTypesOf(sc); len(members) > 0 {
-					key := xdm.AnnotationName(name.URI, name.Local)
+					key := canon(xdm.AnnotationName(name.URI, name.Local))
 					names := make([]string, 0, len(members))
 					for _, m := range members {
-						if mn := annotationName(m); mn != "" && mn != key {
+						if mn := canon(annotationName(m)); mn != "" && mn != key {
 							names = append(names, mn)
 						}
 					}
@@ -332,8 +344,8 @@ func registerDerivedTypes(s *Schema) {
 				if bn := b.Name; bn.Local != "" && bn.URI != NSSchema &&
 					!(bn.URI == name.URI && bn.Local == name.Local) {
 					regDerived(
-						xdm.AnnotationName(name.URI, name.Local),
-						xdm.AnnotationName(bn.URI, bn.Local))
+						canon(xdm.AnnotationName(name.URI, name.Local)),
+						canon(xdm.AnnotationName(bn.URI, bn.Local)))
 					continue
 				}
 			}
@@ -344,8 +356,8 @@ func registerDerivedTypes(s *Schema) {
 		// The nearest named built-in ancestor is what the value atomises as,
 		// which is exactly what annotationName computes for the base.
 		if base != nil {
-			key := xdm.AnnotationName(name.URI, name.Local)
-			if prim := annotationName(base); prim != "" && prim != key {
+			key := canon(xdm.AnnotationName(name.URI, name.Local))
+			if prim := canon(annotationName(base)); prim != "" && prim != key {
 				regDerived(key, prim)
 			}
 		}
