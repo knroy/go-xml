@@ -904,7 +904,10 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// no xsl:import reached; see compileBudget.
 	nested := opts.budget != nil
 	if !nested {
-		opts.budget = &compileBudget{}
+		opts.budget = &compileBudget{maxSchemaBytes: opts.MaxSchemaBytes}
+		if opts.MaxSchemaBytes == 0 {
+			opts.budget.maxSchemaBytes = DefaultMaxSchemaBytes
+		}
 	}
 	c := &compiler{
 		opts: opts,
@@ -1163,6 +1166,21 @@ type CompileOptions struct {
 	// declares its entities that way -- sets AllowDOCTYPE here, and thereby
 	// says so deliberately rather than having it decided for it.
 	SchemaParseOptions xdm.ParseOptions
+
+	// MaxSchemaBytes bounds the total schema source text one compilation may
+	// read through SchemaResolver, cumulatively rather than per declaration:
+	// every xsl:import-schema of every module and package, the documents each
+	// schema reaches through its own xs:include, xs:import and xs:redefine,
+	// and the compilations fn:transform starts from the static phase all draw
+	// on the one allowance. Zero means DefaultMaxSchemaBytes. An inline
+	// <xs:schema> is part of the stylesheet module and is not charged; what it
+	// includes is.
+	//
+	// Exceeding it fails the compilation with an error wrapping
+	// xdm.ErrResourceLimit rather than XTSE0220: a truncated schema is a
+	// schema whose components are partly missing, and the stylesheet is never
+	// compiled against one.
+	MaxSchemaBytes int64
 
 	// PackageResolver loads the packages named by xsl:use-package. Nil
 	// disables package composition, for the same reason a nil Resolver
