@@ -2,6 +2,7 @@ package xsd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"strings"
@@ -537,11 +538,19 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 	}
 	// Arguments are clipped before formatting so the full string is never
 	// copied, and the message after, for arguments that are neither.
+	//
+	// A cause that is a resource refusal makes the failure one too, so a
+	// value the processor declined to decide (see maxYearDigits) is not
+	// reported as a document found invalid.
+	var sentinel error
 	for i, a := range args {
 		switch x := a.(type) {
 		case string:
 			args[i] = clip(x, maxMessage)
 		case error:
+			if errors.Is(x, xdm.ErrResourceLimit) {
+				sentinel = xdm.ErrResourceLimit
+			}
 			args[i] = clip(x.Error(), maxMessage)
 		}
 	}
@@ -549,6 +558,7 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 		Code:    code,
 		Message: clip(fmt.Sprintf(format, args...), maxMessage),
 		Path:    v.pathString(),
+		Err:     sentinel,
 	}
 	if t := v.twins[n]; t != nil {
 		n = t

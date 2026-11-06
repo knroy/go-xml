@@ -1,8 +1,11 @@
 package xsd
 
 import (
+	"fmt"
 	"math/big"
 	"strings"
+
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Comparison of the date, time and duration types.
@@ -230,12 +233,68 @@ func parseTime(v string, out *big.Rat) bool {
 	return true
 }
 
-// parseYear reads an optionally signed decimal year of any length.
+// maxYearDigits is the most year digits a date or time value may have.
+//
+// The year is unbounded in the lexical space, but converting it is not free:
+// big.Int.SetString is superlinear in the digit count, so a megabyte-long year
+// cost seconds every time a facet, enumeration or key compared it. XSD 1.1
+// Part 2 §5.4 (Partial Implementation of Infinite Datatypes) lets a processor
+// limit the year digits it supports, provided it supports at least four. A
+// thousand is far past any year a document means and keeps one conversion in
+// microseconds.
+const maxYearDigits = 1000
+
+// yearDigits returns the length of the year of a date or time literal of a
+// primitive with a year (0 for the others): the run of digits after an
+// optional leading '-'. The literal is already in the lexical space, so that
+// run is the whole year.
+func yearDigits(v, primitive string) int {
+	switch primitive {
+	case "dateTime", "date", "gYear", "gYearMonth":
+	default:
+		return 0
+	}
+	v = strings.TrimPrefix(v, "-")
+	n := 0
+	for n < len(v) && v[n] >= '0' && v[n] <= '9' {
+		n++
+	}
+	return n
+}
+
+// checkYearDigits refuses a value whose year runs past maxYearDigits. The
+// refusal wraps xdm.ErrResourceLimit: the value is not invalid, this
+// processor declines to decide it, and a caller has to be able to tell the two
+// apart.
+func checkYearDigits(normalized, primitive string) error {
+	if n := yearDigits(normalized, primitive); n > maxYearDigits {
+		return fmt.Errorf(
+			"the year of %s has %d digits, more than the %d this processor "+
+				"supports (XSD 1.1 Part 2 §5.4): %w",
+			truncate(normalized), n, maxYearDigits, xdm.ErrResourceLimit)
+	}
+	return nil
+}
+
+// parseYear reads an optionally negative decimal year of up to maxYearDigits
+// digits.
 //
 // The year is unbounded in the lexical space, and refusing one too long for
 // an int64 left every facet, enumeration and key that compares it
-// unconstrained: a caller that cannot compare a value lets it pass.
+// unconstrained: a caller that cannot compare a value lets it pass. A longer
+// year is refused before it reaches here, by checkYearDigits, as a resource
+// limit. The digits are checked first because SetString also takes a '+',
+// which the lexical space does not.
 func parseYear(v string, out *big.Int) bool {
+	digits := strings.TrimPrefix(v, "-")
+	if digits == "" || len(digits) > maxYearDigits {
+		return false
+	}
+	for i := 0; i < len(digits); i++ {
+		if digits[i] < '0' || digits[i] > '9' {
+			return false
+		}
+	}
 	_, ok := out.SetString(v, 10)
 	return ok
 }

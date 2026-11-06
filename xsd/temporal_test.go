@@ -1,6 +1,8 @@
 package xsd
 
 import (
+	"errors"
+	"math/big"
 	"strings"
 	"testing"
 
@@ -154,6 +156,54 @@ func TestValidateTemporalBoundsLargeYear(t *testing.T) {
 	assertInvalid(t, schema, `<y>99999999999999999999</y>`, "maxInclusive")
 	assertValid(t, schema, `<y>-99999999999999999999</y>`)
 	assertValid(t, schema, `<d>2024-06-01Z</d>`)
+}
+
+// big.Int.SetString is superlinear in the digit count, so a megabyte-long year
+// cost seconds per comparison. Part 2 §5.4 lets a processor limit the year
+// digits it supports (to no fewer than four), so a year past maxYearDigits is
+// refused as a resource limit, a verdict of "cannot decide" rather than
+// "invalid". A year well inside the limit still compares exactly.
+func TestValidateTemporalYearDigitLimit(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="y">
+	    <xs:restriction base="xs:gYear">
+	      <xs:maxInclusive value="100000000000000000000000000000"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	  <xs:element name="y" type="y"/>
+	  <xs:element name="d">
+	    <xs:complexType><xs:attribute name="at" type="xs:gYearMonth"/></xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	long := "1" + strings.Repeat("0", 1999)
+	for _, doc := range []string{
+		`<y>` + long + `</y>`,
+		`<y>-` + long + `</y>`,
+		`<d at="` + long + `-01"/>`,
+	} {
+		err := validateString(t, schema, doc)
+		if !errors.Is(err, xdm.ErrResourceLimit) {
+			t.Errorf("%.40s: Validate = %v, want a resource-limit refusal", doc, err)
+		}
+	}
+
+	assertValid(t, schema, `<y>100000000000000000000000000000</y>`)
+	assertInvalid(t, schema, `<y>100000000000000000000000000001</y>`, "maxInclusive")
+	assertValid(t, schema, `<y>99999999999999999999999999999</y>`)
+	assertInvalid(t, schema, `<y>+2024</y>`, "")
+
+	// SetString accepts a sign, so the year is checked as digits first.
+	var y big.Int
+	for _, v := range []string{"+2024", "2_024", "", "-", "1" + strings.Repeat("0", maxYearDigits)} {
+		if parseYear(v, &y) {
+			t.Errorf("parseYear(%q) accepted", v)
+		}
+	}
+	if !parseYear("-"+strings.Repeat("9", maxYearDigits), &y) {
+		t.Errorf("parseYear refused a year of maxYearDigits digits")
+	}
 }
 
 func TestValidateDurationBounds(t *testing.T) {

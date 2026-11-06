@@ -245,6 +245,10 @@ func validateAtomicValueBoundsIn(lexical string, t *SimpleType, version Version,
 	if err := checkLexicalSpaceVersion(normalized, prim, version); err != nil {
 		return "", err
 	}
+	// Before any facet or key converts it; see maxYearDigits.
+	if err := checkYearDigits(normalized, prim); err != nil {
+		return "", err
+	}
 	// The integer branch narrows the *lexical* space, not only the value
 	// space: xs:integer has no decimal point at all, so "+0.0" is not an
 	// integer literal even though it denotes zero and has no fraction

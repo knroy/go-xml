@@ -361,6 +361,7 @@ like any other:
 | `ValidateOptions.MaxErrors` | 100 | failures collected before stopping |
 | `ValidateOptions.MaxDepth` | 1000 | validation recursion, and so its stack use |
 | `DefaultMaxMatchStates` | 4096 | simultaneous content-model readings per element |
+| *(fixed)* | 1000 | year digits in a date or time value (Part 2 §5.4); a longer year is refused with `xdm.ErrResourceLimit`, not reported invalid |
 
 `MaxContentModelPositions` exists because a content model can be far larger
 than the text describing it. A group DAG in which each of n groups references
