@@ -360,32 +360,14 @@ func prunedInstrOK(n *xdm.Node, top bool, up int) bool {
 			ok = false // it could hand a member on as the node itself
 			return
 		}
-		for a := range n.Attrs() {
-			if a.Name().URI != "" && !(xsl && a.Name().URI == xdm.NSXSL) {
-				continue
-			}
+		if !nodeExprs(n, func(a *xdm.Node, e xpath.Expr, pattern bool) bool { // streamcopy_l3group.go
 			if top && a.Name().Local == "select" {
-				continue
+				return true
 			}
-			var srcs []string
-			pattern := xsl && patternAttrs[a.Name().Local]
-			if xsl && (exprAttrs[a.Name().Local] || pattern) {
-				srcs = []string{a.Value()}
-			} else if strings.ContainsAny(a.Value(), "{}") {
-				exprs, valid := avtExpressions(a.Value())
-				if !valid {
-					ok = false
-					return
-				}
-				srcs = exprs
-			}
-			for _, src := range srcs {
-				e := parseAt(n, src)
-				if e == nil || !prunedExprOK(e, up) || pattern && positionalPattern(e) {
-					ok = false
-					return
-				}
-			}
+			return prunedExprOK(e, up) && !(pattern && positionalPattern(e))
+		}) {
+			ok = false
+			return
 		}
 		for ch := range n.Children() {
 			check(ch, false)

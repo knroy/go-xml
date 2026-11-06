@@ -343,6 +343,8 @@ func TestStreamGroupByEventCopies(t *testing.T) {
 			{`<xsl:variable name="m" select="map { 'x' : current-group()/sub/@x/string(), 'n' : count(current-group()) }"/><g n="{$m?n}"><xsl:value-of select="$m?x" separator=","/></g>`, true},
 			{`<g k="{current-grouping-key()}"><xsl:copy-of select="current-group()/sub"/></g>`, true},
 			{`<g k="{current-grouping-key()}"><xsl:copy-of select="current-group()"/></g>`, true},
+			// An attribute value template on a namespaced attribute is read too.
+			{`<g xmlns:q="urn:q" q:a="{count(ancestor::*)}" n="{count(current-group())}"/>`, true},
 			// Two consuming operands (current-group() is consuming, §19.8.9.4):
 			// roaming and free-ranging by §19.8.1's general rules, a verdict
 			// the core does not trust.
@@ -460,10 +462,10 @@ func TestStreamForkGroupByMemberReads(t *testing.T) {
 		{`@k`, `<g s="{sum(current-group() ! @v)}"/>`, "-", ""},
 		{`@k`, `<xsl:variable name="m" select="current-group()"/><g n="{count($m)}"/>`, "-", ""},
 		{`@k`, `<xsl:copy/>`, "-", ""},
-		{`@k`, `<g xsl:use-attribute-sets="s"/>`, "-", ""},
 		{`@k`, `<xsl:for-each-group select="current-group()/a" group-adjacent="."><g/></xsl:for-each-group>`, "-", ""},
 		{`@k`, `<xsl:for-each select="1 to 2"><g n="{.}"/></xsl:for-each>`, "-", ""},
 		{`*:k`, `<g/>`, "-", ""},
+		{`@k`, `<g xmlns:q="urn:q" q:s="{sum(current-group()/@w)}"/>`, "k,w", ""},
 	} {
 		sheet := mainSheet(`<xsl:template match="/doc"><xsl:for-each-group select="rec" group-by="` + c.by + `">` +
 			c.body + `</xsl:for-each-group></xsl:template>`)
@@ -521,6 +523,7 @@ func TestStreamForkGroupByPrunedMembers(t *testing.T) {
 			`<g s="{sum(current-group()/@v)}"/>`,
 			`<g m="{max(current-group()/@v ! number())}"/>`,
 			`<g j="{string-join(current-group()/a, ',')}"/>`,
+			`<g xmlns:q="urn:q" q:s="{sum(current-group()/@v)}"/>`,
 			`<g><xsl:copy-of select="current-group()/b"/></g>`,
 			`<xsl:if test="count(current-group()) gt 1"><g n="{name()}" p="{position()}"/></xsl:if>`,
 		} {
@@ -565,5 +568,46 @@ func TestStreamForkGroupByPrunedMembers(t *testing.T) {
 	t.Logf("count-only body allocated: stream %d, tree %d (%.2fx)", sa, ta, float64(sa)/float64(ta))
 	if float64(sa) > 0.6*float64(ta) {
 		t.Errorf("a count-only body allocates %.2fx the tree's bytes (%d vs %d)", float64(sa)/float64(ta), sa, ta)
+	}
+}
+
+// TestCopyFreeBodyReadsEveryRoute: copyFreeBody sees every expression a
+// body evaluates, or refuses: attribute value templates on namespaced
+// attributes of literal result elements, attribute sets (their bodies are
+// elsewhere), shadow attributes (made at compile time), and grouping
+// patterns, which may test a member's parent or position.
+func TestCopyFreeBodyReadsEveryRoute(t *testing.T) {
+	for _, c := range []struct {
+		attrs, body string
+		ok          bool
+	}{
+		{`group-by="@k"`, `<g xmlns:q="urn:q" q:a="{@k}"/>`, true},
+		{`group-by="@k"`, `<g xmlns:q="urn:q" q:a="{count(ancestor::*)}"/>`, false},
+		{`group-by="@k"`, `<g xmlns:q="urn:q" q:a="{generate-id(.)}"/>`, false},
+		{`group-by="@k"`, `<g xsl:use-attribute-sets="s"/>`, false},
+		{`group-by="@k"`, `<xsl:element name="g" use-attribute-sets="s"/>`, false},
+		{`group-by="@k"`, `<xsl:copy select="current-group()[1]" use-attribute-sets="s"/>`, false},
+		{`group-by="@k"`, `<g><xsl:value-of _select="{'path(.)'}"/></g>`, false},
+		{`group-by="@k"`, `<g xsl:_use-attribute-sets="{'s'}"/>`, false},
+		{`group-by="@k" xsl:use-when="true()"`, `<g/>`, true},
+		{`group-starting-with="rec[@k = 'a']"`, `<xsl:sort select="@k"/><g/>`, true},
+		{`group-starting-with="doc/rec"`, `<xsl:sort select="@k"/><g/>`, false},
+		{`group-starting-with="rec[exists(parent::doc)]"`, `<xsl:sort select="@k"/><g/>`, false},
+		{`group-ending-with="rec[root(.)]"`, `<xsl:sort select="@k"/><g/>`, false},
+		{`group-ending-with="rec[2]"`, `<xsl:sort select="@k"/><g/>`, false},
+		{`group-adjacent="count(ancestor::*)"`, `<xsl:sort select="@k"/><g/>`, false},
+		{`group-by="@k"`, `<xsl:for-each-group select="current-group()" group-starting-with="//rec"><g/></xsl:for-each-group>`, false},
+		{`group-by="@k"`, `<xsl:merge><xsl:merge-source for-each-item="root(.)" select="."><xsl:merge-key select="1"/></xsl:merge-source><xsl:merge-action/></xsl:merge>`, false},
+	} {
+		sheet := mainSheet(`<xsl:attribute-set name="s"><xsl:attribute name="p" select="path(.)"/></xsl:attribute-set>` +
+			`<xsl:template match="/doc"><xsl:for-each-group select="rec" ` + c.attrs + `>` + c.body + `</xsl:for-each-group></xsl:template>`)
+		tree, err := xdm.ParseString(sheet, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		el := tree.Root.FirstChild().FirstChild().NextSibling().FirstChild()
+		if got := copyFreeBody(el); got != c.ok {
+			t.Errorf("%s %s: copy-free %v, want %v", c.attrs, c.body, got, c.ok)
+		}
 	}
 }
