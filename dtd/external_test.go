@@ -246,8 +246,11 @@ func TestNestedConditionalSections(t *testing.T) {
 	if err := loadCheck(t, doc+`<r><a outer="x"/></r>`, outerInclude); err != nil {
 		t.Errorf("an INCLUDE's own declarations should apply: %v", err)
 	}
-	if err := loadCheck(t, doc+`<r><a outer="x" inner="y"/></r>`, outerInclude); err != nil {
-		t.Errorf("the nested IGNORE should not have made inner required: %v", err)
+	// inner was never declared, so it is reported as undeclared, not as a
+	// required attribute.
+	if err := loadCheck(t, doc+`<r><a outer="x" inner="y"/></r>`, outerInclude); err == nil ||
+		!strings.Contains(err.Error(), "attribute inner is not declared") {
+		t.Errorf("the nested IGNORE should have left inner undeclared: %v", err)
 	}
 	if err := loadCheck(t, doc+`<r><a/></r>`, outerInclude); err == nil {
 		t.Error("the outer INCLUDE should have made outer #REQUIRED")

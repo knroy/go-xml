@@ -121,6 +121,43 @@ func TestAttributes(t *testing.T) {
 	}
 }
 
+// XML 1.0 §3.3.1 VC Attribute Value Type: every attribute must be declared,
+// and names are matched as written, prefix included, as a DTD declares them.
+func TestUndeclaredAndPrefixedAttributes(t *testing.T) {
+	const dt = `<!DOCTYPE order [<!ELEMENT order EMPTY>` +
+		`<!ATTLIST order id CDATA #REQUIRED xml:lang (en) #IMPLIED>` +
+		`<!ELEMENT r EMPTY>]>`
+	for _, c := range []struct{ doc, want string }{
+		{`<order id="1"/>`, ""},
+		{`<order id="1" xml:lang="en"/>`, ""},
+		{`<order xmlns="urn:other" id="1"/>`, ""}, // xmlns stays exempt
+		{`<order/>`, "required attribute id is missing"},
+		{`<order id="1" admin="true"/>`, "attribute admin is not declared"},
+		{`<order id="1" xml:lang="zz"/>`, `attribute xml:lang = "zz" is not one of en`},
+		{`<o:order xmlns:o="urn:other" id="1"/>`, "element o:order is not declared"},
+		{`<r evil="1"/>`, "attribute evil is not declared"},
+	} {
+		err := check(t, dt+c.doc)
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: %v", c.doc, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: got %v, want %q", c.doc, err, c.want)
+		}
+	}
+	tree, err := xdm.ParseString(dt+`<order id="1" admin="true"/>`, xdm.ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := Parse(tree.DocType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(tree.Root, d, Options{AllowUndeclared: true}); err != nil {
+		t.Errorf("AllowUndeclared should skip an undeclared attribute: %v", err)
+	}
+}
+
 // ID must be unique and IDREF must resolve — including forward, which is why
 // references are checked after the whole document is read.
 func TestIDAndIDREF(t *testing.T) {

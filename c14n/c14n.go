@@ -434,8 +434,9 @@ func Func(root *xdm.Node, f func(*xdm.Node) bool) NodeSet { return funcSet{root,
 // as a node set rooted at the top of doc's tree.
 //
 // ns supplies prefix bindings for the expression, which is compiled as
-// XPath 2.0 (an XPath 1.0 transform expression is almost always also valid
-// 2.0). Namespace nodes the expression returns are ignored; see the package
+// XPath 2.0 and evaluated in XPath 1.0 compatibility mode, so a 1.0
+// transform expression yields the 1.0 node set (relational comparisons
+// convert to numbers, for instance). Namespace nodes the expression returns are ignored; see the package
 // documentation. ExcludeSubtree is faster and should be preferred where it
 // applies.
 func FromXPath(doc *xdm.Node, expr string, ns map[string]string) (NodeSet, error) {
@@ -443,6 +444,7 @@ func FromXPath(doc *xdm.Node, expr string, ns map[string]string) (NodeSet, error
 	if err != nil {
 		return nil, err
 	}
+	c = c.WithCompatMode(true) // XML-DSig transforms are XPath 1.0
 	seq, err := c.Eval(xpath.NewContext(doc, xpath.Builtins()))
 	if err != nil {
 		return nil, err
@@ -484,14 +486,15 @@ type NamespaceSet interface {
 // Because namespace nodes are filtered like any other, the result is a
 // NamespaceSet and may keep part of an element's namespace axis. FromXPath,
 // by contrast, takes the nodes an expression returns and lets namespace
-// declarations follow their elements. The filter is compiled as XPath 2.0,
-// with ns supplying its prefix bindings; the XML-DSig here() function is not
-// provided.
+// declarations follow their elements. The filter is compiled as XPath 2.0
+// and evaluated in XPath 1.0 compatibility mode, with ns supplying its prefix
+// bindings; the XML-DSig here() function is not provided.
 func FromXPathFilter(doc *xdm.Node, filter string, ns map[string]string) (NodeSet, error) {
 	c, err := xpath.Compile(filter, prefixMap(ns))
 	if err != nil {
 		return nil, err
 	}
+	c = c.WithCompatMode(true) // XML-DSig transforms are XPath 1.0
 	root := top(doc)
 	seq, err := allNodes.Eval(xpath.NewContext(root, xpath.Builtins()))
 	if err != nil {

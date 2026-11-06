@@ -241,6 +241,11 @@ type Options struct {
 // caller must be able to tell them apart.
 const maxIncludeDepth = 40
 
+// maxSchemaFetches bounds the include/externalRef fetches of one compilation,
+// counted over every route rather than per chain: a diamond is legal and is
+// fetched once per route, so repeated inclusion grows exponentially in depth.
+const maxSchemaFetches = 10_000
+
 // resolveHref turns the href written on n into the reference a Resolver sees.
 //
 // The base is the nearest xml:base above n, falling back to where the schema

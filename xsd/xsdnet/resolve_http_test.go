@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/fileuri"
 )
 
 func TestHTTPResolverHostPolicy(t *testing.T) {
@@ -97,4 +99,21 @@ func TestHTTPResolverFallsBackToFiles(t *testing.T) {
 		t.Fatalf("a local location should still resolve: %v", err)
 	}
 	rc.Close()
+}
+
+func TestHTTPResolverRefusesLocalUnderRemoteBase(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "secret.xsd")
+	if err := os.WriteFile(p, []byte(`<a/>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &HTTPResolver{}
+	rc, _, err := r.Resolve("", fileuri.Of(p), "http://remote.example/a.xsd")
+	if err == nil {
+		rc.Close()
+		t.Fatal("a file: location under a remote base was opened")
+	}
+	if !strings.Contains(err.Error(), "is not permitted") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
