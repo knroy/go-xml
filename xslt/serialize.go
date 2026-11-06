@@ -790,6 +790,9 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 			s.fail(err)
 			return
 		}
+		if s.rawEnd(n.Value()) {
+			return
+		}
 		s.indent(depth)
 		s.writeString("<!--")
 		s.writeString(n.Value())
@@ -798,6 +801,9 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 	case xdm.KindPI:
 		if err := s.validatePI(n.Name().Local, n.Value()); err != nil {
 			s.fail(err)
+			return
+		}
+		if s.rawEnd(n.Value()) {
 			return
 		}
 		// The HTML method ends a processing instruction at the first ">"
@@ -954,6 +960,14 @@ func (s *serializer) openTag(n *xdm.Node, depth, base int, nonEmpty bool) (elemS
 	// declaration. Both spellings are dropped, the HTML5 "charset" form and
 	// the HTTP-header form, but only as children of that head (§7.4.13).
 	if s.html && htmlser.ReplacedMeta(s.head, n) {
+		return st, false
+	}
+	// A script or style inside another writes an end tag of its own name
+	// into the raw content, and an HTML parser takes that for the outer
+	// element's end: what follows it is live markup. Same rule as rawEnd.
+	if s.rawText && isRawTextElement(n.Name().Local) {
+		s.fail(fmt.Errorf("SERE0007: %s inside %s would end it; it cannot "+
+			"be escaped in the html output method", n.Name().Local, s.rawTextName))
 		return st, false
 	}
 	s.indent(depth)
@@ -2052,8 +2066,11 @@ func (s *serializer) singleQuoted(segs []mapSegment) bool {
 // that the output version cannot write, and reports whether there was one:
 // a C0 control other than TAB, LF and CR under an XML-based method at XML
 // 1.0. writeAttrRune would refuse it; inside an HTML raw-text element nothing
-// is escaped and nothing is refused.
+// is escaped, and only the "</" rawEnd refuses.
 func (s *serializer) attrErr(v string) bool {
+	if s.rawEnd(v) {
+		return true
+	}
 	if s.rawText || s.html && !s.xhtml || s.xml11() {
 		return false
 	}
@@ -2066,6 +2083,19 @@ func (s *serializer) attrErr(v string) bool {
 		}
 	}
 	return false
+}
+
+// rawEnd refuses v, which is about to be written raw inside an HTML raw-text
+// element, when it holds "</": the rule the text-node case enforces, for the
+// other raw writes there -- a descendant's attribute value, a comment, a
+// processing instruction. Each would otherwise close the element early.
+func (s *serializer) rawEnd(v string) bool {
+	if !s.rawText || !strings.Contains(v, "</") {
+		return false
+	}
+	s.fail(fmt.Errorf("SERE0007: %s content contains '</', which would end "+
+		"the element; it cannot be escaped in the html output method", s.rawTextName))
+	return true
 }
 
 // writeAttrSeg escapes one run of an attribute value that no character map
