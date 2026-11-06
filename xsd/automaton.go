@@ -135,12 +135,20 @@ type counter struct {
 // DefaultMaxContentModelPositions. Callers holding a Schema pass its retained
 // budget, so a model validates under the same limit its constraints were
 // checked under — see Schema.maxPositions.
+//
+// Every follow set is bounded by maxUPAStateWidth, the width checkUPA already
+// refuses at load. A schema that loaded never reaches it, so for modelFor it
+// changes nothing; what it covers is NewSequenceMatcher, whose DTD caller has
+// no UPA gate in front of it. A DTD <!ELEMENT r (a?,a?,...)> of 8192 members
+// otherwise built ~n²/2 edges with a linear dedup per edge — 36 s and 4 GB for
+// a 24 KB internal subset — before the position budget refused it, and did so
+// again for every <r/>. The bound refuses that model after ~256 positions.
 func compileContentModel(p *Particle, limit int) (*contentModel, error) {
-	return compileForChecks(p, limit, 0)
+	return compileForChecks(p, limit, maxUPAStateWidth)
 }
 
 // compileForChecks is compileContentModel with every follow set bounded by
-// maxFollow (zero: unbounded).
+// maxFollow (zero: unbounded, which only tests use).
 //
 // checkUPA refuses any state wider than maxUPAStateWidth, and a dense model —
 // a sequence of n optional elements — has follow sets that wide long before
