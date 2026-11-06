@@ -3,8 +3,11 @@ package xslt
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // pollCtx reports, on polled, each time something asks it whether it is done.
@@ -77,5 +80,61 @@ func TestCompileContextCancelsWaitAndStaticPhase(t *testing.T) {
 	defer cancelAgain()
 	if _, err := CompileContext(again, quick, CompileOptions{}); err != nil {
 		t.Fatalf("the slot was not released: %v", err)
+	}
+}
+
+// fn:transform called while a transformation runs compiles its stylesheet
+// under the transformation's context, so cancelling the transformation stops
+// the nested static phase too.
+func TestRuntimeTransformCompilesUnderTransformContext(t *testing.T) {
+	outer := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+  <xsl:param name="inner"/>
+  <xsl:template name="main">
+    <xsl:sequence select="transform(map{'stylesheet-node': $inner,
+      'initial-template': QName('', 'main'), 'delivery-format': 'raw'})?output"/>
+  </xsl:template>
+</xsl:stylesheet>`
+	sheet, err := Compile(parseSheet(t, outer), CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner, err := xdm.ParseString(slowStatic, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := sheet.Transform(ctx, nil, TransformOptions{InitialTemplate: "main",
+			Params: map[string]xdm.Sequence{"inner": {inner.Root}}})
+		done <- err
+	}()
+	// The nested compilation holds the slot once its static phase is running;
+	// a compile that cannot get the slot is the signal.
+	for {
+		probe, cancelProbe := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		_, err := CompileContext(probe, parseSheet(t, wrap(`<xsl:template match="/"/>`)), CompileOptions{})
+		cancelProbe()
+		if err != nil {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("the transform finished before it was cancelled: %v", err)
+		default:
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		// The nested compilation itself must be what stopped: one compiled
+		// under context.Background() runs to the end, and the transform is
+		// then cancelled after it, which is a different error.
+		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "compiling the stylesheet") {
+			t.Fatalf("got %v, want the nested compilation cancelled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelling the transform did not stop the nested compilation")
 	}
 }

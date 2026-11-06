@@ -946,16 +946,20 @@ func compileNested(
 		budget:       rt.budget,
 		StaticParams: static,
 		MaxVersion:   maxVersion,
+		// The nested compilation is cancelled with the transformation, or
+		// the static phase, that asked for it.
+		ctx: rt.goCtx,
 	}
 	// A transform reached from the static phase is running INSIDE a Compile
 	// that holds compileSlot, so it must not ask for the lock again. rt.static
 	// is set only from the runtime the static phase builds, and is the only
 	// thing that distinguishes the two paths.
-	compile := Compile
+	var sheet *Stylesheet
 	if rt.static {
-		compile = compileNestedLocked
+		sheet, err = compileNestedLocked(root, copts)
+	} else {
+		sheet, err = CompileContext(rt.goCtx, root, copts)
 	}
-	sheet, err := compile(root, copts)
 	if err != nil {
 		if xdm.ErrorCode(err) != "" {
 			return nil, fmt.Errorf("fn:transform: compiling the stylesheet: %w", err)
