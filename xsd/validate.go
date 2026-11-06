@@ -662,13 +662,16 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			v.fail(el, "cvc-elt.4.2", "%v", err)
 			return nil
 		}
-		if !v.derivedFrom(t, decl.Type) {
+		// typ, not decl.Type: under XSD 1.1 it is the selected type,
+		// and checking the declared one let xsi:type escape an
+		// xs:error alternative by naming the declared type.
+		if !v.derivedFrom(t, typ) {
 			v.fail(el, "cvc-elt.4.3",
 				"xsi:type %q is not derived from the declared type",
 				xsiType.Value())
 			return nil
 		}
-		if m, blocked := v.substitutionBlocked(t, decl); blocked {
+		if m, blocked := v.substitutionBlocked(t, decl, typ); blocked {
 			v.fail(el, "cvc-elt.4.3",
 				"xsi:type %q substitutes by %v, which is blocked",
 				xsiType.Value(), m)
@@ -729,8 +732,18 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			// typeDef01202m1 are the pair: xsi:nil="true" with
 			// xsi:type="xsd:string" and an ordinary attribute
 			// alongside, expected invalid.
-			if st, ok := typ.(*SimpleType); ok && st != nil {
+			//
+			// The same holds for a complex type: Element Locally Valid
+			// (Complex Type) conditions only its clause 2, the content, on
+			// nilling. The type must not be abstract (1), the attributes
+			// must be valid and the required ones present (3, 4, which is
+			// also where xs:ID attributes are recorded), and its
+			// assertions hold (6).
+			switch t := typ.(type) {
+			case *SimpleType:
 				v.checkNoForeignAttributes(el, nil, nil)
+			case *ComplexType:
+				v.nilledComplex(el, t)
 			}
 			v.annotate(el, typ)
 			// dm:nilled is recorded on the node rather than left to be
@@ -954,6 +967,25 @@ func (v *validator) validateAgainstType(el *xdm.Node, typ Type, decl *ElementDec
 
 	v.annotate(el, typ)
 	return tables
+}
+
+// nilledComplex is validateComplexType for a nilled element: everything but
+// the content.
+func (v *validator) nilledComplex(el *xdm.Node, t *ComplexType) {
+	if t.Abstract {
+		v.fail(el, "cvc-type.2",
+			"type {%s}%s is abstract and cannot validate an element directly",
+			t.Name.URI, t.Name.Local)
+		return
+	}
+	if v.schema.Version == Version11 && len(t.Assertions) > 0 {
+		v.assertScopes++
+		defer func() {
+			v.checkAssertions(el, t)
+			v.assertScopes--
+		}()
+	}
+	v.validateAttributes(el, t)
 }
 
 // validateComplexType checks an element against a complex type.
@@ -1896,21 +1928,26 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 					v.fail(kid, "cvc-elt.4.2", "%v", err)
 					return nil
 				}
-				v.validateAgainstType(kid, t, nil)
-				return nil
+				return mergeTables(v.validateAgainstType(kid, t, nil))
 			}
 			// The annotation is saved and restored around this
 			// assessment, and the resolved fields travel WITH it:
 			// they are halves of one fact, so restoring the name
 			// while leaving the meaning from the anyType pass would
 			// describe the old type with the new type's erasure.
+			//
+			// The tables of the subtree go up, as they do from a
+			// declared child: a nested scope of a key below this
+			// element is pruned from the outer scope's walk
+			// (frontier), so its targets reach the outer table only
+			// through them.
 			prev := v.typingOf(kid)
-			v.validateAgainstType(kid, v.schema.anyType(), nil)
+			tables := v.validateAgainstType(kid, v.schema.anyType(), nil)
 			if v.typed {
 				v.setTypeAnnotationResolved(kid, prev.TypeAnnotation,
 					prev.DerivedPrimitive, prev.ListItem)
 			}
-			return nil
+			return mergeTables(tables)
 		case ProcessStrict:
 			d, ok := v.schema.Elements[name]
 			if !ok {
@@ -1929,8 +1966,7 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 						v.fail(kid, "cvc-elt.4.2", "%v", err)
 						return nil
 					}
-					v.validateAgainstType(kid, t, nil)
-					return nil
+					return mergeTables(v.validateAgainstType(kid, t, nil))
 				}
 				v.fail(kid, "cvc-complex-type.2.4.c",
 					"no declaration for {%s}%s, matched by a strict wildcard",
@@ -2175,9 +2211,12 @@ func optionalAllMembers(g *ModelGroup, particles []*Particle) []int {
 // The whole chain from the named type up to the declared one is examined, not
 // just the first step: substituting Dee for B goes through De, and it is the
 // *set* of methods used along the way that the block applies to.
-func (v *validator) substitutionBlocked(t Type, decl *ElementDecl) (Derivation, bool) {
+//
+// base is the type xsi:type replaces: the declared type, or under XSD 1.1 the
+// one the type alternatives selected.
+func (v *validator) substitutionBlocked(t Type, decl *ElementDecl, base Type) (Derivation, bool) {
 	blocked := decl.DisallowedSubstitutions
-	if ct, ok := decl.Type.(*ComplexType); ok {
+	if ct, ok := base.(*ComplexType); ok {
 		blocked = DerivationSet(uint8(blocked) | uint8(ct.Prohibits))
 	}
 	if blocked == 0 {
@@ -2185,7 +2224,7 @@ func (v *validator) substitutionBlocked(t Type, decl *ElementDecl) (Derivation, 
 	}
 
 	seen := map[Type]bool{}
-	for cur := t; cur != nil && cur != decl.Type && !seen[cur]; {
+	for cur := t; cur != nil && cur != base && !seen[cur]; {
 		seen[cur] = true
 		ct, ok := cur.(*ComplexType)
 		if !ok {

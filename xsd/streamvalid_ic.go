@@ -244,7 +244,10 @@ func (s *streamV) fieldNodes(f *svFrame, x, ti int, t *svTarget, i int, field *I
 		if fd.n++; fd.n == 1 {
 			fi := f.icFrame()
 			fi.fieldOf = append(fi.fieldOf, svFieldRef{t, i})
-			if fi.text == nil {
+			// A complex field has no key to read (keySequence refuses
+			// it), so its text is not kept: every open complex field
+			// keeping all the text below it was depth times the text.
+			if fi.text == nil && !f.complexField() {
 				fi.text = &strings.Builder{}
 			}
 		}
@@ -257,6 +260,12 @@ func (s *streamV) fieldNodes(f *svFrame, x, ti int, t *svTarget, i int, field *I
 			delete(v.attrOwner, a) // selectAttrs' stand-in for a defaulted value
 		}
 	}
+}
+
+// complexField reports whether f's element, as a field node, has no simple
+// value (complexTyped). A nilled element's content was not assessed.
+func (f *svFrame) complexField() bool {
+	return f.ct != nil && f.kind != svNil && f.ct.Content != ContentSimple
 }
 
 // icText is text the element at frame x has directly; stripped says it was
@@ -287,7 +296,9 @@ func (s *streamV) icEnd(f *svFrame, x int) {
 	}
 	for _, r := range fi.fieldOf {
 		fd := &r.t.fields[r.i]
-		fd.complex = f.ct != nil && f.ct.Content != ContentSimple
+		if fd.complex = f.complexField(); fd.complex {
+			continue
+		}
 		if _, ok := v.keyValues[f.el]; ok {
 			fd.key = v.keyString(f.el)
 		} else if fi.stripped {
@@ -343,8 +354,9 @@ func (s *streamV) icEnd(f *svFrame, x int) {
 			s.need(c, -1)
 		}
 	}
-	// validateElement returns the tables to a parent walking its content.
-	if x == 0 || f.decl == nil || f.typ == nil || f.kind == svNil || len(tables) == 0 {
+	// validateElement returns the tables to a parent walking its content,
+	// and validateChild those of a child it assessed with no declaration.
+	if x == 0 || f.typ == nil || f.kind == svNil || len(tables) == 0 {
 		return
 	}
 	switch p := &s.frames[x-1]; p.kind {

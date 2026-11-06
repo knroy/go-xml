@@ -383,10 +383,10 @@ func TestStreamValidationMatchesTree(t *testing.T) {
 		{"keys: key duplicate in a sub", keys, strings.Replace(svKeysDoc, `<def v="2"/><def v="3"/>`, `<def v="3"/><def v="3"/>`, 1), strict, true},
 		{"keys: element field compared as a value", keys, strings.Replace(svKeysDoc, `<item id="3" cat="x"><code>1</code>`, `<item id="3"><code>1</code>`, 1), strict, true},
 		// A nested scope reached through an element assessed by xsi:type
-		// alone: its table does not come up (validateAgainstType's tables
-		// are dropped), and the outer scope's walk does not go into it.
-		{"keys: a nested scope's table lost", keys, strings.Replace(svKeysDoc, `<leaf>c</leaf></node>`,
-			`<leaf>c</leaf><w:wrap xmlns:w="urn:w" xmlns:k="urn:k" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="k:wrapT"><node><leaf>a</leaf></node></w:wrap></node>`, 1), strict, false},
+		// alone: the outer scope's walk does not go into it, so its table
+		// has to come up through that element (validateChild).
+		{"keys: a nested scope's table kept", keys, strings.Replace(svKeysDoc, `<leaf>c</leaf></node>`,
+			`<leaf>c</leaf><w:wrap xmlns:w="urn:w" xmlns:k="urn:k" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="k:wrapT"><node><leaf>a</leaf></node></w:wrap></node>`, 1), strict, true},
 		{"keys: field selects two", keys, strings.Replace(svKeysDoc, `<code>1.0</code>`, `<code>1.0</code><code>2</code>`, 1), strict, true},
 		{"keys: field selects a complex type", keys, strings.Replace(svKeysDoc, `<sub><def v="1"/>`, `<sub><x/><def v="1"/>`, 1), strict, true},
 		{"keys: unique attribute", keys, strings.Replace(svKeysDoc, `<node n="y"/>`, `<node n="y"/><node n="y"/>`, 1), strict, true},
