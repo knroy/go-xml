@@ -149,8 +149,11 @@ func (s *streamSplit) jsonOne() bool {
 // event) or the element at the start tag Next returned (d >= 1). It reads
 // to the context's end.
 func (r *splitRun) jsonContext(v *xdm.Node, d int) error {
-	jw := &jsonWriter{c: r.c, indent: r.s.json.indent}
+	jw := &jsonWriter{c: r.c, indent: r.s.json.indent, ctx: r.ctx}
 	if err := jw.context(v, d); err != nil {
+		return err
+	}
+	if err := jw.charge(); err != nil {
 		return err
 	}
 	return r.take(xdm.One(xdm.NewString(jw.b.String())))
@@ -225,7 +228,7 @@ func (r *splitRun) jsonMatch(ev xdmstream.Event, f splitFrame) error {
 		return err
 	}
 	ev.Node = v // the predicates may have read the cursor since
-	jw := &jsonWriter{c: r.c, indent: r.s.json.indent, d0: ev.Depth}
+	jw := &jsonWriter{c: r.c, indent: r.s.json.indent, d0: ev.Depth, ctx: r.ctx}
 	if nests {
 		jw.m, jw.frames = r, []splitFrame{f}
 	}
@@ -236,6 +239,9 @@ func (r *splitRun) jsonMatch(ev xdmstream.Event, f splitFrame) error {
 		r.jsonErr = err
 		return r.take(xdm.One(xdm.NewString("")))
 	case err != nil:
+		return err
+	}
+	if err := jw.charge(); err != nil {
 		return err
 	}
 	return r.take(xdm.One(xdm.NewString(jw.b.String())))
@@ -284,6 +290,31 @@ type jsonWriter struct {
 	// invalid is the error fail settled on: the input is not the JSON
 	// representation (not the cursor's or a predicate's).
 	invalid error
+	// ctx is the evaluation the text held whole is charged to (charge), and
+	// charged what of it is billed; nil charges nothing.
+	ctx     *xpath.Context
+	charged int
+}
+
+// charge checks for cancellation and bills the text held whole since the
+// last call to the byte budget, as xpath's xml-to-json does: indentation
+// writes 2 x depth bytes per member, so the text is not bounded by the input
+// that was charged as it was read. container calls it per member, so a
+// refusal lands within one member's output of the bound. A flushed writer's
+// pieces are charged as they are handed on.
+func (jw *jsonWriter) charge() error {
+	if jw.ctx == nil {
+		return nil
+	}
+	if err := jw.ctx.Err(); err != nil {
+		return err
+	}
+	if jw.b.flush != nil {
+		return nil
+	}
+	n := jw.b.sb.Len() - jw.charged
+	jw.charged = jw.b.sb.Len()
+	return jw.ctx.ChargeBytes(n)
 }
 
 // jsonOpen is an open element of the representation: its local name, and
@@ -522,6 +553,9 @@ func (jw *jsonWriter) container(isMap bool, k, jd int) error {
 				return err
 			}
 			jw.b.spill(false)
+			if err := jw.charge(); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -811,7 +845,7 @@ func (run *streamRun) jsonOut(rt *runtime, op *streamOp, out *outputBuilder) (bo
 		}
 	}
 	var cerr error
-	jw := &jsonWriter{c: run.c, indent: op.split.json.indent}
+	jw := &jsonWriter{c: run.c, indent: op.split.json.indent, ctx: rt.ctx}
 	jw.b.flush = func(p []byte) {
 		if cerr == nil {
 			cerr = rt.ctx.ChargeBytes(len(p))

@@ -195,7 +195,21 @@ func (i *sequenceInstr) appendItem(rt *runtime, out *outputBuilder, it xdm.Item)
 			return err
 		}
 	}
-	return nil
+	return topItemsRefused(rt, out)
+}
+
+// topItemsRefused refuses out once the sequence it holds at the top level --
+// the value of an as-typed variable or parameter, a function's result --
+// passes the item bound. Each select that feeds it had an allowance of its
+// own (Compiled.Eval), and a variable reference hands its whole value over
+// uncharged, so two xsl:sequence of the variable before doubled a chain of
+// sibling variables per line with nothing counting. Under an open element
+// the items become children, which the node budget charges instead.
+func topItemsRefused(rt *runtime, out *outputBuilder) error {
+	if out.Open() != nil {
+		return nil
+	}
+	return rt.ctx.ItemsRefused(int64(len(out.Items())))
 }
 
 // copyOfInstr implements xsl:copy-of, which deep-copies nodes.
@@ -469,7 +483,7 @@ func (i *copyOfInstr) copyItem(rt *runtime, out *outputBuilder, it xdm.Item) err
 			return err
 		}
 	}
-	return nil
+	return topItemsRefused(rt, out)
 }
 
 // isNamespaceSensitiveType reports whether a type annotation names a type
@@ -1007,7 +1021,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 					"result tree")
 		}
 		out.AppendValue(v)
-		return nil
+		return topItemsRefused(rt, out)
 	}
 
 	switch node.Kind() {
