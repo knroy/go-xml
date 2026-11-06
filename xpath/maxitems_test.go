@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -83,6 +84,28 @@ func TestFlattenAndDataChargeTheItemBudget(t *testing.T) {
 		}
 		if err := eval(200, expr); err != nil {
 			t.Errorf("%s under a bound of 200: %v", expr, err)
+		}
+	}
+}
+
+// array:flatten and fn:data flatten under the evaluation's Env.Ctx, so a
+// cancelled host context stops a shared-member expansion with its error
+// rather than with xdm.Flatten's step-ceiling panic.
+func TestFlattenAndDataObserveEnvCtx(t *testing.T) {
+	a := xdm.NewArray(xdm.Sequence{xdm.NewArray()})
+	for i := 0; i < 30; i++ {
+		a = xdm.NewArray(xdm.Sequence{a}, xdm.Sequence{a})
+	}
+	gctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx := NewContext(nil, Builtins()).WithEnv(func(e *Env) { e.Ctx = gctx })
+	for _, name := range []xdm.QName{{URI: xdm.NSArray, Local: "flatten"}, {URI: xdm.NSFN, Local: "data"}} {
+		f, ok := Builtins().Lookup(name, 1)
+		if !ok {
+			t.Fatalf("%s#1 is not registered", name.Local)
+		}
+		if _, err := f.Call(ctx, []xdm.Sequence{{a}}); !errors.Is(err, context.Canceled) {
+			t.Errorf("%s under a cancelled Env.Ctx: err=%v, want context.Canceled", name.Local, err)
 		}
 	}
 }

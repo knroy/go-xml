@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -457,8 +458,27 @@ const maxFlattenSteps = 1 << 24
 //
 // A walk past maxFlattenSteps is refused with ErrResourceLimit, raised as an
 // internal/xdmlimit panic that the entry points of xpath, xquery and xslt
-// recover and return.
+// recover and return. FlattenContext returns that refusal as an error, and
+// observes cancellation, instead.
 func Flatten(seq Sequence) Sequence {
+	out, err := FlattenContext(context.Background(), seq)
+	if err != nil {
+		xdmlimit.Refuse(err)
+	}
+	return out
+}
+
+// flattenCheckEvery is how many items inside arrays FlattenContext visits
+// between two checks of its context.
+const flattenCheckEvery = 1024
+
+// FlattenContext is Flatten for a caller that holds a context.Context: it
+// checks ctx every flattenCheckEvery items the walk visits inside arrays and
+// returns ctx.Err() once ctx is done, and it returns the ErrResourceLimit
+// refusal past maxFlattenSteps as its error rather than panicking.
+//
+// A nil ctx is never cancelled, as with xpath.CompileOptions.Context.
+func FlattenContext(ctx context.Context, seq Sequence) (Sequence, error) {
 	out := make(Sequence, 0, len(seq))
 	// An explicit stack rather than recursion: an array nested a million deep
 	// is a value a query can build, and recursing on it overflows the Go stack.
@@ -484,10 +504,15 @@ func Flatten(seq Sequence) Sequence {
 		// already materialised, and the caller's budget charged it.
 		if len(stack) > 1 {
 			steps++
+			if ctx != nil && steps%flattenCheckEvery == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
 		}
 		if steps > maxFlattenSteps {
-			xdmlimit.Refuse(fmt.Errorf("xdm: flattening an array visits more than %d items: %w",
-				maxFlattenSteps, ErrResourceLimit))
+			return nil, fmt.Errorf("xdm: flattening an array visits more than %d items: %w",
+				maxFlattenSteps, ErrResourceLimit)
 		}
 		if arr, ok := it.(*ArrayItem); ok {
 			stack = append(stack, frame{seqs: arr.members})
@@ -495,7 +520,7 @@ func Flatten(seq Sequence) Sequence {
 			out = append(out, it)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // mapArrayString renders a map or array for an error message. It is

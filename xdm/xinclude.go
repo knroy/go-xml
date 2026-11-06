@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -95,7 +96,19 @@ type XIncludeOptions struct {
 	// bound the including document was held to. BaseURI and DocumentURI are
 	// overwritten per resource and anything set here for them is ignored.
 	Parse ParseOptions
+
+	// Context carries cancellation. The pass checks it before each
+	// inclusion, before each fetch and every xincludeCheckEvery nodes a
+	// local xpointer search visits, and once it is done returns an error
+	// wrapping ctx.Err(). The input tree is never modified, cancelled or
+	// not: the pass builds a new tree, and a cancelled pass returns none.
+	// A nil Context is never cancelled.
+	Context context.Context
 }
+
+// xincludeCheckEvery is how many nodes the local xpointer searches of one
+// pass visit between two checks of XIncludeOptions.Context.
+const xincludeCheckEvery = 1024
 
 // ProcessXInclude performs XInclude processing on tree and returns the result
 // as a new tree.
@@ -127,6 +140,18 @@ func ProcessXInclude(tree *Tree, opts XIncludeOptions) (_ *Tree, err error) {
 		p.stack = append(p.stack, base)
 	}
 	return p.processTree(tree, base, 0)
+}
+
+// cancelled reports whether the pass's context is done, as a fatal error so
+// that no xi:fallback recovers from it.
+func (p *includeProc) cancelled() error {
+	if p.opts.Context == nil {
+		return nil
+	}
+	if err := p.opts.Context.Err(); err != nil {
+		return fatalInclude{fmt.Errorf("xi:include processing cancelled: %w", err)}
+	}
+	return nil
 }
 
 // fatalInclude marks an error that xi:fallback must NOT recover from.
@@ -370,6 +395,9 @@ func newHolder() *Node { return NewTree().Root }
 
 // expandInclude appends to dst the replacement for one xi:include element.
 func (p *includeProc) expandInclude(dst, inc *Node, depth int) error {
+	if err := p.cancelled(); err != nil {
+		return err
+	}
 	if depth >= maxIncludeDepth {
 		return fatalInclude{fmt.Errorf(
 			"resource limit exceeded: xi:include nesting exceeds %d levels: %w",
@@ -528,6 +556,13 @@ func (p *includeProc) selectLocal(inc *Node, xptr, base string) (*Node, error) {
 	root := inc.Root()
 	picked, err := selectXPointerIn(root, xptr, func(n *Node) *Node {
 		p.visits++
+		if p.visits%xincludeCheckEvery == 0 {
+			// The view has no error return; the refusal is recovered by
+			// ProcessXInclude.
+			if err := p.cancelled(); err != nil {
+				xdmlimit.Refuse(err)
+			}
+		}
 		return p.viewOf(n)
 	})
 	if limit := p.nodeLimit(); limit >= 0 && p.visits > limit {
@@ -579,6 +614,9 @@ func (p *includeProc) fetchText(target, base, encoding string) (*Node, error) {
 	}
 	if p.opts.Resolver == nil {
 		return nil, fmt.Errorf("no include resolver: inclusions are not permitted")
+	}
+	if err := p.cancelled(); err != nil {
+		return nil, err
 	}
 	p.fetches++
 	data, _, err := p.opts.Resolver.ResolveInclude(target, base, textEncodingMarker(encoding))
@@ -656,6 +694,9 @@ func (p *includeProc) fetch(dst *Node, target, base, parse, xptr, encoding strin
 	}
 	if p.opts.Resolver == nil {
 		return fmt.Errorf("no include resolver: inclusions are not permitted")
+	}
+	if err := p.cancelled(); err != nil {
+		return err
 	}
 	p.fetches++
 

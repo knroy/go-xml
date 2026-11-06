@@ -234,7 +234,10 @@ func registerArrayFuncs(l *Library) {
 	// xdm.Flatten's own fixed ceiling. fn:data charges the same way.
 	l.registerArray("flatten", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		in := seqArg(args, 0)
-		out := xdm.Flatten(in)
+		out, err := xdm.FlattenContext(ctx.ev().Ctx, in)
+		if err != nil {
+			return nil, err
+		}
 		if err := ctx.countItems(len(out) - len(in)); err != nil {
 			return nil, err
 		}
