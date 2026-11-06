@@ -1,6 +1,7 @@
 package xquery
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -96,10 +97,11 @@ func (noSchemaResolver) Resolve(namespace, location, base string) (
 // graph are, and the bound is the same one and for the same reason:
 // DefaultMaxModuleBytes, at the same value. The count of documents reached
 // through a schema's OWN references is bounded separately, by xsd's own
-// limits, which the assembler applies as it follows them -- so this budget
-// bounds the bytes the QUERY's own imports pull in, cumulatively across the
-// compilation rather than per import, because a budget spent one import at a
-// time is not spent at all.
+// limits, which the assembler applies per load -- so this budget bounds the
+// bytes, of the imported documents and of every document they reach (see
+// chargedResolver), cumulatively across the compilation and its library
+// modules rather than per import, because a budget spent one import at a time
+// is not spent at all.
 const DefaultMaxSchemaBytes = 16 << 20
 
 // A Schema is a schema registered with the compilation directly, rather than
@@ -167,16 +169,24 @@ type schemaLoader struct {
 	// imports of different namespaces contribute to the same table and a name
 	// is looked up once.
 	merged *xsd.Schema
-	// bytes is the source budget spent so far.
-	bytes int64
+	// bytes is the source budget spent so far. It is shared by every loader
+	// of one compilation -- the main module's and each library module's --
+	// because MaxSchemaBytes is cumulative across the compilation, and a
+	// counter per module would hand each of MaxModules modules the whole
+	// allowance.
+	bytes *int64
+	// over is the budget refusal raised while xsd.Load followed a schema's
+	// own references. xsd records or drops a resolver error depending on the
+	// reference, so parse reports this rather than trusting Load's result.
+	over error
 	// registered is Options.Schemas keyed by namespace, consulted before the
 	// resolver because a schema the host supplied needs no reach at all.
 	registered map[string]Schema
 }
 
 // newSchemaLoader prepares a loader, applying the defaults for the bound and
-// for the resolver.
-func newSchemaLoader(opts Options) *schemaLoader {
+// for the resolver. spent is the compilation's shared byte counter.
+func newSchemaLoader(opts Options, spent *int64) *schemaLoader {
 	if opts.SchemaResolver == nil {
 		// Closed by default. See noSchemaResolver: this is the difference
 		// between "a query may name a schema the host registered" and "a
@@ -186,7 +196,7 @@ func newSchemaLoader(opts Options) *schemaLoader {
 	if opts.MaxSchemaBytes == 0 {
 		opts.MaxSchemaBytes = DefaultMaxSchemaBytes
 	}
-	l := &schemaLoader{opts: opts, registered: map[string]Schema{}}
+	l := &schemaLoader{opts: opts, bytes: spent, registered: map[string]Schema{}}
 	for _, s := range opts.Schemas {
 		// A namespace registered twice keeps the first. §4.11 forbids the
 		// QUERY from importing one namespace twice (XQST0058); two
@@ -291,12 +301,25 @@ func (l *schemaLoader) load(imp schemaImport, base string) error {
 // and assembles it.
 func (l *schemaLoader) read(rc io.ReadCloser, resolved, base, ns string) (
 	*xsd.Schema, error) {
-	// The read is bounded BEFORE it happens rather than measured after:
-	// reading a schema and then noticing it was too big has already paid the
-	// cost the bound exists to refuse. LimitReader is given one byte more
-	// than the remaining allowance so that "exactly at the limit" and "over
-	// it" are distinguishable.
-	remaining := l.opts.MaxSchemaBytes - l.bytes
+	data, err := l.readCharged(rc, ns)
+	if err != nil {
+		return nil, err
+	}
+	uri := resolved
+	if uri == "" {
+		uri = base
+	}
+	return l.parse(strings.NewReader(string(data)), uri, ns)
+}
+
+// readCharged reads one schema document, spending the byte budget.
+//
+// The read is bounded BEFORE it happens rather than measured after: reading a
+// schema and then noticing it was too big has already paid the cost the bound
+// exists to refuse. LimitReader is given one byte more than the remaining
+// allowance so that "exactly at the limit" and "over it" are distinguishable.
+func (l *schemaLoader) readCharged(rc io.Reader, ns string) ([]byte, error) {
+	remaining := l.opts.MaxSchemaBytes - *l.bytes
 	if remaining < 0 {
 		remaining = 0
 	}
@@ -309,11 +332,42 @@ func (l *schemaLoader) read(rc io.ReadCloser, resolved, base, ns string) (
 	if err := l.spend(int64(len(data)), ns); err != nil {
 		return nil, err
 	}
-	uri := resolved
-	if uri == "" {
-		uri = base
+	return data, nil
+}
+
+// chargedResolver is the resolver xsd.Load follows an imported schema's own
+// xs:include, xs:import and xs:redefine through. Each document it opens is
+// read through readCharged, so the closure spends the same MaxSchemaBytes as
+// the query's own imports. Without it an import charged only its top
+// document, and repeating one import under many namespaces re-read the whole
+// closure each time for free.
+type chargedResolver struct {
+	l  *schemaLoader
+	ns string
+}
+
+// Resolve implements xsd.Resolver.
+func (r chargedResolver) Resolve(namespace, location, base string) (
+	io.ReadCloser, string, error) {
+	if r.l.over != nil {
+		return nil, "", r.l.over
 	}
-	return l.parse(strings.NewReader(string(data)), uri, ns)
+	rc, resolved, err := r.l.opts.SchemaResolver.Resolve(namespace, location, base)
+	if rc == nil {
+		return nil, resolved, err
+	}
+	defer rc.Close()
+	if err != nil {
+		return nil, resolved, err
+	}
+	data, err := r.l.readCharged(rc, r.ns)
+	if err != nil {
+		if errors.Is(err, xdm.ErrResourceLimit) {
+			r.l.over = err
+		}
+		return nil, resolved, err
+	}
+	return io.NopCloser(bytes.NewReader(data)), resolved, nil
 }
 
 // parse turns schema document text into an assembled schema.
@@ -329,7 +383,7 @@ func (l *schemaLoader) parse(r io.Reader, baseURI, ns string) (*xsd.Schema, erro
 		// the same resolver the query's import was granted, never by a wider
 		// one. A nil resolver here would let xsd apply ITS default, and this
 		// package's default is the stricter of the two: nothing is opened.
-		Resolver:     l.opts.SchemaResolver,
+		Resolver:     chargedResolver{l: l, ns: ns},
 		ParseOptions: l.opts.SchemaParseOptions,
 	}
 	// A schema document may declare with vc:minVersion that it is written for
@@ -340,6 +394,9 @@ func (l *schemaLoader) parse(r io.Reader, baseURI, ns string) (*xsd.Schema, erro
 		opts.Version = v
 	}
 	loaded, err := xsd.Load(tree.Root, baseURI, opts)
+	if l.over != nil {
+		return nil, l.over
+	}
 	if err != nil {
 		return nil, fmt.Errorf(
 			"XQST0059: the schema for namespace %q could not be loaded: %w",
@@ -361,8 +418,8 @@ func (l *schemaLoader) parse(r io.Reader, baseURI, ns string) (*xsd.Schema, erro
 // be there and be perfectly valid -- and a host that retried on it would
 // retry forever. See docs/security.md on this distinction.
 func (l *schemaLoader) spend(n int64, ns string) error {
-	l.bytes += n
-	if l.bytes > l.opts.MaxSchemaBytes {
+	*l.bytes += n
+	if *l.bytes > l.opts.MaxSchemaBytes {
 		return fmt.Errorf(
 			"a query may read at most %d bytes of schema documents "+
 				"(Options.MaxSchemaBytes); the import of %q exceeded it, "+
@@ -453,7 +510,10 @@ func mergeXSDSchema(dst, src *xsd.Schema) {
 // bound and the closed-by-default resolver stay invisible to it.
 func (p *parser) loadSchemaImport(imp schemaImport, base string) error {
 	if p.schemaLoader == nil {
-		p.schemaLoader = newSchemaLoader(p.opts)
+		if p.schemaBytes == nil {
+			p.schemaBytes = new(int64)
+		}
+		p.schemaLoader = newSchemaLoader(p.opts, p.schemaBytes)
 	}
 	if err := p.schemaLoader.load(imp, base); err != nil {
 		return err
