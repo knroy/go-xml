@@ -83,3 +83,46 @@ func TestDrivePathAndEscapeAreIdenticalAfterParse(t *testing.T) {
 			"must be what separates them, and it does not")
 	}
 }
+
+// TestIsForeignNetworkPath runs the Windows network spellings on every
+// platform, because the rule is decided on the string alone.
+func TestIsForeignNetworkPath(t *testing.T) {
+	for _, c := range []struct {
+		p     string
+		roots []string
+		want  bool
+	}{
+		{`\\host\share\x.xml`, nil, true},
+		{`//host/share/x.xml`, nil, true},
+		{`/\host\share\x.xml`, nil, true},
+		{`\/host/share/x.xml`, nil, true},
+		{`\\host\share`, nil, true},
+		{`\\host`, nil, true},
+		{`///x.xml`, nil, true},
+		{`\\?\UNC\host\share\x.xml`, nil, true},
+		{`\\?\C:\x.xml`, nil, true},
+		{`\\.\pipe\x`, nil, true},
+		{`//host/share/x.xml`, []string{`C:\root`, "/srv/root"}, true},
+		{`\\evil\share\x.xml`, []string{`\\host\share\root`}, true},
+		{`\\host\other\x.xml`, []string{`\\host\share\root`}, true},
+		{`\\?\UNC\host\share\x`, []string{`\\?\UNC\host\share`}, true},
+
+		// A share the caller rooted on is the caller's host, not a new one.
+		{`\\host\share\root\x.xml`, []string{`\\host\share\root`}, false},
+		{`//HOST/Share/root/x.xml`, []string{`\\host\share\root`}, false},
+		{`\\host\share\other\x.xml`, []string{"/srv", `\\host\share\root`}, false},
+
+		// Local paths.
+		{`C:\root\x.xml`, nil, false},
+		{`C:/root/x.xml`, nil, false},
+		{"/srv/root/x.xml", nil, false},
+		{`\root\x.xml`, nil, false},
+		{"sub/x.xml", nil, false},
+		{"", nil, false},
+		{"/", nil, false},
+	} {
+		if got := IsForeignNetworkPath(c.p, c.roots...); got != c.want {
+			t.Errorf("IsForeignNetworkPath(%q, %q) = %v, want %v", c.p, c.roots, got, c.want)
+		}
+	}
+}

@@ -106,6 +106,13 @@ func (r *FileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 		if root, err = filepath.EvalSymlinks(root); err != nil {
 			return nil, err
 		}
+		// A UNC path is refused before EvalExisting touches it: on Windows a
+		// stat of one already connects to the host it names.
+		if uripath.IsForeignNetworkPath(p, root) {
+			return nil, fmt.Errorf(
+				"relaxng: schema URI %q names a network path; only local files "+
+					"are permitted", href)
+		}
 		abs, err := filepath.Abs(p)
 		if err != nil {
 			return nil, err
