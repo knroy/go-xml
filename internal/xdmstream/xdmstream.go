@@ -446,9 +446,15 @@ func (c *Cursor) Skip() error {
 }
 
 // Ground moves past the current element, as Skip, and returns a copy of it
-// that may be kept: the element, whole, in a tree of its own, under shallow
-// copies of its ancestors (name, namespaces, attributes, base URI) and a
-// document node with the document's URIs, as xdm.ParseBursts delivers one.
+// that may be kept: the element, whole, under shallow copies of its
+// ancestors (name, namespaces, attributes, base URI) and a document node
+// with the document's URIs, as xdm.ParseBursts delivers one. A small
+// element's copy shares its tree and its ancestors' copies with the small
+// elements grounded before and after it (xdm's ground batch), so a Ground
+// under a deep spine costs the element, not the spine; nothing the copy
+// answers tells that tree from one of its own: it has no siblings there,
+// and its order, identity and generate-id are its original's. A large
+// element's copy is in a tree of its own.
 func (c *Cursor) Ground() (*xdm.Node, error) {
 	if _, err := c.decide(xdmburst.Ground); err != nil {
 		return nil, err
@@ -461,9 +467,8 @@ func (c *Cursor) Ground() (*xdm.Node, error) {
 // GroundLater moves past the current element, as Skip, and has fn called
 // with a copy of it, as Ground returns one, perhaps after more of the
 // document has been read. Small elements grounded so share one tree and the
-// copies of their ancestors (xdm's burst batches), where a Ground of each
-// copies all its ancestors every time: under a deep spine that is the
-// difference between linear and records x depth. Such a tree holds those
+// copies of their ancestors (xdm's burst batches), as Ground's do, and the
+// tree is handed over complete, with no later growth. Such a tree holds those
 // elements under their common ancestors' copies, so the ancestors' content
 // is not one element's alone. fn is called in document order, before any
 // later Ground returns, and at the latest when the document element closes;
