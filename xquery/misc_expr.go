@@ -408,21 +408,13 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		}
 	}
 	schema := ctx.sc.schema
-	if schema == nil {
+	if schema == nil && !n.lax {
 		// No "import schema": the in-scope schema definitions are empty.
-		if !n.lax {
-			// Including "validate type T", whose named type cannot be in an
-			// empty set of definitions either.
-			return nil, xdm.Errorf("XQDY0084",
-				"validate has no in-scope schema definitions to validate "+
-					"against: the query imported no schema")
-		}
-		// Lax assessment with empty in-scope schema definitions finds no
-		// declaration for any element, and XSD 1.0 §3.3.4 clause 1.2 makes
-		// that a skipped assessment rather than a failure. The tree therefore
-		// comes through as it was built, with one exception below.
-		annotateBuiltinXSIType(root)
-		return seq, nil
+		// Including "validate type T", whose named type cannot be in an
+		// empty set of definitions either.
+		return nil, xdm.Errorf("XQDY0084",
+			"validate has no in-scope schema definitions to validate "+
+				"against: the query imported no schema")
 	}
 
 	// §3.21 validates a COPY: "the validate expression returns a new copy of
@@ -434,6 +426,17 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		root = m(root).(*xdm.Node)
 	} else {
 		root = xdmbuild.DeepCopy(root)
+	}
+
+	if schema == nil {
+		// Lax assessment with empty in-scope schema definitions finds no
+		// declaration for any element, and XSD 1.0 §3.3.4 clause 1.2 makes
+		// that a skipped assessment rather than a failure. The copy therefore
+		// comes through as it was built, with one exception below. It is the
+		// copy that is annotated: stamping the operand wrote into the
+		// caller's tree, which a concurrently used Query only reads.
+		annotateBuiltinXSIType(root)
+		return xdm.One(root), nil
 	}
 
 	// A document node's validation root is its element child, and the
