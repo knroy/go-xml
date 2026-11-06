@@ -185,8 +185,10 @@ func TestStreamOutCap(t *testing.T) {
 // and never more. (What is left grows with the input, as it does for the
 // filter, whose output is small: the streamed input's own share.)
 func TestStreamOutMemory(t *testing.T) {
-	if testing.Short() {
-		t.Skip("memory test")
+	// Under -race the instrumentation's heap moves the ratios, so the bounds
+	// are not checked there: the race lane would pay minutes for no assertion.
+	if testing.Short() || raceEnabled {
+		t.Skip("measures the live heap")
 	}
 	for _, c := range []struct {
 		name, decls string

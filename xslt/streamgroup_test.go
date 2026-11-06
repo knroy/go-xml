@@ -168,6 +168,9 @@ func TestStreamGroupMatchesTree(t *testing.T) {
 		for _, c := range groupBodies {
 			for _, d := range coreDecls {
 				where := fmt.Sprintf("doc %s, decls %q, body %s", name, d, c.body)
+				if raceSkip(where) {
+					continue
+				}
 				streamed += coreCheck(t, coreSheetWith(d, c.body), dir, where, c.stream, TransformOptions{})
 			}
 		}
@@ -232,8 +235,10 @@ func TestStreamGroupErrors(t *testing.T) {
 // item of look-ahead and its output, never the tree: counting each group,
 // and copying each group a member at a time.
 func TestStreamGroupMemory(t *testing.T) {
-	if testing.Short() {
-		t.Skip("memory test")
+	// Under -race the instrumentation's heap moves the ratios, so the bounds
+	// are not checked there: the race lane would pay minutes for no assertion.
+	if testing.Short() || raceEnabled {
+		t.Skip("measures the live heap")
 	}
 	var b strings.Builder
 	b.WriteString("<doc>")

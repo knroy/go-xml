@@ -85,6 +85,9 @@ func TestStreamCallMatchesTree(t *testing.T) {
 		for _, c := range callBodies {
 			for _, d := range coreDecls {
 				where := fmt.Sprintf("doc %s, decls %q, body %s", name, d, c.body)
+				if raceSkip(where) {
+					continue
+				}
 				streamed += coreCheck(t, coreSheetWith(d+callDecls, c.body), dir, where, c.stream, TransformOptions{})
 			}
 		}

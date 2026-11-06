@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,6 +227,9 @@ func TestStreamCoreMatchesTree(t *testing.T) {
 		for _, c := range coreBodies {
 			for _, d := range coreDecls {
 				where := fmt.Sprintf("doc %s, decls %q, body %s", name, d, c.body)
+				if raceSkip(where) {
+					continue
+				}
 				streamed += coreCheck(t, coreSheetWith(d, c.body), dir, where, c.stream, TransformOptions{})
 			}
 		}
@@ -233,6 +237,25 @@ func TestStreamCoreMatchesTree(t *testing.T) {
 	if streamed == 0 {
 		t.Error("nothing streamed without a re-run")
 	}
+}
+
+// raceStride: under -race a stream-vs-tree differential checks one case in
+// raceStride. The streaming paths these walk run on one goroutine, so the race
+// detector learns nothing more from the other cases; the race lane only paid
+// for them in minutes (the xslt package passed 25 minutes on CI). The plain
+// run checks every case.
+const raceStride = 4
+
+// raceSkip reports whether to skip the differential case named by key under
+// -race. The pick hashes the case's own values, not its place in a map's
+// iteration order, so every race run checks the same cases.
+func raceSkip(key ...any) bool {
+	if !raceEnabled {
+		return false
+	}
+	h := fnv.New32a()
+	fmt.Fprint(h, key...)
+	return h.Sum32()%raceStride != 0
 }
 
 // coreCheck runs sheet over dir's doc.xml on the core and on the tree and
@@ -291,8 +314,10 @@ func TestStreamCoreCopyOfRoot(t *testing.T) {
 // output -- never the tree. Each is measured against the tree's run of the
 // same transform: the tree holds the document and the output.
 func TestStreamCoreMemory(t *testing.T) {
-	if testing.Short() {
-		t.Skip("memory test")
+	// Under -race the instrumentation's heap moves the ratios, so the bounds
+	// are not checked there: the race lane would pay minutes for no assertion.
+	if testing.Short() || raceEnabled {
+		t.Skip("measures the live heap")
 	}
 	var b strings.Builder
 	b.WriteString("<doc>")

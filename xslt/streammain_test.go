@@ -424,6 +424,9 @@ func TestStreamMainMatchesTree(t *testing.T) {
 	for name, doc := range mainDocs {
 		for _, c := range cases {
 			for _, d := range coreDecls {
+				if raceSkip(name, d, c.decls) {
+					continue
+				}
 				sheet := mainSheet(d + c.decls)
 				co, ct := mainRun(sheet, doc, true, opts)
 				tr, _ := mainRun(sheet, doc, false, opts)
@@ -501,8 +504,10 @@ func TestStreamMainErrors(t *testing.T) {
 // than Parse + Transform, by the shape's bound; peak live heap of the whole
 // transform, document text excluded (both read it from one string).
 func TestStreamMainMemory(t *testing.T) {
-	if testing.Short() {
-		t.Skip("memory test")
+	// Under -race the instrumentation's heap moves the ratios, so the bounds
+	// are not checked there: the race lane would pay minutes for no assertion.
+	if testing.Short() || raceEnabled {
+		t.Skip("measures the live heap")
 	}
 	var b strings.Builder
 	b.WriteString("<doc>")

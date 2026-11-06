@@ -119,8 +119,8 @@ func TestStreamCopyAccumulatorValues(t *testing.T) {
 // R's open item: 62.5 MB at 40k records, the tree 79 MB); let go, the run
 // holds a few MB (the copies' tables between sweeps), the tree its document.
 func TestStreamCopyAccumulatorsReleased(t *testing.T) {
-	if testing.Short() {
-		t.Skip("memory test")
+	if testing.Short() || raceEnabled {
+		t.Skip("measures the live heap")
 	}
 	tr, err := xdm.ParseString(`<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xpath-default-namespace="urn:orders">`+
 		`<xsl:accumulator name="n" initial-value="0" streamable="yes"><xsl:accumulator-rule match="order" select="$value + 1"/></xsl:accumulator>`+

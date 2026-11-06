@@ -151,6 +151,11 @@ func TestLiveGrowingRefused(t *testing.T) {
 // what it holds reaches it; negative lifts that, and a positive value bounds
 // the total instead.
 func TestLiveNodesBuilt(t *testing.T) {
+	if raceEnabled {
+		// Each run builds millions of nodes on one goroutine: over a minute
+		// under -race, with nothing shared for the detector to see.
+		t.Skip("volume only; the plain run checks it")
+	}
 	const n = 1800 // holds 10,800 nodes at the end, builds about 9.7 million
 	if _, err := liveRun(t, liveG8, n, true, TransformOptions{}); !refused(err, "more than 2000000 result-tree nodes") {
 		t.Errorf("default: want the node refusal, got %v", err)

@@ -202,6 +202,9 @@ func TestStreamPopMatchesTree(t *testing.T) {
 		for _, c := range popBodies {
 			for _, d := range coreDecls {
 				where := fmt.Sprintf("doc %s, decls %q, body %s", name, d, c.body)
+				if raceSkip(where) {
+					continue
+				}
 				streamed += coreCheck(t, coreSheetWith(d+popDecls, c.body), dir, where, c.stream, TransformOptions{})
 			}
 		}

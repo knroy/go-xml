@@ -368,6 +368,9 @@ func TestStreamMainLeafTopUnderOutput(t *testing.T) {
 	if sb.String() != tb.String() {
 		t.Errorf("stream %q\ntree   %q", sb.String(), tb.String())
 	}
+	if testing.Short() || raceEnabled {
+		return // the rest measures the live heap
+	}
 	big := liveOrders(20000)
 	plain, withRoot := peakLive(t, compile(ident), big), peakLive(t, s, big)
 	t.Logf("peak live %d bytes without the rule for /, %d with it", plain, withRoot)

@@ -140,6 +140,9 @@ func TestStreamL7MatchesTree(t *testing.T) {
 		}
 		for di, d := range coreDecls {
 			for bi, b := range l7Rows {
+				if raceSkip(name, di, bi) {
+					continue
+				}
 				coreCheck(t, coreSheetWith(d+b.decl, b.body), dir, fmt.Sprintf("%s decl %d row %d", name, di, bi), b.stream, TransformOptions{})
 			}
 		}

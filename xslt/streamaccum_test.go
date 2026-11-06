@@ -91,6 +91,9 @@ func TestStreamAccumMatchesTree(t *testing.T) {
 		for ai, acc := range accumDecls {
 			for _, ws := range coreDecls {
 				for _, b := range accumBodies {
+					if raceSkip(name, ai, ws, b.body) {
+						continue
+					}
 					sheet := coreSheetWith(ws+acc+accumRules, b.body)
 					why = ""
 					so, se, st := coreRun(sheet, dir, true, TransformOptions{})
@@ -305,8 +308,10 @@ func TestStreamAccumItemLimit(t *testing.T) {
 // container and through TransformReader: the observer holds a value per
 // open element, not one per node.
 func TestStreamAccumMemory(t *testing.T) {
-	if testing.Short() {
-		t.Skip("memory test")
+	// Under -race the instrumentation's heap moves the ratios, so the bounds
+	// are not checked there: the race lane would pay minutes for no assertion.
+	if testing.Short() || raceEnabled {
+		t.Skip("measures the live heap")
 	}
 	var b strings.Builder
 	b.WriteString("<doc>")

@@ -88,6 +88,9 @@ func TestStreamTryMatchesTree(t *testing.T) {
 			body := strings.Replace(c.body, "<o>", `<o xmlns:err="http://www.w3.org/2005/xqt-errors">`, 1)
 			for _, d := range coreDecls {
 				where := fmt.Sprintf("doc %s, decls %q, body %s", name, d, c.body)
+				if raceSkip(where) {
+					continue
+				}
 				streamed += coreCheck(t, coreSheetWith(d, body), dir, where, c.stream, TransformOptions{})
 			}
 		}
