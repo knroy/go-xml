@@ -26,7 +26,10 @@ import "github.com/knroy/go-xml/v2/xdm"
 
 // splitHold is what a holding split has collected so far.
 type splitHold struct {
-	roots map[*xdm.Node]bool
+	// roots are the roots of the trees the items live in, each with the
+	// records counted for it: a tree small grounded copies are handed out
+	// of grows after (xdm's ground batch).
+	roots map[*xdm.Node]int64
 	held  int64 // records of the trees the items live in
 	ord   uint64
 	last  *xdm.Node // the item element with the greatest ordinal
@@ -47,7 +50,7 @@ func holdSlack(tree int64) int64 { return tree>>6 + 64 }
 func (r *splitRun) holdOn(items xdm.Sequence) error {
 	h := r.hold
 	if h == nil {
-		h = &splitHold{roots: map[*xdm.Node]bool{}}
+		h = &splitHold{roots: map[*xdm.Node]int64{}}
 		r.hold = h
 	}
 	for _, it := range items {
@@ -55,16 +58,18 @@ func (r *splitRun) holdOn(items xdm.Sequence) error {
 		if !ok {
 			continue
 		}
-		if root := n.Root(); !h.roots[root] {
-			h.roots[root] = true
-			if t := n.Tree(); t != nil {
-				h.held += int64(t.Len())
-				// A batch is handed over complete: the parse has read
-				// its last record, which the tree holds too.
+		root := n.Root()
+		if t := n.Tree(); t != nil {
+			if k := int64(t.Len()); k > h.roots[root] {
+				h.held += k - h.roots[root]
+				h.roots[root] = k
+				// The parse has read the batch's last record, which the
+				// tree holds too.
 				h.reach(r, t.NodeAt(t.Len()-1))
-			} else {
-				h.held += records(root, true)
 			}
+		} else if _, ok := h.roots[root]; !ok {
+			h.roots[root] = records(root, true)
+			h.held += h.roots[root]
 		}
 		if r.s.mode == matchGround && n.Kind() == xdm.KindElement {
 			// Each copy carries its origin in the batch (a segment):

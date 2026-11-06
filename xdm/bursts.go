@@ -106,8 +106,10 @@ type burster struct {
 	// been there: gen counts the elements the client was asked about.
 	gens ordStack
 	gen  uint64
-	// batch holds the small bursts not yet delivered (burstBatch), or is nil.
-	batch *burstBatch
+	// batch holds the small bursts not yet delivered (burstBatch), or is nil;
+	// shared is the batch small grounded copies are handed out of at once
+	// (ground), or nil.
+	batch, shared *burstBatch
 	// spineCopies counts the records copied as ancestors of a burst (the
 	// document node, the spine's elements and their attributes), and
 	// burstRecs the records of the bursts themselves (spineCopiesPerRecord).
@@ -502,6 +504,7 @@ func (b *burster) ended(el *Node, d int, spaces *spaceTable, names *nameCache) e
 		if err := b.flush(); err != nil {
 			return err
 		}
+		b.shared = nil
 	}
 	b.discardLast(el.Parent(), spaces, names)
 	return nil
@@ -581,10 +584,11 @@ func (b *burster) trimRest(cur *Node, spaces *spaceTable, names *nameCache) erro
 	for t := cur.tree; cur.v1 != noIdx && t.rec(cur.v1).isLeaf(); {
 		b.discardLast(cur, spaces, names)
 	}
-	if b.batch != nil && textSince(cur.tree, b.marks.top().text.blocks) >= burstFrozen {
+	if (b.batch != nil || b.shared != nil) && textSince(cur.tree, b.marks.top().text.blocks) >= burstFrozen {
 		if err := b.flush(); err != nil {
 			return err
 		}
+		b.shared = nil
 		b.rewind(cur.tree, spaces, names)
 	}
 	return nil
@@ -683,9 +687,15 @@ func (b *burster) discardLast(p *Node, spaces *spaceTable, names *nameCache) {
 		t.chunks = t.chunks[:b.moved]
 		b.moved = 0
 	}
-	if b.batch != nil {
-		// The batch's records point into the stores: they are taken back
-		// once it has been delivered.
+	if bt := b.shared; bt != nil && (textSince(p.tree, bt.blocks) >= burstBatchText ||
+		len(p.tree.names)-bt.names >= burstBatchRecords || len(p.tree.frames)-bt.frames >= burstBatchRecords) {
+		// What the parse stored since the shared batch began is garbage
+		// that a kept copy would hold: the next copy starts a batch.
+		b.shared = nil
+	}
+	if b.batch != nil || b.shared != nil {
+		// The batches' records point into the stores: they are taken back
+		// once they have been delivered or replaced.
 		return
 	}
 	b.rewind(p.tree, spaces, names)
@@ -773,17 +783,24 @@ func (b *burster) rewind(t *Tree, spaces *spaceTable, names *nameCache) {
 	}
 }
 
-// take delivers the burst el: a large one, or one grounded for now, at
-// once, in a tree of its own (deliver), and a small one with the bursts
-// before it (burstBatch).
+// take delivers the burst el: a large one at once, in a tree of its own
+// (deliver); a small one grounded for now at once too, from the shared
+// batch (ground); and a small one grounded later with the bursts before it
+// (burstBatch).
 func (b *burster) take(el *Node) error {
 	t := el.tree
 	b.burstRecs += int(t.endOf(el) - el.self)
-	if !b.later || t.endOf(el)-el.self > burstSmall {
+	small := t.endOf(el)-el.self <= burstSmall
+	if !b.later || !small {
 		if err := b.flush(); err != nil {
 			return err
 		}
-		g := b.deliver(el)
+		var g *Node
+		if !b.later && small && b.ords != nil && groundShared {
+			g = b.ground(el)
+		} else {
+			g = b.deliver(el)
+		}
 		if err := b.spineCopiesCheck(); err != nil {
 			return err
 		}
@@ -793,26 +810,70 @@ func (b *burster) take(el *Node) error {
 		}
 		return b.fn(g)
 	}
-	b.add(el)
+	if b.batch == nil {
+		b.batch = b.newBatch(t, false)
+	}
+	b.add(b.batch, el)
 	if err := b.spineCopiesCheck(); err != nil {
 		return err
 	}
-	if bt := b.batch; int(bt.t.n) >= max(burstBatchRecords, 4*bt.spine) ||
-		textSince(t, bt.blocks) >= burstBatchText {
+	if b.batch.full(t) {
 		return b.flush()
 	}
 	return nil
 }
 
-// Each burst's tree holds copies of its ancestors with their attributes, so
-// bursts under an element of many attributes, or under a deep spine, cost
-// bursts x (depth + attributes) where the tree costs bursts + depth +
-// attributes. Past spineCopiesFloor records so copied, elements and
-// attributes alike, a parse that has copied more than spineCopiesPerRecord
-// for each record of its bursts is refused.
+// groundShared says small grounded copies are handed out of a shared batch
+// (ground); a var for the test that shows what it saves.
+var groundShared = true
+
+// ground copies el, a small burst grounded for now, into the shared batch,
+// under the copies of its ancestors there, and returns the copy, which may
+// be kept: the batch goes on growing, but nothing the copy answers sees the
+// copies after it. Its ancestors' copies are shallow, so their content,
+// siblings and string values are posture faults, as a tree of its own's are
+// (deliver); and each copy of an element here is given an end just past its
+// attributes, so NextSibling of the copy finds no sibling after it, as its
+// tree of its own would, and it is given no previous sibling either. Order,
+// identity and generate-id read the copies' origins (streamview.go).
 //
-// ponytail: a refusal, not a cure; sharing the ancestors' copies between
-// trees handed out one by one (Ground) would need trees that grow after.
+// A batch is replaced once it is full (burstBatch.full), or once the parse
+// has stored too much since it began (discardLast): a kept copy holds its
+// batch's records and the parse's stores as they were when it was made, and
+// while a batch is open the parse takes nothing back from its stores.
+func (b *burster) ground(el *Node) *Node {
+	t := el.tree
+	if bt := b.shared; bt == nil || bt.full(t) {
+		b.shared = b.newBatch(t, true)
+	}
+	bt := b.shared
+	j := b.add(bt, el)
+	b.finish(bt)
+	return bt.t.rec(j)
+}
+
+// full reports whether bt, a batch of bursts out of the parse tree t, is to
+// be delivered or replaced: it holds burstBatchRecords records, or four
+// times what the copies of the open path take if that is more, or the parse
+// has stored burstBatchText bytes of text since it began. (The open path's
+// copies, not all the batch ever copied for ancestors: under ancestors each
+// one new that grew with the batch, which was never replaced; see viewBatch.)
+func (bt *burstBatch) full(t *Tree) bool {
+	return int(bt.t.n) >= max(burstBatchRecords, 4*bt.recs[len(bt.recs)-1]) ||
+		textSince(t, bt.blocks) >= burstBatchText
+}
+
+// A burst's tree holds copies of its ancestors with their attributes. Small
+// bursts share them (burstBatch, ground), so ancestors are copied once per
+// batch, and a batch holds four times what its open path's copies take: the
+// copies stay a fraction of the records. A large burst is delivered in a
+// tree of its own (deliver), and costs depth + attributes more than its
+// records; past spineCopiesFloor records so copied, elements and attributes
+// alike, a parse that has copied more than spineCopiesPerRecord for each
+// record of its bursts is refused. Since small bursts share, the refusal
+// is a backstop: depth alone (at most MaxDepth, against burstSmall records
+// a large burst holds) does not reach it, only a spine of tens of thousands
+// of attributes over large bursts does.
 const spineCopiesPerRecord = 64
 
 var spineCopiesFloor = 1 << 24 // a var for the test
@@ -828,8 +889,8 @@ func (b *burster) spineCopiesCheck() error {
 
 // A burst of more than burstSmall records is delivered on its own; smaller
 // ones are batched until the batch holds burstBatchRecords records (or four
-// times the records its ancestors' copies take, attributes included), or the parse has stored burstBatchText bytes of
-// text since the batch began. The text a spine element's content stored
+// times the records its open path's copies take, attributes included), or
+// the parse has stored burstBatchText bytes of text since the batch began. The text a spine element's content stored
 // before a child of it opened waits for the element to close: burstFrozen
 // bounds it.
 //
@@ -861,37 +922,48 @@ type burstBatch struct {
 	// node), and gens[d] that element's gens entry.
 	path []uint32
 	gens []uint64
+	// recs[d] is how many records the copies down to path[d] take, their
+	// attributes included.
+	recs []int
 	// els are the bursts, in order.
 	els []uint32
-	// spine is how many records the copies of ancestors take.
-	spine int
-	// blocks is how many text blocks the parse had when the batch began.
-	blocks int
-	src    *Tree
+	// blocks, names and frames are how many text blocks, names and frames
+	// the parse had when the batch began.
+	blocks, names, frames int
+	src                   *Tree
 	// o, for the stream driver, is the batch's origin (streamview.go).
 	o *treeOrigin
+	// lone says its bursts are handed out as they are added (ground): each
+	// is given no siblings, and the ancestors' copies ends just past their
+	// attributes.
+	lone bool
 }
 
-// add copies el, a small burst, into the batch, under copies of the spine
-// elements it does not share with the burst before it.
-func (b *burster) add(el *Node) {
-	t := el.tree
-	bt := b.batch
-	if bt == nil {
-		bt = &burstBatch{t: &Tree{}, blocks: len(t.text.blocks), src: t}
-		b.batch = bt
-		if b.ords != nil {
-			bt.o = bt.t.setOrigin(b.stream(t))
-			bt.o.add(0, 0)
-		}
-		r := bt.t.rec(bt.copyRange(t, 0, 1, noIdx, noIdx))
-		r.v1 = noIdx
-		if bt.o != nil {
-			r.flags |= fShallow
-		}
-		bt.path, bt.gens = append(bt.path, 0), append(bt.gens, 0)
-		bt.spine = 1
+// newBatch starts a batch of bursts out of the parse tree t with a copy of
+// its document node; lone, for ground.
+func (b *burster) newBatch(t *Tree, lone bool) *burstBatch {
+	bt := &burstBatch{t: &Tree{}, blocks: len(t.text.blocks), names: len(t.names), frames: len(t.frames), src: t, lone: lone}
+	if b.ords != nil {
+		bt.o = bt.t.setOrigin(b.stream(t))
+		bt.o.add(0, 0)
 	}
+	r := bt.t.rec(bt.copyRange(t, 0, 1, noIdx, noIdx))
+	r.v1 = noIdx
+	if bt.o != nil {
+		r.flags |= fShallow
+	}
+	if lone {
+		r.end = 1
+	}
+	bt.path, bt.gens, bt.recs = append(bt.path, 0), append(bt.gens, 0), append(bt.recs, 1)
+	return bt
+}
+
+// add copies el, a small burst, into the batch bt, under copies of the
+// spine elements it does not share with the burst before it, and returns
+// the copy's index.
+func (b *burster) add(bt *burstBatch, el *Node) uint32 {
+	t := el.tree
 	d := b.gens.len() - 1 // el's parent
 	k := 1
 	for k < len(bt.path) && k <= d && bt.gens[k] == b.gens.at(k) {
@@ -911,16 +983,24 @@ func (b *burster) add(el *Node) {
 			e.flags |= fShallow // its content is not all here
 		}
 		e.end, e.v1 = openEnd, noIdx
+		if bt.lone {
+			e.end = bt.t.n // its content is not counted in its range
+		}
 		bt.path, bt.gens = append(bt.path, j), append(bt.gens, b.gens.at(k))
+		bt.recs = append(bt.recs, bt.recs[len(bt.recs)-1]+1+int(s.attrCount()))
 		b.spineCopies += 1 + int(s.attrCount())
-		bt.spine += 1 + int(s.attrCount())
 		k++
 	}
 	j := bt.appendUnder(t, el.self, t.endOf(el))
 	if bt.o != nil {
 		bt.o.add(j, b.ordOf(el))
 	}
-	bt.els = append(bt.els, j)
+	if bt.lone {
+		bt.t.rec(j).prev = noIdx // the copies before it are not its siblings
+	} else {
+		bt.els = append(bt.els, j)
+	}
+	return j
 }
 
 // appendUnder copies the records [lo, hi) of t, a node's own and those after
@@ -932,12 +1012,13 @@ func (bt *burstBatch) appendUnder(t *Tree, lo, hi uint32) uint32 {
 	return j
 }
 
-// closeTo ends the copies at depths k and deeper.
+// closeTo ends the copies at depths k and deeper (a lone batch's ends are
+// already set).
 func (bt *burstBatch) closeTo(k int) {
-	for i := len(bt.path) - 1; i >= k; i-- {
+	for i := len(bt.path) - 1; i >= k && !bt.lone; i-- {
 		bt.t.rec(bt.path[i]).end = bt.t.n
 	}
-	bt.path, bt.gens = bt.path[:k], bt.gens[:k]
+	bt.path, bt.gens, bt.recs = bt.path[:k], bt.gens[:k], bt.recs[:k]
 }
 
 // copyRange appends copies of the records [lo, hi) of t, whose links within
@@ -1015,8 +1096,24 @@ func (b *burster) flush() error {
 	}
 	b.batch = nil
 	bt.closeTo(0)
+	bt.t.rec(0).end = bt.t.n
+	b.finish(bt)
+	c := bt.t
+	for _, i := range bt.els {
+		if err := b.fn(c.rec(i)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// finish makes bt's tree a document, as a burst's tree is (deliver),
+// sharing the parse's stores as they now are. A lone batch is finished
+// again at each copy added: its tree then reads the stores as they are
+// then, of which what it read before is a prefix (the parse takes nothing
+// back while a batch is open).
+func (b *burster) finish(bt *burstBatch) {
 	c, t := bt.t, bt.src
-	c.rec(0).end = c.n
 	c.Root = c.rec(0)
 	if bt.o == nil {
 		c.id.Store(int64(nextTreeID()))
@@ -1029,19 +1126,13 @@ func (b *burster) flush() error {
 		c.ownSource().externalSubset = s.externalSubset
 	}
 	c.names = t.names[:len(t.names):len(t.names)]
-	c.text.blocks = make([][]byte, len(t.text.blocks))
-	for i, blk := range t.text.blocks {
-		c.text.blocks[i] = blk[:len(blk):len(blk)]
+	c.text.blocks = c.text.blocks[:0]
+	for _, blk := range t.text.blocks {
+		c.text.blocks = append(c.text.blocks, blk[:len(blk):len(blk)])
 	}
 	c.text.size = t.text.size
 	c.frames = t.frames[:len(t.frames):len(t.frames)]
 	c.frameData = t.frameData[:len(t.frameData):len(t.frameData)]
-	for _, i := range bt.els {
-		if err := b.fn(c.rec(i)); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // deliver hands el to fn in a tree of its own. By now the parse's tree holds

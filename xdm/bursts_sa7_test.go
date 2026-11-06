@@ -48,10 +48,12 @@ func (c *groundAt) Later(any) error              { return nil }
 // floor, a parse that copies more than spineCopiesPerRecord of them (the
 // document node, the elements, the attributes) for each record grounded is
 // refused (a ResourceLimit), where one at the rate passes, of attributes or
-// of attribute-free ancestors alike.
+// of attribute-free ancestors alike. Copies in trees of their own (deliver),
+// as a large burst is: small ones share their ancestors' copies
+// (TestDriveGroundSharesTheSpine).
 func TestDriveGroundSpineAttrsRefused(t *testing.T) {
-	defer func(f int) { spineCopiesFloor = f }(spineCopiesFloor)
-	spineCopiesFloor = 1000
+	defer func(f int, s bool) { spineCopiesFloor, groundShared = f, s }(spineCopiesFloor, groundShared)
+	spineCopiesFloor, groundShared = 1000, false
 	for _, c := range []struct {
 		depth, s, n int
 		refused     bool
