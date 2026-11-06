@@ -128,7 +128,7 @@ syntax error does *not* carry the sentinel.
 | `MaxSchemaBytes` | `xquery/schemaimport.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the schema is not there |
 | `ValidateOptions.MaxDepth` | `xsd/validate.go` | `cvc-elt.1` | the element is invalid against its declaration |
 | `maxSchemaFetches` (10,000) | `relaxng/resolve.go` | *(none)* | include/externalRef fetches per RELAX NG compilation, all routes; the refusal names the budget |
-| `maxModuleVisits` (10,000) | `xslt/compile.go` | *(none)* | `xsl:include`/`xsl:import` resolutions per `Compile`, all routes, static phase and compile both counting; the refusal names the budget and wraps `xdm.ErrResourceLimit` |
+| `maxModuleVisits` (10,000) | `xslt/compile.go` | *(none)* | `xsl:include`/`xsl:import` resolutions per `Compile`, all routes, static phase and compile both counting, plus each `xsl:use-package` read and compile; the refusal names the budget and wraps `xdm.ErrResourceLimit` |
 | `fn:transform` nesting | `xslt/fntransform.go` | `XPDY0001` | no context item is defined; the depth is `TransformOptions.MaxDepth`, charged from the call so that a stylesheet transforming itself accumulates it, including across nested compilations; `DefaultMaxDepth` in the static phase |
 
 The XSD case reaches a caller through `xsd.ValidationErrors`, which now

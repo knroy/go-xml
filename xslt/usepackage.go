@@ -943,6 +943,19 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 			"XTSE3000: no package named %s is available (package loading is "+
 				"disabled)", u.name)
 	}
+	// Everything from here on depends on the package alone, not on this
+	// xsl:use-package's accepts and overrides, so it is read once per
+	// Compile however many paths reach the package. comps is clipped so that
+	// acceptComponents appending to it cannot write into the shared array.
+	memo := u.name + "\x00" + u.versions
+	if r, ok := c.packageReads[memo]; ok {
+		u.key, u.doc, u.root, u.staticVars = r.key, r.doc, r.root, r.staticVars
+		u.comps, u.inherited = slices.Clip(r.comps), r.inherited
+		return u, nil
+	}
+	if err := c.visitModule(el, u.name); err != nil {
+		return nil, err
+	}
 	doc, err := c.opts.PackageResolver.ResolvePackage(u.name, u.versions)
 	if err != nil {
 		return nil, fmt.Errorf("XTSE3000: no package matches name %q and "+
@@ -1021,6 +1034,11 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 	u.inherited = inherited
 	comps = append(comps, inherited...)
 	u.comps = comps
+	if c.packageReads == nil {
+		c.packageReads = map[string]*usePackageDecl{}
+	}
+	c.packageReads[memo] = &usePackageDecl{key: u.key, doc: u.doc, root: u.root,
+		staticVars: u.staticVars, comps: slices.Clip(comps), inherited: inherited}
 	return u, nil
 }
 
@@ -1716,6 +1734,9 @@ func contextItemAttr(el *xdm.Node, name string) string {
 // The used package's tree is not edited: the decisions are recorded in e, and
 // the tree compiled is a copy built with them applied.
 func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
+	if err := c.visitModule(u.el, u.name); err != nil {
+		return err
+	}
 	e := pkgEdits{}
 	keep := map[*xdm.Node]bool{}
 	for _, comp := range u.comps {

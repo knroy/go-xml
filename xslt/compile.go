@@ -45,7 +45,8 @@ type compiler struct {
 	seen       map[string]bool
 	schemaSeen map[string]bool
 	// moduleVisits counts the xsl:include and xsl:import occurrences this
-	// compilation has resolved, over both module walks; see maxModuleVisits.
+	// compilation has resolved, over both module walks, and the packages it
+	// has read or compiled; see maxModuleVisits.
 	moduleVisits int
 	// importDepth counts how many xsl:import declarations the compiler is
 	// currently inside.
@@ -66,6 +67,11 @@ type compiler struct {
 	// activePackages holds the packages being read or compiled on the
 	// current path, keyed by packageKey, for XTSE3005.
 	activePackages map[string]bool
+	// packageReads memoises readUsePackage's reading of a package, keyed by
+	// the name and version range it was requested with, so that a package
+	// used on several paths is resolved and read once. Only the part that
+	// depends on the package alone is kept; see readUsePackage.
+	packageReads map[string]*usePackageDecl
 	// schemaHoisted records that the xsl:import-schema pre-pass has run, so
 	// that the recursion for each included module does not repeat it from a
 	// root that sees less than the first one did.
@@ -2083,8 +2089,11 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 // result cannot be shared -- and a chain where each module imports the next
 // twice costs 2^N. Both walks charge it, the static phase and the compile, so
 // an occurrence counts twice; the largest real stylesheets measured (DocBook
-// XSL 1.79 fo, xslTNG, XSpec) need about 120. A nested compilation started by
-// fn:transform counts afresh: its nesting is already bounded by maxDepth.
+// XSL 1.79 fo, xslTNG, XSpec) need about 120. A package used on several paths
+// is likewise compiled once per path, since each use may override it
+// differently (3.5.2), so every package read and compile is charged too. A
+// nested compilation started by fn:transform counts afresh: its nesting is
+// already bounded by maxDepth.
 const maxModuleVisits = 10_000
 
 // visitModule charges one module visit against maxModuleVisits.
@@ -2092,7 +2101,7 @@ func (c *compiler) visitModule(el *xdm.Node, href string) error {
 	if c.moduleVisits >= maxModuleVisits {
 		return fmt.Errorf(
 			"%s %q: resource limit exceeded: compiling this stylesheet "+
-				"needs more than %d xsl:include/xsl:import module visits: %w",
+				"needs more than %d xsl:include/xsl:import/xsl:use-package module visits: %w",
 			el.Name().Lexical(), href, maxModuleVisits, xdm.ErrResourceLimit)
 	}
 	c.moduleVisits++

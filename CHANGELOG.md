@@ -379,6 +379,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | XQuery `validate lax` with no imported schema wrote `xsi:type` annotations into the caller's tree | It annotates and returns the §3.21 copy; the input is left as it was. | [`f46ec7b`][f46ec7b] |
 | Rooted file resolvers statted a `//host/share` or `file:////host/...` path before containment, reaching the host over SMB on Windows | It is refused first, unless a root is on that share. | [`60fed8a`][60fed8a] |
 | A panic while `xslt.FileResolver` parsed a file left other callers waiting on it blocked forever | The in-flight entry is released by a defer and its waiters get an error. | [`60fed8a`][60fed8a] |
+| A package used on several paths was read and compiled once per path, so a layered `xsl:use-package` DAG cost 2^N | Its read is shared per `Compile`; each read and compile counts against the 10,000 module visits. | [`4c5c3ee`][4c5c3ee] |
 
 ### Changed — behaviour
 
@@ -391,6 +392,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | One XInclude pass shares a node budget | Everything its inclusions copy in counts against `Parse.MaxNodes`, once per level it is copied through. | [`eb4d0ae`][eb4d0ae] |
 | An `xsl:use-package` cycle is XTSE3005 | A package that uses itself, directly or through another, is a static error, not a crash. | [`dce8830`][dce8830] |
 | `Compile` refuses a stylesheet needing over 10,000 module visits | Each include/import resolution counts, in the static phase and the compile; real stylesheets need about 120. | [`77c3c5d`][77c3c5d] |
+| Package reads and compiles count as module visits | A package graph compiling over 10,000 package copies is refused with `ErrResourceLimit`; the W3C package cases need at most 16. | [`4c5c3ee`][4c5c3ee] |
 | A streamed parse refuses over 64 ancestor attributes per record past 16M copies | It returns `ErrResourceLimit` where Parse + Transform succeeds; back off to the tree on `errors.Is`. | [`f90e97d`][f90e97d] |
 | A streamed `xsl:merge` of more than 64 inputs runs on the tree | Output is unchanged; memory is the tree's. | [`e621bf7`][e621bf7] |
 | `Serialize` refuses an `OutputSettings.Standalone` other than "", omit, yes or no | SEPM0016, where a value such as "true" was written raw. | [`877b3af`][877b3af] |
@@ -2647,3 +2649,4 @@ here so every entry in this file sits under a release.
 [cfc090e]: https://github.com/knroy/go-xml/commit/cfc090e
 [77c3c5d]: https://github.com/knroy/go-xml/commit/77c3c5d
 [60fed8a]: https://github.com/knroy/go-xml/commit/60fed8a
+[4c5c3ee]: https://github.com/knroy/go-xml/commit/4c5c3ee
