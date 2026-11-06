@@ -1553,13 +1553,14 @@ func weekOfYear(dt *xdm.DateTime) int {
 	// of the year.
 	iso := (weekdayIndex(dt) + 6) % 7 // Monday = 0
 	days := daysFromCivilLocal(dt.Year, dt.Month, dt.Day) - int64(iso) + 3
-	// Recover the calendar year of that Thursday by walking from the value's
-	// own year, which is at most one out in either direction.
+	// Recover the calendar year of that Thursday from the value's own year,
+	// which is at most one out in either direction. Only those neighbours are
+	// tested: walking until the day counts agreed never ended once a day count
+	// had overflowed.
 	y := dt.Year
-	for daysFromCivilLocal(y+1, 1, 1) <= days {
+	if daysFromCivilLocal(y+1, 1, 1) <= days {
 		y++
-	}
-	for daysFromCivilLocal(y, 1, 1) > days {
+	} else if daysFromCivilLocal(y, 1, 1) > days {
 		y--
 	}
 	return int((days-daysFromCivilLocal(y, 1, 1))/7) + 1

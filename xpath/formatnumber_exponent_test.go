@@ -4,6 +4,7 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -155,4 +156,53 @@ func decimalOf(t *testing.T, s string) *xdm.Atomic {
 		t.Fatalf("bad decimal %q", s)
 	}
 	return xdm.NewDecimal(r)
+}
+
+// TestScaleForExponentMatchesStepping pins the estimated exponent to the
+// one-power-at-a-time answer on both sides of every boundary it can miss.
+func TestScaleForExponentMatchesStepping(t *testing.T) {
+	stepped := func(v *big.Rat, minInt int) int {
+		abs, exp := new(big.Rat).Abs(v), 0
+		for abs.Cmp(powerOfTen(minInt)) >= 0 {
+			abs, exp = scaleByPowerOfTen(abs, -1), exp+1
+		}
+		for abs.Cmp(powerOfTen(minInt-1)) < 0 {
+			abs, exp = scaleByPowerOfTen(abs, 1), exp-1
+		}
+		return exp
+	}
+	one := big.NewRat(1, 1)
+	for k := -12; k <= 12; k++ {
+		p := powerOfTen(k)
+		for _, v := range []*big.Rat{
+			p, new(big.Rat).Sub(p, big.NewRat(1, 1e15)), new(big.Rat).Add(p, big.NewRat(1, 1e15)),
+			new(big.Rat).Mul(p, big.NewRat(7, 3)), new(big.Rat).Mul(p, big.NewRat(-1, 9)),
+			new(big.Rat).Quo(one, new(big.Rat).Mul(p, big.NewRat(3, 1))),
+		} {
+			for minInt := 0; minInt <= 4; minInt++ {
+				if got, want := scaleForExponent(v, minInt), stepped(v, minInt); got != want {
+					t.Errorf("scaleForExponent(%s, %d) = %d, want %d", v.RatString(), minInt, got, want)
+				}
+			}
+		}
+	}
+}
+
+// TestFormatNumberExponentLargeDecimalIsFast: a 100000-digit decimal under
+// '0.0e0' outlived a 5 s wait while the plain picture took under a millisecond.
+func TestFormatNumberExponentLargeDecimalIsFast(t *testing.T) {
+	val := decimalOf(t, "1"+strings.Repeat("0", 99998)+"7")
+	done := make(chan string, 1)
+	go func() {
+		s, _ := FormatNumberVersion(val, "0.0e0", DefaultDecimalFormat(), XPath31)
+		done <- s
+	}()
+	select {
+	case s := <-done:
+		if s != "1.0e99999" {
+			t.Errorf("got %q, want 1.0e99999", s)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("format-number exponent picture still running after 2s")
+	}
 }

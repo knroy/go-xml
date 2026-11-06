@@ -590,6 +590,12 @@ func addDurationToDate(d, dur *xdm.Atomic, subtract bool) (*xdm.Atomic, error) {
 			out.Month += 12
 			out.Year--
 		}
+		// The parser refuses a year outside the range daysFromCivil can count
+		// (xdm maxYear/minYear); the month total fitting in int does not keep
+		// the result inside it, and such a value compared and serialised wrongly.
+		if out.Year > dateMaxYear || out.Year < dateMinYear {
+			return nil, xdm.Errorf("FODT0001", "year %d overflows the date range", out.Year)
+		}
 		// Clamp the day to the last valid day of the resulting month.
 		if maxDay := daysInMonthOf(out.Year, out.Month); out.Day > maxDay {
 			out.Day = maxDay
@@ -618,6 +624,13 @@ func addDurationToDate(d, dur *xdm.Atomic, subtract bool) (*xdm.Atomic, error) {
 	}
 	return xdm.NewDateTime(&out, d.Type), nil
 }
+
+// dateMaxYear and dateMinYear mirror xdm's unexported maxYear and minYear,
+// the year range the date parser accepts.
+const (
+	dateMaxYear = 25252734927766554
+	dateMinYear = -25252734927764584
+)
 
 func durationFromSigned(months int, secs *big.Rat, t xdm.TypeCode) *xdm.Atomic {
 	neg := months < 0 || (months == 0 && secs.Sign() < 0)

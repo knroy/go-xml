@@ -1,7 +1,10 @@
 package xpath
 
 import (
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -174,5 +177,38 @@ func TestFormatIntegerHiddenFromXPath20(t *testing.T) {
 	if code := xdm.ErrorCode(err); code != "XPST0017" {
 		t.Errorf("error code %s (%v), want XPST0017 -- the function must be "+
 			"unknown at 2.0, not merely fail", code, err)
+	}
+}
+
+// TestIrregularGroupingIsLinear: alternating separators sent every digit
+// through a scan of every separator; a 320001-character picture took 7.7 s.
+func TestIrregularGroupingIsLinear(t *testing.T) {
+	for _, tc := range []struct{ expr, want string }{
+		{`format-integer(1234567, '0,0.0')`, "12345,6.7"},
+		{`format-integer(1234567, '0,0.0,0')`, "1234,5.6,7"},
+		{`format-number(1.234567, '0.0,00,0')`, "1.2,34,6"},
+	} {
+		if got := fiOne(t, tc.expr); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.expr, got, tc.want)
+		}
+	}
+	g := 160000
+	for _, tc := range []struct {
+		expr string
+		want int
+	}{
+		{`string-length(format-integer(1, '0` + strings.Repeat(",0.0", g/2) + `'))`, 2*g + 1},
+		{`string-length(format-number(1, '0.` + strings.Repeat("0,00,", g/2) + `0'))`, 2 + 5*g/2 + 1},
+	} {
+		done := make(chan string, 1)
+		go func() { done <- fiOne(t, tc.expr) }()
+		select {
+		case got := <-done:
+			if got != strconv.Itoa(tc.want) {
+				t.Errorf("length %s, want %d", got, tc.want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("irregular grouping still running after 2s")
+		}
 	}
 }

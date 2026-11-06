@@ -1,8 +1,11 @@
 package xpath
 
 import (
+	"fmt"
+	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -212,5 +215,62 @@ func TestParseJSONNumberOverflowIsInfinity(t *testing.T) {
 	}
 	if got != "1e400" {
 		t.Errorf("json-to-xml('1e400') string value = %q, want %q", got, "1e400")
+	}
+}
+
+// TestYearMonthDurationKeepsTheYearBound: date + yearMonthDuration built a
+// year the parser refuses, which then compared lt 2000-01-01 and hung [W].
+func TestYearMonthDurationKeepsTheYearBound(t *testing.T) {
+	for _, expr := range []string{
+		`string(xs:date('2000-01-01') + xs:yearMonthDuration('P25252734927766554Y'))`,
+		`string(xs:date('-2000-01-01') - xs:yearMonthDuration('P25252734927762585Y'))`,
+		`string(xs:dateTime('2000-01-01T00:00:00') + xs:yearMonthDuration('P25252734927766554Y'))`,
+		`format-date(xs:date('2000-12-20') + xs:yearMonthDuration('P25252734927766524Y'), '[W]')`,
+	} {
+		_, err := eval31(t, expr, nil)
+		if err == nil || !strings.Contains(err.Error(), "FODT0001") {
+			t.Errorf("%s: err = %v, want FODT0001", expr, err)
+		}
+	}
+	// The bound itself is still reachable.
+	got, err := eval31(t, `string(xs:date('2000-01-01') + xs:yearMonthDuration('P25252734927764554Y'))`, nil)
+	if err != nil || got != "25252734927766554-01-01" {
+		t.Errorf("max year: got %q, %v", got, err)
+	}
+}
+
+// TestWeekOfYearIsBoundedForAnyYear: the ISO-year search walked until the
+// day counts agreed, which never happened once they had overflowed.
+func TestWeekOfYearIsBoundedForAnyYear(t *testing.T) {
+	done := make(chan int, 1)
+	go func() {
+		done <- weekOfYear(&xdm.DateTime{Year: 25252734927768524, Month: 12, Day: 20, Second: new(big.Rat)})
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("weekOfYear did not return for an out-of-range year")
+	}
+	if w := weekOfYear(&xdm.DateTime{Year: 2000, Month: 12, Day: 20, Second: new(big.Rat)}); w != 51 {
+		t.Errorf("2000-12-20 [W] = %d, want 51", w)
+	}
+}
+
+// TestDateYearBoundsMatchTheParser: cast.go keeps its own copy of xdm's year
+// range (dateMaxYear, dateMinYear). Pin it to what the parser accepts so the
+// two cannot drift apart.
+func TestDateYearBoundsMatchTheParser(t *testing.T) {
+	for _, c := range []struct {
+		year int64
+		ok   bool
+	}{{dateMaxYear, true}, {dateMaxYear + 1, false}, {dateMinYear, true}, {dateMinYear - 1, false}} {
+		lex := fmt.Sprintf("%d-01-01", c.year)
+		if c.year < 0 {
+			lex = fmt.Sprintf("-%d-01-01", -c.year)
+		}
+		_, err := eval31(t, "string(xs:date('"+lex+"'))", nil)
+		if (err == nil) != c.ok {
+			t.Errorf("xs:date(%q): err = %v, want accepted=%v", lex, err, c.ok)
+		}
 	}
 }
