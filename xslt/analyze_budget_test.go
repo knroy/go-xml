@@ -44,7 +44,7 @@ func TestAnalyzeStringReportsBudgetExhaustion(t *testing.T) {
 	if err == nil {
 		t.Fatal("the exhausted budget was reported as a non-match")
 	}
-	if !strings.Contains(err.Error(), "FORX0002") {
+	if !strings.Contains(err.Error(), "XPDY0130") {
 		t.Fatalf("wrong error: %v", err)
 	}
 }

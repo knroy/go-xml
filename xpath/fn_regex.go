@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -435,9 +436,21 @@ func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 				return re2, nil
 			}
 		}
-		return nil, fmt.Errorf("FORX0002: invalid regular expression %q: %w", pattern, err)
+		return nil, regexCompileError(pattern, err)
 	}
 	return re, nil
+}
+
+// regexCompileError reports a pattern CompileBounded declined. A pattern RE2
+// rejects is FORX0002, which F&O defines for a pattern that "is syntactically
+// invalid". One refused for its size is valid, and XPath 3.1 §2.3.1 gives an
+// exceeded limit its own code: "An error must be raised if such a limitation
+// is exceeded [err:XPDY0130]".
+func regexCompileError(pattern string, err error) error {
+	if errors.Is(err, xdm.ErrResourceLimit) {
+		return fmt.Errorf("XPDY0130: regular expression %q exceeds a processor limit: %w", pattern, err)
+	}
+	return fmt.Errorf("FORX0002: invalid regular expression %q: %w", pattern, err)
 }
 
 // validEscapes are the single characters that may follow a backslash, beyond

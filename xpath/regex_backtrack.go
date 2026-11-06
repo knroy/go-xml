@@ -116,19 +116,17 @@ const backtrackMaxDepth = 50_000
 // errBacktrackBudget is returned when a match exhausts the budget.
 //
 // It is deliberately not a false: the pattern may well match, and reporting
-// that it does not would be an answer this engine did not compute. FORX0002 is
-// the code the rest of the regex layer uses for "this pattern cannot be
-// evaluated here", and that is exactly what has happened.
+// that it does not would be an answer this engine did not compute.
 //
-// The code is nonetheless a poor description of the condition -- FORX0002 is
-// "invalid regular expression", and the pattern here is perfectly valid; what
-// ran out was this processor's budget. The specs give no code for that, so the
-// code is kept (callers and the conformance suites read it) and
-// xdm.ErrResourceLimit wrapped in alongside, which is the thing a caller
-// should branch on to tell "your pattern is wrong" from "retry with a shorter
-// input or a raised budget".
+// The code is XPDY0130, not FORX0002. F&O defines FORX0002 only for a pattern
+// that "is syntactically invalid", and this one is valid; what ran out was
+// this processor's budget, which is XPath 3.1 §2.3.1's case: "limitations may
+// exist on the maximum numbers or sizes of various objects. An error must be
+// raised if such a limitation is exceeded [err:XPDY0130]". Both the step
+// budget and backtrackMaxDepth raise it. xdm.ErrResourceLimit is wrapped in
+// alongside, as for every other limit.
 var errBacktrackBudget = fmt.Errorf(
-	"FORX0002: regular expression exceeded the backtracking step budget; "+
+	"XPDY0130: regular expression exceeded the backtracking step budget; "+
 		"the pattern may be exponential in the length of the input: %w",
 	xdm.ErrResourceLimit)
 
@@ -658,7 +656,7 @@ func buildCharAtom(src string, dotAll, fold bool) (*regexp.Regexp, error) {
 	// foul of RE2's line handling.
 	re, err := CompileBounded(prefix + `\A(?:` + translated + `)\z`)
 	if err != nil {
-		return nil, fmt.Errorf("FORX0002: invalid regular expression %q: %w", src, err)
+		return nil, regexCompileError(src, err)
 	}
 	return re, nil
 }

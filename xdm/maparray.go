@@ -511,7 +511,9 @@ func FlattenContext(ctx context.Context, seq Sequence) (Sequence, error) {
 			}
 		}
 		if steps > maxFlattenSteps {
-			return nil, fmt.Errorf("xdm: flattening an array visits more than %d items: %w",
+			// XPDY0130 is XPath 3.1 §2.3.1's code for an exceeded limit; with
+			// it a catch clause naming the code catches this refusal.
+			return nil, fmt.Errorf("XPDY0130: flattening an array visits more than %d items: %w",
 				maxFlattenSteps, ErrResourceLimit)
 		}
 		if arr, ok := it.(*ArrayItem); ok {

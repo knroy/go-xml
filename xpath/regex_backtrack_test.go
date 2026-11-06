@@ -236,8 +236,8 @@ func TestBacktrackBudgetTerminates(t *testing.T) {
 		if bt.Err() == nil {
 			t.Fatalf("exhausting the budget returned %v with no error", got)
 		}
-		if !strings.Contains(bt.Err().Error(), "FORX0002") {
-			t.Errorf("got %v, want FORX0002", bt.Err())
+		if !strings.Contains(bt.Err().Error(), "XPDY0130") {
+			t.Errorf("got %v, want XPDY0130", bt.Err())
 		}
 	})
 }
@@ -250,8 +250,8 @@ func TestBacktrackBudgetSurfacesThroughFnMatches(t *testing.T) {
 		if err == nil {
 			t.Fatal("fn:matches answered an exponential pattern instead of failing")
 		}
-		if !strings.Contains(err.Error(), "FORX0002") {
-			t.Errorf("got %v, want FORX0002", err)
+		if !strings.Contains(err.Error(), "XPDY0130") {
+			t.Errorf("got %v, want XPDY0130", err)
 		}
 	})
 }

@@ -21,7 +21,7 @@ import (
 // So the required shape is
 //
 //	no match         -> a normal false result
-//	budget exhausted -> a dynamic error, FORX0002
+//	budget exhausted -> a dynamic error, XPDY0130 (XPath 3.1 §2.3.1)
 //
 // The mechanism is btMachine.overrun, which findFrom propagates and every
 // exported method turns into Err(). These tests pin that end to end, through
@@ -35,15 +35,14 @@ import (
 //     SetBacktrackingRegex(true) the pattern below never reaches the
 //     backtracker at all: compileBacktrackFallback declines, the RE2/backref
 //     path rejects it at COMPILE time, and the test exercises nothing.
-//   - That compile-time rejection is *also* reported as FORX0002. So asserting
-//     on the code alone cannot tell "the budget ran out" from "this pattern was
-//     refused before it ever ran", which is precisely the distinction these
-//     tests exist to pin. An earlier version asserted only
-//     strings.Contains(err, "FORX0002") and stayed green with the guard deleted.
+//   - That compile-time rejection is FORX0002. The budget once reported
+//     FORX0002 too, so asserting on the code alone could not tell "the budget
+//     ran out" from "this pattern was refused before it ever ran": an earlier
+//     version asserted only strings.Contains(err, "FORX0002") and stayed green
+//     with the guard deleted.
 //
-// What separates the two is xdm.ErrResourceLimit, which errBacktrackBudget
-// wraps and the compile-time refusals do not. Every assertion below therefore
-// checks that sentinel, not just the code.
+// The budget now reports XPDY0130 and wraps xdm.ErrResourceLimit, and the
+// compile-time refusals do neither. Every assertion below checks both.
 
 // pathological is the shape the budget exists for: nested unbounded
 // quantification with a backreference, which explores exponentially many
@@ -60,9 +59,9 @@ func enableBacktracking(t *testing.T) {
 	t.Cleanup(func() { SetBacktrackingRegex(prev) })
 }
 
-// wantBudgetError asserts that err is the budget's own error rather than any
-// other FORX0002. The sentinel is what makes this test non-vacuous: a
-// compile-time rejection carries the same code but not xdm.ErrResourceLimit.
+// wantBudgetError asserts that err is the budget's own error rather than a
+// compile-time FORX0002 rejection, which carries neither its code nor
+// xdm.ErrResourceLimit.
 func wantBudgetError(t *testing.T, expr string, err error) {
 	t.Helper()
 	if err == nil {
@@ -70,18 +69,18 @@ func wantBudgetError(t *testing.T, expr string, err error) {
 			"because a false here is indistinguishable from a genuine non-match", expr)
 		return
 	}
-	if got := xdm.ErrorCode(err); got != "FORX0002" {
-		t.Errorf("%s: ErrorCode = %q, want FORX0002 (err: %v)", expr, got, err)
+	if got := xdm.ErrorCode(err); got != "XPDY0130" {
+		t.Errorf("%s: ErrorCode = %q, want XPDY0130 (err: %v)", expr, got, err)
 	}
 	if !errors.Is(err, xdm.ErrResourceLimit) {
 		t.Errorf("%s = %v, want the budget error wrapping xdm.ErrResourceLimit; "+
-			"a bare FORX0002 here means the pattern was refused before it ran, "+
+			"without it the pattern was refused before it ran, "+
 			"so the budget was never exercised", expr, err)
 	}
 }
 
 // TestBacktrackBudgetIsAnErrorNotFalse drives fn:matches with a pattern that
-// exhausts the budget and asserts the result is FORX0002 rather than the
+// exhausts the budget and asserts the result is XPDY0130 rather than the
 // "false" a silent guard would produce.
 func TestBacktrackBudgetIsAnErrorNotFalse(t *testing.T) {
 	enableBacktracking(t)
@@ -136,7 +135,7 @@ func TestBacktrackBudgetErrorReachesEveryFunction(t *testing.T) {
 
 // TestOrdinaryNonMatchIsStillFalse is the other half, and the reason the test
 // above is not vacuous: a pattern that simply does not match must return false
-// rather than an error. Without this, "everything is FORX0002" would pass.
+// rather than an error. Without this, "everything is an error" would pass.
 func TestOrdinaryNonMatchIsStillFalse(t *testing.T) {
 	cases := []struct{ expr, want string }{
 		{`matches("abc", "^z")`, "false"},

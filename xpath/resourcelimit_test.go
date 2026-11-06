@@ -19,7 +19,8 @@ import (
 //     report it now; they once borrowed XPST0003, "syntactically invalid",
 //     about a type or expression that was perfectly well-formed.
 //   - FORX0002 means "invalid regular expression". A pattern that exhausts the
-//     backtracking budget is valid; the budget is what ran out.
+//     backtracking budget is valid; the budget is what ran out, so it now
+//     reports XPDY0130 as well.
 //   - FOAR0002 means "numeric overflow or underflow". Nothing overflowed when
 //     a range bound is refused; the enumeration was declined.
 //
@@ -91,7 +92,7 @@ func TestResourceLimitsCarrySentinelAndKeepTheirCode(t *testing.T) {
 					`", "(a*)*\1b")`, ctx, nil)
 				return err
 			},
-			"FORX0002", "backtracking step budget",
+			"XPDY0130", "backtracking step budget",
 		},
 	}
 	for _, tt := range tests {
