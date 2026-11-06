@@ -175,11 +175,11 @@ reason:
 - **`Compile` holds a process-wide lock (`compileMu`) and takes no context**,
   so one slow compile delays every other and cannot be cancelled. The audit
   marked it needs-validation.
-- **Three units the audit deferred on budget were not reviewed:** lazy cache
+- **Two units the audit deferred on budget were not reviewed:** lazy cache
   writes on objects documented as safe for concurrent use (possible data
-  races), the XPath constant-folding budgets (`evalToLiteral` mints a fresh
-  default-budget context per fold), and RELAX NG validation-time cost
-  (`textDeriv`/`listDeriv` against `MaxPatternSize`).
+  races) and RELAX NG validation-time cost (`textDeriv`/`listDeriv` against
+  `MaxPatternSize`). The third, the XPath constant-folding budgets, was
+  fixed in round SC (see [security](security.md)).
 - **UNC paths on Windows in `xslt.FileResolver.resolvePath`** were flagged
   needs-validation and are untested on Windows.
 

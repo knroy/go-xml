@@ -1908,6 +1908,7 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 **Twenty-third pass (round SC, audit run-2), 2026-11-06.**
 
 - **XQuery `validate lax` with no imported schema annotated the caller's tree** — integrity: it stamped `xsi:type` annotations onto the operand itself and returned it, so `data(.) instance of xs:integer` changed for every later query, through an unsynchronised write into a tree a concurrently used `Query` only reads. The §3.21 copy is now made first and annotated instead. Pinned by `TestValidateLaxWithoutSchemaCopiesOperand`. See CHANGELOG.
+- **XPath constant folding had no aggregate budget and ignored the compile deadline** — cost, reachable from `xsl:evaluate`: each fold minted the full 5M-item / 1 GiB evaluation budget, so twenty `1 to 999999` terms (241 bytes) allocated 2.98 GB at compile under a 20 ms Context. One fold context per pass, 4,096 items shared, bound to the compile context; a range of two different literal bounds is not evaluated. 0.2 ms, 0.03 MB. Pinned by `TestFoldingIsBoundedPerCompilation`.
 
 **Twenty-second pass (round SB) — what round SA left open, 2026-11-06.**
 

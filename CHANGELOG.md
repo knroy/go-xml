@@ -340,6 +340,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| XPath constant folding gave each fold a fresh 5M-item budget and ignored the compile deadline: 241 bytes allocated 2.98 GB | One shared 4,096-item fold budget per compile, bound to its Context; unequal literal ranges are not folded. | [`e73a30b`][e73a30b] |
 | `ParseOptions.MaxNodes` charged only start tags, so a document of PIs or comments passed any bound | Text that is not all white space, comments and PIs now count one node each. | [`9e9a6f9`][9e9a6f9], [`089c346`][089c346] |
 | k ATTLIST defaults on one tag cost k×k comparisons, reachable from `fn:parse-xml` | A tag whose declarations times attributes pass 64 indexes its attributes by name. | [`43ca7b2`][43ca7b2] |
 | Copying one long text node into many elements used up the text store's blocks and panicked | One string reuses its block; past half the block space values are copied and packed. | [`ad032d1`][ad032d1] |
@@ -2636,6 +2637,7 @@ here so every entry in this file sits under a release.
 [9e39b51]: https://github.com/knroy/go-xml/commit/9e39b51
 [6e51253]: https://github.com/knroy/go-xml/commit/6e51253
 [aeae707]: https://github.com/knroy/go-xml/commit/aeae707
+[e73a30b]: https://github.com/knroy/go-xml/commit/e73a30b
 [a85f40a]: https://github.com/knroy/go-xml/commit/a85f40a
 [0c70a04]: https://github.com/knroy/go-xml/commit/0c70a04
 [915eb63]: https://github.com/knroy/go-xml/commit/915eb63

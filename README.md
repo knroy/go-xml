@@ -796,6 +796,10 @@ Two conditions guard every rewrite:
   deliberately not folded — refusing a stylesheet at compile time for an error
   in a branch that is never taken would be wrong.
 
+Folding is bounded per compilation: every fold in one compile shares a
+4,096-item budget and `CompileOptions.Context`, and a fold that would exceed
+either is simply not done, so it runs at evaluation time instead.
+
 Foldable functions are an allowlist, not a denylist. A user-defined function is
 never folded even if it happens to be pure, because the library it resolves
 through is supplied by the caller.
