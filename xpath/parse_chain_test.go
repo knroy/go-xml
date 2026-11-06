@@ -116,3 +116,45 @@ func TestManyShortChainsAreNotRefused(t *testing.T) {
 		t.Fatalf("%d separate two-term chains were refused: %v", len(parts), err)
 	}
 }
+
+// A parenthesised chain is returned as the bare inner Expr, so it becomes the
+// leftmost operand of the chain around it and the two spines join. Counted per
+// loop, each chain below was legal and the composition was not: a thousand
+// nested 10,000-term chains made a spine of ten million and a fatal stack
+// overflow inside Compile. The postfix and lookup chains are spines of the
+// same kind. Three sub-limit pieces are enough to cross the bound here.
+func TestComposedChainsAreRefusedNotFatal(t *testing.T) {
+	third := maxChainLength/3 + 1
+	nest := func(op, unit string) string {
+		s := "1"
+		for i := 0; i < 3; i++ {
+			s = "(" + s + ")" + strings.Repeat(op+unit, third)
+		}
+		return s
+	}
+	for _, c := range []struct{ name, src string }{
+		{"nested additive", nest("+", "1")},
+		{"mixed operators", "((1" + strings.Repeat("+1", third) + ")" +
+			strings.Repeat("*1", third) + ")" + strings.Repeat(" or 1", third)},
+		{"right operand", "1+(1" + strings.Repeat("+1", 2*third) + ")" +
+			strings.Repeat("+1", third)},
+		{"postfix", "(1)" + strings.Repeat("[1]()", 2*third)},
+		{"lookup", "map{1:1}" + strings.Repeat("?1", 3*third)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := CompileWith(c.src, CompileOptions{Version: XPath31})
+			if err == nil {
+				t.Fatal("a composed spine over the bound was accepted")
+			}
+			if !strings.Contains(err.Error(), "operator chain exceeds") ||
+				!errors.Is(err, xdm.ErrResourceLimit) {
+				t.Fatalf("refused for the wrong reason: %v", err)
+			}
+		})
+	}
+	// The same pieces side by side are separate paths and must still compile.
+	piece := "(1" + strings.Repeat("+1", third) + ")"
+	if _, err := Compile(piece+"="+piece+","+piece+" or "+piece, nil); err != nil {
+		t.Fatalf("sibling chains were charged to each other: %v", err)
+	}
+}

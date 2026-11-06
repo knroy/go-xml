@@ -136,11 +136,15 @@ func (p *Parser) parseStepExpr() (Expr, error) {
 	} else if ok {
 		return step, nil
 	}
+	outer := p.spine
+	p.spine = 0
 	base, err := p.parsePrimary()
 	if err != nil {
 		return nil, err
 	}
-	return p.parsePostfix(base)
+	e, err := p.parsePostfix(base)
+	p.spine = max(outer, p.spine)
+	return e, err
 }
 
 // parsePostfix applies the postfix chain of production [48]:
@@ -150,15 +154,26 @@ func (p *Parser) parseStepExpr() (Expr, error) {
 // both legal and mean different things. They are therefore consumed in one
 // loop rather than as two passes; running predicates first would reorder them
 // against the calls.
+//
+// Each predicate list, argument list and lookup nests the base one level
+// deeper, so "$f()[1]()[1]..." is a spine like an operator chain and is
+// charged to maxChainLength the same way. The base's height is p.spine on
+// entry, and the chain's height is left there on return.
 func (p *Parser) parsePostfix(base Expr) (Expr, error) {
+	h := p.spine
 	for {
+		p.spine = 0
 		if p.peekIs(TokOp, "[") {
 			pred, err := p.parsePredicates()
 			if err != nil {
 				return nil, err
 			}
 			if len(pred) == 0 {
+				p.spine = h
 				return base, nil
+			}
+			if h, err = p.grow(h, "["); err != nil {
+				return nil, err
 			}
 			base = &FilterExpr{Base: base, Predicates: pred}
 			continue
@@ -176,6 +191,9 @@ func (p *Parser) parsePostfix(base Expr) (Expr, error) {
 			if err != nil {
 				return nil, err
 			}
+			if h, err = p.grow(h, "("); err != nil {
+				return nil, err
+			}
 			base = &DynamicCall{Target: base, Args: args}
 			continue
 		}
@@ -187,9 +205,13 @@ func (p *Parser) parsePostfix(base Expr) (Expr, error) {
 			if err != nil {
 				return nil, err
 			}
+			if h, err = p.grow(h, "?"); err != nil {
+				return nil, err
+			}
 			base = look
 			continue
 		}
+		p.spine = h
 		return base, nil
 	}
 }
