@@ -288,7 +288,8 @@ func foldConstant(e Expr, f *exprFacts) (Expr, bool) {
 		// false before the stylesheet's case-blind collation could be
 		// applied. Leaving comparisons unfolded costs one evaluation and is
 		// the only way the answer can depend on the collation in force.
-		if isComparisonOp(v.Op) {
+		// Two numeric literals compare alike under any context, so they fold.
+		if isComparisonOp(v.Op) && !numericOperands(v) {
 			return nil, false
 		}
 		// A range of two different literal bounds is empty or longer than
@@ -389,7 +390,7 @@ func isClosedUncached(e Expr, f *exprFacts) bool {
 		// compilation (see foldConstant), so it is not closed: an ancestor
 		// that took it as closed folded it, and not('a' eq 'A') was frozen
 		// under codepoint order whatever collation the run then used.
-		if isComparisonOp(v.Op) {
+		if isComparisonOp(v.Op) && !numericOperands(v) {
 			return false
 		}
 		return isClosed(v.Left, f) && isClosed(v.Right, f)
@@ -481,6 +482,17 @@ func foldableFunction(name xdm.QName, arity int) bool {
 
 // isComparisonOp reports whether an operator's result can depend on the
 // default collation, which is what makes it unsafe to fold at compile time.
+// numericOperands reports whether both operands of v are numeric literals. A
+// comparison of numbers reads neither the default collation nor the implicit
+// timezone, so unlike any other comparison it is closed over its operands.
+// The literal type is the only static type the folder has to hand; an
+// operand that only folds to a number later is left to run time.
+func numericOperands(v *BinaryOp) bool {
+	l, lok := v.Left.(*Literal)
+	r, rok := v.Right.(*Literal)
+	return lok && rok && l.Val.Type.IsNumeric() && r.Val.Type.IsNumeric()
+}
+
 func isComparisonOp(op string) bool {
 	switch op {
 	case "eq", "ne", "lt", "le", "gt", "ge",
