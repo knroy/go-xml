@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"regexp/syntax"
+	"sync/atomic"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -22,25 +23,53 @@ const MaxRegexpProgram = 100000
 //
 // Where regexp also builds a onepass program, which copies a class's rune
 // table into every instruction that uses it, those copies are charged too, at
-// ten runes to an instruction as cachedProgramTooBig counts them. An XSD
-// facet is always anchored, so \A(?:\pL{990})\z passed at about 1000
-// instructions and retained 8 MB per compiled facet.
+// ten runes to an instruction as compileBounded counts them. An XSD facet is
+// always anchored, so \A(?:\pL{990})\z passed at about 1000 instructions and
+// retained 8 MB per compiled facet.
 func CompileBounded(expr string) (*regexp.Regexp, error) {
-	re, err := syntax.Parse(expr, syntax.Perl)
+	re, _, err := compileBounded(expr)
+	return re, err
+}
+
+// regexCompiles counts the programs compileBounded builds: each
+// regexp.Compile, and each syntax.Compile onepassEligible needs. The tests
+// read it to show a pattern is compiled once, not once per call.
+var regexCompiles atomic.Int64
+
+// regexBytesPerInst is the retained size of one RE2 instruction, about 40
+// bytes, and a rune of a class table is 4: hence ten runes to an instruction.
+const regexBytesPerInst = 40
+
+// compileBounded is CompileBounded that also returns the estimated bytes the
+// compiled program retains, which the regex cache weighs the entry by. The
+// estimate comes from the same parse as the size check, so storing a pattern
+// costs no second compile.
+//
+// A class shared by the copies of x{n} is counted once, as the ordinary
+// program shares its table, except where regexp also builds a onepass
+// program: that copies the table into every instruction that uses it, so
+// there each use is counted. \w translates to a Unicode-wide class, so 504
+// copies of it (a 1 KB key) retain 4 MB, and ^\p{L}{990}$ retained 8 MB.
+func compileBounded(expr string) (*regexp.Regexp, int, error) {
+	p, err := syntax.Parse(expr, syntax.Perl)
 	if err != nil {
-		// Let regexp.Compile report it, so the message is the usual one.
-		return regexp.Compile(expr)
+		// regexp.Compile fails at this same parse, with this same error.
+		return nil, 0, err
 	}
-	s := re.Simplify()
+	s := p.Simplify()
 	n := progSize(s, map[*syntax.Regexp]int{})
-	if n <= MaxRegexpProgram && onepassEligible(s) {
-		n += classRunes(s, map[*syntax.Regexp]int{}, true) / 10
-	}
-	if n > MaxRegexpProgram {
-		return nil, fmt.Errorf("regular expression compiles to more than %d instructions: %w",
+	onepass := n <= MaxRegexpProgram && onepassEligible(s, n)
+	runes := classRunes(s, map[*syntax.Regexp]int{}, onepass) / 10
+	if n > MaxRegexpProgram || onepass && n+runes > MaxRegexpProgram {
+		return nil, 0, fmt.Errorf("regular expression compiles to more than %d instructions: %w",
 			MaxRegexpProgram, xdm.ErrResourceLimit)
 	}
-	return regexp.Compile(expr)
+	regexCompiles.Add(1)
+	re, err := regexp.Compile(expr)
+	if err != nil {
+		return nil, 0, err
+	}
+	return re, (n + runes) * regexBytesPerInst, nil
 }
 
 // progSize estimates the instruction count of a simplified tree. Simplify
@@ -70,41 +99,49 @@ func progSize(re *syntax.Regexp, memo map[*syntax.Regexp]int) int {
 	return n
 }
 
-// maxCachedProgram is the largest program, in estimated RE2 instructions, that
-// the regex cache will retain.
-const maxCachedProgram = 4096
+// onepassMaxInst is the program length from which regexp's makeOnePass
+// declines to build a onepass program.
+const onepassMaxInst = 1000
 
-// cachedProgramTooBig reports whether re is too large to cache. It re-parses
-// the compiled source, which is cheap beside the compile that just ran.
+// onepassEligible reports whether regexp may build a onepass program for s,
+// whose progSize is size: one anchored at the start of the text and under
+// onepassMaxInst instructions, which are the conditions regexp's
+// compileOnePass checks before it tries.
 //
-// progSize counts a character class as one instruction, but each class keeps
-// its own rune table: \w translates to a Unicode-wide class, so 504 copies of
-// it (a 1 KB key) passed the gate and retained 4 MB per entry. The class
-// payload is therefore added, at ten runes to an instruction (a rune is 4
-// bytes, an instruction about 40).
-//
-// A shared class is counted once, as the ordinary program shares its table,
-// except where regexp also builds a onepass program: that copies the table
-// into every instruction that uses it, so there each use is counted. Counted
-// once, ^\p{L}{990}$ passed the gate and retained 8 MB per entry, and 1024
-// such entries could pin 8 GB in the process-wide cache.
-func cachedProgramTooBig(re *regexp.Regexp) bool {
-	p, err := syntax.Parse(re.String(), syntax.Perl)
-	if err != nil {
+// Two cheap tests come first, so that only a candidate is compiled. progSize
+// counts at most three per instruction the program holds (two for a
+// repetition that compiles to one, one for a concatenation, which compiles to
+// none and has two operands), so a size of three times the limit is a program
+// over it. And compileOnePass needs the first instruction to be \A, which
+// only a tree that begins with OpBeginText can compile to.
+func onepassEligible(s *syntax.Regexp, size int) bool {
+	if size >= 3*onepassMaxInst || !leadsWithBeginText(s) {
 		return false
 	}
-	s := p.Simplify()
-	return progSize(s, map[*syntax.Regexp]int{})+
-		classRunes(s, map[*syntax.Regexp]int{}, onepassEligible(s))/10 > maxCachedProgram
+	regexCompiles.Add(1)
+	prog, err := syntax.Compile(s)
+	return err == nil && len(prog.Inst) < onepassMaxInst &&
+		prog.StartCond()&syntax.EmptyBeginText != 0
 }
 
-// onepassEligible reports whether regexp may build a onepass program for s:
-// one anchored at the start of the text and under 1000 instructions, which
-// are the conditions regexp's compileOnePass checks before it tries.
-func onepassEligible(s *syntax.Regexp) bool {
-	prog, err := syntax.Compile(s)
-	return err == nil && len(prog.Inst) < 1000 &&
-		prog.StartCond()&syntax.EmptyBeginText != 0
+// leadsWithBeginText reports whether the first instruction s compiles to may
+// be \A. It follows the operand a program starts with: the first of a
+// concatenation, a plus, which compiles its operand first, and a capture,
+// which is conservative (its first instruction is the capture itself).
+func leadsWithBeginText(s *syntax.Regexp) bool {
+	for {
+		switch s.Op {
+		case syntax.OpBeginText:
+			return true
+		case syntax.OpConcat, syntax.OpCapture, syntax.OpPlus:
+			if len(s.Sub) == 0 {
+				return false
+			}
+			s = s.Sub[0]
+		default:
+			return false
+		}
+	}
 }
 
 // classRunes sums the rune tables of the classes in re. With perUse false a

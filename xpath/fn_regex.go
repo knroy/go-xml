@@ -283,10 +283,27 @@ func compileArgRegexp(args []xdm.Sequence, pat, flags int, v Version) (*regexp.R
 // time. A true LRU would need a linked list and a lock on every *read*, which
 // costs more than it saves for the access pattern here: the working set is a
 // handful of stylesheet patterns that are re-cached immediately after a clear.
+//
+// Entries are also weighed, by the bytes their compiled program retains (see
+// compileBounded), and the cache is cleared when their sum would pass
+// regexCacheBytes. A pattern under the key limit can still compile to
+// megabytes (85 copies of \p{L}{1000} is about 1 KB and retains 3.95 MB), so
+// a count alone does not bound the memory.
 const regexCacheMax = 1024
 
+// regexCacheBytes is the most the regex cache retains, 160 MiB: the bound it
+// had as 1024 entries of at most 4096 instructions each, at
+// regexBytesPerInst. That per-entry cap left a larger program uncached, so it
+// was compiled again on every call; such a program is now cached by weight.
+const regexCacheBytes = regexCacheMax * 4096 * regexBytesPerInst
+
+// regexEntryBytes is the heaviest single entry the regex cache keeps, the
+// size of a program at MaxRegexpProgram, about 4 MB. Only a pattern whose
+// class tables push it past that is compiled again on each use.
+const regexEntryBytes = MaxRegexpProgram * regexBytesPerInst
+
 // key: version + "\x00" + flags + "\x00" + pattern -> *regexp.Regexp or error
-var regexCache = boundedCache[string, any]{max: regexCacheMax, items: map[string]any{}}
+var regexCache = boundedCache[string, any]{max: regexCacheMax, maxWeight: regexCacheBytes, items: map[string]any{}}
 
 // compileXPathRegexp translates an XML Schema / XPath 2.0 regular expression
 // into Go's syntax and compiles it.
@@ -309,30 +326,24 @@ func compileXPathRegexp(pattern, flags string, v Version) (*regexp.Regexp, error
 		}
 	}
 
-	re, err := buildRegexp(pattern, flags, v)
+	re, w, err := buildRegexp(pattern, flags, v)
 	if err != nil {
-		storeRegex(key, err)
+		storeRegex(key, err, 0)
 		return nil, err
 	}
-	storeRegex(key, re)
+	storeRegex(key, re, w)
 	return re, nil
 }
 
-// storeRegex adds an entry. The bound is enforced by boundedCache, which holds
-// the check and the insert under one lock: doing them separately let concurrent
-// callers interleave between the two and carry the table past its limit.
-func storeRegex(key string, v any) {
-	if len(key) > maxCachedKey {
+// storeRegex adds an entry whose value retains about w bytes beyond its key.
+// The bounds are enforced by boundedCache, which holds the check and the
+// insert under one lock: doing them separately let concurrent callers
+// interleave between the two and carry the table past its limit.
+func storeRegex(key string, v any, w int) {
+	if len(key) > maxCachedKey || w > regexEntryBytes {
 		return
 	}
-	// A pattern under the key limit can still compile to megabytes (85 copies
-	// of \p{L}{1000} is about 1 KB and retains 3.95 MB), so a large program is
-	// not kept either. The largest real pattern in the corpora is about 2,593
-	// instructions.
-	if re, ok := v.(*regexp.Regexp); ok && cachedProgramTooBig(re) {
-		return
-	}
-	regexCache.Put(key, v)
+	regexCache.PutWeighted(key, v, len(key)+w)
 }
 
 // argFlags reads the flags argument of a regex function.
@@ -348,7 +359,9 @@ func argFlags(args []xdm.Sequence, i int) (string, error) {
 	return argStringRequired(args, i)
 }
 
-func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
+// buildRegexp compiles a pattern and returns, beside it, the bytes its program
+// retains, for storeRegex to weigh it by.
+func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, int, error) {
 	var goFlags []string
 	dotAll := false
 	// literal is the "q" flag: the pattern is a plain string, not a pattern.
@@ -384,12 +397,12 @@ func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 			// it is what keeps this engine's answer the same as every other
 			// conforming processor's.
 			if !v.atLeast30() {
-				return nil, fmt.Errorf(
+				return nil, 0, fmt.Errorf(
 					"FORX0001: unknown regular expression flag %q", string(f))
 			}
 			literal = true
 		default:
-			return nil, fmt.Errorf("FORX0001: unknown regular expression flag %q", string(f))
+			return nil, 0, fmt.Errorf("FORX0001: unknown regular expression flag %q", string(f))
 		}
 	}
 
@@ -414,7 +427,7 @@ func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 		var err error
 		translated, err = translatePattern(pattern, dotAll, v)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	if len(goFlags) > 0 {
@@ -424,7 +437,7 @@ func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 	// XPath's fn:matches is a *containment* test, unlike XML Schema's pattern
 	// facet which is anchored. Go's MatchString is also containment, so no
 	// anchoring is added here.
-	re, err := CompileBounded(translated)
+	re, w, err := compileBounded(translated)
 	if err != nil {
 		// A repeat count RE2 will not accept is still a valid XML Schema
 		// pattern — "a{2147483647}" simply matches nothing any input can
@@ -432,13 +445,13 @@ func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 		// when it was merely enormous, so the count is clamped to one past
 		// RE2's limit, which matches exactly what the original would.
 		if clamped, ok := clampRepeatCounts(translated); ok {
-			if re2, err2 := CompileBounded(clamped); err2 == nil {
-				return re2, nil
+			if re2, w2, err2 := compileBounded(clamped); err2 == nil {
+				return re2, w2, nil
 			}
 		}
-		return nil, regexCompileError(pattern, err)
+		return nil, 0, regexCompileError(pattern, err)
 	}
-	return re, nil
+	return re, w, nil
 }
 
 // regexCompileError reports a pattern CompileBounded declined. A pattern RE2
@@ -1087,14 +1100,14 @@ func compileBacktrackCached(pattern, flags string, ver Version) (*btRegexp, erro
 	}
 	bt, err := compileBacktrack(pattern, flags, ver)
 	if err != nil {
-		storeRegex(key, err)
+		storeRegex(key, err, 0)
 		return nil, err
 	}
 	if bt == nil {
-		storeRegex(key, nilBacktrack{})
+		storeRegex(key, nilBacktrack{}, 0)
 		return nil, nil
 	}
-	storeRegex(key, bt)
+	storeRegex(key, bt, 0)
 	return bt.clone(), nil
 }
 

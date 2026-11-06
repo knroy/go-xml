@@ -11,15 +11,16 @@ import (
 )
 
 // TestRegexCacheRefusesClassHeavyProgram: 504 copies of \w are a 1 KB key but
-// a Unicode-wide class each, about 4 MB retained; such a program is
-// recompiled per use rather than pinned in the process-wide cache. An
-// ordinary pattern with a few classes is still cached.
+// a Unicode-wide class each, about 4 MB retained. Such a program was once
+// recompiled per use; it is now cached, and its class tables count toward
+// the cache's byte bound (see TestRegexCacheIsBoundedByWeight). An ordinary
+// pattern with a few classes is cached too.
 func TestRegexCacheRefusesClassHeavyProgram(t *testing.T) {
 	for _, c := range []struct {
 		pat    string
 		cached bool
 	}{
-		{strings.Repeat(`\w`, 504) + "sa3x", false},
+		{strings.Repeat(`\w`, 504) + "sa3x", true},
 		{`^\w+@\w+\.\w+$`, true},
 	} {
 		if _, err := compileXPathRegexp(c.pat, "", XPath31); err != nil {
