@@ -45,6 +45,14 @@ type TypeEnvironment struct {
 
 	unionMu sync.RWMutex
 	union   map[typeName][]typeName
+	// memberLists interns the stored member lists, keyed by the member
+	// names joined with NUL, so every union with the same members shares
+	// one slice. A restriction of a union inherits its base's whole list,
+	// and the xsd package registers that list for each restriction; stored
+	// once per type, N restrictions of a K-member union kept N*K names in a
+	// table that is never evicted. Interned, they keep K plus N.
+	// Guarded by unionMu. A stored list is never modified.
+	memberLists map[string][]typeName
 
 	nsMu sync.Mutex
 	ns   map[string]string
@@ -123,6 +131,8 @@ func NewTypeEnvironment() *TypeEnvironment {
 		list:    map[typeName]typeName{},
 		union:   map[typeName][]typeName{},
 		ns:      map[string]string{},
+
+		memberLists: map[string][]typeName{},
 	}
 }
 
@@ -228,21 +238,47 @@ func (e *TypeEnvironment) RegisterUnion(name string, members []string) {
 	// A member listed twice is tried twice to no effect, so only its first
 	// occurrence is kept: memberTypes="t:a t:a ..." would otherwise retain
 	// one name per reference in a table that is never evicted.
-	cp := make([]typeName, 0, len(members))
+	kept := make([]string, 0, len(members))
 	seen := make(map[string]bool, len(members))
 	for _, m := range members {
 		if m != "" && m != name && !seen[m] {
 			seen[m] = true
-			cp = append(cp, e.stored(m))
+			kept = append(kept, m)
 		}
 	}
-	if len(cp) == 0 {
+	if len(kept) == 0 {
 		return
 	}
+	cp := e.internMembers(kept)
 	k := e.stored(name)
 	e.unionMu.Lock()
 	e.union[k] = cp
 	e.unionMu.Unlock()
+}
+
+// internMembers returns the stored form of a member list, shared with every
+// union this environment already holds with the same members in the same
+// order. The caller must not hold unionMu.
+func (e *TypeEnvironment) internMembers(members []string) []typeName {
+	key := strings.Join(members, "\x00")
+	e.unionMu.RLock()
+	cp, ok := e.memberLists[key]
+	e.unionMu.RUnlock()
+	if ok {
+		return cp
+	}
+	cp = make([]typeName, len(members))
+	for i, m := range members {
+		cp[i] = e.stored(m)
+	}
+	e.unionMu.Lock()
+	if prev, ok := e.memberLists[key]; ok {
+		cp = prev
+	} else {
+		e.memberLists[key] = cp
+	}
+	e.unionMu.Unlock()
+	return cp
 }
 
 // UnionMembersOf returns the declared member types of a union type, or nil
@@ -336,17 +372,26 @@ func (e *TypeEnvironment) Merge(src *TypeEnvironment) {
 		unions[k] = v
 	}
 	src.unionMu.RUnlock()
-	e.unionMu.Lock()
 	for k, v := range unions {
+		e.unionMu.RLock()
+		_, ok := e.union[k]
+		e.unionMu.RUnlock()
+		if ok {
+			continue
+		}
+		// Interned here too, so the aggregate schema an import merges into
+		// keeps one list per distinct member list rather than one per type.
+		names := make([]string, len(v))
+		for i, m := range v {
+			names[i] = m.String()
+		}
+		members := e.internMembers(names)
+		e.unionMu.Lock()
 		if _, ok := e.union[k]; !ok {
-			members := make([]typeName, len(v))
-			for i, m := range v {
-				members[i] = e.restored(m)
-			}
 			e.union[e.restored(k)] = members
 		}
+		e.unionMu.Unlock()
 	}
-	e.unionMu.Unlock()
 }
 
 // typeEnvOf returns the environment to consult for a node: the one the schema

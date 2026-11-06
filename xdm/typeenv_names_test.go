@@ -40,3 +40,34 @@ func TestTypeEnvironmentNamesRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// A restriction of a union inherits the base's member list, and the xsd
+// package registers that list again for every restriction. N restrictions of
+// a K-member union kept N*K stored names in the never-evicted global table;
+// identical lists now share one stored slice, through Merge as well.
+func TestRegisterUnionSharesIdenticalMemberLists(t *testing.T) {
+	const k, n = 50, 20
+	members := make([]string, k)
+	for i := range members {
+		members[i] = "{urn:a}m" + string(rune('A'+i%26)) + string(rune('a'+i/26))
+	}
+	src := NewTypeEnvironment()
+	for j := 0; j < n; j++ {
+		src.RegisterUnion("{urn:a}r"+string(rune('A'+j)), members)
+	}
+	merged := NewTypeEnvironment()
+	merged.Merge(src)
+	for _, e := range []*TypeEnvironment{src, merged} {
+		backing := map[*typeName]bool{}
+		for _, m := range e.union {
+			backing[&m[0]] = true
+		}
+		if len(e.union) != n || len(backing) != 1 {
+			t.Errorf("%d unions over %d stored member lists, want %d over 1",
+				len(e.union), len(backing), n)
+		}
+		if got := e.UnionMembersOf("{urn:a}rC"); !reflect.DeepEqual(got, members) {
+			t.Errorf("UnionMembersOf = %q, want %q", got, members)
+		}
+	}
+}

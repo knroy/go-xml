@@ -61,3 +61,28 @@ func TestContextMaxItems(t *testing.T) {
 		t.Errorf("a nested context escaped its caller's bound of 10: %v", err)
 	}
 }
+
+// An array holds its members by reference, so a few charged constructors
+// describe many leaves. array:flatten and fn:data materialise them, and the
+// host's MaxItems must bound that, not only xdm.Flatten's fixed ceiling.
+func TestFlattenAndDataChargeTheItemBudget(t *testing.T) {
+	const nest = `let $a := [1, 2, 3, 4], $b := [$a, $a, $a, $a], $c := [$b, $b, $b, $b] return `
+	eval := func(limit int, expr string) error {
+		ctx := NewContext(nil, Builtins())
+		ctx = ctx.WithEnv(func(e *Env) { e.MaxItems = limit })
+		c, err := CompileWith(nest+expr, CompileOptions{Version: XPath31})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.Eval(ctx)
+		return err
+	}
+	for _, expr := range []string{`count(Q{http://www.w3.org/2005/xpath-functions/array}flatten($c))`, `count(data($c))`} {
+		if err := eval(40, expr); xdm.ErrorCode(err) != "XPDY0130" || !errors.Is(err, xdm.ErrResourceLimit) {
+			t.Errorf("%s under a bound of 40: got %v, want XPDY0130", expr, err)
+		}
+		if err := eval(200, expr); err != nil {
+			t.Errorf("%s under a bound of 200: %v", expr, err)
+		}
+	}
+}

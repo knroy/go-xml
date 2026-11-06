@@ -19,13 +19,24 @@ const MaxRegexpProgram = 100000
 // CompileBounded is regexp.Compile that refuses a pattern whose program would
 // exceed MaxRegexpProgram instructions. The refusal wraps xdm.ErrResourceLimit.
 // It is shared by the XPath and XSD pattern compilers.
+//
+// Where regexp also builds a onepass program, which copies a class's rune
+// table into every instruction that uses it, those copies are charged too, at
+// ten runes to an instruction as cachedProgramTooBig counts them. An XSD
+// facet is always anchored, so \A(?:\pL{990})\z passed at about 1000
+// instructions and retained 8 MB per compiled facet.
 func CompileBounded(expr string) (*regexp.Regexp, error) {
 	re, err := syntax.Parse(expr, syntax.Perl)
 	if err != nil {
 		// Let regexp.Compile report it, so the message is the usual one.
 		return regexp.Compile(expr)
 	}
-	if n := progSize(re.Simplify(), map[*syntax.Regexp]int{}); n > MaxRegexpProgram {
+	s := re.Simplify()
+	n := progSize(s, map[*syntax.Regexp]int{})
+	if n <= MaxRegexpProgram && onepassEligible(s) {
+		n += classRunes(s, map[*syntax.Regexp]int{}, true) / 10
+	}
+	if n > MaxRegexpProgram {
 		return nil, fmt.Errorf("regular expression compiles to more than %d instructions: %w",
 			MaxRegexpProgram, xdm.ErrResourceLimit)
 	}

@@ -30,10 +30,12 @@ func TestLargeProgramIsNotCached(t *testing.T) {
 // An anchored program under 1000 instructions also gets a onepass copy, which
 // copies a class's rune table into every instruction that uses it, so a class
 // shared across x{n} is charged at each use there. Charged once,
-// ^\p{L}{990}$ was cached at about 8 MB an entry.
+// ^\p{L}{990}$ was cached at about 8 MB an entry; CompileBounded now refuses
+// that one outright, and ^\p{L}{100}$ (about 0.5 MB) still compiles but is
+// not cached.
 func TestOnepassClassCopiesAreCharged(t *testing.T) {
 	n := regexCache.Len()
-	if _, err := compileXPathRegexp(`^\p{L}{990}$`, "", XPath20); err != nil {
+	if _, err := compileXPathRegexp(`^\p{L}{100}$`, "", XPath20); err != nil {
 		t.Fatal(err)
 	}
 	if regexCache.Len() != n {
