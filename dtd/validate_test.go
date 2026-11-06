@@ -578,24 +578,28 @@ func TestRootElementTypeIsChecked(t *testing.T) {
 }
 
 // A DTD has no UPA gate, so its content models are not bounded by follow
-// width: a repeated choice of 1000 alternatives is 1000 wide in every state
-// and must validate. Only the total number of follow edges is bounded.
+// width: a repeated choice of n alternatives is n wide in every state, is
+// deterministic, and XML 1.0 allows it at any width. Its follow relation has
+// n² edges, and copying every follow set refused n=1100 at the edge budget;
+// the follow sets of a repeated group now share one reference to its first
+// set, so the model costs O(n).
 func TestWideRepeatedChoiceValidates(t *testing.T) {
+	const n = 2000
 	var b strings.Builder
 	b.WriteString("<!DOCTYPE r [\n<!ELEMENT r (")
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < n; i++ {
 		if i > 0 {
 			b.WriteByte('|')
 		}
 		fmt.Fprintf(&b, "a%d", i)
 	}
 	b.WriteString(")*>\n")
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < n; i++ {
 		fmt.Fprintf(&b, "<!ELEMENT a%d EMPTY>\n", i)
 	}
-	b.WriteString("]><r><a999/><a0/><a500/><a0/></r>")
+	b.WriteString("]><r><a1999/><a0/><a500/><a0/></r>")
 	if err := check(t, b.String()); err != nil {
-		t.Fatalf("a repeated 1000-alternative choice must validate: %v", err)
+		t.Fatalf("a repeated %d-alternative choice must validate: %v", n, err)
 	}
 	bad := strings.Replace(b.String(), "<a500/>", "<b/>", 1)
 	if err := check(t, bad); err == nil {
