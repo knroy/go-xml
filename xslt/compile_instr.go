@@ -330,8 +330,10 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 		}
 		// A generated xsl:original namespace is the XSLT namespace under
 		// another name -- rewriteOverride rebinds the override's XSLT
-		// prefixes to it -- and is excluded as that namespace is.
-		if uri == xdm.NSXSL || strings.HasPrefix(uri, originalNS) || excluded[uri] {
+		// prefixes to it -- and is excluded as that namespace is. Only the
+		// URIs this compilation generated: one the stylesheet declares under
+		// the same prefix is an ordinary namespace.
+		if uri == xdm.NSXSL || c.env.originalNSs[uri] || excluded[uri] {
 			// Section 11.1.4: "a namespace node whose string value is a
 			// target namespace URI is copied to the result tree, whether or
 			// not the URI identifies an excluded namespace". Whether a URI is

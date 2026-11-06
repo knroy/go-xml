@@ -537,6 +537,12 @@ type compileEnv struct {
 	// originalSerial numbers the generated namespaces of xsl:original; see
 	// pkgEdits.rewriteOverride.
 	originalSerial int
+	// originalNSs is the set of xsl:original namespaces this compilation
+	// generated, which compileLiteralElement excludes as it excludes the
+	// XSLT namespace. Exact URIs only: a stylesheet may itself declare a URI
+	// under originalNS, and 11.1.3 copies every namespace it does not
+	// exclude.
+	originalNSs map[string]bool
 	// dynamicRefCache memoises makesDynamicReference per package tree.
 	dynamicRefCache map[*xdm.Node]bool
 	// composedVisibility is the effective visibility of a used package's
@@ -558,6 +564,7 @@ type compileEnv struct {
 func newCompileEnv() *compileEnv {
 	return &compileEnv{
 		packageParent:      map[int]int{},
+		originalNSs:        map[string]bool{},
 		dynamicRefCache:    map[*xdm.Node]bool{},
 		composedVisibility: map[*xdm.Node]visibility{},
 	}

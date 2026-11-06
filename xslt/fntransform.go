@@ -30,14 +30,10 @@ import (
 // fn:doc would be a hole in the sandbox rather than a feature, so
 // stylesheet-location and the source it names resolve through the same
 // (possibly nil) resolvers the caller supplied.
+//
+// Its nested compilations spend the calling runtime's compileBudget, which
+// the static phase's runtime takes from the Compile it runs inside.
 func registerTransformFunc(l *xpath.Library) {
-	registerTransformFuncWith(l, nil)
-}
-
-// registerTransformFuncWith is registerTransformFunc for the static phase,
-// whose nested compilations spend budget, the outer compilation's module
-// budget, rather than minting their own. See compileBudget.
-func registerTransformFuncWith(l *xpath.Library, budget *compileBudget) {
 	l.Add(xpath.Function{
 		Name:  xdm.QName{URI: xdm.NSFN, Local: "transform"},
 		Arity: 1,
@@ -56,9 +52,7 @@ func registerTransformFuncWith(l *xpath.Library, budget *compileBudget) {
 			if err != nil {
 				return nil, err
 			}
-			caller := callerOf(rt)
-			caller.budget = budget
-			return runNestedTransform(ctx, caller, opts)
+			return runNestedTransform(ctx, callerOf(rt), opts)
 		},
 	})
 }
@@ -78,8 +72,9 @@ type transformCaller struct {
 	// cache is the outer stylesheet's compiled-stylesheet cache, or nil for
 	// a caller with no stylesheet and for the static phase.
 	cache *nestedCache
-	// budget is the module budget of the Compile a static-phase caller runs
-	// inside, which its nested compilations share; nil otherwise.
+	// budget is the module budget its nested compilations share: the
+	// caller's transformState.compileBudget, which for a static-phase caller
+	// is the Compile's. Nil for a caller with no stylesheet.
 	budget *compileBudget
 }
 
@@ -89,6 +84,7 @@ func callerOf(rt *runtime) transformCaller {
 		opts: *rt.opts, pkgs: rt.sheet.pkgResolver,
 		depth: rt.depth, maxDepth: rt.maxDepth,
 		goCtx: rt.goCtx, static: rt.static,
+		budget: rt.compileBudget,
 	}
 	if !rt.static {
 		c.cache = &rt.sheet.nested

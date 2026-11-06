@@ -2238,8 +2238,8 @@ func (c *compiler) compileOverrideRules(root *xdm.Node, precedence int) error {
 // originalNS is the namespace the declaration an xsl:override replaces is
 // renamed into, with a serial number appended per override.
 //
-// It is a URI no stylesheet can write, so a generated name in it cannot
-// collide with one the source declared.
+// A stylesheet can declare a URI under it too, so what marks a namespace as
+// generated is membership of compileEnv.originalNSs, not the prefix.
 const originalNS = "http://go-xml.invalid/xslt/original/"
 
 // overriddenMarkerNS is the namespace of the attribute that carries the name a
@@ -2304,6 +2304,7 @@ func (e pkgEdits) rewriteOverride(env *compileEnv, overriding, original *xdm.Nod
 	}
 	env.originalSerial++
 	uri := fmt.Sprintf("%s%d", originalNS, env.originalSerial)
+	env.originalNSs[uri] = true
 	// A mode is not reachable through xsl:original -- there is no syntax for
 	// it -- and renaming it would detach the used package's template rules
 	// from the mode they name.
