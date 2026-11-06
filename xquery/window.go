@@ -190,6 +190,15 @@ func (c *windowClause) windows(t tuple, seq xdm.Sequence, ctx *evalContext) ([]t
 			// where the specification asks for four.
 			continue
 		}
+		// emit copies the window's items, so a sliding window that never
+		// closes holds n(n+1)/2 of them across its starts. The copy is
+		// charged to the held item budget before it is made; the tuple count
+		// flwor.eval charges afterwards sees only one item per window.
+		if end >= s {
+			if err := ctx.xp.ChargeItems(end - s + 1); err != nil {
+				return nil, err
+			}
+		}
 		w := c.emit(st, seq, s, end, closed, &x)
 		if c.typeCheck != nil {
 			v, _ := w.lookup(c.name)
@@ -215,8 +224,16 @@ func (c *windowClause) windows(t tuple, seq xdm.Sequence, ctx *evalContext) ([]t
 // condition — the one case where the end is defined in terms of the start.
 func (c *windowClause) findEnd(st tuple, seq xdm.Sequence, s int,
 	ctx *evalContext, x *winExt) (int, bool, error) {
+	// Each scan runs to the end of the sequence when no boundary fires, and
+	// windows calls this once per start, so the scans together are
+	// quadratic in the binding sequence with nothing emitted or charged
+	// under "only". Both loops check for cancellation per position, which is
+	// what lets a host deadline stop that work.
 	if !c.hasEnd {
 		for e := s + 1; e <= len(seq); e++ {
+			if err := ctx.xp.Err(); err != nil {
+				return 0, false, err
+			}
 			nt := c.start.bind(st, seq, e, &x.start)
 			ok, err := c.start.when.evalBool(nt.sub(ctx))
 			if err != nil {
@@ -229,6 +246,9 @@ func (c *windowClause) findEnd(st tuple, seq xdm.Sequence, s int,
 		return len(seq), false, nil
 	}
 	for e := s; e <= len(seq); e++ {
+		if err := ctx.xp.Err(); err != nil {
+			return 0, false, err
+		}
 		et := c.end.bind(st, seq, e, &x.end)
 		ok, err := c.end.when.evalBool(et.sub(ctx))
 		if err != nil {

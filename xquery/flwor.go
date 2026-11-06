@@ -624,9 +624,17 @@ func (c *groupByClause) apply(in []tuple, ctx *evalContext) ([]tuple, error) {
 				merged = merged.bind(name, p.key.vals[i])
 				continue
 			}
+			// The members can share one value -- a "let" before a "for"
+			// binds the same slice into every tuple -- so the concatenation
+			// is the first place those items are materialised once per
+			// member. Charging it is what keeps "let $big := 1 to 3000 for
+			// $i in 1 to 3000 group by $k := 0" inside MaxItems.
 			var all xdm.Sequence
 			for _, m := range p.member {
 				v, _ := m.lookup(name)
+				if err := ctx.xp.ChargeItems(len(v)); err != nil {
+					return nil, err
+				}
 				all = append(all, v...)
 			}
 			merged = merged.bind(name, all)

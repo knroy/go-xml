@@ -84,6 +84,10 @@ type parser struct {
 	// whole prolog, so that each import consults the resolver once and the
 	// components fold into one merged schema. nil for a query with no import.
 	schemaLoader *schemaLoader
+	// schemaBytes is the compilation's MaxSchemaBytes spend, shared with the
+	// parser of every library module the compilation loads so that the budget
+	// is cumulative across them. nil until the first "import schema".
+	schemaBytes *int64
 
 	// vars and funcs accumulate the prolog's declarations. They are on the
 	// parser rather than returned from parseProlog because a declaration

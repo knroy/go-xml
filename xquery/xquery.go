@@ -143,7 +143,10 @@ type Options struct {
 
 	// MaxSchemaBytes bounds the total schema source text one compilation may
 	// read through SchemaResolver and Schemas, cumulatively rather than per
-	// import. Zero means DefaultMaxSchemaBytes.
+	// import: the documents an imported schema reaches through its own
+	// xs:include, xs:import and xs:redefine, and the schema imports of every
+	// library module the query loads, all draw on the one allowance. Zero
+	// means DefaultMaxSchemaBytes.
 	//
 	// Exceeding it fails the compilation with an error wrapping
 	// xdm.ErrResourceLimit rather than XQST0059: a truncated schema is a
@@ -289,7 +292,7 @@ func Compile(src string, opts Options) (*Query, error) {
 	// are followed here rather than in the parser because the budget is
 	// per-compilation: a module that loaded its own imports could not be
 	// counted against the same allowance. See moduleLoader.
-	mods, err := loadModules(p.moduleImports, opts, sc)
+	mods, err := loadModules(p.moduleImports, opts, sc, p.schemaBytes)
 	if err != nil {
 		return nil, err
 	}
