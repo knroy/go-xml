@@ -2119,7 +2119,7 @@ func referencedWithin(e pkgEdits, root *xdm.Node, comp *component) bool {
 // is that a declaration nothing uses survives.
 func makesDynamicReference(root *xdm.Node) bool {
 	// Memoised on the root: referencedWithin asks once per component, and the
-	// answer is a property of the tree. Guarded by compileMu with the rest of
+	// answer is a property of the tree. Guarded by compileSlot with the rest of
 	// the package-composition state.
 	if v, ok := dynamicRefCache[root]; ok {
 		return v
@@ -2419,7 +2419,7 @@ func (e pkgEdits) rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 }
 
 // packageSerial numbers the packages one compilation sees, so that each has
-// an identity its declarations can be filed under. It is guarded by compileMu
+// an identity its declarations can be filed under. It is guarded by compileSlot
 // with the rest of the compile-time package state.
 var packageSerial int
 
@@ -2642,7 +2642,7 @@ func (c *compiler) snapshotPackageLocalDecls() func() {
 //
 // It is keyed by node because there is nowhere else to put the answer: the
 // nodes are the same trees the parser produced, and the compilation that reads
-// them runs later. Guarded by compileMu along with compilePackage itself.
+// them runs later. Guarded by compileSlot along with compilePackage itself.
 var overridingDecls map[*xdm.Node]int
 
 // noteOverridingDecl records that an overriding declaration belongs to pkg.

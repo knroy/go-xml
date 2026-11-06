@@ -189,7 +189,7 @@ type transformState struct {
 	// while the outer stylesheet is still COMPILING, which is what the flag
 	// records. Its one consequence is that the nested stylesheet is compiled
 	// through compileNestedLocked rather than Compile, the outer compilation
-	// already holding compileMu. See staticPhase.staticRuntime.
+	// already holding compileSlot. See staticPhase.staticRuntime.
 	static bool
 
 	// funcResults memoises the results of stylesheet functions declared

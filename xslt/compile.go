@@ -2112,7 +2112,7 @@ const maxModuleNodes = 500_000
 // visits maxModuleVisits bounds and the nodes maxModuleNodes bounds. It is
 // minted by compileLocked and shared with every compilation fn:transform
 // starts from the static phase, which runs inside it under the same
-// compileMu: the house rule that a nested operation spends the parent's
+// compileSlot: the house rule that a nested operation spends the parent's
 // remainder rather than restarting it.
 //
 // The schema bytes are here for the same reason: a nested compilation spends

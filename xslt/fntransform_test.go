@@ -423,7 +423,7 @@ func mustFileResolver(t *testing.T, dir string) *xslt.FileResolver {
 // A static="yes" variable may call fn:transform. Section 9.7 gives a static
 // expression the whole F&O library and excludes nothing from it, so the
 // nested transformation runs during the STATIC PHASE of the outer
-// compilation -- while Compile still holds compileMu and the package state
+// compilation -- while Compile still holds compileSlot and the package state
 // that goes with it. transform-004 is the suite case.
 func TestStaticTransform(t *testing.T) {
 	dir := t.TempDir()

@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"sort"
@@ -523,7 +524,7 @@ func buildPackageUses(parent map[int]int) map[int][]int {
 // reference written there must reach it: template "b" of use-package-175 is
 // declared in package B and refers to $v, which B's copy of D declares. The
 // reference carries B, the binding carries D, and only this chain relates
-// them. Guarded by compileMu with the rest of the package state.
+// them. Guarded by compileSlot with the rest of the package state.
 var packageParent = map[int]int{}
 
 // packageSpace is one package's whitespace declarations.
@@ -701,17 +702,38 @@ func stylesheetBase(doc *xdm.Node, opt string) string {
 	return opt
 }
 
-// Compile compiles a stylesheet from a parsed XSLT document.
+// Compile compiles a stylesheet from a parsed XSLT document. It is
+// CompileContext with context.Background().
+func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
+	return CompileContext(context.Background(), doc, opts)
+}
+
+// CompileContext compiles a stylesheet from a parsed XSLT document, giving up
+// with ctx.Err() if ctx is done before the compilation can start, and
+// stopping the static phase -- use-when, shadow attributes and static
+// variables, including an fn:transform one of them calls -- when ctx is
+// cancelled while it runs.
 //
-// The lock is taken here and only here. compileLocked holds the body, so that
-// a compilation running *inside* another one -- which fn:transform is, when a
-// static variable calls it during the static phase -- can reach the same code
-// without asking for a mutex the outer call has not let go of. See
+// The compile slot is taken here and only here. compileLocked holds the body,
+// so that a compilation running *inside* another one -- which fn:transform is,
+// when a static variable calls it during the static phase -- can reach the
+// same code without asking for a slot the outer call has not let go of. See
 // compileNestedLocked.
-func Compile(doc *xdm.Node, opts CompileOptions) (_ *Stylesheet, err error) {
+func CompileContext(ctx context.Context, doc *xdm.Node, opts CompileOptions) (_ *Stylesheet, err error) {
 	defer xdmlimit.Recover(&err) // a node constructed past a tree's text blocks
-	compileMu.Lock()
-	defer compileMu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case compileSlot <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-compileSlot }()
+	opts.ctx = ctx
 	setSharedNS(map[*xdm.Node]map[string]string{})
 	defer setSharedNS(nil)
 	setVersionMemo(true)
@@ -725,8 +747,8 @@ func Compile(doc *xdm.Node, opts CompileOptions) (_ *Stylesheet, err error) {
 // thousands of per-element lookups share a few dozen maps instead of building
 // one each: rebuilding them was a third of DocBook's compile allocation.
 // Outside a compilation m is nil and nothing is cached. It has its own mutex
-// rather than relying on compileMu because a running transform, which does
-// not hold compileMu, can reach inScopeNamespacesShared too.
+// rather than relying on compileSlot because a running transform, which does
+// not hold compileSlot, can reach inScopeNamespacesShared too.
 //
 // byContent and lists intern the maps and the literal elements' binding lists
 // by content as well: SchXslt redeclares one prefix on each of the CEN
@@ -853,7 +875,7 @@ func (s *Stylesheet) globalByName() map[string]*Variable {
 // already running on this goroutine.
 //
 // fn:transform called from a static="yes" variable has to compile a second
-// stylesheet while the first is still being compiled. Taking compileMu again
+// stylesheet while the first is still being compiled. Taking compileSlot again
 // would deadlock against the outer Compile, which still holds it; so this
 // entry point skips the lock, which is sound precisely because the nested
 // compilation is synchronous -- it runs on the goroutine that holds the lock,
@@ -884,7 +906,16 @@ func compileNestedLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error
 	return compileLocked(doc, opts)
 }
 
-// compileLocked is Compile's body. The caller holds compileMu.
+// goCtx is the context the compilation runs under: CompileContext's, or for
+// one fn:transform started, the caller's.
+func (c *compiler) goCtx() context.Context {
+	if c.opts.ctx != nil {
+		return c.opts.ctx
+	}
+	return context.Background()
+}
+
+// compileLocked is Compile's body. The caller holds compileSlot.
 func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// See xsd.Schema.Validate: a nil document is a caller's mistake, but a
 	// library that panics on one takes the caller's process with it.
@@ -1136,6 +1167,10 @@ type CompileOptions struct {
 	// compilation started by fn:transform. Unexported like moduleBudget:
 	// only a nested compilation sets them.
 	nestedDepth, nestedMaxDepth int
+	// ctx is the context CompileContext was given, which the static phase
+	// evaluates under. A compilation fn:transform starts carries the calling
+	// transformation's.
+	ctx context.Context
 	// budget is the module visits and nodes this compilation may still
 	// spend. Unexported and minted by compileLocked like moduleBudget; a
 	// compilation fn:transform starts from the static phase inherits it.
@@ -1348,13 +1383,13 @@ type nsResolver struct {
 // far more code than the feature is worth. A compiled Stylesheet holds its
 // own schema and never reads this again.
 //
-// compileMu makes that safe. Compile is a public entry point, so nothing stops
-// a caller compiling two stylesheets at once, and package state written
+// compileSlot makes that safe. Compile is a public entry point, so nothing
+// stops a caller compiling two stylesheets at once, and package state written
 // without a lock is a data race whether or not a test happens to exercise it.
-// Compilation is not on any hot path — a stylesheet compiles once and
-// transforms many documents — so serialising it costs nothing that matters.
+// It is a one-slot channel rather than a mutex so that CompileContext can give
+// up waiting for it when its context is done.
 var (
-	compileMu     sync.Mutex
+	compileSlot   = make(chan struct{}, 1)
 	compileSchema *xsd.Schema
 	// compilePackage identifies the package whose module is being compiled,
 	// for the same reason and by the same mechanism as compileSchema. It is

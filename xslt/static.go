@@ -965,7 +965,7 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 	} else {
 		// A 2.0 processor runs no nested transformation. Left to the xpath
 		// stub, the call would reach the processor this package's init
-		// registers, which compiles under the compileMu this Compile already
+		// registers, which compiles under the compileSlot this Compile already
 		// holds -- a deadlock -- so the stub's FOXT0004 is given here instead.
 		lib.Add(xpath.Function{
 			Name:  xdm.QName{URI: xdm.NSFN, Local: "transform"},
