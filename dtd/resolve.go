@@ -150,6 +150,13 @@ func (r *FileResolver) resolvePath(systemID, base string) (root, rel string, err
 	if !filepath.IsAbs(p) && base != "" {
 		p = filepath.Join(filepath.Dir(fileURIToPath(base)), p)
 	}
+	// A UNC path is refused before EvalExisting touches it: on Windows a
+	// stat of one already connects to the host it names.
+	if uripath.IsForeignNetworkPath(p, r.Root) {
+		return "", "", fmt.Errorf(
+			"system identifier %q names a network path; only local files are "+
+				"permitted", systemID)
+	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return "", "", err

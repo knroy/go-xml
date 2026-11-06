@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/knroy/go-xml/v2/internal/uripath"
 )
 
 // A Resolver turns a schemaLocation into schema source.
@@ -165,6 +167,14 @@ func (r *FileResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 
 	if !filepath.IsAbs(p) && base != "" {
 		p = filepath.Join(filepath.Dir(base), p)
+	}
+	// A UNC path is refused before EvalSymlinks touches it: on Windows a
+	// symlink walk on one already connects to the host it names. Checked
+	// before Clean, which folds a leading "//" into "/" on Unix.
+	if r.Root != "" && uripath.IsForeignNetworkPath(p, r.Root) {
+		return nil, "", fmt.Errorf(
+			"schemaLocation %q names a network path; only local files are "+
+				"permitted", location)
 	}
 	p = filepath.Clean(p)
 

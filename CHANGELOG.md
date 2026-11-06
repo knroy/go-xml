@@ -377,6 +377,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | RELAX NG include and externalRef fan-out had no total bound, so a few tiny schemas cost F^depth fetches | One compilation makes at most 10,000 fetches, then `ErrResourceLimit`. | [`cfc090e`][cfc090e] |
 | A module imported on several paths was compiled once per path, so imports doubling per level cost 2^N | One compilation resolves at most 10,000 include/import occurrences, then `ErrResourceLimit`. | [`77c3c5d`][77c3c5d] |
 | XQuery `validate lax` with no imported schema wrote `xsi:type` annotations into the caller's tree | It annotates and returns the §3.21 copy; the input is left as it was. | [`f46ec7b`][f46ec7b] |
+| Rooted file resolvers statted a `//host/share` or `file:////host/...` path before containment, reaching the host over SMB on Windows | It is refused first, unless a root is on that share. | [`60fed8a`][60fed8a] |
+| A panic while `xslt.FileResolver` parsed a file left other callers waiting on it blocked forever | The in-flight entry is released by a defer and its waiters get an error. | [`60fed8a`][60fed8a] |
 
 ### Changed — behaviour
 
@@ -394,6 +396,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `Serialize` refuses an `OutputSettings.Standalone` other than "", omit, yes or no | SEPM0016, where a value such as "true" was written raw. | [`877b3af`][877b3af] |
 | `xsl:key` entries are bounded per transform | They are totalled across every index against `MaxItems`, so many keyed temporary trees can raise XPDY0130. | [`d06d0f3`][d06d0f3] |
 | c14n XPath transforms use XPath 1.0 rules | A relational comparison of two strings converts both to numbers, as XML-DSig requires. | [`0c70a04`][0c70a04] |
+| Rooted file resolvers refuse UNC and device paths | `//host/…`, `\\host\…`, `file:////host/…` and `\\?\…` fail with "names a network path" on every OS unless a root is on that `\\host\share`. | [`60fed8a`][60fed8a] |
 
 ## v2.2.0 — 2026-11-01
 
@@ -2643,3 +2646,4 @@ here so every entry in this file sits under a release.
 [915eb63]: https://github.com/knroy/go-xml/commit/915eb63
 [cfc090e]: https://github.com/knroy/go-xml/commit/cfc090e
 [77c3c5d]: https://github.com/knroy/go-xml/commit/77c3c5d
+[60fed8a]: https://github.com/knroy/go-xml/commit/60fed8a

@@ -431,6 +431,11 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 		baseDir := filepath.Dir(fileURIToPath(base))
 		p = filepath.Join(baseDir, p)
 	}
+	// A UNC path is refused before anything below touches it: on Windows a
+	// symlink walk on one already connects to the host it names.
+	if uripath.IsForeignNetworkPath(p, r.Roots...) {
+		return "", fmt.Errorf("%q names a network path; only local files are permitted", given)
+	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return "", err
@@ -650,17 +655,25 @@ func (r *FileResolver) loadTracked(
 		r.inflight[key] = call
 		r.mu.Unlock()
 
-		tree, size, err := r.parseUncached(path, name, trackPos, b)
+		// The release is deferred so that a panic in the parse still clears
+		// the key and wakes the waiters, which would otherwise block forever.
+		// err starts non-nil and is only replaced if the parse returns, so a
+		// waiter woken by a panic is handed an error rather than a nil tree.
+		var tree *xdm.Tree
+		var size int64
+		err := fmt.Errorf("loading %q panicked", name)
+		defer func() {
+			r.mu.Lock()
+			if err == nil {
+				r.publish(path, tree, size)
+			}
+			delete(r.inflight, key)
+			r.mu.Unlock()
 
-		r.mu.Lock()
-		if err == nil {
-			r.publish(path, tree, size)
-		}
-		delete(r.inflight, key)
-		r.mu.Unlock()
-
-		call.tree, call.err = tree, err
-		close(call.done)
+			call.tree, call.err = tree, err
+			close(call.done)
+		}()
+		tree, size, err = r.parseUncached(path, name, trackPos, b)
 		return tree, err
 	}
 }

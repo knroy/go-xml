@@ -1629,6 +1629,14 @@ dropped the authority and silently read the same-named local file — not a
 confinement escape (the path still met the root check), but a read the caller
 never asked for and a refusal that never happened.
 
+A UNC or device path — `//host/share/x`, `\\host\share\x`,
+`file:////host/share/x`, `file://localhost//host/share/x`, `\\?\…` — carries
+no authority for that check to see, and on Windows the `EvalSymlinks` below
+would already reach the host over SMB. All four refuse it ("names a network
+path") before any filesystem call, unless a root is on the same `\\host\share`
+(`internal/uripath.IsForeignNetworkPath`); `relaxng` and `xsd` only when `Root`
+is set.
+
 Each still performs the earlier `EvalSymlinks` and prefix comparison, and that
 is deliberate: it is the **diagnosis**, not the enforcement. It decides which
 root a path belongs to, produces the refusal (in `xslt` since 2f825daf
@@ -1909,6 +1917,7 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 
 - **XQuery `validate lax` with no imported schema annotated the caller's tree** — integrity: it stamped `xsi:type` annotations onto the operand itself and returned it, so `data(.) instance of xs:integer` changed for every later query, through an unsynchronised write into a tree a concurrently used `Query` only reads. The §3.21 copy is now made first and annotated instead. Pinned by `TestValidateLaxWithoutSchemaCopiesOperand`. See CHANGELOG.
 - **XPath constant folding had no aggregate budget and ignored the compile deadline** — cost, reachable from `xsl:evaluate`: each fold minted the full 5M-item / 1 GiB evaluation budget, so twenty `1 to 999999` terms (241 bytes) allocated 2.98 GB at compile under a 20 ms Context. One fold context per pass, 4,096 items shared, bound to the compile context; a range of two different literal bounds is not evaluated. 0.2 ms, 0.03 MB. Pinned by `TestFoldingIsBoundedPerCompilation`.
+- **Rooted file resolvers touched a UNC path before containment** — host contact, driven by document data: `//host/share/x`, `file:////host/share/x` and `file://localhost//host/share/x` carry no `file:` authority, so on Windows the symlink walk before the root check (xslt, relaxng, xsd, dtd) connected to the named host over SMB. `uripath.IsForeignNetworkPath` refuses UNC and device paths first, unless a root is on the same share. Pinned on every OS by `TestIsForeignNetworkPath` and a `…RefusesUNCBeforeFilesystem` test per resolver. Also: `xslt.FileResolver.loadTracked` releases an in-flight parse by defer, so a panic no longer strands its waiters.
 
 **Twenty-second pass (round SB) — what round SA left open, 2026-11-06.**
 

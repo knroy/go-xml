@@ -174,14 +174,23 @@ reason:
   not cured. A cure needs shared growing trees or a `Ground` contract change.
 - **`Compile` holds a process-wide lock (`compileMu`) and takes no context**,
   so one slow compile delays every other and cannot be cancelled. The audit
-  marked it needs-validation.
-- **Two units the audit deferred on budget were not reviewed:** lazy cache
-  writes on objects documented as safe for concurrent use (possible data
-  races) and RELAX NG validation-time cost (`textDeriv`/`listDeriv` against
-  `MaxPatternSize`). The third, the XPath constant-folding budgets, was
-  fixed in round SC (see [security](security.md)).
-- **UNC paths on Windows in `xslt.FileResolver.resolvePath`** were flagged
-  needs-validation and are untested on Windows.
+  marked it needs-validation; audit run-2 measured a trivial compile waiting
+  944 ms behind a slow static phase.
+- **`c14n.FromXPathFilter` evaluates the filter once per node under a fresh,
+  uncancellable context** (`c14n/c14n.go`), so a 70-byte filter of nested
+  quantifiers held a CPU for 4 s on a 260-byte document in audit run-2.
+  Closing it needs a context-taking variant, which is new exported API (an
+  owner decision); it matters only to a verifier that evaluates the filter
+  before authenticating the signature.
+- **Audit run-2 (scoped, at `67d70cbc`) left three units deferred:** RELAX NG
+  validation-time cost (`textDeriv`/`listDeriv` run with no `MaxPatternSize`
+  check, `relaxng/derive.go`), the RELAX NG compile-time restriction walk
+  (`followRef` in `relaxng/restrict.go` re-expands a define per `<ref>` with
+  no memo), and a re-check of the sibling resolvers' UNC handling (closed in
+  round SC, untested on a Windows host). Run-1's other deferred units, the
+  lazy caches on concurrency-safe objects and the XPath constant-folding
+  budgets, were reviewed in run-2: the caches are synchronised, and folding
+  was fixed in round SC (see [security](security.md)).
 
 ### Memory: what the footprint round left open (performance)
 

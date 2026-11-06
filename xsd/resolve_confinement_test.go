@@ -170,3 +170,21 @@ func TestFileResolverMissingIsNotRefusal(t *testing.T) {
 		t.Errorf("an escape was not reported as a policy refusal: %v", err)
 	}
 }
+
+// TestFileResolverRefusesUNCBeforeFilesystem pins that a UNC path is refused
+// before EvalSymlinks walks it -- on Windows that walk alone connects to the
+// host -- rather than by the containment check after it. The host is .invalid
+// so that a regression on Windows CI cannot reach a real machine.
+func TestFileResolverRefusesUNCBeforeFilesystem(t *testing.T) {
+	r := &FileResolver{Root: t.TempDir()}
+	for _, loc := range []string{
+		"//unc-host.invalid/share/x.xsd",
+		"file:////unc-host.invalid/share/x.xsd",
+		"file://localhost//unc-host.invalid/share/x.xsd",
+	} {
+		_, _, err := r.Resolve("", loc, "")
+		if err == nil || !strings.Contains(err.Error(), "names a network path") {
+			t.Errorf("Resolve(%q) = %v, want the network-path refusal", loc, err)
+		}
+	}
+}
