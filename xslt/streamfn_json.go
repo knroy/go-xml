@@ -10,25 +10,19 @@ package xslt
 // holds of them and less, never the document. The result is the string the
 // tree's call returns.
 //
-// Validity is what the tree's is; the error is not: any element that is not
-// the JSON representation ends the run with errJSONStream, and the core
-// runs the container on the tree, which raises its own error exactly
-// (streamexec.go: an error the tree also raises is the tree's). So the
-// writer must reject exactly what xmlToJSON rejects, and accept the rest
-// with byte-identical text; the order of the checks does not matter.
+// Validity and the error are the tree's: the writer raises xmlToJSON's
+// error, and of several the one xmlToJSON meets first, which is not always
+// the first in document order (jsonWriter); with a path, the matches'
+// count's XPTY0004 comes before any (jsonFinish).
 //
 // The options must be a map constructor of string literal keys and literal
 // values, its indent entry true() or false(): it is then known at compile
-// time and cannot fail (the tree decodes it before reading the node). The
-// outer is zero-or-one($items): a path with a second match fails there,
-// and the tree raises its XPTY0004. A match that may be a leaf, or a path
-// that has a tail, is refused. Matches that may nest are matched below the
-// first one too, as the writer reads its events (jsonWriter.m): a second
-// match there ends the run with errJSONStream, and the tree raises its
-// XPTY0004 (or whatever error it meets first).
+// time and cannot fail (the tree decodes it before reading the node). A
+// match that may be a leaf, or a path that has a tail, is refused. Matches
+// that may nest are matched below the first one too, as the writer reads
+// its events (jsonWriter.m), and counted.
 
 import (
-	"errors"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -43,10 +37,6 @@ import (
 type jsonSplit struct {
 	indent bool
 }
-
-// errJSONStream ends a streamed xml-to-json whose input is not the JSON
-// representation: the tree's run then raises the error.
-var errJSONStream = errors.New("xml-to-json: not the JSON representation of a value")
 
 // jsonCall is walk's case for fn:xml-to-json(N [, options]).
 func (w *splitter) jsonCall(x *xpath.FuncCall, put func(xpath.Expr), use splitUse) (done, ok bool) {
@@ -168,25 +158,27 @@ func (r *splitRun) jsonContext(v *xdm.Node, d int) error {
 
 // context is jsonContext's writing.
 func (jw *jsonWriter) context(v *xdm.Node, d int) error {
+	jw.d0 = d
 	if d > 0 {
 		// Its view: the name and attributes, as the start tag has them.
 		return jw.element(xdmstream.Event{Kind: xdmstream.StartElement, Depth: d, Node: v}, 0)
 	}
+	jw.open = append(jw.open, jsonOpen{text: true})
 	seen := false
 	for {
-		ev, err := jw.c.Next()
+		ev, err := jw.next()
 		if err != nil {
 			return err
 		}
 		switch ev.Kind {
 		case xdmstream.EndDocument:
 			if !seen {
-				return errJSONStream
+				return errJSONOneChild()
 			}
 			return nil
 		case xdmstream.StartElement:
 			if seen {
-				return errJSONStream
+				return jw.fail(errJSONOneChild(), 0)
 			}
 			seen = true
 			if err := jw.element(ev, 0); err != nil {
@@ -194,19 +186,37 @@ func (jw *jsonWriter) context(v *xdm.Node, d int) error {
 			}
 		case xdmstream.Text:
 			if strings.TrimSpace(ev.Node.Value()) != "" {
-				return errJSONStream
+				return jw.fail(jw.textErr(0), 0)
 			}
 		}
 	}
 }
 
+// errJSONOneChild is xmlToJSON's for a document node with no element child
+// or more than one.
+func errJSONOneChild() error {
+	return xdm.Errorf("FOJS0006", "a document node holding JSON XML must have one element child")
+}
+
 // jsonMatch writes a match, at its start tag ev, its frame f: the first; a
-// later one is skipped, and an empty string stands for it, which the outer's
-// zero-or-one refuses.
+// later one is passed over, and an empty string stands for it. The tree
+// evaluates the path before it reads any match as JSON, so a second match
+// raises its XPTY0004 whatever the first holds: the first match's error waits
+// in r.jsonErr, and finish raises one or the other (jsonFinish).
 func (r *splitRun) jsonMatch(ev xdmstream.Event, f splitFrame) error {
+	nests := r.s.nests && !r.s.jsonOne()
 	if len(r.items) > 0 {
-		if err := r.c.Skip(); err != nil {
-			return err
+		if !nests {
+			if err := r.c.Skip(); err != nil {
+				return err
+			}
+		} else {
+			// Its matches below it count too: read to its end.
+			jw := &jsonWriter{c: r.c, d0: ev.Depth, m: r, frames: []splitFrame{f}}
+			if err := jw.fail(nil, 0); err != nil {
+				return err
+			}
+			r.jsonMore += jw.more
 		}
 		return r.take(xdm.One(xdm.NewString("")))
 	}
@@ -215,87 +225,218 @@ func (r *splitRun) jsonMatch(ev xdmstream.Event, f splitFrame) error {
 		return err
 	}
 	ev.Node = v // the predicates may have read the cursor since
-	jw := &jsonWriter{c: r.c, indent: r.s.json.indent}
-	if r.s.nests && !r.s.jsonOne() {
+	jw := &jsonWriter{c: r.c, indent: r.s.json.indent, d0: ev.Depth}
+	if nests {
 		jw.m, jw.frames = r, []splitFrame{f}
 	}
-	if err := jw.element(ev, 0); err != nil {
+	err = jw.element(ev, 0)
+	r.jsonMore += jw.more
+	switch {
+	case err != nil && err == jw.invalid:
+		r.jsonErr = err
+		return r.take(xdm.One(xdm.NewString("")))
+	case err != nil:
 		return err
 	}
 	return r.take(xdm.One(xdm.NewString(jw.b.String())))
 }
 
+// jsonLeaf takes a leaf match n: the tree's xml-to-json of it raises
+// XPTY0004, unless a second match raises the count's first.
+func (r *splitRun) jsonLeaf(n *xdm.Node) error {
+	if len(r.items) == 0 {
+		r.jsonErr = xdm.ErrType("fn:xml-to-json expects an element or document node, got %s", n.Kind())
+	}
+	return r.take(xdm.One(xdm.NewString("")))
+}
+
+// jsonFinish raises, for xml-to-json of a path, the error the tree raises
+// first: the matches' count's, then the first match's.
+func (r *splitRun) jsonFinish() error {
+	if n := len(r.items) + r.jsonMore; n > 1 {
+		return xdm.Errorf("XPTY0004", "a sequence of %d items is not allowed as the first argument of "+
+			"fn:xml-to-json(), which is declared node()?", n)
+	}
+	return r.jsonErr
+}
+
 // jsonWriter writes the JSON text of elements read off c. With m, each
 // element it reads is matched against the split's path as walk would match
-// it, frames the open elements' (the written match's first).
+// it, frames the open elements' (the written match's first), and more counts
+// the matches.
+//
+// It checks what xmlToJSON checks, in xmlToJSON's order: there a map or an
+// array (or a null, or the document node) has its whole content checked for
+// text before any member is read, and a member's key before its name. So the
+// first error met in document order is not always the tree's: text later in
+// an open container is reported before it. fail reads on to the context's
+// end for that, holding nothing but open, the elements open from the context
+// down (the context first, at depth d0).
 type jsonWriter struct {
 	c      *xdmstream.Cursor
 	b      jsonBuf
 	indent bool
 	m      *splitRun
 	frames []splitFrame
+	more   int
+	d0     int
+	open   []jsonOpen
+	// invalid is the error fail settled on: the input is not the JSON
+	// representation (not the cursor's or a predicate's).
+	invalid error
 }
 
-// nested matches the member at start tag ev against the path, under the
-// innermost open element: a match is a second one, and the run ends.
-func (jw *jsonWriter) nested(ev xdmstream.Event) error {
-	at := splitAt{r: jw.m, n: ev.Node}
-	f, match, err := jw.m.s.enter(&jw.frames[len(jw.frames)-1], &at)
-	if err != nil {
-		return err
+// jsonOpen is an open element of the representation: its local name, and
+// whether text in it is an error (a map, an array, a null, the document).
+type jsonOpen struct {
+	name string
+	text bool
+}
+
+// next is the cursor's next event; with m, a start tag is matched below the
+// innermost open element, and an end tag closes its frame.
+func (jw *jsonWriter) next() (xdmstream.Event, error) {
+	ev, err := jw.c.Next()
+	if err != nil || jw.m == nil {
+		return ev, err
 	}
-	if match {
-		return errJSONStream // the tree's zero-or-one raises XPTY0004
+	switch ev.Kind {
+	case xdmstream.StartElement:
+		at := splitAt{r: jw.m, n: ev.Node}
+		f, match, err := jw.m.s.enter(&jw.frames[len(jw.frames)-1], &at)
+		if err != nil {
+			return ev, err
+		}
+		if match {
+			jw.more++
+		}
+		jw.frames = append(jw.frames, f)
+	case xdmstream.EndElement:
+		if ev.Depth > jw.d0 {
+			jw.frames = jw.frames[:len(jw.frames)-1]
+		}
 	}
-	jw.frames = append(jw.frames, f)
-	return nil
+	return ev, nil
+}
+
+// textErr is the error of text in open element i.
+func (jw *jsonWriter) textErr(i int) error {
+	if jw.d0 == 0 && i == 0 {
+		return xdm.Errorf("FOJS0006", "unexpected text under a document node holding JSON XML")
+	}
+	return xdm.Errorf("FOJS0006", "element %s may not contain text", jw.open[i].name)
+}
+
+// fail settles on err, met with the elements open[:lim] still to check for
+// text, as the tree checks them before it gets to err: it reads to the end of
+// the context, and text in one of them that is open still replaces err with
+// that element's error (the outermost's last). A document node's second
+// element child replaces it too. With m, the matches below are counted.
+func (jw *jsonWriter) fail(err error, lim int) error {
+	open := len(jw.open)
+	for {
+		ev, e := jw.next()
+		if e != nil {
+			return e
+		}
+		switch ev.Kind {
+		case xdmstream.EndDocument:
+			jw.invalid = err
+			return err
+		case xdmstream.EndElement:
+			i := ev.Depth - jw.d0
+			if i == 0 {
+				jw.invalid = err
+				return err
+			}
+			open = min(open, i)
+		case xdmstream.StartElement:
+			if jw.d0 == 0 && ev.Depth == 1 && lim > 0 {
+				err, lim = errJSONOneChild(), 0
+			}
+		case xdmstream.Text:
+			if i := ev.Depth - 1 - jw.d0; i < open && i < lim && jw.open[i].text &&
+				strings.TrimSpace(ev.Node.Value()) != "" {
+				err, lim = jw.textErr(i), i
+			}
+		}
+	}
 }
 
 // element writes the element whose start tag ev is, at JSON depth jd, and
 // reads to its end tag.
 func (jw *jsonWriter) element(ev xdmstream.Event, jd int) error {
-	n, d := ev.Node, ev.Depth
+	n, k := ev.Node, len(jw.open)
 	if n.Name().URI != fnNS {
-		return errJSONStream
+		return jw.fail(xdm.Errorf("FOJS0006", "element %s is not in the XPath functions namespace", n.Name().Local), k)
 	}
 	for a := range n.Attrs() {
 		switch q := a.Name(); {
 		case q.URI == fnNS:
-			return errJSONStream
+			return jw.fail(xdm.Errorf("FOJS0006", "attribute %s is not allowed in the JSON namespace", q.Local), k)
 		case q.URI != "":
 		case q.Local == "key", q.Local == "escaped-key", q.Local == "escaped":
 			// Read where xmlToJSON reads them: escaped on a string,
 			// escaped-key on a map's member (key).
 		default:
-			return errJSONStream
+			return jw.fail(xdm.Errorf("FOJS0006", "attribute %q is not allowed on element %s", q.Local, n.Name().Local), k)
 		}
 	}
-	switch kind := n.Name().Local; kind {
-	case "null", "boolean", "number", "string":
-		esc := false
-		if v, has := jsonAttr(n, "escaped"); has && kind == "string" {
-			var ok bool
-			if esc, ok = jsonBool(v); !ok {
-				return errJSONStream
+	kind := n.Name().Local
+	switch kind {
+	case "null", "boolean", "number", "string", "array", "map":
+	default:
+		return jw.fail(xdm.Errorf("FOJS0006", "element %s is not part of the JSON XML representation", kind), k)
+	}
+	jw.open = append(jw.open, jsonOpen{name: kind, text: kind == "null" || kind == "array" || kind == "map"})
+	var err error
+	switch kind {
+	case "null":
+		err = jw.null(k)
+	case "array", "map":
+		err = jw.container(kind == "map", k, jd)
+	default:
+		var txt string
+		if txt, err = jw.leafText(k); err == nil {
+			if err = jw.leaf(n, kind, txt); err != nil && k > 0 {
+				err = jw.fail(err, k)
+			} else if err != nil {
+				jw.invalid = err // the context, read to its end tag
 			}
 		}
-		txt, err := jw.leafText(d)
+	}
+	jw.open = jw.open[:k]
+	return err
+}
+
+// null reads a null, open element k, to its end tag: text in it is an
+// error, and so, unless there is text, is an element.
+func (jw *jsonWriter) null(k int) error {
+	for {
+		ev, err := jw.next()
 		if err != nil {
 			return err
 		}
-		return jw.leaf(kind, txt, esc)
-	case "array", "map":
-		return jw.container(kind == "map", d, jd)
+		switch ev.Kind {
+		case xdmstream.Text:
+			if strings.TrimSpace(ev.Node.Value()) != "" {
+				return jw.fail(jw.textErr(k), k)
+			}
+		case xdmstream.StartElement:
+			return jw.fail(xdm.Errorf("FOJS0006", "element null must be empty"), k+1)
+		case xdmstream.EndElement:
+			jw.b.WriteString("null")
+			return nil
+		}
 	}
-	return errJSONStream
 }
 
-// leafText reads a leaf's content to its end tag: its text, comments and
-// processing instructions passed over; an element child is not allowed.
-func (jw *jsonWriter) leafText(d int) (string, error) {
+// leafText reads a leaf, open element k, to its end tag: its text, comments
+// and processing instructions passed over; an element child is not allowed.
+func (jw *jsonWriter) leafText(k int) (string, error) {
 	var b strings.Builder
 	for {
-		ev, err := jw.c.Next()
+		ev, err := jw.next()
 		if err != nil {
 			return "", err
 		}
@@ -303,49 +444,46 @@ func (jw *jsonWriter) leafText(d int) (string, error) {
 		case xdmstream.Text:
 			b.WriteString(ev.Node.Value())
 		case xdmstream.StartElement:
-			return "", errJSONStream
+			return "", jw.fail(xdm.Errorf("FOJS0006", "element %s may not have element children", jw.open[k].name), k)
 		case xdmstream.EndElement:
-			if ev.Depth == d {
-				return b.String(), nil
-			}
-		case xdmstream.EndDocument:
-			return "", errJSONStream
+			return b.String(), nil
 		}
 	}
 }
 
-// leaf writes a null, boolean, number or string of text txt.
-func (jw *jsonWriter) leaf(kind, txt string, esc bool) error {
+// leaf writes a boolean, number or string n of text txt, or returns
+// xmlToJSON's error for it.
+func (jw *jsonWriter) leaf(n *xdm.Node, kind, txt string) error {
 	t := strings.TrimSpace(txt)
 	switch kind {
-	case "null":
-		if t != "" {
-			return errJSONStream
-		}
-		jw.b.WriteString("null")
 	case "boolean":
 		v, ok := jsonBool(txt)
 		if !ok {
-			return errJSONStream
+			return xdm.Errorf("FOJS0006", "%q is not a valid boolean", txt)
 		}
 		jw.b.WriteString(strconv.FormatBool(v))
 	case "number":
 		f, err := strconv.ParseFloat(t, 64)
-		if err != nil || f != f || f > 1.7976931348623157e308 || f < -1.7976931348623157e308 {
-			return errJSONStream
+		if err != nil {
+			return xdm.Errorf("FOJS0006", "%q is not a valid number", t)
+		}
+		if f != f || f > 1.7976931348623157e308 || f < -1.7976931348623157e308 {
+			return xdm.Errorf("FOJS0006", "%q has no JSON representation", t)
 		}
 		jw.b.WriteString(xdm.NewDouble(f).String())
 	case "string":
-		if !jsonLiteral(&jw.b, txt, esc) {
-			return errJSONStream
+		esc, err := jsonBoolAttr(n, "escaped")
+		if err != nil {
+			return err
 		}
+		return jsonLiteral(&jw.b, txt, esc)
 	}
 	return nil
 }
 
-// container writes a map or an array whose start tag, at depth d, is the
-// current event, its members at JSON depth jd+1.
-func (jw *jsonWriter) container(isMap bool, d, jd int) error {
+// container writes a map or an array, open element k, whose start tag is
+// the current event, its members at JSON depth jd+1.
+func (jw *jsonWriter) container(isMap bool, k, jd int) error {
 	open, end := byte('['), byte(']')
 	if isMap {
 		open, end = '{', '}'
@@ -354,21 +492,16 @@ func (jw *jsonWriter) container(isMap bool, d, jd int) error {
 	seen := map[string]bool{}
 	kids := 0
 	for {
-		ev, err := jw.c.Next()
+		ev, err := jw.next()
 		if err != nil {
 			return err
 		}
 		switch ev.Kind {
 		case xdmstream.Text:
 			if strings.TrimSpace(ev.Node.Value()) != "" {
-				return errJSONStream
+				return jw.fail(jw.textErr(k), k)
 			}
-		case xdmstream.EndDocument:
-			return errJSONStream
 		case xdmstream.EndElement:
-			if ev.Depth != d {
-				return errJSONStream // cannot happen: a member is read to its end
-			}
 			if kids > 0 {
 				jw.newline(jd)
 			}
@@ -381,57 +514,48 @@ func (jw *jsonWriter) container(isMap bool, d, jd int) error {
 			kids++
 			jw.newline(jd + 1)
 			if isMap {
-				if !jw.key(ev.Node, seen) {
-					return errJSONStream
-				}
-			}
-			if jw.m != nil {
-				if err := jw.nested(ev); err != nil {
-					return err
+				if err := jw.key(ev.Node, seen); err != nil {
+					return jw.fail(err, k+1)
 				}
 			}
 			if err := jw.element(ev, jd+1); err != nil {
 				return err
-			}
-			if jw.m != nil {
-				jw.frames = jw.frames[:len(jw.frames)-1]
 			}
 			jw.b.spill(false)
 		}
 	}
 }
 
-// key writes the key of a map's member n and its colon, checking it is
-// there, its escaped-key, and that no other member has it.
-func (jw *jsonWriter) key(n *xdm.Node, seen map[string]bool) bool {
+// key writes the key of a map's member n and its colon, or returns
+// xmlToJSON's error for it: it is there, its escaped-key is a boolean, its
+// escapes are, no other member has it.
+func (jw *jsonWriter) key(n *xdm.Node, seen map[string]bool) error {
 	k, ok := jsonAttr(n, "key")
 	if !ok {
-		return false
+		return xdm.Errorf("FOJS0006", "every child of a map element must have a key attribute")
 	}
-	esc := false
-	if v, has := jsonAttr(n, "escaped-key"); has {
-		if esc, ok = jsonBool(v); !ok {
-			return false
-		}
+	esc, err := jsonBoolAttr(n, "escaped-key")
+	if err != nil {
+		return err
 	}
 	plain := k
 	if esc {
-		if plain, ok = jsonUnescape(k); !ok {
-			return false
+		if plain, err = jsonUnescape(k); err != nil {
+			return err
 		}
 	}
 	if seen[plain] {
-		return false
+		return xdm.Errorf("FOJS0006", "duplicate key %q in a map element", plain)
 	}
 	seen[plain] = true
-	if !jsonLiteral(&jw.b, k, esc) {
-		return false
+	if err := jsonLiteral(&jw.b, k, esc); err != nil {
+		return err
 	}
 	jw.b.WriteByte(':')
 	if jw.indent {
 		jw.b.WriteByte(' ')
 	}
-	return true
+	return nil
 }
 
 func (jw *jsonWriter) newline(depth int) {
@@ -465,17 +589,31 @@ func jsonBool(v string) (val, ok bool) {
 	return false, false
 }
 
+// jsonBoolAttr reads n's escaped or escaped-key, as xpath's jsonBooleanAttr
+// does: false when it is absent.
+func jsonBoolAttr(n *xdm.Node, local string) (bool, error) {
+	v, has := jsonAttr(n, local)
+	if !has {
+		return false, nil
+	}
+	b, ok := jsonBool(v)
+	if !ok {
+		return false, xdm.Errorf("FOJS0006", "%q is not a valid xs:boolean for the %s attribute", v, local)
+	}
+	return b, nil
+}
+
 // jsonLiteral writes s as a quoted JSON string, as xpath's
 // jsonStringLiteral does: with escaped, its escapes checked and copied as
-// written.
-func jsonLiteral(b *jsonBuf, s string, escaped bool) bool {
+// written. The error is jsonStringLiteral's.
+func jsonLiteral(b *jsonBuf, s string, escaped bool) error {
 	b.WriteByte('"')
 	rs := []rune(s)
 	for i := 0; i < len(rs); i++ {
 		c := rs[i]
 		if escaped && c == '\\' {
 			if i+1 >= len(rs) {
-				return false
+				return errJSONEndSlash()
 			}
 			switch rs[i+1] {
 			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
@@ -485,11 +623,11 @@ func jsonLiteral(b *jsonBuf, s string, escaped bool) bool {
 				continue
 			case 'u':
 				if i+5 >= len(rs) {
-					return false
+					return errJSONShortU()
 				}
 				for j := i + 2; j < i+6; j++ {
 					if !isHexRune(rs[j]) {
-						return false
+						return xdm.Errorf("FOJS0007", "%q is not a hexadecimal digit in a \\u escape", string(rs[j]))
 					}
 				}
 				for j := i; j < i+6; j++ {
@@ -498,12 +636,19 @@ func jsonLiteral(b *jsonBuf, s string, escaped bool) bool {
 				i += 5
 				continue
 			}
-			return false
+			return xdm.Errorf("FOJS0007", "invalid escape sequence \\%s", string(rs[i+1]))
 		}
 		jsonChar(b, c)
 	}
 	b.WriteByte('"')
-	return true
+	return nil
+}
+
+// errJSONEndSlash and errJSONShortU are xpath's escape errors.
+func errJSONEndSlash() error { return xdm.Errorf("FOJS0007", "a string may not end with a backslash") }
+
+func errJSONShortU() error {
+	return xdm.Errorf("FOJS0007", "a \\u escape needs four hexadecimal digits")
 }
 
 func isHexRune(c rune) bool {
@@ -541,8 +686,8 @@ func jsonChar(b *jsonBuf, c rune) {
 }
 
 // jsonUnescape decodes a key's escapes for the duplicate check, as xpath's
-// unescapeJSONString does; false where that fails.
-func jsonUnescape(s string) (string, bool) {
+// unescapeJSONString does, with its error.
+func jsonUnescape(s string) (string, error) {
 	var b strings.Builder
 	rs := []rune(s)
 	for i := 0; i < len(rs); i++ {
@@ -551,7 +696,7 @@ func jsonUnescape(s string) (string, bool) {
 			continue
 		}
 		if i+1 >= len(rs) {
-			return "", false
+			return "", errJSONEndSlash()
 		}
 		switch rs[i+1] {
 		case '"', '\\', '/':
@@ -568,20 +713,20 @@ func jsonUnescape(s string) (string, bool) {
 			b.WriteRune(0x09)
 		case 'u':
 			if i+5 >= len(rs) {
-				return "", false
+				return "", errJSONShortU()
 			}
 			v, err := strconv.ParseInt(string(rs[i+2:i+6]), 16, 32)
 			if err != nil {
-				return "", false
+				return "", xdm.Errorf("FOJS0007", "invalid \\u escape")
 			}
 			b.WriteRune(rune(v))
 			i += 4
 		default:
-			return "", false
+			return "", xdm.Errorf("FOJS0007", "invalid escape sequence \\%s", string(rs[i+1]))
 		}
 		i++
 	}
-	return b.String(), true
+	return b.String(), nil
 }
 
 // jsonBuf is what a jsonWriter writes: held whole, or, with flush, handed
