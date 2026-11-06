@@ -229,6 +229,9 @@ type frag struct {
 	first    []int
 	last     []int
 	nullable bool
+	// looped records that every last -> first edge is already laid down,
+	// so a repetition wrapped directly around this subtree adds nothing.
+	looped bool
 }
 
 // maxPositions is the default bound on the automaton size, used when no
@@ -349,9 +352,15 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 			m.scopeLast[scope][l] = true
 		}
 	}
-	if p.MaxOccurs == Unbounded || p.MaxOccurs > 1 {
+	if (p.MaxOccurs == Unbounded || p.MaxOccurs > 1) && !inner.looped {
 		// The loop-back edges wrap around scope, so they lie inside
 		// one repetition of the enclosing scope, not of this one.
+		//
+		// They are skipped when the body already loops: a chain of d
+		// repeated group references each wrapping the last re-lays the
+		// same |last| x |first| edges at every level, a dedup scan per
+		// edge, for nothing.
+		inner.looped = true
 		for _, l := range inner.last {
 			if err := m.addFollow(l, inner.first, enclosing); err != nil {
 				return frag{}, err
@@ -426,6 +435,7 @@ func (m *contentModel) buildSequence(g *ModelGroup, scope int) (frag, error) {
 			out.last = append([]int(nil), f.last...)
 		}
 		out.nullable = out.nullable && f.nullable
+		out.looped = len(g.Particles) == 1 && f.looped
 	}
 	return out, nil
 }
@@ -446,6 +456,7 @@ func (m *contentModel) buildChoice(g *ModelGroup, scope int) (frag, error) {
 		out.first = append(out.first, f.first...)
 		out.last = append(out.last, f.last...)
 		out.nullable = out.nullable || f.nullable
+		out.looped = len(g.Particles) == 1 && f.looped
 	}
 	return out, nil
 }
