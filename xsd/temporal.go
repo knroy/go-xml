@@ -91,7 +91,7 @@ func parseTemporal(v, primitive string) (temporal, bool) {
 		return temporal{}, false
 	}
 
-	var year int64 = 1972 // a leap year, so that --02-29 is representable
+	year := big.NewInt(1972) // a leap year, so that --02-29 is representable
 	var month int64 = 1
 	var day int64 = 1
 	var secs = new(big.Rat)
@@ -102,14 +102,14 @@ func parseTemporal(v, primitive string) (temporal, bool) {
 		if i < 0 {
 			return temporal{}, false
 		}
-		if !parseDate(body[:i], &year, &month, &day) {
+		if !parseDate(body[:i], year, &month, &day) {
 			return temporal{}, false
 		}
 		if !parseTime(body[i+1:], secs) {
 			return temporal{}, false
 		}
 	case "date":
-		if !parseDate(body, &year, &month, &day) {
+		if !parseDate(body, year, &month, &day) {
 			return temporal{}, false
 		}
 	case "time":
@@ -117,12 +117,12 @@ func parseTemporal(v, primitive string) (temporal, bool) {
 			return temporal{}, false
 		}
 	case "gYear":
-		if !parseInt(body, &year) {
+		if !parseYear(body, year) {
 			return temporal{}, false
 		}
 	case "gYearMonth":
 		i := strings.LastIndexByte(body, '-')
-		if i <= 0 || !parseInt(body[:i], &year) || !parseInt(body[i+1:], &month) {
+		if i <= 0 || !parseYear(body[:i], year) || !parseInt(body[i+1:], &month) {
 			return temporal{}, false
 		}
 	case "gMonth":
@@ -144,9 +144,16 @@ func parseTemporal(v, primitive string) (temporal, bool) {
 	}
 
 	// Days from a civil date, using the era algorithm so that the year is
-	// unbounded and negative years work.
-	days := daysFromCivil(year, month, day)
-	total := new(big.Rat).SetInt64(days * 86400)
+	// unbounded and negative years work. The Gregorian calendar repeats
+	// every 400 years, which are exactly 146097 days, so the year is split
+	// into whole eras and a year of era in big arithmetic and only the
+	// small remainder goes through daysFromCivil. Doing it all in int64
+	// wrapped days*86400 above a year of about 2.9e11, and a date in the
+	// year 394573983248376 then compared equal to one in 2024.
+	era, yoe := new(big.Int).DivMod(year, big.NewInt(400), new(big.Int))
+	days := era.Mul(era, big.NewInt(146097))
+	days.Add(days, big.NewInt(daysFromCivil(yoe.Int64(), month, day)))
+	total := new(big.Rat).SetInt(days.Mul(days, big.NewInt(86400)))
 	total.Add(total, secs)
 	if primitive == "time" {
 		// xs:time has no date, so 24:00:00 is the same time of day as
@@ -187,7 +194,7 @@ func splitTZ(v string) (body string, offset int64, hasTZ, ok bool) {
 	return v, 0, false, true
 }
 
-func parseDate(v string, year, month, day *int64) bool {
+func parseDate(v string, year *big.Int, month, day *int64) bool {
 	last := strings.LastIndexByte(v, '-')
 	if last <= 0 {
 		return false
@@ -196,7 +203,7 @@ func parseDate(v string, year, month, day *int64) bool {
 	if mid <= 0 {
 		return false
 	}
-	return parseInt(v[:mid], year) && parseInt(v[mid+1:last], month) &&
+	return parseYear(v[:mid], year) && parseInt(v[mid+1:last], month) &&
 		parseInt(v[last+1:], day)
 }
 
@@ -221,6 +228,16 @@ func parseTime(v string, out *big.Rat) bool {
 		out.Add(out, frac)
 	}
 	return true
+}
+
+// parseYear reads an optionally signed decimal year of any length.
+//
+// The year is unbounded in the lexical space, and refusing one too long for
+// an int64 left every facet, enumeration and key that compares it
+// unconstrained: a caller that cannot compare a value lets it pass.
+func parseYear(v string, out *big.Int) bool {
+	_, ok := out.SetString(v, 10)
+	return ok
 }
 
 // parseInt reads an optionally signed decimal integer.
