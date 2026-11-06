@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -127,4 +128,26 @@ func replaceOnce(s, old, new string) string {
 		}
 	}
 	return s
+}
+
+// TestSerializeMapDoctypeIsChecked: the map form stored doctype-system and
+// doctype-public after a type check only, so a system literal holding both
+// quote kinds ended its own quoting and wrote the rest as live DTD markup.
+// The element form refuses the same values with SEPM0017; given directly they
+// are SEPM0016 (Serialization 3.1 §3).
+func TestSerializeMapDoctypeIsChecked(t *testing.T) {
+	for _, params := range []string{
+		`map{'method':'xml','doctype-system':'a"b''><!--'}`,
+		`map{'method':'xml','doctype-system':'s','doctype-public':'p"q'}`,
+	} {
+		got, err := evalSerialize(t, "serialize(parse-xml('<a/>'), "+params+")")
+		if err == nil || xdm.ErrorCode(err) != "SEPM0016" {
+			t.Errorf("serialize with %s = %q, %v; want SEPM0016", params, got, err)
+		}
+	}
+	// The control: one quote kind is a legal system literal.
+	got, err := evalSerialize(t, `serialize(parse-xml('<a/>'), map{'method':'xml','doctype-system':'a"b'})`)
+	if err != nil || !strings.Contains(got, `<!DOCTYPE a SYSTEM 'a"b'>`) {
+		t.Errorf("doctype-system a\"b = %q, %v; want a single-quoted literal", got, err)
+	}
 }

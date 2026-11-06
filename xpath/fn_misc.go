@@ -181,6 +181,10 @@ func registerUnparsedText(l *Library, since Version) {
 			}
 		}
 		if _, err := unparsedText(ctx, args); err != nil {
+			// A budget refusal is not an answer about the resource.
+			if errors.Is(err, xdm.ErrResourceLimit) {
+				return nil, err
+			}
 			return boolSeq(false), nil
 		}
 		return boolSeq(true), nil
@@ -289,6 +293,11 @@ func readText(ctx *Context, s, enc string) (string, error) {
 			return "", err
 		}
 		return "", fmt.Errorf("FOUT1170: cannot retrieve %q: %w", s, err)
+	}
+	// The resolver caps one read, not their sum, and caches nothing, so
+	// every call is a fresh string the evaluation may retain.
+	if err := ctx.countBytes(len(text)); err != nil {
+		return "", err
 	}
 	return text, nil
 }

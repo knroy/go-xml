@@ -182,3 +182,29 @@ func TestUnparsedTextAvailableIsFalseForAFragmentRatherThanAnError(t *testing.T)
 		t.Errorf("unparsed-text-available('r.txt') = %s, want true", s)
 	}
 }
+
+// TestUnparsedTextChargesTheByteBudget: the resolver's text was returned with
+// no charge, so (1 to N) ! unparsed-text('f') retained N copies of a file
+// while charging N items. fn:json-doc shares the read.
+func TestUnparsedTextChargesTheByteBudget(t *testing.T) {
+	big := strings.Repeat("a", 4096)
+	for _, expr := range []string{
+		"sum((1 to 8) ! string-length(unparsed-text('f')))",
+		"count((1 to 8) ! unparsed-text-lines('f'))",
+		"count((1 to 8) ! json-doc('f'))",
+	} {
+		t.Run(expr, func(t *testing.T) {
+			ctx := NewContext(nil, Builtins()).WithVersion(XPath31).HoldByteBudget()
+			text := big
+			if strings.Contains(expr, "json-doc") {
+				text = `"` + big + `"`
+			}
+			ctx = ctx.WithEnv(func(e *Env) { e.Texts = fixedTextResolver{text: text} })
+			if err := ctx.ChargeBytes(MaxBytes - 16*1024); err != nil {
+				t.Fatalf("charging the budget: %v", err)
+			}
+			_, err := Eval(expr, ctx, nil)
+			wantByteRefusal(t, err)
+		})
+	}
+}

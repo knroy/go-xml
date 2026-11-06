@@ -1006,7 +1006,10 @@ func formatIETFSeconds(sec *big.Rat) string {
 	s := sec.FloatString(9)
 	s = strings.TrimRight(s, "0")
 	s = strings.TrimSuffix(s, ".")
-	if len(s) > 0 && s[1] == '.' {
+	// A fraction below the nine places trims away entirely, so "05.0000000001"
+	// can come back as the single digit "5": the length is checked before the
+	// point is looked for, since indexing s[1] there panicked.
+	if len(s) == 1 || s[1] == '.' {
 		s = "0" + s
 	}
 	return s
