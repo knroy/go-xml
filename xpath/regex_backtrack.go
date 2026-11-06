@@ -729,9 +729,8 @@ type btMachine struct {
 // engine did rather than the input it consumed — which is the quantity that
 // blows up.
 //
-// It also enters one level of recursion, which the caller leaves with a
-// deferred m.depth-- once step has succeeded, and refuses a level past
-// backtrackMaxDepth.
+// It also enters one level of recursion, which the caller leaves through
+// leave once step has succeeded, and refuses a level past backtrackMaxDepth.
 func (m *btMachine) step() bool {
 	m.steps++
 	if m.steps > m.budget || m.depth >= backtrackMaxDepth {
@@ -742,68 +741,79 @@ func (m *btMachine) step() bool {
 	return true
 }
 
+// leave exits the level step entered and passes ok through, so that every
+// return of match and matchRepeat is written "return m.leave(...)".
+func (m *btMachine) leave(ok bool) bool {
+	m.depth--
+	return ok
+}
+
 // btCont is a continuation: given the position after a node matched, decide
 // whether the rest of the pattern can match from there.
 type btCont func(pos int) bool
 
+// match tries n at pos, then k. It holds one level of m.depth for the
+// duration and releases it on every return through m.leave, not by defer:
+// this runs up to backtrackBudget times a match, and a deferred closure made
+// the engine about 2.8 times slower. A panic leaves depth raised, which is
+// harmless: the machine belongs to one call and is dropped with it.
 func (m *btMachine) match(n btNode, pos int, k btCont) bool {
 	if m.overrun || !m.step() {
 		return false
 	}
-	defer func() { m.depth-- }()
 	switch t := n.(type) {
 	case *btEmpty:
-		return k(pos)
+		return m.leave(k(pos))
 
 	case *btAnchor:
 		if t.end {
 			if pos == len(m.in) || (m.multiline && m.in[pos] == '\n') {
-				return k(pos)
+				return m.leave(k(pos))
 			}
-			return false
+			return m.leave(false)
 		}
 		if pos == 0 || (m.multiline && m.in[pos-1] == '\n') {
-			return k(pos)
+			return m.leave(k(pos))
 		}
-		return false
+		return m.leave(false)
 
 	case *btLiteral:
 		if pos+len(t.text) > len(m.in) {
-			return false
+			return m.leave(false)
 		}
 		for i, r := range t.text {
 			if !runeEq(m.in[pos+i], r, t.fold) {
-				return false
+				return m.leave(false)
 			}
 		}
-		return k(pos + len(t.text))
+		return m.leave(k(pos + len(t.text)))
 
 	case *btChar:
 		if pos >= len(m.in) {
-			return false
+			return m.leave(false)
 		}
 		if !t.re.MatchString(string(m.in[pos])) {
-			return false
+			return m.leave(false)
 		}
-		return k(pos + 1)
+		return m.leave(k(pos + 1))
 
 	case *btSeq:
-		return m.matchSeq(t.items, pos, k)
+		return m.leave(m.matchSeq(t.items, pos, k))
 
 	case *btAlt:
 		for _, b := range t.branches {
 			if m.match(b, pos, k) {
-				return true
+				return m.leave(true)
 			}
 			if m.overrun {
-				return false
+				return m.leave(false)
 			}
 		}
-		return false
+		return m.leave(false)
 
 	case *btGroup:
 		if t.index == 0 {
-			return m.match(t.node, pos, k)
+			return m.leave(m.match(t.node, pos, k))
 		}
 		gs, ge := 2*t.index, 2*t.index+1
 		oldS, oldE := m.caps[gs], m.caps[ge]
@@ -823,7 +833,7 @@ func (m *btMachine) match(n btNode, pos int, k btCont) bool {
 		if !ok {
 			m.caps[gs], m.caps[ge] = oldS, oldE
 		}
-		return ok
+		return m.leave(ok)
 
 	case *btBackref:
 		gs, ge := 2*t.group, 2*t.group+1
@@ -836,11 +846,11 @@ func (m *btMachine) match(n btNode, pos int, k btCont) bool {
 		}
 		n := e - s
 		if pos+n > len(m.in) {
-			return false
+			return m.leave(false)
 		}
 		for i := 0; i < n; i++ {
 			if !runeEq(m.in[pos+i], m.in[s+i], t.fold) {
-				return false
+				return m.leave(false)
 			}
 		}
 		pos += n
@@ -848,21 +858,21 @@ func (m *btMachine) match(n btNode, pos int, k btCont) bool {
 		// text following the reference.
 		if len(t.literal) > 0 {
 			if pos+len(t.literal) > len(m.in) {
-				return false
+				return m.leave(false)
 			}
 			for i, r := range t.literal {
 				if !runeEq(m.in[pos+i], r, t.fold) {
-					return false
+					return m.leave(false)
 				}
 			}
 			pos += len(t.literal)
 		}
-		return k(pos)
+		return m.leave(k(pos))
 
 	case *btRepeat:
-		return m.matchRepeat(t, pos, 0, k)
+		return m.leave(m.matchRepeat(t, pos, 0, k))
 	}
-	return false
+	return m.leave(false)
 }
 
 func (m *btMachine) matchSeq(items []btNode, pos int, k btCont) bool {
@@ -887,7 +897,6 @@ func (m *btMachine) matchRepeat(t *btRepeat, pos, count int, k btCont) bool {
 	if m.overrun || !m.step() {
 		return false
 	}
-	defer func() { m.depth-- }()
 	canStop := count >= t.min
 	canMore := t.max < 0 || count < t.max
 
@@ -913,20 +922,20 @@ func (m *btMachine) matchRepeat(t *btRepeat, pos, count int, k btCont) bool {
 		// regex-019 needs — "(.*?)" must stop at the first quote the
 		// backreference can match, not run to the last.
 		if canStop && k(pos) {
-			return true
+			return m.leave(true)
 		}
 		if m.overrun {
-			return false
+			return m.leave(false)
 		}
-		return more()
+		return m.leave(more())
 	}
 	if more() {
-		return true
+		return m.leave(true)
 	}
 	if m.overrun {
-		return false
+		return m.leave(false)
 	}
-	return canStop && k(pos)
+	return m.leave(canStop && k(pos))
 }
 
 func runeEq(a, b rune, fold bool) bool {
