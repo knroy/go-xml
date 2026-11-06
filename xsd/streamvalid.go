@@ -776,19 +776,27 @@ func (s *streamV) hold(f *svFrame, depth int) {
 		el := f.el
 		h := xdm.NewNode(xdm.KindElement, el.Name(), "")
 		h.SetBaseURI(el.BaseURI())
+		// The frame is built in one pass and set once, as scopeForAssertion
+		// does: one AddNamespace per binding copies the frame built so far.
+		var pairs []string
+		declared := map[string]bool{}
 		for prefix, uri := range el.DeclaredNamespaces() {
-			h.AddNamespace(prefix, uri)
+			declared[prefix] = true
+			pairs = append(pairs, prefix, uri)
 		}
 		for prefix, uri := range v.inScopeNamespaces(el) {
-			if _, declared := h.LookupPrefix(prefix); !declared {
-				h.AddNamespace(prefix, uri)
+			if !declared[prefix] {
+				pairs = append(pairs, prefix, uri)
 			}
 		}
+		h.AddNamespaces(pairs...)
 		f.held = h
 	} else if f.held != nil {
+		var pairs []string
 		for prefix, uri := range f.el.DeclaredNamespaces() {
-			f.held.AddNamespace(prefix, uri)
+			pairs = append(pairs, prefix, uri)
 		}
+		f.held.AddNamespaces(pairs...)
 	}
 	if f.held != nil {
 		for a := range f.el.Attrs() {

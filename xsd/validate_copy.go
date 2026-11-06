@@ -225,14 +225,18 @@ func (c *copier) copyTree(top *xdm.Node) *xdm.Node {
 // those src carries, in the order an in-place edit would have added them.
 func (c *copier) fill(dst, src *xdm.Node) {
 	c.note(dst, src)
+	// One AddNamespaces rather than one AddNamespace per binding, so the
+	// frame is built and interned once.
+	var pairs []string
 	for prefix, uri := range src.DeclaredNamespaces() {
-		dst.AddNamespace(prefix, uri)
+		pairs = append(pairs, prefix, uri)
 	}
 	if c.v != nil {
 		for _, ns := range c.v.fixups[src] {
-			dst.AddNamespace(ns.prefix, ns.uri)
+			pairs = append(pairs, ns.prefix, ns.uri)
 		}
 	}
+	dst.AddNamespaces(pairs...)
 	for a := range src.Attrs() {
 		c.note(dst.AppendAttr(a.Name(), a.Value()), a)
 	}
