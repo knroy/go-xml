@@ -1,8 +1,11 @@
 package xsd
 
 import (
+	"fmt"
 	"math/big"
 	"strings"
+
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Comparison of the date, time and duration types.
@@ -218,7 +221,8 @@ func parseTime(v string, out *big.Rat) bool {
 	}
 	out.SetInt64(h*3600 + m*60 + s)
 	if len(v) > 8 {
-		if v[8] != '.' {
+		// Bounded before the conversion; see maxTemporalDigits.
+		if v[8] != '.' || len(v)-9 > maxTemporalDigits {
 			return false
 		}
 		frac, ok := new(big.Rat).SetString("0" + v[8:])
@@ -230,12 +234,65 @@ func parseTime(v string, out *big.Rat) bool {
 	return true
 }
 
-// parseYear reads an optionally signed decimal year of any length.
+// maxTemporalDigits is the longest run of digits a date, time or duration
+// literal may have: its year, its fractional seconds, or one duration field.
+//
+// None of them is bounded in the lexical space, but converting one is not
+// free: big.Int.SetString and big.Rat.SetString are superlinear in the digit
+// count, so a megabyte-long year or fraction cost seconds every time a facet,
+// enumeration or key compared it. XSD 1.1 Part 2 §5.4 (Partial Implementation
+// of Infinite Datatypes) lets a processor limit the year digits and the
+// fractional-second precision it supports, provided it supports at least four
+// and three. A thousand is far past anything a document means and keeps one
+// conversion in microseconds.
+const maxTemporalDigits = 1000
+
+// checkTemporalDigits refuses a date, time or duration value with a run of
+// digits longer than maxTemporalDigits. The literal is already in the lexical
+// space, so its digit runs are exactly its numeric fields. The refusal wraps
+// xdm.ErrResourceLimit: the value is not invalid, this processor declines to
+// decide it, and a caller has to be able to tell the two apart.
+func checkTemporalDigits(normalized, primitive string) error {
+	switch primitive {
+	case "dateTime", "date", "time", "gYear", "gYearMonth", "duration":
+	default:
+		return nil
+	}
+	run := 0
+	for i := 0; i < len(normalized); i++ {
+		if normalized[i] < '0' || normalized[i] > '9' {
+			run = 0
+			continue
+		}
+		if run++; run > maxTemporalDigits {
+			return fmt.Errorf(
+				"%s has a field of more than %d digits, the most this "+
+					"processor supports (XSD 1.1 Part 2 §5.4): %w",
+				truncate(normalized), maxTemporalDigits, xdm.ErrResourceLimit)
+		}
+	}
+	return nil
+}
+
+// parseYear reads an optionally negative decimal year of up to
+// maxTemporalDigits digits.
 //
 // The year is unbounded in the lexical space, and refusing one too long for
 // an int64 left every facet, enumeration and key that compares it
-// unconstrained: a caller that cannot compare a value lets it pass.
+// unconstrained: a caller that cannot compare a value lets it pass. A longer
+// year is refused before it reaches here, by checkTemporalDigits, as a resource
+// limit. The digits are checked first because SetString also takes a '+',
+// which the lexical space does not.
 func parseYear(v string, out *big.Int) bool {
+	digits := strings.TrimPrefix(v, "-")
+	if digits == "" || len(digits) > maxTemporalDigits {
+		return false
+	}
+	for i := 0; i < len(digits); i++ {
+		if digits[i] < '0' || digits[i] > '9' {
+			return false
+		}
+	}
 	_, ok := out.SetString(v, 10)
 	return ok
 }
@@ -307,8 +364,14 @@ func daysFromCivil(y, m, d int64) int64 {
 // so P1M and P30D have no fixed order. The spec makes duration only partially
 // ordered for exactly this reason, and comparing through a single "average
 // month" would invent an order the spec does not have.
+//
+// The months are a big integer because the year and month fields are
+// unbounded (duYearFrag, duMonthFrag). An int64 count failed to parse past its
+// range, and wrapped when a year just inside it was multiplied by twelve; a
+// value that cannot be compared passes every bound, so either way was a false
+// accept.
 type duration struct {
-	months  int64
+	months  *big.Int
 	seconds *big.Rat
 }
 
@@ -324,7 +387,7 @@ type duration struct {
 // The four references are the ones the spec names, chosen so that every
 // combination of leap year and month length is covered.
 func compareDuration(a, b duration) (int, bool) {
-	if a.months == b.months {
+	if a.months.Cmp(b.months) == 0 {
 		return a.seconds.Cmp(b.seconds), true
 	}
 
@@ -368,31 +431,32 @@ var durationReferences = [4]struct {
 // The months are added first and the day clamped to the length of the resulting
 // month, which is what makes "one month after 31 January" mean 28 or 29
 // February rather than an invalid date. Only then are the seconds added.
+//
+// The arithmetic is in big integers, with the year split into 400-year eras as
+// parseTemporal does, since the months are unbounded. DivMod is Euclidean, so
+// with a positive divisor it rounds toward negative infinity, which is what a
+// calendar needs for years before the epoch.
 func addDurationTo(ref struct {
 	y, m, d int64
 	secs    int64
 }, d duration) *big.Rat {
-	totalMonths := ref.y*12 + (ref.m - 1) + d.months
-	year := floorDiv(totalMonths, 12)
-	month := totalMonths - year*12 + 1
+	totalMonths := big.NewInt(ref.y*12 + (ref.m - 1))
+	totalMonths.Add(totalMonths, d.months)
+	year, month := new(big.Int).DivMod(totalMonths, big.NewInt(12), new(big.Int))
+	era, yoe := new(big.Int).DivMod(year, big.NewInt(400), new(big.Int))
+	m := month.Int64() + 1
 
 	day := ref.d
-	if max := daysInMonth(year, month); day > max {
+	if max := daysInMonth(yoe.Int64(), m); day > max {
 		day = max
 	}
 
-	out := new(big.Rat).SetInt64(daysFromCivil(year, month, day)*86400 + ref.secs)
+	days := era.Mul(era, big.NewInt(146097))
+	days.Add(days, big.NewInt(daysFromCivil(yoe.Int64(), m, day)))
+	secs := days.Mul(days, big.NewInt(86400))
+	secs.Add(secs, big.NewInt(ref.secs))
+	out := new(big.Rat).SetInt(secs)
 	return out.Add(out, d.seconds)
-}
-
-// floorDiv divides rounding toward negative infinity, which is what a calendar
-// needs for years before the epoch.
-func floorDiv(a, b int64) int64 {
-	q := a / b
-	if a%b != 0 && (a < 0) != (b < 0) {
-		q--
-	}
-	return q
 }
 
 // daysInMonth returns the length of a month in the proleptic Gregorian
@@ -422,23 +486,21 @@ func parseDuration(v string) (duration, bool) {
 	v = v[1:]
 
 	datePart, timePart, hasT := strings.Cut(v, "T")
-	var months int64
+	months := new(big.Int)
 	seconds := new(big.Rat)
 
 	if !scanDurationFields(datePart, "YMD", func(field byte, n *big.Rat) bool {
 		switch field {
 		case 'Y':
-			i, ok := ratToInt(n)
-			if !ok {
+			if !n.IsInt() {
 				return false
 			}
-			months += i * 12
+			months.Add(months, new(big.Int).Mul(n.Num(), big.NewInt(12)))
 		case 'M':
-			i, ok := ratToInt(n)
-			if !ok {
+			if !n.IsInt() {
 				return false
 			}
-			months += i
+			months.Add(months, n.Num())
 		case 'D':
 			seconds.Add(seconds, new(big.Rat).Mul(n, big.NewRat(86400, 1)))
 		}
@@ -462,7 +524,7 @@ func parseDuration(v string) (duration, bool) {
 	}
 
 	if neg {
-		months = -months
+		months.Neg(months)
 		seconds.Neg(seconds)
 	}
 	return duration{months: months, seconds: seconds}, true
@@ -485,6 +547,11 @@ func scanDurationFields(v, designators string, fn func(byte, *big.Rat) bool) boo
 		}
 		pos += d + 1
 
+		// Bounded before the conversion; see maxTemporalDigits. The
+		// field may carry a '.', so a run of the limit takes one more.
+		if n > maxTemporalDigits+1 {
+			return false
+		}
 		val, ok := new(big.Rat).SetString(v[:n])
 		if !ok || !fn(v[n], val) {
 			return false
@@ -492,18 +559,6 @@ func scanDurationFields(v, designators string, fn func(byte, *big.Rat) bool) boo
 		v = v[n+1:]
 	}
 	return true
-}
-
-// ratToInt returns the integer value of an exact whole rational.
-func ratToInt(r *big.Rat) (int64, bool) {
-	if !r.IsInt() {
-		return 0, false
-	}
-	n := r.Num()
-	if !n.IsInt64() {
-		return 0, false
-	}
-	return n.Int64(), true
 }
 
 // wrapDay reduces a seconds-of-day value into [0, 86400).

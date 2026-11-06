@@ -161,13 +161,14 @@ func TestInstanceLocationsUnderHTTPResolverStayRooted(t *testing.T) {
 			AllowNoNamespace: true,
 			Resolver:         &HTTPResolver{AllowHost: func(string) bool { return false }},
 		}, xsd.Options{})
-		if err == nil {
-			t.Errorf("%s: a schema outside the schema directory was loaded; Validate = %v",
-				loc, ext.Validate(tree.Root, xsd.ValidateOptions{}))
+		// The location is a hint (§4.3.2): one outside is declined, not an
+		// error, and nothing from it is loaded.
+		if err != nil {
+			t.Errorf("%s: a declined location failed the call: %v", loc, err)
 			continue
 		}
-		if !strings.Contains(err.Error(), "outside the directories the schema was loaded from") {
-			t.Errorf("%s: error %q is not the confinement refusal", loc, err)
+		if ext.Validate(tree.Root, xsd.ValidateOptions{}) == nil {
+			t.Errorf("%s: a schema outside the schema directory was loaded", loc)
 		}
 	}
 }

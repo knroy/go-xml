@@ -1,7 +1,6 @@
 package xsd
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,7 +207,9 @@ func TestInstanceLocationKeyStatsOnlySchemaDirs(t *testing.T) {
 // The policy allows namespaces, and the check ran on the pair's namespace
 // text alone, so pairing an allowed namespace with a document defining
 // another let the instance supply declarations the policy never allowed.
-// xs:import makes the same check (src-import.3.1).
+// xs:import makes the same check (src-import.3.1). The location is a hint
+// (§4.3.2), so a document that fails it is declined, not an error: nothing
+// from it is added, and the rest of the instance's locations still apply.
 func TestInstanceLocationMustDefineItsNamespace(t *testing.T) {
 	dir, main := writeSchemaSet(t)
 	if err := os.WriteFile(filepath.Join(dir, "evil.xsd"), []byte(`
@@ -248,13 +249,15 @@ func TestInstanceLocationMustDefineItsNamespace(t *testing.T) {
 			t.Fatal(err)
 		}
 		ext, err := s.WithInstanceLocations(tree.Root, policy, Options{})
-		if err == nil {
-			t.Errorf("%s: extended without error; Validate = %v",
-				doc, ext.Validate(tree.Root, ValidateOptions{}))
+		if err != nil {
+			t.Errorf("%s: a declined location failed the call: %v", doc, err)
 			continue
 		}
-		if !strings.Contains(err.Error(), "target namespace") {
-			t.Errorf("%s: error %q is not the namespace mismatch", doc, err)
+		if len(ext.Elements) != len(s.Elements) {
+			t.Errorf("%s: the declined document added components: %v", doc, ext.Elements)
+		}
+		if ext.Validate(tree.Root, ValidateOptions{}) == nil {
+			t.Errorf("%s: validated against the declined document", doc)
 		}
 	}
 	// The matching pair is still followed.
@@ -274,7 +277,8 @@ func TestInstanceLocationMustDefineItsNamespace(t *testing.T) {
 // A local location the instance names must lie inside the schema's own
 // directories whatever resolver is supplied. An unrooted FileResolver stands
 // in here for xsdnet.HTTPResolver with no Files, which reads every local
-// location through one.
+// location through one. A location outside is declined like any other the
+// policy refuses (§4.3.2 makes it a hint): the resolver is never asked for it.
 func TestInstanceLocationConfinedWhateverResolver(t *testing.T) {
 	_, main := writeSchemaSet(t)
 	outside := t.TempDir()
@@ -300,12 +304,54 @@ func TestInstanceLocationConfinedWhateverResolver(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = s.WithInstanceLocations(tree.Root, InstanceLocationPolicy{
+		r := &countingResolver{Resolver: &FileResolver{}}
+		ext, err := s.WithInstanceLocations(tree.Root, InstanceLocationPolicy{
 			AllowNoNamespace: true,
-			Resolver:         &FileResolver{},
+			Resolver:         r,
 		}, Options{})
-		if !errors.Is(err, errRefusedByPolicy) {
-			t.Errorf("%s: WithInstanceLocations = %v, want the confinement refusal", loc, err)
+		if err != nil {
+			t.Errorf("%s: a declined location failed the call: %v", loc, err)
+			continue
+		}
+		if r.fetches != 0 {
+			t.Errorf("%s: the resolver was asked %d times", loc, r.fetches)
+		}
+		if ext.Validate(tree.Root, ValidateOptions{}) == nil {
+			t.Errorf("%s: validated against a document outside the schema directory", loc)
+		}
+	}
+}
+
+// An error about a document the instance named quotes the location the
+// instance wrote, never the host path it was joined into: a document that is
+// not XML, and one whose root is not xs:schema.
+func TestInstanceLocationErrorQuotesOnlyTheLocation(t *testing.T) {
+	dir, main := writeSchemaSet(t)
+	for name, src := range map[string]string{
+		"broken.xsd": "<xs:schema", "notschema.xsd": "<x/>",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := LoadFiles([]string{main}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	abs, _ := filepath.Abs(dir)
+	for _, name := range []string{"broken.xsd", "notschema.xsd"} {
+		tree, err := xdm.ParseString(`<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`+
+			` xsi:noNamespaceSchemaLocation="`+name+`"><x>1</x></doc>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.WithInstanceLocations(tree.Root, InstanceLocationPolicy{AllowNoNamespace: true}, Options{})
+		if err == nil {
+			t.Fatalf("%s: a document the instance named that is not a schema loaded", name)
+		}
+		if !strings.Contains(err.Error(), `"`+name+`"`) ||
+			strings.Contains(err.Error(), dir) || strings.Contains(err.Error(), abs) {
+			t.Errorf("error %q should quote only the instance's location", err)
 		}
 	}
 }
@@ -327,5 +373,82 @@ func TestInstanceLocalPathRefusesNetworkPaths(t *testing.T) {
 	if got, err := instanceLocalPath("https://e.example/a.xsd", dirs[0], dirs); err != nil ||
 		got != "https://e.example/a.xsd" {
 		t.Errorf("a remote location is the resolver's to judge: %q, %v", got, err)
+	}
+}
+
+// Errors about documents reached from an instance-named location, through
+// its includes and imports, name them by the location text as written in the
+// referring document. The same faults in the caller's own load keep the
+// resolved path, which the caller chose and which helps them find the file.
+func TestInstanceOriginErrorsQuoteOnlyLocations(t *testing.T) {
+	dir, main := writeSchemaSet(t)
+	for name, src := range map[string]string{
+		"inc.xsd": `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">` +
+			`<xs:include schemaLocation="broken.xsd"/>` +
+			`<xs:include schemaLocation="deep.xsd"/>` +
+			`<xs:import namespace="urn:x" schemaLocation="wrongns.xsd"/>` +
+			`</xs:schema>`,
+		"broken.xsd":  "<xs:schema",
+		"deep.xsd":    `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element/></xs:schema>`,
+		"wrongns.xsd": `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:y"/>`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	abs, _ := filepath.Abs(dir)
+	real, _ := filepath.EvalSymlinks(abs)
+	leaks := func(msg string) bool {
+		return strings.Contains(msg, dir) || strings.Contains(msg, abs) ||
+			strings.Contains(msg, real)
+	}
+
+	s, err := LoadFiles([]string{main}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := xdm.ParseString(`<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`+
+		` xsi:noNamespaceSchemaLocation="inc.xsd"><x>1</x></doc>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.WithInstanceLocations(tree.Root, InstanceLocationPolicy{AllowNoNamespace: true}, Options{})
+	if err == nil {
+		t.Fatal("an instance-named schema with faulty includes loaded")
+	}
+	msg := err.Error()
+	if leaks(msg) {
+		t.Errorf("an error from the instance's documents carries a host path:\n%s", msg)
+	}
+	for _, name := range []string{`"broken.xsd"`, `"wrongns.xsd"`, "deep.xsd"} {
+		if !strings.Contains(msg, name) {
+			t.Errorf("the error does not name %s:\n%s", name, msg)
+		}
+	}
+
+	// A resolver's own error text is scrubbed too: an unrooted FileResolver
+	// reports a missing file by the absolute path it tried to open.
+	if err := os.WriteFile(filepath.Join(dir, "redef.xsd"), []byte(
+		`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">`+
+			`<xs:redefine schemaLocation="missing.xsd"><xs:simpleType name="t">`+
+			`<xs:restriction base="t"/></xs:simpleType></xs:redefine></xs:schema>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tree, err = xdm.ParseString(`<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`+
+		` xsi:noNamespaceSchemaLocation="redef.xsd"><x>1</x></doc>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.WithInstanceLocations(tree.Root, InstanceLocationPolicy{
+		AllowNoNamespace: true, Resolver: &FileResolver{},
+	}, Options{})
+	if err == nil || leaks(err.Error()) || !strings.Contains(err.Error(), `"missing.xsd"`) {
+		t.Errorf("a resolver error from the instance's documents: %v", err)
+	}
+
+	// The caller's own load is named by resolved path.
+	_, err = LoadFiles([]string{filepath.Join(dir, "inc.xsd")}, Options{})
+	if err == nil || !leaks(err.Error()) {
+		t.Errorf("the caller's own load should keep the resolved path: %v", err)
 	}
 }

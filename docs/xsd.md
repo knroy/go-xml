@@ -314,7 +314,10 @@ Three things about that shape are deliberate:
   caller thinks about and folding it in would grant it by accident.
 * **A refused location is ignored, not an error.** §4.3.2 makes the attribute
   a hint, so declining to take it is not a fault in the document. A reference
-  that really needed the components still fails, at the reference.
+  that really needed the components still fails, at the reference. The same
+  goes for a local location outside the directories the schema was loaded
+  from (never opened), one the resolver cannot supply, and a document that
+  does not define the namespace it was named for (never added).
 * **The receiver is not modified.** A `Schema` is immutable and shared, so
   this returns a new one. That means a fresh assembly per instance, which is
   why it is a separate call rather than something `Validate` does — a caller
@@ -358,6 +361,7 @@ like any other:
 | `ValidateOptions.MaxErrors` | 100 | failures collected before stopping |
 | `ValidateOptions.MaxDepth` | 1000 | validation recursion, and so its stack use |
 | `DefaultMaxMatchStates` | 4096 | simultaneous content-model readings per element |
+| *(fixed)* | 1000 | digits in one field of a date, time or duration value: the year, the fractional seconds, a duration field (Part 2 §5.4); a longer field is refused with `xdm.ErrResourceLimit`, not reported invalid |
 
 `MaxContentModelPositions` exists because a content model can be far larger
 than the text describing it. A group DAG in which each of n groups references

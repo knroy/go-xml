@@ -400,11 +400,14 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 	return loadFiles(paths, opts, nil)
 }
 
-// loadFiles is LoadFiles for two or more paths. wantNS, keyed by index into
-// paths, names the target namespace a document must declare ("" for none):
-// WithInstanceLocations sets it for each document an instance named, so the
-// namespace its policy allowed is the one the document actually defines.
-func loadFiles(paths []string, opts Options, wantNS map[int]string) (*Schema, error) {
+// loadFiles is LoadFiles for two or more paths. named, keyed by index into
+// paths, marks the documents WithInstanceLocations added for an instance, with
+// the location and namespace the instance gave. Such a document is a hint
+// (§4.3.2): one the resolver cannot supply, or that does not define the
+// namespace the policy allowed it for, is declined and skipped, and an error
+// about one quotes the instance's own location rather than the host path it
+// was joined into.
+func loadFiles(paths []string, opts Options, named map[int]instanceLocation) (*Schema, error) {
 	if opts.Resolver == nil {
 		// As in LoadFile, confined to what the caller named. Several
 		// paths may sit in several directories, so the grant is the set
@@ -432,7 +435,16 @@ func loadFiles(paths []string, opts Options, wantNS map[int]string) (*Schema, er
 		if err := a.admitFetch(); err != nil {
 			return nil, err
 		}
+		inst, isInst := named[i]
 		rc, resolved, err := opts.Resolver.Resolve("", path, "")
+		if isInst && (err != nil || rc == nil) {
+			// A hint that cannot be followed is not taken, as for an
+			// xs:import whose location does not resolve.
+			if rc != nil {
+				rc.Close()
+			}
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -442,16 +454,19 @@ func loadFiles(paths []string, opts Options, wantNS map[int]string) (*Schema, er
 		tree, err := xdm.Parse(rc, schemaParseOptions(rc, opts.ParseOptions))
 		rc.Close()
 		if err != nil {
-			return nil, fmt.Errorf("parsing schema %q: %w", path, err)
+			shown := path
+			if isInst {
+				shown = inst.location
+			}
+			return nil, fmt.Errorf("parsing schema %q: %w", shown, err)
 		}
 		// The check src-import.3.1 makes for an xs:import: without it an
 		// instance could pair a namespace its policy allows with a
-		// document defining components in one it does not.
-		if want, ok := wantNS[i]; ok {
-			if got, has := targetNSOf(tree.Root); has != (want != "") || got != want {
-				return nil, fmt.Errorf(
-					"the instance names %q for namespace %q, but the "+
-						"document has target namespace %q", path, want, got)
+		// document defining components in one it does not. Such a
+		// document is declined like a namespace the policy refuses.
+		if isInst {
+			if got, has := targetNSOf(tree.Root); has != (inst.namespace != "") || got != inst.namespace {
+				continue
 			}
 		}
 		// A document named directly by the caller adopts no namespace, so
@@ -464,6 +479,10 @@ func loadFiles(paths []string, opts Options, wantNS map[int]string) (*Schema, er
 		// faults are not attributed to a file they did not expect.
 		a.rootBases[resolved] = true
 		a.push(tree.Root, resolved, "", false)
+		if isInst {
+			a.queue[len(a.queue)-1].shown = inst.location
+			a.queue[len(a.queue)-1].fromInstance = true
+		}
 	}
 
 	if err := a.run(); err != nil {
@@ -631,6 +650,14 @@ type pending struct {
 
 	// redefining marks a document reached through xs:redefine.
 	redefining bool
+
+	// shown, when set, is how errors name the document instead of base: the
+	// location as written by the instance or by the document referring to
+	// it, rather than the host path it resolved to.
+	shown string
+
+	// fromInstance is schemaDoc.fromInstance for the document once read.
+	fromInstance bool
 }
 
 // assembler reads a schema document and everything it references.
@@ -647,7 +674,7 @@ type assembler struct {
 	p      *parser
 	count  int
 
-	// limitErr is the MaxDocuments refusal admitFetch made inside queueRef,
+	// limitErr is the MaxDocuments refusal admitFetch made inside parseAndQueue,
 	// which has no error result; run returns it after the document.
 	limitErr error
 
@@ -865,18 +892,22 @@ func (a *assembler) run() error {
 			return a.tooManyDocuments()
 		}
 
+		shown := item.base
+		if item.shown != "" {
+			shown = item.shown
+		}
 		root := item.root
 		if root.Kind() == xdm.KindDocument {
 			els := root.ChildElements()
 			if len(els) == 0 {
-				return fmt.Errorf("schema document at %q is empty", item.base)
+				return fmt.Errorf("schema document at %q is empty", shown)
 			}
 			root = els[0]
 		}
 		if !root.IsElement(NSSchema, "schema") {
 			return fmt.Errorf(
 				"schema document at %q has root {%s}%s, want {%s}schema",
-				item.base, root.Name().URI, root.Name().Local, NSSchema)
+				shown, root.Name().URI, root.Name().Local, NSSchema)
 		}
 
 		if err := a.readOne(root, item); err != nil {
@@ -890,9 +921,11 @@ func (a *assembler) run() error {
 }
 
 // admitFetch reports the MaxDocuments refusal when the documents already read
-// or queued fill the allowance. It runs before every fetch: counting only as a
-// document is dequeued let every reference of the document read last, and
-// every path given to LoadFiles, be fetched and parsed past the limit first.
+// or queued fill the allowance. It runs before a new document is parsed:
+// counting only as a document is dequeued let every reference of the document
+// read last, and every path given to LoadFiles, be fetched and parsed past the
+// limit first. A reference to a document already read is not charged; see
+// parseAndQueue.
 func (a *assembler) admitFetch() error {
 	if a.count+len(a.queue) >= a.opts.MaxDocuments {
 		return a.tooManyDocuments()
@@ -909,11 +942,15 @@ func (a *assembler) tooManyDocuments() error {
 
 // readOne reads one document's components and queues what it references.
 func (a *assembler) readOne(root *xdm.Node, item pending) error {
-	doc := &schemaDoc{root: root, baseURI: item.base}
+	doc := &schemaDoc{root: root, baseURI: item.base, fromInstance: item.fromInstance}
 	// A fault in this document should name it — unless it is the document
 	// the caller handed to Load, which they are already looking at.
 	if !a.rootBases[item.base] {
-		a.p.noteDocument(root, item.base)
+		name := item.base
+		if item.shown != "" {
+			name = item.shown
+		}
+		a.p.noteDocument(root, name)
 	}
 	if attr := root.Attr("", "targetNamespace"); attr != nil {
 		// §3.15.2 (schema-namespace): targetNamespace names a
@@ -1064,13 +1101,8 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 
 // queueRef resolves and queues a referenced document.
 func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location string, isInclude, redefining bool) {
-	if location != "" || !isInclude {
-		if a.limitErr == nil {
-			a.limitErr = a.admitFetch()
-		}
-		if a.limitErr != nil {
-			return
-		}
+	if a.limitErr != nil {
+		return
 	}
 	if location == "" {
 		if !isInclude {
@@ -1125,7 +1157,8 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 			// refused: that is a decision, not a miss, and a
 			// schema silently missing what sat outside the root
 			// would be reported as having loaded.
-			a.p.errs = append(a.p.errs, errorAt(el, "src-resolve", "%v", err))
+			a.p.errs = append(a.p.errs, errorAt(el, "src-resolve", "%v",
+				scrubResolveErr(doc, location, err)))
 			return
 		}
 		// A redefine that redefines nothing costs nothing when its
@@ -1172,7 +1205,8 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 			err = fmt.Errorf("resolved to nothing")
 		}
 		a.p.errs = append(a.p.errs, errorAt(el, "src-resolve",
-			"cannot resolve schemaLocation %q: %v", location, err))
+			"cannot resolve schemaLocation %q: %v", location,
+			scrubResolveErr(doc, location, err)))
 		return
 	}
 
@@ -1180,10 +1214,29 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 }
 
 func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespace string, doc *schemaDoc, isInclude, redefining bool) {
+	// MaxDocuments counts documents read, so only a document not read yet is
+	// charged, and it is charged here, before it is parsed. Charging every
+	// reference before it was resolved refused a set of exactly MaxDocuments
+	// documents as soon as one of them referred back to another: an import
+	// cycle, a second include of one file, or an import naming no location.
+	// Which document a reference names is known only once it is resolved,
+	// so this is the earliest the two can be told apart.
+	//
+	// The key read below also carries the namespace a chameleon include
+	// adopts, which only the parsed document settles. A reference whose
+	// location is already read under either key it could have is parsed
+	// first and charged after, exactly; any other is charged now.
+	loc := a.canon.location(resolved)
+	if !a.seen[docKey{location: loc}] && !a.seen[docKey{location: loc, adoptedNS: doc.targetNS}] {
+		if a.limitErr = a.admitFetch(); a.limitErr != nil {
+			return
+		}
+	}
+	shown := a.shownAs(el, doc, resolved, namespace)
 	tree, err := xdm.Parse(rc, schemaParseOptions(rc, a.opts.ParseOptions))
 	if err != nil {
 		a.p.errs = append(a.p.errs, errorAt(el, "src-resolve",
-			"parsing %q: %v", resolved, err))
+			"parsing %q: %v", shown, err))
 		return
 	}
 
@@ -1202,20 +1255,20 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 			}
 			a.p.errs = append(a.p.errs, errorAt(el, code,
 				"the document at %q has target namespace %q, "+
-					"which differs from %q", resolved, refNS, doc.targetNS))
+					"which differs from %q", shown, refNS, doc.targetNS))
 			return
 		}
 	} else if namespace != "" {
 		if !refHasNS || refNS != namespace {
 			a.p.errs = append(a.p.errs, errorAt(el, "src-import.3.1",
 				"import names namespace %q but the document at %q "+
-					"has target namespace %q", namespace, resolved, refNS))
+					"has target namespace %q", namespace, shown, refNS))
 			return
 		}
 	} else if refHasNS {
 		a.p.errs = append(a.p.errs, errorAt(el, "src-import.3.2",
 			"import has no namespace attribute but the document at %q "+
-				"has target namespace %q", resolved, refNS))
+				"has target namespace %q", shown, refNS))
 		return
 	}
 
@@ -1272,8 +1325,52 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 	if alreadySeen {
 		return
 	}
+	if a.limitErr = a.admitFetch(); a.limitErr != nil {
+		return
+	}
 
 	a.push(tree.Root, resolved, chameleon, redefining)
+	if doc.fromInstance {
+		a.queue[len(a.queue)-1].shown = shown
+		a.queue[len(a.queue)-1].fromInstance = true
+	}
+}
+
+// shownAs is how errors name the document el references, resolved to
+// resolved. A document in the caller's own load is named by its resolved
+// path, which the caller chose and which helps them find it. One reached from
+// a location an instance named is named by the location text as written in
+// the referring document (its namespace, for an import that gives none),
+// because its resolved path is a host path the instance's author has no
+// business learning.
+func (a *assembler) shownAs(el *xdm.Node, doc *schemaDoc, resolved, namespace string) string {
+	if !doc.fromInstance {
+		return resolved
+	}
+	if loc := el.AttrValue("schemaLocation"); loc != "" {
+		return loc
+	}
+	return namespace
+}
+
+// scrubResolveErr is err as a resolver error is shown for a reference from
+// doc. In the caller's own load it is err itself. From a document an instance
+// reached, the resolver's text can carry the host path it tried (an os.Open
+// error does), so only what kind of failure it was is kept, with the
+// sentinels errors.Is looks for.
+func scrubResolveErr(doc *schemaDoc, location string, err error) error {
+	if !doc.fromInstance {
+		return err
+	}
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errRefusedByPolicy):
+		return fmt.Errorf("schemaLocation %q: %w", location, errRefusedByPolicy)
+	case errors.Is(err, errNoResolver):
+		return fmt.Errorf("schemaLocation %q: %w", location, errNoResolver)
+	}
+	return fmt.Errorf("schemaLocation %q cannot be read", location)
 }
 
 // targetNSOf returns a schema document's target namespace and whether it

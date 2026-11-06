@@ -48,6 +48,12 @@ type schemaDoc struct {
 	// baseURI locates this document, for resolving include and import.
 	baseURI string
 
+	// fromInstance marks a document an instance named, or one reached from
+	// such a document through its includes and imports. Errors name it and
+	// what it references by the location text as written, never by a
+	// resolved host path; see assembler.shownAs.
+	fromInstance bool
+
 	// ids records the xs:ID-typed id= attributes seen in this document, so
 	// that a repeat can be reported. ID uniqueness is scoped to one XML
 	// document, not to the assembled schema: MS-Additional addA002 and
