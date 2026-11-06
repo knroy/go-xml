@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -201,6 +202,14 @@ func applyToNode(rt *runtime, node *xdm.Node, mode string,
 		rt.sheet.warnNoMatch(rt, node, mode)
 		return applyBuiltInRule(rt, node, mode, params, tunnels, out)
 	}
+	return applyRule(rt, node, mode, t, next, params, tunnels, out)
+}
+
+// applyRule runs t, selected for node (applyToNode), next the index to
+// resume the scan after it at.
+func applyRule(rt *runtime, node *xdm.Node, mode string, t *Template, next int,
+	params, tunnels paramValues, out *outputBuilder) error {
+
 	if err := rt.sheet.warnMultipleMatch(
 		rt, node, mode, t, next, rt.ctx); err != nil {
 		return err
@@ -437,8 +446,7 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 		size, idx := node.NumChildren(), 0
 		for ch := range node.Children() {
 			idx++
-			sub := rt.builtInFocus(mode, ch, idx, size)
-			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
+			if err := applyBuiltInChild(rt, ch, idx, size, mode, params, tunnels, out); err != nil {
 				return err
 			}
 		}
@@ -1183,8 +1191,7 @@ func builtInDescend(rt *runtime, node *xdm.Node, mode string,
 		size, idx := node.NumChildren(), 0
 		for ch := range node.Children() {
 			idx++
-			sub := rt.builtInFocus(mode, ch, idx, size)
-			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
+			if err := applyBuiltInChild(rt, ch, idx, size, mode, params, tunnels, out); err != nil {
 				return err
 			}
 		}
@@ -1222,20 +1229,56 @@ func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
 	// the identity rule.
 	for idx := range node.NumAttrs() {
 		a := node.AttrAt(idx)
-		an := rt.builtInFocus(mode, a, idx+1, node.NumAttrs())
-		if err := applyToNode(an, a, mode, params, tunnels, out); err != nil {
+		if err := applyBuiltInChild(rt, a, idx+1, node.NumAttrs(), mode, params, tunnels, out); err != nil {
 			return err
 		}
 	}
 	size, idx := node.NumChildren(), 0
 	for ch := range node.Children() {
 		idx++
-		cn := rt.builtInFocus(mode, ch, idx, size)
-		if err := applyToNode(cn, ch, mode, params, tunnels, out); err != nil {
+		if err := applyBuiltInChild(rt, ch, idx, size, mode, params, tunnels, out); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// applyBuiltInChild is applyToNode for node, a child (or attribute) the
+// built-in rule running in rt visits at position pos of size, in
+// builtInFocus's runtime -- made only when something reads it. When every
+// rule that may match node is matched on its kind, name and ancestors alone
+// (bareMatch), no warning-on-no-match is asked for, and the mode's built-in
+// rule is a skip or text-only-copy -- which reads its runtime only to count
+// the depth and as the base of its children's focus, which replaces this
+// one -- a node no rule matches is given the built-in rule in rt. That
+// focus (a runtime, a context and its host) was most of the allocations of
+// a skipping mode with rules (audit A3-3).
+func applyBuiltInChild(rt *runtime, node *xdm.Node, pos, size int, mode string,
+	params, tunnels paramValues, out *outputBuilder) error {
+
+	s := rt.sheet
+	lazy := false
+	switch s.modeNoMatch[mode] {
+	case "shallow-skip", "deep-skip", "text-only-copy", "":
+		lazy = !s.modeWarnNoMatch[mode] && bareMatch(s, node, mode)
+	}
+	if !lazy {
+		return applyToNode(rt.builtInFocus(mode, node, pos, size), node, mode, params, tunnels, out)
+	}
+	if err := rt.ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.checkModeTyped(node, mode); err != nil {
+		return err
+	}
+	t, next, err := s.findTemplateFrom(node, mode, rt.ctx, 0)
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		return applyBuiltInRule(rt, node, mode, params, tunnels, out)
+	}
+	return applyRule(rt.withCurrent(node, pos, size), node, mode, t, next, params, tunnels, out)
 }
 
 // builtInFocus is rt.withCurrent for a child the built-in rules are about to
@@ -1326,19 +1369,18 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		}
 		defer rt.ascend()
 		for a := range node.Attrs() {
-			an := rt.builtInFocus(mode, a, 1, node.NumAttrs())
-			if err := applyToNode(an, a, mode, params, tunnels, sub); err != nil {
+			if err := applyBuiltInChild(rt, a, 1, node.NumAttrs(), mode, params, tunnels, sub); err != nil {
 				return err
 			}
 		}
 		size, idx := node.NumChildren(), 0
 		for ch := range node.Children() {
 			idx++
-			cn := rt.builtInFocus(mode, ch, idx, size)
-			if err := applyToNode(cn, ch, mode, params, tunnels, sub); err != nil {
+			if err := applyBuiltInChild(rt, ch, idx, size, mode, params, tunnels, sub); err != nil {
 				return err
 			}
 		}
+		xdmsink.Release(sub) // its builder is reused once it is written (A3-4)
 		return nil
 	default:
 		// Text, comments, processing instructions and attributes have no

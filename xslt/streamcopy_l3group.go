@@ -23,8 +23,8 @@ package xslt
 import (
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/xdm"
-	"github.com/knroy/go-xml/v2/xdmbuild"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
@@ -44,7 +44,8 @@ func eventPopulation(op *streamOp) bool {
 	if !elem {
 		return false
 	}
-	s.mode, op.eventPop = matchBody, true
+	s.mode, s.rawBody, op.eventPop = matchBody, true, true
+	op.keep = prunedMembers(op.el) // streamcopy_l3keep.go
 	return true
 }
 
@@ -58,24 +59,136 @@ func (run *streamRun) eventPopEval(rt *runtime, op *streamOp) (xdm.Sequence, err
 	run.used = true
 	// The copies stand for the members the tree reads in its source, which
 	// the parse budget counted: they are not charged to MaxNodes, the
-	// result's budget, which the tree never charges for them.
-	b := xdmbuild.New(xsltPolicy{})
+	// result's budget, which the tree never charges for them. They are
+	// children of one document node, which holds the base URI they share:
+	// nothing in the body reaches a member's parent (copyFreeBody), and a
+	// parentless copy would carry a base URI of its own.
+	var (
+		doc     *xdm.Node
+		members xdm.Sequence
+		buf     []string
+	)
 	err := op.split.loopAt(rt.ctx, run.c, run.d, g, nil, func(v *xdm.Node, md int) (bool, error) {
 		if v.Kind() != xdm.KindElement {
 			return false, errStreamPlan // eventPopulation admits elements only
 		}
-		if err := rt.ctx.Err(); err != nil {
+		if doc == nil {
+			doc = xdm.NewFragment().NewRoot(xdm.KindDocument, xdm.QName{}, "")
+			doc.SetBaseURI(run.c.At().Node.BaseURI())
+		}
+		m, err := copyMember(rt, doc, run.c, md, op.keep, &buf)
+		if err != nil {
 			return false, err
 		}
-		return true, copyEvents(rt, b, run.c, md, false, nil)
+		members = append(members, m)
+		return true, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := b.Refused(); err != nil {
+	return members, nil
+}
+
+// copyMember copies the element whose start tag c is at, depth d, as the
+// last child of doc, read off the parse's own nodes (Event.Node) as its
+// events pass, as copy-of copies a node (copyItem: xdm.Copy, then
+// inheritNamespaces): each node's name, base URI, typing, declared
+// namespaces as written, attributes and content, and on the copy's root the
+// bindings it inherited, sorted. It is written straight into doc's records:
+// no builder, no view per node. With keep, the root keeps only those
+// attributes and children, the others skipped on the cursor unread. buf is
+// scratch for the namespace pairs.
+func copyMember(rt *runtime, doc *xdm.Node, c *xdmstream.Cursor, d int, keep *memberKeep, buf *[]string) (*xdm.Node, error) {
+	if err := rt.ctx.Err(); err != nil {
 		return nil, err
 	}
-	return b.Sequence(), nil
+	src := c.At().Node
+	root := doc.AppendElementInheriting(src.Name())
+	shallowMember(root, src, keep, buf)
+	var arr [32]nsBinding
+	pairs := (*buf)[:0]
+	for _, b := range scopeBindings(src, arr[:0]) {
+		if !declares(root, b.prefix) {
+			pairs = append(pairs, b.prefix, b.uri)
+		}
+	}
+	root.AddNamespaces(pairs...)
+	*buf = pairs
+	if keep != nil && len(keep.kids) == 0 {
+		return root, c.Skip()
+	}
+	cur := root
+	var text *xdm.Node // the text node last appended to cur, if nothing followed it
+	for {
+		ev, err := c.Next()
+		if err != nil {
+			return nil, err
+		}
+		if keep != nil && ev.Depth == d+1 && ev.Kind != xdmstream.EndElement {
+			text = nil
+			if ev.Kind != xdmstream.StartElement {
+				continue // a leaf of the member's own: not read
+			}
+			if !hasName(keep.kids, ev.Node.Name()) {
+				if err := c.Skip(); err != nil {
+					return nil, err
+				}
+				continue
+			}
+		}
+		switch ev.Kind {
+		case xdmstream.StartElement:
+			if err := rt.ctx.Err(); err != nil {
+				return nil, err
+			}
+			cur, text = cur.AppendElementInheriting(ev.Node.Name()), nil
+			shallowMember(cur, ev.Node, nil, buf)
+		case xdmstream.EndElement:
+			if ev.Depth == d {
+				return root, nil
+			}
+			cur, text = cur.Parent(), nil
+		case xdmstream.Text:
+			if text != nil {
+				text.AppendValue(ev.Node.Value())
+			} else {
+				text = cur.AppendText(ev.Node.Value())
+			}
+		case xdmstream.Comment:
+			cur.AppendComment(ev.Node.Value())
+			text = nil
+		case xdmstream.PI:
+			cur.AppendPI(ev.Node.Name().Local, ev.Node.Value())
+			text = nil
+		default:
+			return nil, errStreamPlan // the document ended inside the member
+		}
+	}
+}
+
+// shallowMember gives el, a copy of src just made, what xdm.Copy gives a
+// copied element besides its content: src's base URI, typing, declared
+// namespaces and attributes (with keep, only the ones it names), with their
+// typing.
+func shallowMember(el, src *xdm.Node, keep *memberKeep, buf *[]string) {
+	el.SetBaseURI(src.BaseURI())
+	copyTyping(el, src, false)
+	pairs := (*buf)[:0]
+	for p, uri := range src.DeclaredNamespaces() {
+		pairs = append(pairs, p, uri)
+	}
+	el.AddNamespaces(pairs...)
+	*buf = pairs
+	for a := range src.Attrs() {
+		if keep != nil && !hasName(keep.attrs, a.Name()) {
+			continue
+		}
+		ca := el.AppendAttr(a.Name(), a.Value())
+		ca.CopyTypingFrom(a)
+		if a.TypeEnv() != nil {
+			ca.SetTypeEnv(a.TypeEnv())
+		}
+	}
 }
 
 // copyFreeInstrs are the instructions a body of copies may not hold: they
@@ -121,27 +234,11 @@ func copyFreeBody(el *xdm.Node) bool {
 			ok = false // it could hand a member on as the node itself
 			return
 		}
-		for a := range n.Attrs() {
-			if a.Name().URI != "" && !(xsl && a.Name().URI == xdm.NSXSL) {
-				continue
-			}
-			var srcs []string
-			if xsl && exprAttrs[a.Name().Local] {
-				srcs = []string{a.Value()}
-			} else if strings.ContainsAny(a.Value(), "{}") {
-				exprs, valid := avtExpressions(a.Value())
-				if !valid {
-					ok = false
-					return
-				}
-				srcs = exprs
-			}
-			for _, src := range srcs {
-				if e := parseAt(n, src); e == nil || !copyFreeExpr(e) {
-					ok = false
-					return
-				}
-			}
+		if !nodeExprs(n, func(_ *xdm.Node, e xpath.Expr, pattern bool) bool {
+			return copyFreeExpr(e) && (!pattern || copyFreePattern(e))
+		}) {
+			ok = false
+			return
 		}
 		for ch := range n.Children() {
 			check(ch)
@@ -151,9 +248,67 @@ func copyFreeBody(el *xdm.Node) bool {
 	return ok
 }
 
+// nodeExprs calls fn on each expression n, an element of a stylesheet,
+// holds in its attributes, with the attribute: an XSLT instruction's
+// expression and pattern attributes (exprAttrs, patternAttrs; pattern says
+// which), and the attribute value templates of an instruction's attributes
+// and of a literal result element's own (in no namespace or a namespace not
+// XSLT's). It reports false when one cannot be parsed, when fn returns
+// false, and when n evaluates expressions held elsewhere or not yet written:
+// an attribute set it uses, a shadow attribute (_select), whose expression
+// is made at compile time.
+func nodeExprs(n *xdm.Node, fn func(a *xdm.Node, e xpath.Expr, pattern bool) bool) bool {
+	xsl := n.Name().URI == xdm.NSXSL
+	for a := range n.Attrs() {
+		uri, local := a.Name().URI, a.Name().Local
+		if xsl && uri != "" {
+			continue // an extension attribute: no expression of XSLT's
+		}
+		if xsl || uri == xdm.NSXSL { // an XSLT attribute
+			if local == "use-attribute-sets" || strings.HasPrefix(local, "_") {
+				return false
+			}
+			if !xsl {
+				continue // xsl:version, xsl:use-when (static) and the like on a literal result element
+			}
+		}
+		var srcs []string
+		pattern := xsl && patternAttrs[local]
+		if xsl && (exprAttrs[local] || pattern) {
+			srcs = []string{a.Value()}
+		} else if strings.ContainsAny(a.Value(), "{}") {
+			exprs, valid := avtExpressions(a.Value())
+			if !valid {
+				return false
+			}
+			srcs = exprs
+		}
+		for _, src := range srcs {
+			if e := parseAt(n, src); e == nil || !fn(a, e, pattern) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // exprAttrs are the attributes of XSLT instructions that hold an expression.
 var exprAttrs = map[string]bool{"select": true, "test": true, "group-by": true, "group-adjacent": true,
-	"use-when": true, "value": true, "count": true, "from": true, "start-at": true, "key": true}
+	"use-when": true, "value": true, "count": true, "from": true, "start-at": true, "key": true,
+	"for-each-item": true, "for-each-source": true}
+
+// copyFreePattern reports whether a pattern, whose predicates copyFreeExpr
+// passed, tests a node only by its own name, kind and content: one step, no
+// position among siblings. A step before it would test the node's parent,
+// which a copy does not have.
+func copyFreePattern(e xpath.Expr) bool {
+	p, ok := e.(*xpath.PathExpr)
+	if !ok || p.Root || len(p.Steps) != 1 || positionalPattern(e) {
+		return false
+	}
+	_, ok = p.Steps[0].(*xpath.Step)
+	return ok
+}
 
 // copyFreeExpr reports whether e reads nothing of a member that its copy
 // does not have: no axis out of a node but down and to its attributes, no

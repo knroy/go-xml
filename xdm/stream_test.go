@@ -220,3 +220,33 @@ func (c *viewSome) Start(el any, d int) (xdmburst.Action, error) {
 	}
 	return xdmburst.Keep, nil
 }
+
+// The leaves a stream tells -- text, comments, processing instructions --
+// are taken back in place (dropLeaf), not through RemoveLastChild's general
+// clean-up, which a leaf never needs and which cost a drain about a tenth
+// of its time. With positions tracked the tree has source tables to clear,
+// and every leaf goes the general way; what is read is the same.
+func TestDriveDropsLeavesInPlace(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<a>")
+	for i := range 1000 {
+		fmt.Fprintf(&b, "<r i='%d'>t%d<!--c--><?p x?></r>\n", i, i)
+	}
+	b.WriteString("</a>")
+	for _, track := range []bool{false, true} {
+		c := &keepAll{}
+		bs := driver(c)
+		tree, err := parse(strings.NewReader(b.String()), "", ParseOptions{bursts: bs, TrackPositions: track})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := c.leaves
+		if track {
+			want = 0
+		}
+		if c.leaves != 4*1000 || bs.leafDrops != want || tree.n > 1 {
+			t.Fatalf("track=%v: %d leaves told, %d dropped in place (want %d), %d records left",
+				track, c.leaves, bs.leafDrops, want, tree.n)
+		}
+	}
+}

@@ -39,7 +39,13 @@ func (run *streamRun) liveBuiltIn(focus focuser, pos int, el *xdm.Node, md int, 
 			return false, false, nil
 		}
 	}
-	rt := focus.at(el, pos, 0)
+	// A skip or text-only-copy rule reads its runtime only to count the depth
+	// and as the base of its children's focus (applyBuiltInChild): disp's
+	// does, unless a warning names el.
+	rt := focus.disp
+	if nm := s.modeNoMatch[mode]; s.modeWarnNoMatch[mode] || nm == "shallow-copy" || nm == "copy" {
+		rt = focus.at(el, pos, 0)
+	}
 	if err := s.checkModeTyped(el, mode); err != nil {
 		return false, true, err
 	}

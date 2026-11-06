@@ -31,7 +31,9 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -158,16 +160,21 @@ func (s *streamSplit) jsonOne() bool {
 // to the context's end.
 func (r *splitRun) jsonContext(v *xdm.Node, d int) error {
 	jw := &jsonWriter{c: r.c, indent: r.s.json.indent}
+	if err := jw.context(v, d); err != nil {
+		return err
+	}
+	return r.take(xdm.One(xdm.NewString(jw.b.String())))
+}
+
+// context is jsonContext's writing.
+func (jw *jsonWriter) context(v *xdm.Node, d int) error {
 	if d > 0 {
 		// Its view: the name and attributes, as the start tag has them.
-		if err := jw.element(xdmstream.Event{Kind: xdmstream.StartElement, Depth: d, Node: v}, 0); err != nil {
-			return err
-		}
-		return r.take(xdm.One(xdm.NewString(jw.b.String())))
+		return jw.element(xdmstream.Event{Kind: xdmstream.StartElement, Depth: d, Node: v}, 0)
 	}
 	seen := false
 	for {
-		ev, err := r.c.Next()
+		ev, err := jw.c.Next()
 		if err != nil {
 			return err
 		}
@@ -176,7 +183,7 @@ func (r *splitRun) jsonContext(v *xdm.Node, d int) error {
 			if !seen {
 				return errJSONStream
 			}
-			return r.take(xdm.One(xdm.NewString(jw.b.String())))
+			return nil
 		case xdmstream.StartElement:
 			if seen {
 				return errJSONStream
@@ -223,7 +230,7 @@ func (r *splitRun) jsonMatch(ev xdmstream.Event, f splitFrame) error {
 // it, frames the open elements' (the written match's first).
 type jsonWriter struct {
 	c      *xdmstream.Cursor
-	b      strings.Builder
+	b      jsonBuf
 	indent bool
 	m      *splitRun
 	frames []splitFrame
@@ -389,6 +396,7 @@ func (jw *jsonWriter) container(isMap bool, d, jd int) error {
 			if jw.m != nil {
 				jw.frames = jw.frames[:len(jw.frames)-1]
 			}
+			jw.b.spill(false)
 		}
 	}
 }
@@ -460,7 +468,7 @@ func jsonBool(v string) (val, ok bool) {
 // jsonLiteral writes s as a quoted JSON string, as xpath's
 // jsonStringLiteral does: with escaped, its escapes checked and copied as
 // written.
-func jsonLiteral(b *strings.Builder, s string, escaped bool) bool {
+func jsonLiteral(b *jsonBuf, s string, escaped bool) bool {
 	b.WriteByte('"')
 	rs := []rune(s)
 	for i := 0; i < len(rs); i++ {
@@ -504,7 +512,7 @@ func isHexRune(c rune) bool {
 
 // jsonChar writes one character of a string, escaped as xpath's
 // writeJSONChar escapes it.
-func jsonChar(b *strings.Builder, c rune) {
+func jsonChar(b *jsonBuf, c rune) {
 	switch c {
 	case '"':
 		b.WriteString("\\\"")
@@ -574,4 +582,102 @@ func jsonUnescape(s string) (string, bool) {
 		i++
 	}
 	return b.String(), true
+}
+
+// jsonBuf is what a jsonWriter writes: held whole, or, with flush, handed
+// on in pieces of whole characters, about jsonChunk bytes each (spill).
+type jsonBuf struct {
+	sb    strings.Builder
+	p     []byte
+	flush func([]byte)
+}
+
+const jsonChunk = 32 << 10
+
+func (j *jsonBuf) WriteByte(c byte) error {
+	if j.flush != nil {
+		j.p = append(j.p, c)
+		return nil
+	}
+	return j.sb.WriteByte(c)
+}
+
+func (j *jsonBuf) WriteString(s string) {
+	if j.flush != nil {
+		j.p = append(j.p, s...)
+		return
+	}
+	j.sb.WriteString(s)
+}
+
+func (j *jsonBuf) WriteRune(r rune) {
+	if j.flush != nil {
+		j.p = utf8.AppendRune(j.p, r)
+		return
+	}
+	j.sb.WriteRune(r)
+}
+
+func (j *jsonBuf) String() string { return j.sb.String() }
+
+// spill hands on what is written, all of it or once it is a chunk.
+func (j *jsonBuf) spill(all bool) {
+	if j.flush != nil && len(j.p) > 0 && (all || len(j.p) >= jsonChunk) {
+		j.flush(j.p)
+		j.p = j.p[:0]
+	}
+}
+
+// jsonWhole reports whether op is xml-to-json(.) and nothing else: the
+// context's JSON text is the whole of its value (zero-or-one of one string).
+func jsonWhole(op *streamOp) bool {
+	s := op.split
+	if s == nil || s.json == nil || !s.ctxItem || s.cond != nil || s.kids || len(s.checks) > 0 ||
+		s.red != "" || s.docCopy || op.tee != nil || op.eventPop || op.inGroup || copiedPopulation(op) {
+		return false
+	}
+	f, ok := s.outer.Expr().(*xpath.FuncCall)
+	return ok && f.Name.URI == fnNS && f.Name.Local == "zero-or-one" && len(f.Args) == 1 &&
+		isVarRef(f.Args[0], s.outerVar)
+}
+
+// jsonOut is xsl:value-of select="xml-to-json(.)" (jsonWhole) writing into
+// out, when out can take its text as it is made (xdmsink.Text: the text
+// method, nothing held), which then is never held whole (audit A3-5). The
+// bytes are charged as the value-of charges its text, piece by piece; a
+// charge refused stops the writing, and the error is raised once the JSON
+// is read, unless reading it raises one first, as the tree's xml-to-json
+// would before the value-of. What was written before an error stays
+// written (TransformOptions.Output).
+func (run *streamRun) jsonOut(rt *runtime, op *streamOp, out *outputBuilder) (bool, error) {
+	if run.pre != nil || run.used || run.groupAt(op) != nil {
+		return false, nil // evalOp's
+	}
+	w := xdmsink.Text(out)
+	if w == nil {
+		return false, nil
+	}
+	run.used = true
+	var v *xdm.Node
+	if run.d > 0 {
+		var err error
+		if v, err = run.c.View(); err != nil {
+			return true, err
+		}
+	}
+	var cerr error
+	jw := &jsonWriter{c: run.c, indent: op.split.json.indent}
+	jw.b.flush = func(p []byte) {
+		if cerr == nil {
+			cerr = rt.ctx.ChargeBytes(len(p))
+		}
+		if cerr == nil {
+			w(p)
+		}
+	}
+	if err := jw.context(v, run.d); err != nil {
+		return true, err
+	}
+	jw.b.spill(true)
+	return true, cerr
 }

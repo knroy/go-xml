@@ -73,6 +73,18 @@ type Checkpointer interface {
 	Rollback(mark any)
 }
 
+// TextWriter is a Writer that can be handed a text node's value in pieces,
+// as it is made (Text).
+type TextWriter interface {
+	// TextOK reports whether text can be written straight through now:
+	// under the text output method, with nothing held.
+	TextOK() bool
+	// WriteText writes p, whole characters of the value of one text node
+	// at the top of the result (top), of the sequence a document node there
+	// is made from (doc), or else in the innermost open node.
+	WriteText(p []byte, top, doc bool)
+}
+
 // Hooks, set by package xdmbuild.
 var (
 	// Attach makes b, a builder of the principal result with nothing in it
@@ -123,4 +135,13 @@ var (
 	// whose ancestors' builders would otherwise be kept to the copy's depth.
 	Detach func(b any) bool
 	Ascend func(b any)
+	// Release says b, a builder StartElement made, is no longer used by
+	// its caller: once a streaming builder's sink has written its element
+	// and taken it back, b is reused for a later element.
+	Release func(b any)
+	// Text returns, when out streams to a TextWriter that can take text
+	// now, a function that writes the value of a text node about to be
+	// appended to out, in pieces, everything before it in out written; nil
+	// (nothing done) otherwise. The text is not appended to out.
+	Text func(out any) func(p []byte)
 )

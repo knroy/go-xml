@@ -437,8 +437,13 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 	}
 	// Resolve symlinks before the containment check: without this, a symlink
 	// inside a root pointing at /etc/passwd would pass.
+	// A path that does not exist resolves up to its deepest existing
+	// ancestor, so a missing in-root file is reported as not found rather
+	// than refused as outside the roots (uripath.EvalExisting).
 	if resolved, err := r.evalSymlinks(abs); err == nil {
 		abs = resolved
+	} else {
+		abs = uripath.EvalExisting(abs)
 	}
 
 	for _, root := range r.Roots {

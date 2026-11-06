@@ -140,6 +140,9 @@ type burster struct {
 	// viewScans the copies they looked past, for the test that keeps them
 	// in proportion to the elements viewed.
 	viewCopies, viewScans int
+	// leafDrops counts the leaves dropLeaf took back, for the test that
+	// keeps them off RemoveLastChild's general path.
+	leafDrops int
 }
 
 // burstMark is how much of the text store, the name table and the frame
@@ -367,7 +370,7 @@ func (b *burster) resume(act xdmburst.Action) error {
 	case pausedEnd:
 		return b.ended(b.pel, b.pd, b.pspaces, b.pnames)
 	case pausedLeaf:
-		if err := b.tellFrom(b.pel.NextSibling(), b.pd); err != nil {
+		if err := b.tellFrom(b.pel.tree, b.pel.self+1, b.pd); err != nil {
 			return err
 		}
 		if b.prologPause {
@@ -532,7 +535,7 @@ func (b *burster) trimLeaves(cur *Node, d int, spaces *spaceTable, names *nameCa
 
 // trimRest is trimLeaves', once the leaves have been told.
 func (b *burster) trimRest(cur *Node, spaces *spaceTable, names *nameCache) error {
-	for last := cur.LastChild(); last != nil && last.isLeaf(); last = cur.LastChild() {
+	for t := cur.tree; cur.v1 != noIdx && t.rec(cur.v1).isLeaf(); {
 		b.discardLast(cur, spaces, names)
 	}
 	if b.batch != nil && textSince(cur.tree, b.marks.top().text.blocks) >= burstFrozen {
@@ -547,20 +550,27 @@ func (b *burster) trimRest(cur *Node, spaces *spaceTable, names *nameCache) erro
 // tellLeaves tells the client of the leaves at the end of cur's children,
 // at depth d, in document order.
 func (b *burster) tellLeaves(cur *Node, d int) error {
-	first := cur.LastChild()
-	if first == nil || !first.isLeaf() {
+	// cur is a node of the parse being built, so its children are its v1
+	// and prev links (what LastChild and PrevSibling read, without their
+	// checks for copied nodes).
+	t := cur.tree
+	first := cur.v1
+	if first == noIdx || !t.rec(first).isLeaf() {
 		return nil
 	}
-	for p := first.PrevSibling(); p != nil && p.isLeaf(); p = p.PrevSibling() {
+	for p := t.rec(first).prev; p != noIdx && t.rec(p).isLeaf(); p = t.rec(p).prev {
 		first = p
 	}
-	return b.tellFrom(first, d)
+	return b.tellFrom(t, first, d)
 }
 
-// tellFrom tells the client of n and the leaves after it, children of an
-// element at depth d.
-func (b *burster) tellFrom(n *Node, d int) error {
-	for ; n != nil; n = n.NextSibling() {
+// tellFrom tells the client of the leaves from record i of t on, the last
+// children of a node at depth d that is being built: a leaf is one record,
+// and nothing is stored after the last child of the deepest open node, so
+// they are the records from i to the end.
+func (b *burster) tellFrom(t *Tree, i uint32, d int) error {
+	for ; i < t.n; i++ {
+		n := t.rec(i)
 		if b.watch != nil {
 			b.watch(n, d+1, false)
 		}
@@ -615,7 +625,11 @@ func textSince(t *Tree, from int) int {
 // frames stored since p's spine mark; names is the parse's name cache.
 func (b *burster) discardLast(p *Node, spaces *spaceTable, names *nameCache) {
 	n := p.tree.n
-	p.RemoveLastChild()
+	if dropLeaf(p) {
+		b.leafDrops++
+	} else {
+		p.RemoveLastChild()
+	}
 	b.discarded += uint64(n - p.tree.n)
 	if t := p.tree; b.moved > 0 {
 		// Those chunks are the burst's now; the parse allocates afresh.
@@ -631,13 +645,43 @@ func (b *burster) discardLast(p *Node, spaces *spaceTable, names *nameCache) {
 	b.rewind(p.tree, spaces, names)
 }
 
+// dropLeaf takes back p's last child, as RemoveLastChild does, when that is
+// a text, comment or processing instruction that is the tree's last record,
+// p is the deepest node being built, and the tree keeps no source tables:
+// such a record has nothing outside the array to clear (no base URI, typing,
+// position or namespace nodes, which only elements own). It reports whether
+// it did; a stream parse drops half its records here, every leaf it tells.
+func dropLeaf(p *Node) bool {
+	t := p.tree
+	if t.source != nil || t.frozen || p.flags&fSide != 0 || p.v1 == noIdx || p.v1+1 != t.n ||
+		t.open.len() == 0 || t.open.at(t.open.len()-1) != uint64(p.self) {
+		return false
+	}
+	c := t.rec(p.v1)
+	switch NodeKind(c.kind) {
+	case KindText, KindComment, KindPI:
+	default:
+		return false
+	}
+	if c.flags&(fBase|fTyped|fManyAttrs) != 0 {
+		return false
+	}
+	p.v1 = c.prev
+	t.n--
+	return true
+}
+
 // rewind takes back what the parse's tree t stored since the deepest
 // spine element's mark.
 func (b *burster) rewind(t *Tree, spaces *spaceTable, names *nameCache) {
 	m := b.marks.top()
 	t.text.rewind(m.text)
-	rewindNames(t, m.names, names)
-	t.rewindFrames(m.frames, m.frameData)
+	if len(t.names) > m.names+burstSlack { // rewindNames' own test, without the call
+		rewindNames(t, m.names, names)
+	}
+	if len(t.frames) > m.frames+burstSlack {
+		t.rewindFrames(m.frames, m.frameData)
+	}
 	// The whitespace table remembers ranges in the store, some of which may
 	// have just been released.
 	spaces.forget(m.text.blocks)
@@ -930,17 +974,21 @@ func (s *textStore) mark() textMark { return textMark{len(s.blocks)} }
 // goes on taking values past its length. Bytes are only ever appended, so
 // nothing already read changes, and block sizes go on growing as they would.
 func (s *textStore) rewind(m textMark) {
-	var cur []byte
-	if int(s.cur) > m.blocks {
-		cur = s.blocks[s.cur-1]
-	}
-	for i := m.blocks; i < len(s.blocks); i++ {
-		s.blocks[i] = nil
-	}
-	s.blocks = s.blocks[:m.blocks]
-	if cur != nil {
-		s.newBlock(cur)
-		s.cur = int32(len(s.blocks))
+	// Nothing to drop when no block was made since m but the current one,
+	// which would keep its number: the rewind after most leaves.
+	if n := len(s.blocks); n > m.blocks+1 || n == m.blocks+1 && int(s.cur) != n {
+		var cur []byte
+		if int(s.cur) > m.blocks {
+			cur = s.blocks[s.cur-1]
+		}
+		for i := m.blocks; i < len(s.blocks); i++ {
+			s.blocks[i] = nil
+		}
+		s.blocks = s.blocks[:m.blocks]
+		if cur != nil {
+			s.newBlock(cur)
+			s.cur = int32(len(s.blocks))
+		}
 	}
 	// The shared whitespace values and any borrowed blocks may lie in the
 	// blocks just dropped. The values share registers come from the DTD,
