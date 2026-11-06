@@ -1281,8 +1281,13 @@ func sameBindings(a, b []nsBinding) bool {
 	return true
 }
 
-// indexFrame records frame i in the frame indexes.
+// indexFrame records frame i in the frame indexes. A frame AddNamespace
+// extended is left out: the frame after it is the same range one binding
+// longer, and indexing every step of such a chain is quadratic in its length.
 func (t *Tree) indexFrame(i uint32) {
+	if t.extended(i) {
+		return
+	}
 	f := t.frameAt(i)
 	if len(f) == 1 {
 		if t.frameOne == nil {
@@ -1300,6 +1305,16 @@ func (t *Tree) indexFrame(i uint32) {
 	if _, dup := t.frameMany[k]; !dup {
 		t.frameMany[k] = i
 	}
+}
+
+// extended reports that AddNamespace extended frame i: the next frame is the
+// same range one binding longer. Such a frame is never indexed.
+func (t *Tree) extended(i uint32) bool {
+	if int(i)+1 >= len(t.frames) {
+		return false
+	}
+	r, nx := t.frames[i], t.frames[i+1]
+	return nx.start == r.start && nx.n == r.n+1
 }
 
 func frameKey(ns []nsBinding) string {
@@ -1329,10 +1344,30 @@ func (n *Node) AddNamespace(prefix, uri string) {
 		panic("xdm: declaring a namespace in a parsed document")
 	}
 	old := n.frame()
+	if t := n.tree; len(old) >= frameExtendFrom && int(n.v0) == len(t.frames)-1 &&
+		int(t.frames[n.v0].start)+len(old) == len(t.frameData) {
+		// n's frame is the last one stored, so the extended frame is it plus
+		// one binding: a new range over the same bindings, appended without
+		// a copy or an index entry. Copying and interning every intermediate
+		// frame kept K(K+1)/2 bindings, and K^2/2 bytes of keys, for an
+		// element whose K declarations are added one at a time, as every
+		// copy path does. The old frame is left as it was, for any other
+		// element that holds it.
+		r := t.frames[n.v0]
+		t.frameData = append(t.frameData, nsBinding{prefix, uri})
+		n.v0 = uint32(len(t.frames))
+		t.frames = append(t.frames, frameRange{r.start, r.n + 1})
+		return
+	}
 	ns := make([]nsBinding, len(old), len(old)+1)
 	copy(ns, old)
 	n.setFrame(append(ns, nsBinding{prefix, uri}))
 }
+
+// frameExtendFrom is the frame size from which AddNamespace extends the last
+// frame in place of copying and interning it. Smaller frames are cheap to
+// copy, and interning them is what lets many copied elements share one.
+const frameExtendFrom = 8
 
 // AddNamespaces is AddNamespace for each prefix and URI pair in turn, given
 // as prefix, uri, prefix, uri, ...: n's frame is built and interned once

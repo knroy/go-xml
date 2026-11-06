@@ -1172,7 +1172,7 @@ func (t *Tree) rewindFrames(n, nd int) {
 			if j, ok := t.frameOne[f[0]]; ok && int(j) >= n {
 				delete(t.frameOne, f[0])
 			}
-		} else if t.frameMany != nil {
+		} else if t.frameMany != nil && !t.extended(uint32(i)) {
 			k := frameKey(f)
 			if j, ok := t.frameMany[k]; ok && int(j) >= n {
 				delete(t.frameMany, k)
