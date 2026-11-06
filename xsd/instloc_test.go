@@ -170,3 +170,33 @@ func TestInstanceLocationNamingTheSchemaItself(t *testing.T) {
 		t.Errorf("the strict wildcard should find the declaration: %v", err)
 	}
 }
+
+// An instance-supplied location outside the schema's own directories must not
+// be statted, nor its directory listed, to deduplicate it: that is host
+// filesystem access the resolver never admitted, repeated once per spelling.
+// Inside those directories identity is still what names the schema's own
+// documents, however the instance spells them.
+func TestInstanceLocationKeyStatsOnlySchemaDirs(t *testing.T) {
+	dir, main := writeSchemaSet(t)
+	outside := t.TempDir()
+	target := filepath.Join(outside, "target.xsd")
+	if err := os.WriteFile(target, []byte("<x/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c canonCache
+	spelt := filepath.Join(outside, ".", "target.xsd")
+	if got := instanceLocationKey(&c, []string{abs}, spelt); got != target {
+		t.Errorf("key(%q) = %q, want the cleaned text %q", spelt, got, target)
+	}
+	if len(c.byPath) != 0 {
+		t.Errorf("an outside location was looked up on the filesystem: %v", c.byPath)
+	}
+	if got, want := instanceLocationKey(&c, []string{abs}, filepath.Join(dir, ".", "main.xsd")),
+		canonicalLocation(main); got != want {
+		t.Errorf("the schema's own document keyed as %q, want its identity %q", got, want)
+	}
+}

@@ -134,16 +134,29 @@ func (s *Schema) WithInstanceLocations(root *xdm.Node, policy InstanceLocationPo
 	// the instance's spelling of a location need not match the one the
 	// schema was loaded under: "b.xsd" and "./b.xsd" and an absolute path
 	// are three ways of naming one file.
+	//
+	// Identity is asked of the filesystem only for a path inside a directory
+	// the schema was loaded from, which is where its own documents are.
+	// Anywhere else the location is the instance's choice, and statting it
+	// and listing its directory would touch the host filesystem outside the
+	// resolver — once per spelling, before any budget applies — so it is
+	// compared by its cleaned text and left to the resolver.
+	var canon canonCache
+	dirs := make([]string, 0, len(s.sourcePaths))
 	have := map[string]bool{}
 	for _, p := range s.sourcePaths {
-		have[canonicalLocation(p)] = true
+		have[canon.location(p)] = true
+		have[filepath.Clean(p)] = true
+		if d, err := filepath.Abs(filepath.Dir(p)); err == nil {
+			dirs = append(dirs, d)
+		}
 	}
 	for _, loc := range locs {
 		full := loc
 		if !filepath.IsAbs(loc) && !strings.Contains(loc, "://") {
 			full = filepath.Join(base, loc)
 		}
-		if key := canonicalLocation(full); have[key] {
+		if key := instanceLocationKey(&canon, dirs, full); have[key] {
 			continue
 		} else {
 			have[key] = true
@@ -155,6 +168,26 @@ func (s *Schema) WithInstanceLocations(root *xdm.Node, policy InstanceLocationPo
 		return s, nil
 	}
 	return LoadFiles(paths, opts)
+}
+
+// instanceLocationKey is the deduplication key for an instance-supplied
+// location: its filesystem identity when it lies inside one of dirs (absolute
+// directories), and its cleaned text otherwise.
+func instanceLocationKey(canon *canonCache, dirs []string, full string) string {
+	if strings.Contains(full, "://") {
+		return full
+	}
+	full = filepath.Clean(full)
+	if abs, err := filepath.Abs(full); err == nil {
+		for _, d := range dirs {
+			rel, err := filepath.Rel(d, abs)
+			if err == nil && rel != ".." &&
+				!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return canon.location(full)
+			}
+		}
+	}
+	return full
 }
 
 // instanceLocations reads the locations an instance offers, keeping the ones
