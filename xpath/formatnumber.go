@@ -738,7 +738,12 @@ func scaleForExponent(value *big.Rat, minInt int) int {
 	// the boundary often enough to matter, and the whole point of carrying a
 	// big.Rat this far is that the digits are exact.
 	abs := new(big.Rat).Abs(value)
-	exp := 0
+	// The digit counts of numerator and denominator put the exponent within
+	// one of its value, so one scaling and at most one correcting step do
+	// the work; stepping a power of ten at a time from zero was quadratic in
+	// the operand's digits.
+	exp := len(abs.Num().Text(10)) - len(abs.Denom().Text(10)) - minInt
+	abs = scaleByPowerOfTen(abs, -exp)
 	// upper is the first power of ten the mantissa must stay below, and lower
 	// the one it must reach: [10^(minInt-1), 10^minInt) for a positive minInt,
 	// and [0.1, 1) when it is zero.
