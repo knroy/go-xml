@@ -93,6 +93,26 @@ func BacktrackingRegexEnabled() bool { return backtrackingRegex.Load() }
 // anywhere near it.
 const backtrackBudget = 40_000_000
 
+// backtrackMaxDepth bounds how many match and matchRepeat calls may be active
+// at once.
+//
+// The matcher recurses through continuations, so each character a repeat
+// consumes nests about four Go frames, some 512 bytes of stack, and the step
+// budget does not bound that: "(a*)b.*\1" against 400,000 characters stays
+// well under backtrackBudget and died with a fatal "stack overflow" at a
+// 64 MB stack limit, about 131,000 characters in. recover() cannot catch a
+// stack overflow, so the whole process exits. Exceeding this bound sets
+// overrun, exactly as the step budget does, so the caller gets
+// errBacktrackBudget rather than a false.
+//
+// The value is measured against a 32 MB goroutine stack limit, which is a
+// plausible server setting: 100,000 overflowed it for "(a*)b(c|d)*\1", and
+// 50,000 stayed under it for every repeat shape tried, plain, grouped, nested,
+// alternated and lazy. That is 25,000 consumed characters under ".*" and
+// about 12,500 under a repeated group. The longest input in either conformance
+// suite is a few hundred characters.
+const backtrackMaxDepth = 50_000
+
 // errBacktrackBudget is returned when a match exhausts the budget.
 //
 // It is deliberately not a false: the pattern may well match, and reporting
@@ -696,6 +716,9 @@ type btMachine struct {
 	caps   []int
 	steps  int
 	budget int
+	// depth is the number of match and matchRepeat calls active. See
+	// backtrackMaxDepth.
+	depth int
 	// multiline is the "m" flag: ^ and $ also match at line boundaries.
 	multiline bool
 	// overrun records that the budget ran out, so the caller can tell a
@@ -707,12 +730,17 @@ type btMachine struct {
 // left. Every entry to match() charges, so the count measures the work the
 // engine did rather than the input it consumed — which is the quantity that
 // blows up.
+//
+// It also enters one level of recursion, which the caller leaves with a
+// deferred m.depth-- once step has succeeded, and refuses a level past
+// backtrackMaxDepth.
 func (m *btMachine) step() bool {
 	m.steps++
-	if m.steps > m.budget {
+	if m.steps > m.budget || m.depth >= backtrackMaxDepth {
 		m.overrun = true
 		return false
 	}
+	m.depth++
 	return true
 }
 
@@ -724,6 +752,7 @@ func (m *btMachine) match(n btNode, pos int, k btCont) bool {
 	if m.overrun || !m.step() {
 		return false
 	}
+	defer func() { m.depth-- }()
 	switch t := n.(type) {
 	case *btEmpty:
 		return k(pos)
@@ -860,6 +889,7 @@ func (m *btMachine) matchRepeat(t *btRepeat, pos, count int, k btCont) bool {
 	if m.overrun || !m.step() {
 		return false
 	}
+	defer func() { m.depth-- }()
 	canStop := count >= t.min
 	canMore := t.max < 0 || count < t.max
 

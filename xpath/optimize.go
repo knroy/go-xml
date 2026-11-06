@@ -162,6 +162,9 @@ type exprFacts struct {
 	// twice the node count; TestOptimizeNotQuadratic asserts that, since a
 	// count does not vary with machine load the way a compile time does.
 	walks int
+
+	// evals counts fold evaluations, for TestDeclinedFoldNotReevaluated.
+	evals int
 }
 
 func newExprFacts() *exprFacts {
@@ -334,16 +337,27 @@ func intBound(l *Literal) bool {
 // and the unfolded tree is returned so that it raises then, at the point the
 // stylesheet actually evaluates it. Folding "1 div 0" into an error at compile
 // time would refuse a stylesheet whose branch is never taken.
+//
+// A declined node is recorded as not closed, so no ancestor attempts it
+// again. Without that every closed ancestor of "() + 1 + 1 ..." re-evaluated
+// the whole subtree below it and declined it again: Theta(n^2) evaluations
+// inside Compile, from 20 kB of xsl:evaluate input taking 2.2 s, and the fold
+// item budget did not help because an empty result charges no items. The
+// ancestor's fold is only ever lost, never changed, so this costs folds like
+// exists(() + 1), which evaluate at run time instead.
 func evalToLiteral(e Expr, f *exprFacts) (Expr, bool) {
 	if f.cancel != nil && f.cancel.stop() {
 		return nil, false
 	}
+	f.evals++
 	seq, err := e.Eval(f.foldContext())
 	if err != nil || len(seq) != 1 {
+		f.closed[e] = false
 		return nil, false
 	}
 	a, ok := seq[0].(*xdm.Atomic)
 	if !ok {
+		f.closed[e] = false
 		return nil, false
 	}
 	// A folded double must keep its type: xs:double(1) and the integer 1 are

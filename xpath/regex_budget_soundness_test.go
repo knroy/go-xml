@@ -194,3 +194,25 @@ func TestBacktrackOverrunSetsErrAtEveryEntryPoint(t *testing.T) {
 		}
 	})
 }
+
+// TestBacktrackDepthIsAnErrorNotFatal pins the depth bound. The matcher nests
+// Go frames per consumed character, and the step budget does not bound that:
+// "(a*)b.*\1" over 400,000 characters stayed under backtrackBudget and ended
+// the process with a fatal stack overflow, which recover() cannot catch.
+// Running past backtrackMaxDepth must be the budget error instead, while a
+// long input under it still gets a real verdict.
+func TestBacktrackDepthIsAnErrorNotFatal(t *testing.T) {
+	bt, err := compileBacktrack(`(a*)b.*\1`, "", XPath20)
+	if err != nil {
+		t.Fatalf("compileBacktrack: %v", err)
+	}
+	if !bt.MatchString("b"+strings.Repeat("c", 20000)) || bt.Err() != nil {
+		t.Fatalf("a 20,000-character input under the depth bound got no "+
+			"verdict (err %v)", bt.Err())
+	}
+	got := bt.MatchString("b" + strings.Repeat("c", backtrackMaxDepth))
+	if !errors.Is(bt.Err(), xdm.ErrResourceLimit) {
+		t.Fatalf("matching past backtrackMaxDepth returned %v with Err() = %v; "+
+			"want the budget error", got, bt.Err())
+	}
+}

@@ -176,3 +176,23 @@ func TestIsClosedCacheAgreesWithUncached(t *testing.T) {
 		walk(e)
 	}
 }
+
+// TestDeclinedFoldNotReevaluated pins that a declined fold is attempted once.
+// "()" + "+1" x n is closed at every node and evaluates to the empty sequence
+// at every node, so before a decline was recorded each of the n ancestors
+// re-evaluated its whole subtree: n fold evaluations and Theta(n^2) work.
+func TestDeclinedFoldNotReevaluated(t *testing.T) {
+	const n = 2000
+	e, err := Parse("()"+strings.Repeat("+1", n), nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	f := newExprFacts()
+	if _, ok := optimizeDepthFacts(e, 0, f).(*Literal); ok {
+		t.Fatal("an empty-sequence chain folded to a literal")
+	}
+	if f.evals > 1 {
+		t.Errorf("a declined fold was re-evaluated by its ancestors: %d "+
+			"fold evaluations for a %d-node chain, want 1", f.evals, n)
+	}
+}
