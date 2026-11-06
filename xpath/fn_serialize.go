@@ -1705,18 +1705,24 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 					opts.suppressIndent[xdm.QName{URI: qn.URI, Local: qn.Local}] = true
 				}
 			}
-		case "doctype-public":
+		case "doctype-public", "doctype-system":
 			v, err := strParam(name, val)
 			if err != nil {
 				return err
 			}
-			opts.doctypePublic = v
-		case "doctype-system":
-			v, err := strParam(name, val)
-			if err != nil {
-				return err
+			// The value is written into a quoted literal that has no
+			// escaping, so it gets the element form's check: a system
+			// literal holding both quote kinds ended its own quoting and
+			// wrote the rest as live DTD markup. Given directly, the
+			// error is SEPM0016 (§3) rather than the element form's SEPM0017.
+			if _, err := CheckSerializationParam(name, v); err != nil {
+				return fmt.Errorf("SEPM0016: %w", err)
 			}
-			opts.doctypeSystem = v
+			if name == "doctype-public" {
+				opts.doctypePublic = v
+			} else {
+				opts.doctypeSystem = v
+			}
 		case "escape-uri-attributes":
 			// Typed here, as every boolean in the map form is.
 			v, err := boolParam(name, val)
