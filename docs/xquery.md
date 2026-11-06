@@ -374,7 +374,9 @@ is **annotated**, so `validate strict { <hat>8</hat> } instance of element(*,
 hatsize)` is true. Strict assessment of an element the schema does not declare
 at top level is `XQDY0084`; an element that is declared and found invalid is
 `XQDY0027`. A query that imported no schema is unchanged: `validate strict` is
-`XQDY0084` and `validate lax` is a skipped assessment that yields its operand.
+`XQDY0084` and `validate lax` is a skipped assessment that yields a copy of its
+operand, annotated only from an `xsi:type` naming an XSD built-in; the input
+tree is not changed.
 
 A `Schema` may carry already-assembled `Components` (an `*xsd.Schema` from
 `xsd.Load`, or from a stylesheet's or another query's `Schema()`) instead of `Source`, which is
