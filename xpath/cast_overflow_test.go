@@ -3,6 +3,7 @@ package xpath
 import (
 	"fmt"
 	"math/big"
+	"math/bits"
 	"strings"
 	"testing"
 	"time"
@@ -242,9 +243,13 @@ func TestYearMonthDurationKeepsTheYearBound(t *testing.T) {
 // TestWeekOfYearIsBoundedForAnyYear: the ISO-year search walked until the
 // day counts agreed, which never happened once they had overflowed.
 func TestWeekOfYearIsBoundedForAnyYear(t *testing.T) {
+	if bits.UintSize < 64 {
+		t.Skip("an int cannot hold a year past the day count's range")
+	}
+	year := int64(25252734927768524)
 	done := make(chan int, 1)
 	go func() {
-		done <- weekOfYear(&xdm.DateTime{Year: 25252734927768524, Month: 12, Day: 20, Second: new(big.Rat)})
+		done <- weekOfYear(&xdm.DateTime{Year: int(year), Month: 12, Day: 20, Second: new(big.Rat)})
 	}()
 	select {
 	case <-done:
