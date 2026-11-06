@@ -626,3 +626,48 @@ func TestNamespaceScopeNotQuadratic(t *testing.T) {
 			"elements that declare nothing are scanning the scope again", decls, elements, c.considered, bound)
 	}
 }
+
+// TestApexesDoNotRescanScope bounds the work at apexes: elements in the set
+// whose parent is not. Under '/r | //b' every b is one. Each used to scan
+// every binding in scope and every attribute of every ancestor, though r had
+// already rendered the bindings and none of the attributes is inheritable, so
+// the work grew as (apexes × bindings) with nothing written for it. Now an
+// apex considers only the bindings that differ from what is rendered, and
+// what it inherits is computed once per parent.
+func TestApexesDoNotRescanScope(t *testing.T) {
+	const decls, attrs, apexes = 1000, 1000, 2000
+	var b strings.Builder
+	b.WriteString(`<r xml:lang="en"`)
+	for i := 0; i < decls; i++ {
+		fmt.Fprintf(&b, ` xmlns:p%d="urn:%d"`, i, i)
+	}
+	for i := 0; i < attrs; i++ {
+		fmt.Fprintf(&b, ` a%d="v"`, i)
+	}
+	b.WriteString("><s>")
+	b.WriteString(strings.Repeat("<b/>", apexes))
+	b.WriteString("</s></r>")
+	doc := parse(t, b.String())
+	ns, err := FromXPath(doc, "/r | //b", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, alg := range []Algorithm{Inclusive10, Inclusive11} {
+		var out strings.Builder
+		c, err := run(&out, ns, Options{Algorithm: alg})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bound := decls + apexes; c.considered > bound {
+			t.Errorf("%v: %d apexes under %d bindings examined %d bindings, bound %d",
+				alg, apexes, decls, c.considered, bound)
+		}
+		if bound := 2*(attrs+1) + apexes; c.inspected > bound {
+			t.Errorf("%v: %d apexes under %d attributes inspected %d, bound %d",
+				alg, apexes, attrs, c.inspected, bound)
+		}
+		if got := strings.Count(out.String(), `<b xml:lang="en"></b>`); got != apexes {
+			t.Errorf("%v: %d apexes rendered with their inherited xml:lang, want %d", alg, got, apexes)
+		}
+	}
+}
