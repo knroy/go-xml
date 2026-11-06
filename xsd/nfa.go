@@ -306,7 +306,7 @@ func stepCountsWhy(m *contentModel, reach []int, from, to int, cur []int, out *[
 			// the compiler added to make the scope repeatable could
 			// be walked for free, and a repeated group's own
 			// minOccurs and maxOccurs would never be charged at all.
-			if shared > 0 && !m.scopeInner[a[shared-1]][[2]int{from, to}] {
+			if shared > 0 && !m.innerEdge(a[shared-1], from, to) {
 				continue
 			}
 			next := scratchVec(out, cur)

@@ -119,6 +119,43 @@ func TestValidateTemporalBounds(t *testing.T) {
 	assertInvalid(t, schema, `<root>2025-01-01</root>`, "maxInclusive")
 }
 
+// A year too large for int64 arithmetic used to wrap (days*86400) or be
+// refused by the parser, and a value the bound check cannot compare passes it:
+// 394573983248376-06-01Z validated against a 2024 range and matched a 2024
+// enumeration. The year is now held in big arithmetic.
+func TestValidateTemporalBoundsLargeYear(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="d">
+	    <xs:restriction base="xs:date">
+	      <xs:minInclusive value="2024-01-01Z"/>
+	      <xs:maxInclusive value="2024-12-31Z"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	  <xs:simpleType name="e">
+	    <xs:restriction base="xs:date"><xs:enumeration value="2024-01-01Z"/></xs:restriction>
+	  </xs:simpleType>
+	  <xs:simpleType name="dt">
+	    <xs:restriction base="xs:dateTime"><xs:maxInclusive value="2100-12-31T00:00:00Z"/></xs:restriction>
+	  </xs:simpleType>
+	  <xs:simpleType name="y">
+	    <xs:restriction base="xs:gYear"><xs:maxInclusive value="2100"/></xs:restriction>
+	  </xs:simpleType>
+	  <xs:element name="d" type="d"/>
+	  <xs:element name="e" type="e"/>
+	  <xs:element name="dt" type="dt"/>
+	  <xs:element name="y" type="y"/>
+	</xs:schema>`
+
+	assertInvalid(t, schema, `<d>394573983248376-06-01Z</d>`, "maxInclusive")
+	assertInvalid(t, schema, `<d>-394573983248376-06-01Z</d>`, "minInclusive")
+	assertInvalid(t, schema, `<e>394573983248376-06-01Z</e>`, "enumeration")
+	assertInvalid(t, schema, `<dt>300000000000-01-01T00:00:00Z</dt>`, "maxInclusive")
+	assertInvalid(t, schema, `<y>99999999999999999999</y>`, "maxInclusive")
+	assertValid(t, schema, `<y>-99999999999999999999</y>`)
+	assertValid(t, schema, `<d>2024-06-01Z</d>`)
+}
+
 func TestValidateDurationBounds(t *testing.T) {
 	schema := `
 	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">

@@ -163,7 +163,7 @@ func (s *streamV) icStart(f *svFrame, x int) {
 	if v.icScopes == 0 {
 		return
 	}
-	if ic := f.ic; ic != nil && ic.decl != nil && f.typ != nil && f.kind != svNil {
+	if ic := f.ic; ic != nil && ic.decl != nil && (f.typ != nil || f.kind == svNil) {
 		ic.scope = true
 		ic.own = map[*IdentityConstraint][]svKeyed{}
 		for _, c := range ic.decl.IdentityConstraints {
@@ -356,7 +356,7 @@ func (s *streamV) icEnd(f *svFrame, x int) {
 	}
 	// validateElement returns the tables to a parent walking its content,
 	// and validateChild those of a child it assessed with no declaration.
-	if x == 0 || f.typ == nil || f.kind == svNil || len(tables) == 0 {
+	if x == 0 || (f.typ == nil && f.kind != svNil) || len(tables) == 0 {
 		return
 	}
 	switch p := &s.frames[x-1]; p.kind {

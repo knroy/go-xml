@@ -756,7 +756,12 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			t := v.typingOf(el)
 			t.IsNilled = true
 			v.setTyping(el, t)
-			return nil
+			// Nilling empties the content, not the declaration: the
+			// identity constraints it carries still hold, and one whose
+			// selector reaches the element itself has a field to find
+			// or a reference to resolve. Returning without them let
+			// <E xsi:nil="true"/> pass a key on @id that <E/> fails.
+			return v.checkIdentityConstraints(el, decl, nil)
 		}
 	}
 

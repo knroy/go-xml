@@ -25,6 +25,7 @@ package xsd
 // exceed the cap is declined rather than approximated.
 
 import (
+	"slices"
 	"sync/atomic"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -671,13 +672,9 @@ func setKey(set map[int]bool) string {
 	return string(b)
 }
 
-func sortInts(xs []int) {
-	for i := 1; i < len(xs); i++ {
-		for j := i; j > 0 && xs[j] < xs[j-1]; j-- {
-			xs[j], xs[j-1] = xs[j-1], xs[j]
-		}
-	}
-}
+// sortInts was an insertion sort, quadratic in a state set that may hold
+// subsumeMaxStates entries, and setKey runs it for every product state.
+func sortInts(xs []int) { slices.Sort(xs) }
 
 // errSubsumeCounterexample reports that the inclusion check found a sequence
 // the derived model accepts and the base does not.

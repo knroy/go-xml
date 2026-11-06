@@ -478,3 +478,47 @@ func TestStreamValidationRefusals(t *testing.T) {
 		}
 	}
 }
+
+// Nilling empties an element's content, not its declaration: a key or keyref
+// whose selector reaches the nilled element itself still applies. Both
+// validators returned before evaluating them, so <E xsi:nil="true"/> passed a
+// key on @id that <E/> fails.
+func TestNilledElementKeepsIdentityConstraints(t *testing.T) {
+	s := svLoad(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="E" nillable="true">
+	    <xs:complexType><xs:attribute name="id"/><xs:attribute name="ref"/></xs:complexType>
+	    <xs:key name="k"><xs:selector xpath="."/><xs:field xpath="@id"/></xs:key>
+	    <xs:keyref name="r" refer="k"><xs:selector xpath="."/><xs:field xpath="@ref"/></xs:keyref>
+	  </xs:element>
+	  <xs:element name="R">
+	    <xs:complexType><xs:sequence>
+	      <xs:element ref="E"/>
+	      <xs:element name="u"><xs:complexType><xs:attribute name="v"/></xs:complexType></xs:element>
+	    </xs:sequence></xs:complexType>
+	    <xs:keyref name="up" refer="k"><xs:selector xpath="u"/><xs:field xpath="@v"/></xs:keyref>
+	  </xs:element>
+	</xs:schema>`)
+	const nilled = ` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"`
+	strict := xsdstream.Mode{Root: xsdstream.Strict}
+	for _, r := range []struct {
+		doc string
+		bad bool
+	}{
+		{`<E` + nilled + `/>`, true},                 // key field missing
+		{`<E id="a" ref="zz"` + nilled + `/>`, true}, // dangling keyref
+		{`<E id="a" ref="a"` + nilled + `/>`, false}, // resolves to its own key
+		{`<E id="a" ref="a"/>`, false},
+		// The nilled element's key table still reaches its parent.
+		{`<R><E id="a"` + nilled + `/><u v="a"/></R>`, false},
+		{`<R><E id="a"` + nilled + `/><u v="b"/></R>`, true}, // the same, not nilled
+	} {
+		_, werr := svTree(t, s, r.doc, strict)
+		_, gerr := svRun(t, s, r.doc, strict, true)
+		if (werr != nil) != r.bad {
+			t.Errorf("%s: tree error %v, want invalid %v", r.doc, werr, r.bad)
+		}
+		if (gerr != nil) != r.bad {
+			t.Errorf("%s: stream error %v, want invalid %v", r.doc, gerr, r.bad)
+		}
+	}
+}

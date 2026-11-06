@@ -1107,8 +1107,10 @@ func compileWideOptional(t *testing.T, n int) *contentModel {
 		ps[i] = &Particle{MinOccurs: 0, MaxOccurs: 1,
 			Term: &ElementDecl{Name: xdm.QName{Local: fmt.Sprintf("e%d", i)}}}
 	}
-	m, err := compileContentModel(&Particle{MinOccurs: 1, MaxOccurs: 1,
-		Term: &ModelGroup{Compositor: CompositorSequence, Particles: ps}}, 0)
+	// Unbounded: the model must reach checkUPA over-width for the gate
+	// under test to see it.
+	m, err := compileForChecks(&Particle{MinOccurs: 1, MaxOccurs: 1,
+		Term: &ModelGroup{Compositor: CompositorSequence, Particles: ps}}, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("compiling %d optional particles: %v", n, err)
 	}
@@ -1183,8 +1185,8 @@ func TestUPABudgetFiresAndSchemaIsRefused(t *testing.T) {
 					ps[i] = &Particle{MinOccurs: 1, MaxOccurs: 1,
 						Term: &ElementDecl{Name: xdm.QName{Local: "a"}}}
 				}
-				m, err := compileContentModel(&Particle{MinOccurs: 1, MaxOccurs: Unbounded,
-					Term: &ModelGroup{Compositor: CompositorChoice, Particles: ps}}, 0)
+				m, err := compileForChecks(&Particle{MinOccurs: 1, MaxOccurs: Unbounded,
+					Term: &ModelGroup{Compositor: CompositorChoice, Particles: ps}}, 0, 0, 0)
 				if err != nil {
 					t.Fatalf("compile: %v", err)
 				}
