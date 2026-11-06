@@ -22,17 +22,29 @@ import (
 // frames (a variable for the tests, which give every element one).
 var nsFrameDepth = 32
 
-// nsFrame is el, a result element whose body is running, and the answers
-// found from it up. They hold while el's declarations stay as they were:
-// fixup adds some once its body is done. src, for a shallow copy, is the
-// source element copied and all its in-scope bindings.
+// nsFrame is el, a result element whose body is running; src, for a shallow
+// copy, is the source element copied. x, made only when there is something
+// to keep (a frame per level costs every deep result), holds src's in-scope
+// bindings and the answers found from el up.
 type nsFrame struct {
-	el    *xdm.Node
-	up    *nsFrame
-	src   *xdm.Node
+	el, src *xdm.Node
+	up      *nsFrame
+	x       *nsKept
+}
+
+// nsKept is a frame's all (nil: no bindings) and memo, which holds while
+// el's declarations number decls: fixup adds some once el's body is done.
+type nsKept struct {
 	all   []nsBinding
 	memo  []nsMemo
 	decls int
+}
+
+func (f *nsFrame) all() []nsBinding {
+	if f.x == nil {
+		return nil
+	}
+	return f.x.all
 }
 
 const (
@@ -55,11 +67,16 @@ type nsLook struct {
 }
 
 func (f *nsFrame) get(kind uint8, prefix string) (nsLook, bool) {
-	if n := f.el.NumNamespaceDecls(); n != f.decls {
-		f.memo, f.decls = f.memo[:0], n
+	x := f.x
+	if x == nil {
+		f.x = &nsKept{decls: f.el.NumNamespaceDecls()}
 		return nsLook{}, false
 	}
-	for _, m := range f.memo {
+	if n := f.el.NumNamespaceDecls(); n != x.decls {
+		x.memo, x.decls = x.memo[:0], n
+		return nsLook{}, false
+	}
+	for _, m := range x.memo {
 		if m.kind == kind && m.prefix == prefix {
 			return m.r, true
 		}
@@ -68,7 +85,7 @@ func (f *nsFrame) get(kind uint8, prefix string) (nsLook, bool) {
 }
 
 func (f *nsFrame) put(kind uint8, prefix string, r nsLook) {
-	f.memo = append(f.memo, nsMemo{kind, prefix, r})
+	f.x.memo = append(f.x.memo, nsMemo{kind, prefix, r})
 }
 
 // enterNS makes el, a result element whose body is about to run, the
@@ -80,12 +97,12 @@ func enterNS(rt *runtime, el, src *xdm.Node, shared, local []nsBinding) *nsFrame
 	if el == nil || rt.depth < nsFrameDepth {
 		return prev
 	}
-	f := &nsFrame{el: el, up: prev, decls: el.NumNamespaceDecls()}
-	if src != nil {
-		f.src, f.all = src, shared
-		if shared == nil {
-			f.all = slices.Clone(local)
+	f := &nsFrame{el: el, src: src, up: prev}
+	if all := shared; len(all) > 0 || len(local) > 0 {
+		if all == nil {
+			all = slices.Clone(local)
 		}
+		f.x = &nsKept{all: all, decls: el.NumNamespaceDecls()}
 	}
 	rt.ns = f
 	return prev
@@ -99,9 +116,9 @@ func leaveNS(rt *runtime, prev *nsFrame) { rt.ns = prev }
 func srcBindings(rt *runtime, node *xdm.Node, buf []nsBinding) (shared, local []nsBinding) {
 	if f := rt.ns; f != nil && f.src != nil && f.src == node.Parent() && node.Kind() == xdm.KindElement {
 		if node.NumNamespaceDecls() == 0 {
-			return f.all, nil
+			return f.all(), nil
 		}
-		return overlayScope(f.all, node), nil
+		return overlayScope(f.all(), node), nil
 	}
 	return nil, scopeBindings(node, buf)
 }
