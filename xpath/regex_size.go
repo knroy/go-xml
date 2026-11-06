@@ -65,7 +65,35 @@ const maxCachedProgram = 4096
 
 // cachedProgramTooBig reports whether re is too large to cache. It re-parses
 // the compiled source, which is cheap beside the compile that just ran.
+//
+// progSize counts a character class as one instruction, but each class keeps
+// its own rune table: \w translates to a Unicode-wide class, so 504 copies of
+// it (a 1 KB key) passed the gate and retained 4 MB per entry. The class
+// payload is therefore added, at ten runes to an instruction (a rune is 4
+// bytes, an instruction about 40).
 func cachedProgramTooBig(re *regexp.Regexp) bool {
 	p, err := syntax.Parse(re.String(), syntax.Perl)
-	return err == nil && progSize(p.Simplify(), map[*syntax.Regexp]int{}) > maxCachedProgram
+	if err != nil {
+		return false
+	}
+	s := p.Simplify()
+	return progSize(s, map[*syntax.Regexp]int{})+classRunes(s, map[*syntax.Regexp]bool{})/10 > maxCachedProgram
+}
+
+// classRunes sums the rune tables of the distinct classes in re. A node that
+// Simplify shares between the copies of x{n} is counted once, as the compiled
+// program shares its table.
+func classRunes(re *syntax.Regexp, seen map[*syntax.Regexp]bool) int {
+	if seen[re] {
+		return 0
+	}
+	seen[re] = true
+	n := 0
+	if re.Op == syntax.OpCharClass {
+		n = len(re.Rune)
+	}
+	for _, s := range re.Sub {
+		n += classRunes(s, seen)
+	}
+	return n
 }
