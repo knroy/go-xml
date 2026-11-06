@@ -722,7 +722,7 @@ func dropLeaf(p *Node) bool {
 func dropElement(p *Node) bool {
 	t := p.tree
 	if t.source != nil || t.frozen || p.flags&fSide != 0 || p.v1 == noIdx ||
-		len(t.open) == 0 || t.open[len(t.open)-1] != p.self {
+		t.open.len() == 0 || t.open.at(t.open.len()-1) != uint64(p.self) {
 		return false
 	}
 	c := t.rec(p.v1)

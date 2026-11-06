@@ -80,7 +80,7 @@ func driver(c xdmburst.Client) *burster {
 			if b.watch != nil {
 				return
 			}
-			open = ordStack{runs: append([]ordRun(nil), b.ords.runs...), n: b.ords.n}
+			open = ordStack{runs: append([]ordRun(nil), b.ords.runs...)}
 			if b.paused == pausedStart {
 				open.truncate(b.pd)
 				for open.len() < b.pd {
