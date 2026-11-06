@@ -1283,6 +1283,29 @@ The rule this leaves: a test in a `go test ./...` package is a unit test, and a
 unit test that costs minutes is a bug in the test. Drive a budget's edges at a
 forced budget and assert the production value separately.
 
+### The race lane samples volume
+
+The full-streaming work's stream-vs-tree differentials took the xslt package
+to 1312 s under `-race` on ubuntu CI, and past the 25-minute deadline on
+Windows. Under `-race` (`raceEnabled`, xslt/race_on_test.go):
+
+- the `Test*MatchesTree` differentials check one case in `raceStride` (4),
+  picked by `raceSkip` from a hash of the case's own values, so every race run
+  checks the same cases;
+- `TestStreamFuzz`, `TestStreamFuzzMain` and `TestStreamOutFuzz` run seeds
+  1–100 instead of 1–1000;
+- the live-heap tests (`TestStream*Memory`, `TestStreamCopyAccumulatorsReleased`,
+  the heap half of `TestStreamMainLeafTopUnderOutput`) and `TestLiveNodesBuilt`
+  skip; their bounds were already off under `-race`, or they only build
+  millions of nodes on one goroutine.
+
+The streaming paths these walk run on one goroutine, so the race detector gains
+nothing from the extra cases. The plain `go test` step still runs every case.
+The concurrency tests (Tee, fork, concurrent compile and transform, shared
+caches) run in full under `-race`. Locally (12-core arm64) the package went from
+1081 s to 404 s under `-race`. Most of what is left is the budget tests that
+main already had, about 219 s of main's run.
+
 `op:same-key-023` was the case that proved the rule from the other side: it
 builds 75³ = 421,875 keys and calls `map:put` and `map:remove` once for each,
 and while `MapItem` was an entries slice plus a rebuilt index both were O(n),

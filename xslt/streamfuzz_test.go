@@ -827,6 +827,9 @@ func TestStreamFuzz(t *testing.T) {
 		t.Skip("-short")
 	}
 	n, seed0 := 1000, int64(1)
+	if raceEnabled {
+		n = 100 // the first 100 seeds: single-goroutine work, volume only under -race
+	}
 	if v := os.Getenv("GOXSLT_STREAM_FUZZ"); v != "" {
 		var err error
 		if n, err = strconv.Atoi(v); err != nil {
@@ -985,6 +988,9 @@ func TestStreamFuzzMain(t *testing.T) {
 		t.Skip("-short")
 	}
 	n, seed0 := 1000, int64(1)
+	if raceEnabled {
+		n = 100 // the first 100 seeds: single-goroutine work, volume only under -race
+	}
 	if v := os.Getenv("GOXSLT_STREAM_FUZZ"); v != "" {
 		var err error
 		if n, err = strconv.Atoi(v); err != nil {

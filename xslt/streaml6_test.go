@@ -185,12 +185,18 @@ func TestStreamL6MatchesTree(t *testing.T) {
 		for _, c := range l6Bodies {
 			for _, d := range coreDecls {
 				where := fmt.Sprintf("doc %s, decls %q, body %s", name, d, c.body)
+				if raceSkip(where) {
+					continue
+				}
 				streamed += coreCheck(t, coreSheetWith(d, c.body), dir, where, c.stream, TransformOptions{})
 			}
 		}
 		for _, c := range l6DeclBodies {
 			for _, d := range coreDecls {
 				where := fmt.Sprintf("doc %s, decls %q, body %s %s", name, d, c.decl, c.body)
+				if raceSkip(where) {
+					continue
+				}
 				streamed += coreCheck(t, coreSheetWith(d+c.decl, c.body), dir, where, c.stream, TransformOptions{})
 			}
 		}

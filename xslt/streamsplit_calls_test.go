@@ -108,6 +108,9 @@ func TestStreamSheetCallsMatchTree(t *testing.T) {
 		}
 		for di, d := range coreDecls {
 			for bi, b := range bodies {
+				if raceSkip(name, di, bi) {
+					continue
+				}
 				sheet := coreSheetWith(d+decls, b.body)
 				so, se, st := coreRun(sheet, dir, true, TransformOptions{})
 				to, te, _ := coreRun(sheet, dir, false, TransformOptions{})

@@ -158,8 +158,10 @@ func TestStreamMergeMatchesTree(t *testing.T) {
 // TestStreamMergeMemory: a streamed merge of two files of 60,000 records
 // each holds a head per input and a group, never the documents.
 func TestStreamMergeMemory(t *testing.T) {
-	if testing.Short() {
-		t.Skip("memory test")
+	// Under -race the instrumentation's heap moves the ratios, so the bounds
+	// are not checked there: the race lane would pay minutes for no assertion.
+	if testing.Short() || raceEnabled {
+		t.Skip("measures the live heap")
 	}
 	dir := t.TempDir()
 	for _, f := range []struct {

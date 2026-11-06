@@ -111,6 +111,9 @@ func TestStreamShapesMatchTree(t *testing.T) {
 		for _, c := range shapeBodies {
 			for _, d := range coreDecls {
 				where := fmt.Sprintf("doc %s, decls %q, body %s", name, d, c.body)
+				if raceSkip(where) {
+					continue
+				}
 				streamed += coreCheck(t, coreSheetWith(d+shapeDecls, c.body), dir, where, c.stream, TransformOptions{})
 			}
 		}

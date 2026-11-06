@@ -140,6 +140,9 @@ func TestStreamApplyMatchesTree(t *testing.T) {
 		for _, c := range applyCases {
 			for _, d := range coreDecls {
 				where := fmt.Sprintf("doc %s, decls %q, rules %s, body %s", name, d, c.decls, c.body)
+				if raceSkip(where) {
+					continue
+				}
 				streamed += coreCheck(t, coreSheetWith(d+c.decls, c.body), dir, where, c.stream, TransformOptions{})
 			}
 		}

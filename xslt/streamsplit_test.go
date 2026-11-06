@@ -487,6 +487,9 @@ func TestStreamSplitMatchesTree(t *testing.T) {
 	sort.Strings(names)
 	var n struct{ cases, accepted, refused, nonEmpty, giveUp int }
 	for _, src := range splitExprs {
+		if raceSkip(src) { // a whole expression, so its refused-everywhere check stands
+			continue
+		}
 		accepted := false
 		for _, dn := range names {
 			doc := docs[dn]
@@ -841,8 +844,10 @@ func TestStreamSplitSuite(t *testing.T) {
 // strategy class says, not the document: folds and counts a few MB however
 // many records there are, where the tree holds every one.
 func TestStreamSplitMemory(t *testing.T) {
-	if testing.Short() {
-		t.Skip("memory test")
+	// Under -race the instrumentation's heap moves the ratios, so the bounds
+	// are not checked there: the race lane would pay minutes for no assertion.
+	if testing.Short() || raceEnabled {
+		t.Skip("measures the live heap")
 	}
 	var b strings.Builder
 	b.WriteString("<doc>")
