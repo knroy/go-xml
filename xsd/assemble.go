@@ -481,6 +481,7 @@ func loadFiles(paths []string, opts Options, named map[int]instanceLocation) (*S
 		a.push(tree.Root, resolved, "", false)
 		if isInst {
 			a.queue[len(a.queue)-1].shown = inst.location
+			a.queue[len(a.queue)-1].fromInstance = true
 		}
 	}
 
@@ -651,8 +652,12 @@ type pending struct {
 	redefining bool
 
 	// shown, when set, is how errors name the document instead of base: the
-	// location an instance wrote, rather than the host path it resolved to.
+	// location as written by the instance or by the document referring to
+	// it, rather than the host path it resolved to.
 	shown string
+
+	// fromInstance is schemaDoc.fromInstance for the document once read.
+	fromInstance bool
 }
 
 // assembler reads a schema document and everything it references.
@@ -937,11 +942,15 @@ func (a *assembler) tooManyDocuments() error {
 
 // readOne reads one document's components and queues what it references.
 func (a *assembler) readOne(root *xdm.Node, item pending) error {
-	doc := &schemaDoc{root: root, baseURI: item.base}
+	doc := &schemaDoc{root: root, baseURI: item.base, fromInstance: item.fromInstance}
 	// A fault in this document should name it — unless it is the document
 	// the caller handed to Load, which they are already looking at.
 	if !a.rootBases[item.base] {
-		a.p.noteDocument(root, item.base)
+		name := item.base
+		if item.shown != "" {
+			name = item.shown
+		}
+		a.p.noteDocument(root, name)
 	}
 	if attr := root.Attr("", "targetNamespace"); attr != nil {
 		// §3.15.2 (schema-namespace): targetNamespace names a
@@ -1148,7 +1157,8 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 			// refused: that is a decision, not a miss, and a
 			// schema silently missing what sat outside the root
 			// would be reported as having loaded.
-			a.p.errs = append(a.p.errs, errorAt(el, "src-resolve", "%v", err))
+			a.p.errs = append(a.p.errs, errorAt(el, "src-resolve", "%v",
+				scrubResolveErr(doc, location, err)))
 			return
 		}
 		// A redefine that redefines nothing costs nothing when its
@@ -1195,7 +1205,8 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 			err = fmt.Errorf("resolved to nothing")
 		}
 		a.p.errs = append(a.p.errs, errorAt(el, "src-resolve",
-			"cannot resolve schemaLocation %q: %v", location, err))
+			"cannot resolve schemaLocation %q: %v", location,
+			scrubResolveErr(doc, location, err)))
 		return
 	}
 
@@ -1221,10 +1232,11 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 			return
 		}
 	}
+	shown := a.shownAs(el, doc, resolved, namespace)
 	tree, err := xdm.Parse(rc, schemaParseOptions(rc, a.opts.ParseOptions))
 	if err != nil {
 		a.p.errs = append(a.p.errs, errorAt(el, "src-resolve",
-			"parsing %q: %v", resolved, err))
+			"parsing %q: %v", shown, err))
 		return
 	}
 
@@ -1243,20 +1255,20 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 			}
 			a.p.errs = append(a.p.errs, errorAt(el, code,
 				"the document at %q has target namespace %q, "+
-					"which differs from %q", resolved, refNS, doc.targetNS))
+					"which differs from %q", shown, refNS, doc.targetNS))
 			return
 		}
 	} else if namespace != "" {
 		if !refHasNS || refNS != namespace {
 			a.p.errs = append(a.p.errs, errorAt(el, "src-import.3.1",
 				"import names namespace %q but the document at %q "+
-					"has target namespace %q", namespace, resolved, refNS))
+					"has target namespace %q", namespace, shown, refNS))
 			return
 		}
 	} else if refHasNS {
 		a.p.errs = append(a.p.errs, errorAt(el, "src-import.3.2",
 			"import has no namespace attribute but the document at %q "+
-				"has target namespace %q", resolved, refNS))
+				"has target namespace %q", shown, refNS))
 		return
 	}
 
@@ -1318,6 +1330,47 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 	}
 
 	a.push(tree.Root, resolved, chameleon, redefining)
+	if doc.fromInstance {
+		a.queue[len(a.queue)-1].shown = shown
+		a.queue[len(a.queue)-1].fromInstance = true
+	}
+}
+
+// shownAs is how errors name the document el references, resolved to
+// resolved. A document in the caller's own load is named by its resolved
+// path, which the caller chose and which helps them find it. One reached from
+// a location an instance named is named by the location text as written in
+// the referring document (its namespace, for an import that gives none),
+// because its resolved path is a host path the instance's author has no
+// business learning.
+func (a *assembler) shownAs(el *xdm.Node, doc *schemaDoc, resolved, namespace string) string {
+	if !doc.fromInstance {
+		return resolved
+	}
+	if loc := el.AttrValue("schemaLocation"); loc != "" {
+		return loc
+	}
+	return namespace
+}
+
+// scrubResolveErr is err as a resolver error is shown for a reference from
+// doc. In the caller's own load it is err itself. From a document an instance
+// reached, the resolver's text can carry the host path it tried (an os.Open
+// error does), so only what kind of failure it was is kept, with the
+// sentinels errors.Is looks for.
+func scrubResolveErr(doc *schemaDoc, location string, err error) error {
+	if !doc.fromInstance {
+		return err
+	}
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errRefusedByPolicy):
+		return fmt.Errorf("schemaLocation %q: %w", location, errRefusedByPolicy)
+	case errors.Is(err, errNoResolver):
+		return fmt.Errorf("schemaLocation %q: %w", location, errNoResolver)
+	}
+	return fmt.Errorf("schemaLocation %q cannot be read", location)
 }
 
 // targetNSOf returns a schema document's target namespace and whether it
