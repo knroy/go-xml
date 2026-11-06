@@ -291,6 +291,12 @@ type mergeInput struct {
 // errMergeTree sends a merge to the tree before anything was read.
 var errMergeTree = errors.New("streaming: the merge runs on the tree")
 
+// mergeStreamsMax is how many documents a streamed merge reads at once:
+// each holds its file, its cursor and a coroutine until the merge ends, so
+// a merge of more (a for-each-source of many URIs, repeats included) runs
+// on the tree, which reads each document once into its cache.
+const mergeStreamsMax = 64
+
 // errMergeStop ends the walk of an input the merge no longer reads.
 var errMergeStop = errors.New("streaming: merge input stopped")
 
@@ -415,6 +421,9 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 					return mergePreRead{err} // the first streamed source's, as the tree's collect
 				}
 				return err
+			}
+			if len(docs)+len(uris) > mergeStreamsMax {
+				return errMergeTree
 			}
 			base := src.baseURI
 			if base == "" {
