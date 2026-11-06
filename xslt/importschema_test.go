@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -171,4 +172,64 @@ func mustParse(t *testing.T, src string) *xdm.Node {
 		t.Fatalf("parsing the stylesheet: %v", err)
 	}
 	return tree.Root
+}
+
+// budgetTop reaches budgetInc only through xs:include, so the include is read
+// by xsd.Load's own resolution rather than by importschema.go.
+const budgetTop = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:b">
+  <xs:include schemaLocation="inc.xsd"/>
+</xs:schema>`
+
+const budgetInc = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:b">
+  <xs:element name="e" type="xs:string"/>
+</xs:schema>`
+
+// TestMaxSchemaBytesChargesTheClosure: MaxSchemaBytes counts the documents a
+// schema reaches through xs:include, on every path xsl:import-schema reads by,
+// and going over it is a resource-limit refusal rather than XTSE0220 or a
+// silently absent schema.
+func TestMaxSchemaBytesChargesTheClosure(t *testing.T) {
+	res := dtResolver{"top.xsd": budgetTop, "inc.xsd": budgetInc, "urn:b": budgetTop}
+	closure := int64(len(budgetTop) + len(budgetInc))
+	inline := `<xsl:import-schema xmlns:xs="http://www.w3.org/2001/XMLSchema">` + budgetTop + `</xsl:import-schema>`
+	for _, c := range []struct {
+		name, decl string
+		max        int64 // the smallest budget that compiles
+	}{
+		{"schema-location", `<xsl:import-schema namespace="urn:b" schema-location="top.xsd"/>`, closure},
+		{"namespace only", `<xsl:import-schema namespace="urn:b"/>`, closure},
+		{"inline", inline, int64(len(budgetInc))},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			src := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+				c.decl + `</xsl:stylesheet>`
+			sheet, err := Compile(mustParse(t, src), CompileOptions{SchemaResolver: res, MaxSchemaBytes: c.max})
+			if err != nil || sheet.Schema().Elements[xdm.QName{URI: "urn:b", Local: "e"}] == nil {
+				t.Fatalf("MaxSchemaBytes %d: err = %v, want {urn:b}e declared", c.max, err)
+			}
+			_, err = Compile(mustParse(t, src), CompileOptions{SchemaResolver: res, MaxSchemaBytes: c.max - 1})
+			if !errors.Is(err, xdm.ErrResourceLimit) || strings.Contains(err.Error(), "XTSE0220") {
+				t.Errorf("MaxSchemaBytes %d: err = %v, want ErrResourceLimit and not XTSE0220", c.max-1, err)
+			}
+		})
+	}
+}
+
+// TestMaxSchemaBytesIsCumulative: two imports each under the budget are
+// refused together when their sum is over it.
+func TestMaxSchemaBytesIsCumulative(t *testing.T) {
+	other := strings.ReplaceAll(budgetInc, "urn:b", "urn:c")
+	res := dtResolver{"top.xsd": budgetTop, "inc.xsd": budgetInc, "c.xsd": other}
+	src := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <xsl:import-schema namespace="urn:b" schema-location="top.xsd"/>
+  <xsl:import-schema namespace="urn:c" schema-location="c.xsd"/>
+</xsl:stylesheet>`
+	sum := int64(len(budgetTop) + len(budgetInc) + len(other))
+	if _, err := Compile(mustParse(t, src), CompileOptions{SchemaResolver: res, MaxSchemaBytes: sum}); err != nil {
+		t.Fatalf("MaxSchemaBytes %d: %v", sum, err)
+	}
+	_, err := Compile(mustParse(t, src), CompileOptions{SchemaResolver: res, MaxSchemaBytes: sum - 1})
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("MaxSchemaBytes %d: err = %v, want ErrResourceLimit", sum-1, err)
+	}
 }

@@ -128,6 +128,7 @@ syntax error does *not* carry the sentinel.
 | `maxConstructorDepth` | `xquery/enclosed.go` | `XPDY0130` | as above |
 | `MaxModules` / `MaxModuleBytes` | `xquery/module.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the module is not there |
 | `MaxSchemaBytes` | `xquery/schemaimport.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the schema is not there |
+| `MaxSchemaBytes` | `xslt/importschema.go` | *(none)* | as above for `xsl:import-schema`; deliberately **not** `XTSE0220`, which would claim the schema is invalid; wraps `xdm.ErrResourceLimit` |
 | `ValidateOptions.MaxDepth` | `xsd/validate.go` | `cvc-elt.1` | the element is invalid against its declaration |
 | `maxSchemaFetches` (10,000) | `relaxng/resolve.go` | *(none)* | include/externalRef fetches per RELAX NG compilation, all routes; the refusal names the budget |
 | fetched-document budget | `relaxng/compile.go` | *(none)* | the nodes and text bytes of every fetched include/externalRef document per compilation, at xdm's single-document `DefaultMaxNodes` and `DefaultMaxBytes`; wraps `xdm.ErrResourceLimit` |
@@ -445,6 +446,7 @@ sty, err := xslt.Compile(sheet.Root, xslt.CompileOptions{
 | `StaticParams` | `map[string]xdm.Sequence` | none | Values for `xsl:param static="yes"`, keyed by the parameter's `{uri}local` name. A static parameter is bound before static analysis begins, so its value must come from the caller rather than from `Transform`'s runtime `Params`. |
 | `SchemaResolver` | `xsd.Resolver` | disabled | Loads schemas for `xsl:import-schema`. |
 | `SchemaParseOptions` | `xdm.ParseOptions` | refuses a DOCTYPE | Parser options for every schema document `xsl:import-schema` loads, and for what those documents include and import. A document a `CatalogResolver` answers from its own table may carry a DOCTYPE regardless. |
+| `MaxSchemaBytes` | `int64` | *(none)* | Total schema source one compilation may read through `SchemaResolver`, cumulatively across every `xsl:import-schema` of every module and package, every document its `xs:include`/`xs:import`/`xs:redefine` closure reaches, and every compilation `fn:transform` starts from the static phase. An inline `<xs:schema>` is not charged; what it includes is. Zero means `DefaultMaxSchemaBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`, never `XTSE0220`. |
 | `XPathVersion` | `*xpath.Version` | derive | Pins the XPath version for every expression in the stylesheet, overriding what the stylesheet declares. Nil derives it from the `version` attribute. See [Choosing a language version](#choosing-a-language-version). |
 
 ### Choosing a language version

@@ -416,6 +416,14 @@ did not validate stays untyped, which is correct. From the command line,
 `go-xml -xsl sheet.xsl -validate strict in.xml` validates and annotates the
 source against the stylesheet's imported schema before the transform.
 
+Every schema document `xsl:import-schema` reads through `SchemaResolver`, and
+every document its `xs:include`/`xs:import`/`xs:redefine` closure reaches,
+draws on one `CompileOptions.MaxSchemaBytes` allowance per `Compile` (zero
+means `xslt.DefaultMaxSchemaBytes`, 16 MB), shared by every module, package
+and static-phase `fn:transform` compilation. Going over it fails the compile
+with `xdm.ErrResourceLimit` rather than `XTSE0220`; the stylesheet is never
+compiled against a truncated schema.
+
 An earlier revision of this section said a validated node still atomised as
 untyped. That was never the engine's behaviour once annotation existed; the
 example above simply omitted v1's `Annotate`, which is what made it look true.

@@ -1,7 +1,9 @@
 package xslt
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xsd"
@@ -91,7 +93,11 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 		// names that have not been imported." A resolver that cannot answer
 		// therefore leaves the empty schema in place, exactly as before.
 		if ns != "" && c.opts.SchemaResolver != nil {
-			if loaded := c.tryResolveSchemaByNamespace(ns); loaded != nil {
+			loaded, err := c.tryResolveSchemaByNamespace(ns)
+			if err != nil {
+				return err
+			}
+			if loaded != nil {
 				mergeSchema(c.sheet.schema, loaded)
 			}
 		}
@@ -159,6 +165,13 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 			opts.Version = v
 		}
 		loaded, err = xsd.Load(tree.Root, resolved, opts)
+	}
+	// xsd.Load records or drops a resolver error depending on the reference,
+	// so the budget is asked directly rather than read off err: a refused
+	// xs:include must not leave a partial schema behind, nor be reported as
+	// XTSE0220, which says something untrue about the schema.
+	if over := c.schemaOverBudget(); over != nil {
+		return over
 	}
 	if err == nil {
 		err = checkImportedNamespace(el, schemaRoot, ns)
@@ -296,46 +309,116 @@ func (s *Stylesheet) Schema() *xsd.Schema { return s.schema }
 // tryResolveSchemaByNamespace asks the resolver for a schema for ns alone,
 // which is what an xsl:import-schema with no schema-location requests.
 //
-// Every failure returns nil rather than an error: §3.15 makes a namespace
-// whose schema cannot be located a non-error, reportable only later and only
-// if the stylesheet names a component the import did not supply. Raising here
-// would turn a stylesheet the spec says must compile into a static error.
-func (c *compiler) tryResolveSchemaByNamespace(ns string) *xsd.Schema {
-	rc, resolved, err := c.opts.SchemaResolver.Resolve(ns, "", c.opts.BaseURI)
+// Every failure but one returns nil rather than an error: §3.15 makes a
+// namespace whose schema cannot be located a non-error, reportable only later
+// and only if the stylesheet names a component the import did not supply.
+// Raising here would turn a stylesheet the spec says must compile into a
+// static error. The exception is MaxSchemaBytes: running out of allowance is
+// not "no schema could be located", and a silent nil would compile the
+// stylesheet against half a schema.
+func (c *compiler) tryResolveSchemaByNamespace(ns string) (*xsd.Schema, error) {
+	opts := c.schemaLoadOptions()
+	rc, resolved, err := opts.Resolver.Resolve(ns, "", c.opts.BaseURI)
+	if over := c.schemaOverBudget(); over != nil {
+		return nil, over
+	}
 	if err != nil || rc == nil {
-		return nil
+		return nil, nil
 	}
 	defer rc.Close()
-	opts := c.schemaLoadOptions()
 	tree, err := xsd.ParseDocument(rc, opts.ParseOptions)
 	if err != nil || tree.Root == nil {
-		return nil
+		return nil, nil
 	}
 	// The resolver is free to answer with whatever it has; a document whose
 	// target namespace is not the one asked for cannot supply the components
 	// the declaration wants, and merging it would import names under a header
 	// the stylesheet never wrote.
 	if checkImportedNamespace(nil, tree.Root, ns) != nil {
-		return nil
+		return nil, nil
 	}
 	if v, ok := xsd.DocumentRequiresVersion(tree.Root); ok {
 		opts.Version = v
 	}
 	loaded, err := xsd.Load(tree.Root, resolved, opts)
+	if over := c.schemaOverBudget(); over != nil {
+		return nil, over
+	}
 	if err != nil {
+		return nil, nil
+	}
+	return loaded, nil
+}
+
+// DefaultMaxSchemaBytes bounds the total schema source text one compilation
+// may read when CompileOptions.MaxSchemaBytes is zero. It is the same value
+// as xquery.DefaultMaxSchemaBytes, for the same reason: a schema's
+// xs:include/xs:import/xs:redefine graph is attacker-shaped exactly as a
+// module graph is, and a budget spent one declaration at a time is not spent
+// at all.
+const DefaultMaxSchemaBytes = 16 << 20
+
+// chargedSchemaResolver is the resolver every schema document xsl:import-schema
+// reads is opened through: the document a schema-location or a namespace names
+// and every document its closure reaches. Each is read in full, bounded by the
+// compilation's remaining MaxSchemaBytes, and charged against it, so that
+// repeating one import under many namespaces or packages cannot re-read a
+// closure for free. It is xquery's chargedResolver, against compileBudget.
+type chargedSchemaResolver struct{ c *compiler }
+
+// Resolve implements xsd.Resolver.
+func (r chargedSchemaResolver) Resolve(namespace, location, base string) (
+	io.ReadCloser, string, error) {
+	if over := r.c.schemaOverBudget(); over != nil {
+		return nil, "", over
+	}
+	rc, resolved, err := r.c.opts.SchemaResolver.Resolve(namespace, location, base)
+	if rc == nil {
+		return nil, resolved, err
+	}
+	defer rc.Close()
+	if err != nil {
+		return nil, resolved, err
+	}
+	// Bounded before the read rather than measured after it, with one byte
+	// over the remainder so that "at the limit" and "over it" differ.
+	b := r.c.opts.budget
+	data, err := io.ReadAll(io.LimitReader(rc, max(b.maxSchemaBytes-b.schemaBytes, 0)+1))
+	if err != nil {
+		return nil, resolved, err
+	}
+	b.schemaBytes += int64(len(data))
+	if over := r.c.schemaOverBudget(); over != nil {
+		return nil, resolved, over
+	}
+	return io.NopCloser(bytes.NewReader(data)), resolved, nil
+}
+
+// schemaOverBudget reports the MaxSchemaBytes refusal once the compilation has
+// read more schema text than it may. The error wraps xdm.ErrResourceLimit and
+// is deliberately not XTSE0220 or "not found": the schema may be perfectly
+// valid and present, and a host that retried on either would retry forever.
+func (c *compiler) schemaOverBudget() error {
+	b := c.opts.budget
+	if b.schemaBytes <= b.maxSchemaBytes {
 		return nil
 	}
-	return loaded
+	return fmt.Errorf(
+		"xsl:import-schema: resource limit exceeded: a compilation may read "+
+			"at most %d bytes of schema documents (CompileOptions.MaxSchemaBytes): %w",
+		b.maxSchemaBytes, xdm.ErrResourceLimit)
 }
 
 // schemaLoadOptions are the xsd.Options every schema xsl:import-schema loads
 // is read with, whichever path finds it: by location, inline, or by
-// namespace alone. SchemaParseOptions reaches the document itself and,
+// namespace alone. Its Resolver charges MaxSchemaBytes; SchemaParseOptions reaches the document itself and,
 // through xsd.Options.ParseOptions, the documents it includes and imports.
 func (c *compiler) schemaLoadOptions() xsd.Options {
-	opts := xsd.Options{
-		Resolver:     c.opts.SchemaResolver,
-		ParseOptions: c.opts.SchemaParseOptions,
+	opts := xsd.Options{ParseOptions: c.opts.SchemaParseOptions}
+	// Left nil without a SchemaResolver: xsd.Load is closed by default, and
+	// compileImportSchema reads a nil Resolver as "no location may be named".
+	if c.opts.SchemaResolver != nil {
+		opts.Resolver = chargedSchemaResolver{c}
 	}
 	// An XSLT 3.0 processor reads a schema as XSD 1.1 unless the document
 	// says otherwise.

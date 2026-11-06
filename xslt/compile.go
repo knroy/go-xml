@@ -2114,8 +2114,15 @@ const maxModuleNodes = 500_000
 // starts from the static phase, which runs inside it under the same
 // compileMu: the house rule that a nested operation spends the parent's
 // remainder rather than restarting it.
+//
+// The schema bytes are here for the same reason: a nested compilation spends
+// the outer one's MaxSchemaBytes remainder, under the outer one's bound,
+// rather than starting a fresh allowance per fn:transform call.
 type compileBudget struct {
 	visits, nodes int
+	// schemaBytes is the schema source text read so far, against
+	// maxSchemaBytes (CompileOptions.MaxSchemaBytes, defaulted).
+	schemaBytes, maxSchemaBytes int64
 }
 
 // visitModule charges one module visit against maxModuleVisits.
