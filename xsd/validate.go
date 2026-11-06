@@ -1928,21 +1928,26 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 					v.fail(kid, "cvc-elt.4.2", "%v", err)
 					return nil
 				}
-				v.validateAgainstType(kid, t, nil)
-				return nil
+				return mergeTables(v.validateAgainstType(kid, t, nil))
 			}
 			// The annotation is saved and restored around this
 			// assessment, and the resolved fields travel WITH it:
 			// they are halves of one fact, so restoring the name
 			// while leaving the meaning from the anyType pass would
 			// describe the old type with the new type's erasure.
+			//
+			// The tables of the subtree go up, as they do from a
+			// declared child: a nested scope of a key below this
+			// element is pruned from the outer scope's walk
+			// (frontier), so its targets reach the outer table only
+			// through them.
 			prev := v.typingOf(kid)
-			v.validateAgainstType(kid, v.schema.anyType(), nil)
+			tables := v.validateAgainstType(kid, v.schema.anyType(), nil)
 			if v.typed {
 				v.setTypeAnnotationResolved(kid, prev.TypeAnnotation,
 					prev.DerivedPrimitive, prev.ListItem)
 			}
-			return nil
+			return mergeTables(tables)
 		case ProcessStrict:
 			d, ok := v.schema.Elements[name]
 			if !ok {
@@ -1961,8 +1966,7 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 						v.fail(kid, "cvc-elt.4.2", "%v", err)
 						return nil
 					}
-					v.validateAgainstType(kid, t, nil)
-					return nil
+					return mergeTables(v.validateAgainstType(kid, t, nil))
 				}
 				v.fail(kid, "cvc-complex-type.2.4.c",
 					"no declaration for {%s}%s, matched by a strict wildcard",

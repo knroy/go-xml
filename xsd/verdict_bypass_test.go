@@ -71,3 +71,15 @@ func TestXSITypeDerivedFromSelectedAlternative(t *testing.T) {
 	vbCheck(t, "xsi:type strict, strict selected", s, `<m`+vbXSI+` xsi:type="strict" kind="num" v="5"/>`, true, "")
 	vbCheck(t, "xsi:type base, no alternative", s, `<m`+vbXSI+` xsi:type="base" kind="other" v="abc"/>`, true, "")
 }
+
+// A nested scope of a key below a child a wildcard assessed without a
+// declaration still reaches the outer scope's node table.
+func TestWildcardChildKeepsIdentityTables(t *testing.T) {
+	for _, kind := range []string{"unique", "key"} {
+		s := vbLoad(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="R"><xs:complexType><xs:sequence><xs:any processContents="lax" minOccurs="0" maxOccurs="unbounded"/></xs:sequence></xs:complexType><xs:`+kind+` name="u"><xs:selector xpath=".//x"/><xs:field xpath="@id"/></xs:`+kind+`></xs:element></xs:schema>`, Version11)
+		code := map[string]string{"unique": "cvc-identity-constraint.4.1", "key": "cvc-identity-constraint.4.2.2"}[kind]
+		vbCheck(t, kind+" via undeclared wrapper", s, `<R><x id="1"/><W><R><x id="1"/></R></W></R>`, false, code)
+		vbCheck(t, kind+" via xsi:type wrapper", s, `<R`+vbXSI+` xmlns:xs="http://www.w3.org/2001/XMLSchema"><x id="1"/><W xsi:type="xs:anyType"><R><x id="1"/></R></W></R>`, false, code)
+		vbCheck(t, kind+" distinct via wrapper", s, `<R><x id="1"/><W><R><x id="2"/></R></W></R>`, true, "")
+	}
+}

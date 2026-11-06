@@ -343,8 +343,9 @@ func (s *streamV) icEnd(f *svFrame, x int) {
 			s.need(c, -1)
 		}
 	}
-	// validateElement returns the tables to a parent walking its content.
-	if x == 0 || f.decl == nil || f.typ == nil || f.kind == svNil || len(tables) == 0 {
+	// validateElement returns the tables to a parent walking its content,
+	// and validateChild those of a child it assessed with no declaration.
+	if x == 0 || f.typ == nil || f.kind == svNil || len(tables) == 0 {
 		return
 	}
 	switch p := &s.frames[x-1]; p.kind {
