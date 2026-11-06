@@ -89,6 +89,12 @@ func parseGYear(s string, dt *DateTime) (string, error) {
 	if neg {
 		y = -y
 	}
+	// Equality and grouping keys go through ToSeconds and daysFromCivil, so
+	// a gYear needs the same bound as a date (see parseDatePart): past it the
+	// day count wraps and two different years compare equal.
+	if int64(y) > maxYear || int64(y) < minYear {
+		return "", Errorf("FODT0001", "year %d overflows the date range", y)
+	}
 	dt.Year = y
 	return s[i:], nil
 }
