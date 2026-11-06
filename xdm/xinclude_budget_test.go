@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // bombDoc is a document whose entity expansion is large but stays UNDER the
@@ -167,5 +168,59 @@ func TestXIncludeBudgetRefusalIsNotRecoverable(t *testing.T) {
 	}
 	if !errors.Is(err, ErrResourceLimit) {
 		t.Fatalf("refused, but not as a resource limit: %v", err)
+	}
+}
+
+// An href-less xpointer inclusion copies an element as already expanded, so
+// a level of two includes of the level before doubles the result: 30 levels,
+// about 2.5 KB, asked for 2^31 copies, with no resolver and inside every
+// fetch and depth bound. The inclusions now share the pass's node budget,
+// opts.Parse.MaxNodes.
+func TestXIncludeLocalInclusionsShareTheNodeBudget(t *testing.T) {
+	doc := func(levels int) string {
+		var b strings.Builder
+		b.WriteString(`<r xmlns:xi="http://www.w3.org/2001/XInclude"><l0>x</l0>`)
+		for i := 1; i <= levels; i++ {
+			fmt.Fprintf(&b, `<l%d><xi:include xpointer="element(/1/%d)"/><xi:include xpointer="element(/1/%d)"/></l%d>`, i, i, i, i)
+		}
+		b.WriteString(`</r>`)
+		return b.String()
+	}
+	po := ParseOptions{BaseURI: "file:///t/doc.xml", MaxNodes: 1000}
+	tree, err := ParseString(doc(30), po)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ProcessXInclude(tree, XIncludeOptions{Parse: po})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrResourceLimit) || !strings.Contains(err.Error(), "inclusions exceed 1000 nodes") {
+			t.Fatalf("30 doubling levels under MaxNodes 1000: err = %v, want the node budget", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("30 doubling levels did not finish in 5s")
+	}
+
+	// Four levels under the default budget are expanded as before.
+	tree, err = ParseString(doc(4), ParseOptions{BaseURI: "file:///t/doc.xml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := ProcessXInclude(tree, XIncludeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l0 := 0
+	for n := range out.Root.Descendants() {
+		if n.Kind() == KindElement && n.Name().Local == "l0" {
+			l0++
+		}
+	}
+	if l0 != 31 {
+		t.Errorf("four levels: %d copies of l0, want 31", l0)
 	}
 }
