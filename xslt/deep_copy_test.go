@@ -208,7 +208,10 @@ func TestDeepShallowCopyIsLinear(t *testing.T) {
 // default namespace undeclared and redeclared, copy-namespaces="no",
 // inherit-namespaces="no", and literal result elements rebinding a prefix
 // between the copies. The rows were taken before the frames were added;
-// they must hold with a frame for every element as with none.
+// they must hold with a frame for every element as with none. The copy of
+// an element in no namespace (xmlns="" in the source) had the default
+// namespace it inherited on its namespace axis, in both modes; it has none
+// now (XDM 3.1 §6.2; XSLT 3.0 §5.7.3), as Saxon-HE 12.10 and 10.6 answer.
 func TestShallowCopyNamespaceRows(t *testing.T) {
 	defer func(d int) { nsFrameDepth = d }(nsFrameDepth)
 	for _, nsFrameDepth = range []int{0, 1000} {
@@ -238,16 +241,37 @@ func shallowCopyNamespaceRows(t *testing.T) {
 	}
 	// The namespace axis of the copies, in a temporary tree.
 	axis := []struct{ attr, want string }{
-		{``, "a:=urn:d,p=urn:p,;b:=urn:d,p=urn:p2,;p:c:=urn:d,p=urn:p2,;d:=urn:d,p=urn:p2,;e:=urn:e,p=urn:p2,;p:f:=urn:e,p=urn:p2,q=urn:q,;g:=urn:e,p=urn:p2,q=urn:q,;h:=urn:d,p=urn:p2,;p:i:=urn:d,p=urn:p,;"},
-		{` copy-namespaces="no"`, "a:=urn:d,;b:=urn:d,;p:c:=urn:d,p=urn:p2,;d:=urn:d,p=urn:p2,;e:=urn:e,p=urn:p2,;p:f:=urn:e,p=urn:p2,;g:=urn:e,p=urn:p2,;h:=urn:d,;p:i:=urn:d,p=urn:p,;"},
+		{``, "a:=urn:d,p=urn:p,;b:=urn:d,p=urn:p2,;p:c:=urn:d,p=urn:p2,;d:p=urn:p2,;e:=urn:e,p=urn:p2,;p:f:=urn:e,p=urn:p2,q=urn:q,;g:=urn:e,p=urn:p2,q=urn:q,;h:=urn:d,p=urn:p2,;p:i:=urn:d,p=urn:p,;"},
+		{` copy-namespaces="no"`, "a:=urn:d,;b:=urn:d,;p:c:=urn:d,p=urn:p2,;d:p=urn:p2,;e:=urn:e,p=urn:p2,;p:f:=urn:e,p=urn:p2,;g:=urn:e,p=urn:p2,;h:=urn:d,;p:i:=urn:d,p=urn:p,;"},
 		{` inherit-namespaces="no"`, "a:=urn:d,p=urn:p,;b:=urn:d,p=urn:p2,;p:c:=urn:d,p=urn:p2,;d:p=urn:p2,;e:=urn:e,p=urn:p2,;p:f:=urn:e,p=urn:p2,q=urn:q,;g:=urn:e,p=urn:p2,q=urn:q,;h:=urn:d,p=urn:p2,;p:i:=urn:d,p=urn:p,;"},
 	}
 	for _, r := range axis {
-		sheet := outSheet(t, `<xsl:output method="text"/>`, `<xsl:template match="*" mode="c"><xsl:copy`+r.attr+`><xsl:apply-templates mode="c"/></xsl:copy></xsl:template>
-<xsl:template match="/"><xsl:variable name="v"><xsl:apply-templates mode="c"/></xsl:variable><xsl:for-each select="$v//*"><xsl:variable name="e" select="."/><xsl:value-of select="name()"/>:<xsl:for-each select="sort(in-scope-prefixes(.)[. ne 'xml'])"><xsl:value-of select=".||'='||namespace-uri-for-prefix(., $e)"/>,</xsl:for-each>;</xsl:for-each></xsl:template>`)
-		if got, err := outRun(sheet, doc, false, false, TransformOptions{}); err != nil || got != r.want {
-			t.Errorf("axis%s (frames from %d):\n got %s %v\nwant %s", r.attr, nsFrameDepth, got, err, r.want)
-		}
+		sheet := outSheet(t, `<xsl:output method="text"/><xsl:mode streamable="yes"/><xsl:mode name="c" streamable="yes"/>`, `<xsl:template match="*" mode="c"><xsl:copy`+r.attr+`><xsl:apply-templates mode="c"/></xsl:copy></xsl:template>
+<xsl:template match="/">`+nsAxisOf(`<xsl:apply-templates mode="c"/>`)+`</xsl:template>`)
+		nsAxisRow(t, sheet, doc, "axis"+r.attr, r.want)
+	}
+	// A literal result element in no namespace, made in a copy whose own
+	// default comes from its fixup, still to run: the default it will
+	// inherit is undeclared (Saxon-HE 12.10 and 10.6 give these rows).
+	sheet := outSheet(t, `<xsl:output method="text"/><xsl:mode streamable="yes"/>`, `<xsl:template match="/">`+
+		nsAxisOf(`<xsl:for-each select="*"><xsl:copy copy-namespaces="no"><w/></xsl:copy></xsl:for-each>`)+`|<xsl:value-of select="serialize($v)"/></xsl:template>`)
+	nsAxisRow(t, sheet, `<a xmlns="urn:d"><d xmlns=""><g/></d></a>`, "pending fixup", `a:=urn:d,;w:;|<a xmlns="urn:d"><w xmlns=""/></a>`)
+}
+
+// nsAxisOf is a template body that builds the variable v from body and lists
+// each element in it with its in-scope namespaces.
+func nsAxisOf(body string) string {
+	return `<xsl:variable name="v">` + body + `</xsl:variable><xsl:for-each select="$v//*"><xsl:variable name="e" select="."/><xsl:value-of select="name()"/>:<xsl:for-each select="sort(in-scope-prefixes(.)[. ne 'xml'])"><xsl:value-of select=".||'='||namespace-uri-for-prefix(., $e)"/>,</xsl:for-each>;</xsl:for-each>`
+}
+
+// nsAxisRow runs sheet over doc in both modes, the stream's streamed.
+func nsAxisRow(t *testing.T, sheet *Stylesheet, doc, name, want string) {
+	t.Helper()
+	if got, err := outRun(sheet, doc, false, false, TransformOptions{}); err != nil || got != want {
+		t.Errorf("%s (frames from %d):\n got %s %v\nwant %s", name, nsFrameDepth, got, err, want)
+	}
+	if got := streamedRun(t, sheet, doc, TransformOptions{}); got != want {
+		t.Errorf("%s streamed (frames from %d):\n got %s\nwant %s", name, nsFrameDepth, got, want)
 	}
 }
 
