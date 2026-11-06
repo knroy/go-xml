@@ -175,7 +175,7 @@ func checkContentModelConstraints(s *Schema, opts CheckOptions) error {
 	}
 
 	for _, site := range sites {
-		m, err := compileContentModel(site.particle, s.maxPositions)
+		m, err := compileForChecks(site.particle, s.maxPositions, maxUPAStateWidth)
 		if err != nil {
 			// A model that will not compile is a model none of the
 			// checks below can run against, so the schema arrives at

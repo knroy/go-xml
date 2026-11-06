@@ -37,6 +37,9 @@ type contentModel struct {
 	// Options.MaxContentModelPositions compiles every model — at load and
 	// at validation alike — under the budget it was loaded with.
 	maxPositions int
+	// maxFollow, when positive, bounds every follow set while the model is
+	// being built. Zero means unbounded; see compileForChecks.
+	maxFollow int
 
 	// positions are the leaf terms, one per occurrence in the tree.
 	positions []*position
@@ -133,10 +136,24 @@ type counter struct {
 // budget, so a model validates under the same limit its constraints were
 // checked under — see Schema.maxPositions.
 func compileContentModel(p *Particle, limit int) (*contentModel, error) {
+	return compileForChecks(p, limit, 0)
+}
+
+// compileForChecks is compileContentModel with every follow set bounded by
+// maxFollow (zero: unbounded).
+//
+// checkUPA refuses any state wider than maxUPAStateWidth, and a dense model —
+// a sequence of n optional elements — has follow sets that wide long before
+// its positions run out: building it in full costs quadratic edges and memory
+// (229 MB for n=2048) only for the width gate to refuse it in microseconds.
+// Bounding the build at the same width stops at the first follow set the gate
+// would refuse, so the refusal costs what the gate allows rather than what
+// the model would.
+func compileForChecks(p *Particle, limit, maxFollow int) (*contentModel, error) {
 	if limit <= 0 {
 		limit = maxPositions
 	}
-	m := &contentModel{active: map[*ModelGroup]bool{}, maxPositions: limit}
+	m := &contentModel{active: map[*ModelGroup]bool{}, maxPositions: limit, maxFollow: maxFollow}
 	if p == nil {
 		m.nullable = true
 		return m, nil
@@ -330,7 +347,9 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 	}
 	if p.MaxOccurs == Unbounded || p.MaxOccurs > 1 {
 		for _, l := range inner.last {
-			m.addFollow(l, inner.first)
+			if err := m.addFollow(l, inner.first); err != nil {
+				return frag{}, err
+			}
 		}
 	}
 	if p.MinOccurs == 0 {
@@ -388,7 +407,9 @@ func (m *contentModel) buildSequence(g *ModelGroup, scope int) (frag, error) {
 		// Everything that could end the sequence so far may be followed
 		// by anything that starts this particle.
 		for _, l := range out.last {
-			m.addFollow(l, f.first)
+			if err := m.addFollow(l, f.first); err != nil {
+				return frag{}, err
+			}
 		}
 		if out.nullable {
 			out.first = append(out.first, f.first...)
@@ -454,8 +475,9 @@ func (m *contentModel) buildAll(g *ModelGroup, scope int) (frag, error) {
 	return out, nil
 }
 
-// addFollow records that every position in to may follow from.
-func (m *contentModel) addFollow(from int, to []int) {
+// addFollow records that every position in to may follow from. It refuses a
+// follow set wider than m.maxFollow when that is set.
+func (m *contentModel) addFollow(from int, to []int) error {
 	existing := m.follow[from]
 	for _, t := range to {
 		dup := false
@@ -467,10 +489,16 @@ func (m *contentModel) addFollow(from int, to []int) {
 		}
 		if !dup {
 			existing = append(existing, t)
+			if m.maxFollow > 0 && len(existing) > m.maxFollow {
+				return fmt.Errorf(
+					"a state of the content model has more than %d competing positions",
+					m.maxFollow)
+			}
 		}
 		m.edges = append(m.edges, [2]int{from, t})
 	}
 	m.follow[from] = existing
+	return nil
 }
 
 // matches reports whether a position's term accepts an element name.
