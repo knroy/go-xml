@@ -1905,6 +1905,10 @@ Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
 
+**Twenty-third pass (round SC, audit run-2), 2026-11-06.**
+
+- **XPath constant folding had no aggregate budget and ignored the compile deadline** — cost, reachable from `xsl:evaluate`: each fold minted the full 5M-item / 1 GiB evaluation budget, so twenty `1 to 999999` terms (241 bytes) allocated 2.98 GB at compile under a 20 ms Context. One fold context per pass, 4,096 items shared, bound to the compile context; a range of two different literal bounds is not evaluated. 0.2 ms, 0.03 MB. Pinned by `TestFoldingIsBoundedPerCompilation`.
+
 **Twenty-second pass (round SB) — what round SA left open, 2026-11-06.**
 
 - **Shared `xsl:import` targets were recompiled per path** — cost: each import occurrence has its own precedence (§3.11.3), so nothing can be shared, and imports doubling per level cost 2^N under `compileMu`. `maxModuleVisits` (10,000) per `Compile`, counted in both module walks; xslTNG, XSpec and the W3C suite peak at 120. Pinned by `TestImportDiamondIsBounded`.
