@@ -662,13 +662,16 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			v.fail(el, "cvc-elt.4.2", "%v", err)
 			return nil
 		}
-		if !v.derivedFrom(t, decl.Type) {
+		// typ, not decl.Type: under XSD 1.1 it is the selected type,
+		// and checking the declared one let xsi:type escape an
+		// xs:error alternative by naming the declared type.
+		if !v.derivedFrom(t, typ) {
 			v.fail(el, "cvc-elt.4.3",
 				"xsi:type %q is not derived from the declared type",
 				xsiType.Value())
 			return nil
 		}
-		if m, blocked := v.substitutionBlocked(t, decl); blocked {
+		if m, blocked := v.substitutionBlocked(t, decl, typ); blocked {
 			v.fail(el, "cvc-elt.4.3",
 				"xsi:type %q substitutes by %v, which is blocked",
 				xsiType.Value(), m)
@@ -2204,9 +2207,12 @@ func optionalAllMembers(g *ModelGroup, particles []*Particle) []int {
 // The whole chain from the named type up to the declared one is examined, not
 // just the first step: substituting Dee for B goes through De, and it is the
 // *set* of methods used along the way that the block applies to.
-func (v *validator) substitutionBlocked(t Type, decl *ElementDecl) (Derivation, bool) {
+//
+// base is the type xsi:type replaces: the declared type, or under XSD 1.1 the
+// one the type alternatives selected.
+func (v *validator) substitutionBlocked(t Type, decl *ElementDecl, base Type) (Derivation, bool) {
 	blocked := decl.DisallowedSubstitutions
-	if ct, ok := decl.Type.(*ComplexType); ok {
+	if ct, ok := base.(*ComplexType); ok {
 		blocked = DerivationSet(uint8(blocked) | uint8(ct.Prohibits))
 	}
 	if blocked == 0 {
@@ -2214,7 +2220,7 @@ func (v *validator) substitutionBlocked(t Type, decl *ElementDecl) (Derivation, 
 	}
 
 	seen := map[Type]bool{}
-	for cur := t; cur != nil && cur != decl.Type && !seen[cur]; {
+	for cur := t; cur != nil && cur != base && !seen[cur]; {
 		seen[cur] = true
 		ct, ok := cur.(*ComplexType)
 		if !ok {

@@ -61,3 +61,13 @@ func TestNilledComplexTypeChecksAttributes(t *testing.T) {
 	vbCheck(t, "assertion holds", as, `<r`+vbXSI+` xsi:nil="true" a="1"/>`, true, "")
 	vbCheck(t, "assertion fails", as, `<r`+vbXSI+` xsi:nil="true" a="2"/>`, false, "cvc-assertion")
 }
+
+// Under XSD 1.1 xsi:type must derive from the type the alternatives selected,
+// not from the declared one, or naming the declared type escapes them.
+func TestXSITypeDerivedFromSelectedAlternative(t *testing.T) {
+	s := vbLoad(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:complexType name="base"><xs:sequence/><xs:attribute name="kind" type="xs:string"/><xs:attribute name="v" type="xs:anySimpleType"/></xs:complexType><xs:complexType name="strict"><xs:complexContent><xs:restriction base="base"><xs:attribute name="v" type="xs:integer"/></xs:restriction></xs:complexContent></xs:complexType><xs:element name="m" type="base"><xs:alternative test="@kind='forbidden'" type="xs:error"/><xs:alternative test="@kind='num'" type="strict"/></xs:element></xs:schema>`, Version11)
+	vbCheck(t, "xsi:type base, xs:error selected", s, `<m`+vbXSI+` xsi:type="base" kind="forbidden"/>`, false, "cvc-elt.4.3")
+	vbCheck(t, "xsi:type base, strict selected", s, `<m`+vbXSI+` xsi:type="base" kind="num" v="abc"/>`, false, "cvc-elt.4.3")
+	vbCheck(t, "xsi:type strict, strict selected", s, `<m`+vbXSI+` xsi:type="strict" kind="num" v="5"/>`, true, "")
+	vbCheck(t, "xsi:type base, no alternative", s, `<m`+vbXSI+` xsi:type="base" kind="other" v="abc"/>`, true, "")
+}

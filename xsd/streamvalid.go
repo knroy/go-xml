@@ -440,12 +440,12 @@ func (s *streamV) startElement(f *svFrame, el *xdm.Node, decl *ElementDecl) {
 			v.fail(el, "cvc-elt.4.2", "%v", err)
 			return
 		}
-		if !v.derivedFrom(t, decl.Type) {
+		if !v.derivedFrom(t, typ) {
 			v.fail(el, "cvc-elt.4.3", "xsi:type %q is not derived from the declared type",
 				xsiType.Value())
 			return
 		}
-		if m, blocked := v.substitutionBlocked(t, decl); blocked {
+		if m, blocked := v.substitutionBlocked(t, decl, typ); blocked {
 			v.fail(el, "cvc-elt.4.3", "xsi:type %q substitutes by %v, which is blocked",
 				xsiType.Value(), m)
 			return
