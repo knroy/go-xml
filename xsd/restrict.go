@@ -271,13 +271,35 @@ func isUrType(ct *ComplexType) bool {
 // columns. Every cell not named is Forbidden, which is why the fallthrough is
 // an error rather than a pass.
 func particleValidRestriction(r, b *Particle) error {
-	return particleRestricts(r, b, false, Version10)
+	return particleValidRestrictionVersion(r, b, Version10)
 }
 
 // particleValidRestrictionVersion is particleValidRestriction with the schema
 // version, which decides whether the 1.1 all-group subsumption rule applies.
 func particleValidRestrictionVersion(r, b *Particle, v Version) error {
-	return particleRestricts(r, b, false, v)
+	return particleRestricts(r, b, false, &restrictWalk{v: v, memo: map[restrictPair]error{}})
+}
+
+// restrictWalk is the state one Particle Valid (Restriction) check carries
+// down its recursion.
+//
+// memo holds the verdict for every (R, B, expanded) already decided. The
+// recursion has no other bound on how often it revisits a pair: group
+// references make both particle trees DAGs, and two parallel chains
+// g_i = sequence(g_{i+1}, g_{i+1}) and h_i likewise, restricted one by the
+// other, reach each level's pair 2^i times — never sharing a particle, so the
+// r == b shortcut does not fire, and with maxOccurs="2" refs, which
+// inlinedTooLong does not flatten. An 11 KB schema ran for hours. The verdict
+// is a function of the pair, the flag and the version alone, so each pair is
+// now decided once and the walk is bounded by the number of distinct pairs.
+type restrictWalk struct {
+	v    Version
+	memo map[restrictPair]error
+}
+
+type restrictPair struct {
+	r, b     *Particle
+	expanded bool
 }
 
 // particleRestricts carries the clause 2.1 state that particleValidRestriction
@@ -288,7 +310,18 @@ func particleValidRestrictionVersion(r, b *Particle, v Version) error {
 // a member of its own substitution group: expanding again on the way down
 // through RecurseAsIfGroup and RecurseLax reproduces the same head particle
 // forever.
-func particleRestricts(r, b *Particle, expanded bool, v Version) error {
+func particleRestricts(r, b *Particle, expanded bool, w *restrictWalk) error {
+	key := restrictPair{r, b, expanded}
+	if err, ok := w.memo[key]; ok {
+		return err
+	}
+	err := particleRestrictsOnce(r, b, expanded, w)
+	w.memo[key] = err
+	return err
+}
+
+// particleRestrictsOnce is particleRestricts without the memo.
+func particleRestrictsOnce(r, b *Particle, expanded bool, w *restrictWalk) error {
 	// Clause 1: the same particle restricts itself. This is not merely an
 	// optimisation — a group reference shared between base and derived
 	// resolves to one *Particle, and the structural rules below would have
@@ -307,7 +340,7 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 	// preserve and stripping it is what lets the derivation reach a cell at
 	// all: particlesR001 restricts a sequence-with-wildcard by a one-member
 	// choice, which is valid only once the choice is gone.
-	keepChoice := v >= Version11 && bothChoices(r, b)
+	keepChoice := w.v >= Version11 && bothChoices(r, b)
 	r = stripPointless(r, keepChoice)
 	b = stripPointless(b, keepChoice)
 
@@ -350,7 +383,7 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 	// otherwise expand forever.
 	if !expanded && !sameElementDecl(r, b) {
 		if sub := asSubstitutionChoice(b); sub != nil {
-			return particleRestricts(r, sub, true, v)
+			return particleRestricts(r, sub, true, w)
 		}
 	}
 
@@ -369,7 +402,7 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 	// 1.0 table, which stays sound under 1.1 — the table is a conservative
 	// approximation of the same inclusion, never wrong in the accepting
 	// direction.
-	if v >= Version11 {
+	if w.v >= Version11 {
 		if err, ok := allSubsumes(r, b); ok {
 			return err
 		}
@@ -390,7 +423,7 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 		case *Wildcard:
 			return nsCompat(r, rt, b, bt)
 		case *ModelGroup:
-			return recurseAsIfGroup(r, b, bt, expanded, v)
+			return recurseAsIfGroup(r, b, bt, expanded, w)
 		}
 	case *Wildcard:
 		switch bt := b.Term.(type) {
@@ -414,7 +447,7 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 			// wrap costs nothing — recurseUnordered re-derives the
 			// range from the wrapped particle — and the base's other
 			// bucket is emptiable, which clause 2.3 still checks.
-			if v >= Version11 && bt.Compositor == CompositorAll {
+			if w.v >= Version11 && bt.Compositor == CompositorAll {
 				wrapped := &Particle{
 					MinOccurs: 1, MaxOccurs: 1,
 					Term: &ModelGroup{
@@ -423,13 +456,13 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 					},
 				}
 				return recurseUnordered(wrapped,
-					wrapped.Term.(*ModelGroup), b, bt, expanded, v)
+					wrapped.Term.(*ModelGroup), b, bt, expanded, w)
 			}
 		}
 	case *ModelGroup:
 		switch bt := b.Term.(type) {
 		case *Wildcard:
-			return nsRecurseCheckCardinality(r, rt, b, bt, expanded, v)
+			return nsRecurseCheckCardinality(r, rt, b, bt, expanded, w)
 		case *ModelGroup:
 			switch {
 			case rt.Compositor == CompositorAll && bt.Compositor == CompositorAll:
@@ -437,10 +470,10 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 				// unordered retry is an acceptance, so they
 				// compose: whatever the shadow rule forbids is
 				// forbidden however the members are walked.
-				if err := allWildcardShadow(rt, bt, v); err != nil {
+				if err := allWildcardShadow(rt, bt, w.v); err != nil {
 					return err
 				}
-				err := recurse(r, rt, b, bt, expanded, v)
+				err := recurse(r, rt, b, bt, expanded, w)
 				// Recurse walks B's members in order and never
 				// reconsiders one it has passed. For a sequence
 				// that is the point; for an all group, whose
@@ -466,21 +499,21 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 				// Only tried when the ordered walk has already
 				// failed, so no derivation Recurse accepts can
 				// change its answer here.
-				if err != nil && v >= Version11 {
-					if err2 := recurseUnordered(r, rt, b, bt, expanded, v); err2 == nil {
+				if err != nil && w.v >= Version11 {
+					if err2 := recurseUnordered(r, rt, b, bt, expanded, w); err2 == nil {
 						return nil
 					}
 				}
 				return err
 			case rt.Compositor == CompositorSequence && bt.Compositor == CompositorSequence:
-				return recurse(r, rt, b, bt, expanded, v)
+				return recurse(r, rt, b, bt, expanded, w)
 			case rt.Compositor == CompositorChoice && bt.Compositor == CompositorChoice:
-				return recurseLax(r, rt, b, bt, expanded, v)
+				return recurseLax(r, rt, b, bt, expanded, w)
 			case rt.Compositor == CompositorSequence && bt.Compositor == CompositorAll:
-				return recurseUnordered(r, rt, b, bt, expanded, v)
+				return recurseUnordered(r, rt, b, bt, expanded, w)
 			case rt.Compositor == CompositorSequence && bt.Compositor == CompositorChoice:
-				return mapAndSum(r, rt, b, bt, expanded, v)
-			case v >= Version11 && rt.Compositor == CompositorChoice &&
+				return mapAndSum(r, rt, b, bt, expanded, w)
+			case w.v >= Version11 && rt.Compositor == CompositorChoice &&
 				bt.Compositor == CompositorSequence:
 				// The 1.0 table has no Choice:Sequence cell, so this
 				// pair had no answer at all. Under 1.1 the question is
@@ -504,7 +537,7 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 						Particles:  []*Particle{r},
 					},
 				}
-				return recurse(wrapped, wrapped.Term.(*ModelGroup), b, bt, expanded, v)
+				return recurse(wrapped, wrapped.Term.(*ModelGroup), b, bt, expanded, w)
 			}
 		}
 	}
@@ -959,7 +992,7 @@ func nsCompat(r *Particle, rd *ElementDecl, b *Particle, bw *Wildcard) error {
 // recurseAsIfGroup is Particle Derivation OK (Elt:All/Choice/Sequence)
 // (§3.9.6): an element restricting a group is checked as a one-member group of
 // the base's variety.
-func recurseAsIfGroup(r *Particle, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+func recurseAsIfGroup(r *Particle, b *Particle, bg *ModelGroup, expanded bool, w *restrictWalk) error {
 	inner, outerMin, outerMax := r, 1, 1
 	// An *optional* element against a non-repeating choice puts its own range
 	// on the wrapper. particlesHa161 is <element name="a" minOccurs="0"/>
@@ -979,7 +1012,7 @@ func recurseAsIfGroup(r *Particle, b *Particle, bg *ModelGroup, expanded bool, v
 	// effectiveTotalRange, where a group of one repeating N times contributes
 	// N elements, so one range cannot serve both uses. A non-repeating base
 	// has no such sum to get wrong.
-	if v >= Version11 && bg.Compositor == CompositorChoice &&
+	if w.v >= Version11 && bg.Compositor == CompositorChoice &&
 		b.MaxOccurs != Unbounded && b.MaxOccurs <= 1 &&
 		r.MaxOccurs != Unbounded && r.MaxOccurs <= 1 &&
 		r.MinOccurs >= b.MinOccurs {
@@ -992,9 +1025,9 @@ func recurseAsIfGroup(r *Particle, b *Particle, bg *ModelGroup, expanded bool, v
 	}
 	switch bg.Compositor {
 	case CompositorChoice:
-		return recurseLax(wrapped, wrapped.Term.(*ModelGroup), b, bg, expanded, v)
+		return recurseLax(wrapped, wrapped.Term.(*ModelGroup), b, bg, expanded, w)
 	default:
-		return recurse(wrapped, wrapped.Term.(*ModelGroup), b, bg, expanded, v)
+		return recurse(wrapped, wrapped.Term.(*ModelGroup), b, bg, expanded, w)
 	}
 }
 
@@ -1161,7 +1194,7 @@ func containsQName(set []xdm.QName, name xdm.QName) bool {
 
 // nsRecurseCheckCardinality is Particle Derivation OK (All/Choice/Sequence:Any)
 // (§3.9.6): a group restricting a wildcard.
-func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wildcard, expanded bool, v Version) error {
+func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wildcard, expanded bool, w *restrictWalk) error {
 	// Clause 1 says each member must be a valid restriction of "the
 	// wildcard" — the {term}, not the particle B. A wildcard term carries a
 	// namespace constraint and a processContents, but no occurrence range;
@@ -1190,7 +1223,7 @@ func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wil
 	// which leaves exactly the namespace test clause 1 is for.
 	anyOccurs := &Particle{MinOccurs: 0, MaxOccurs: Unbounded, Term: bw}
 	for _, member := range rg.Particles {
-		if err := particleRestricts(member, anyOccurs, expanded, v); err != nil {
+		if err := particleRestricts(member, anyOccurs, expanded, w); err != nil {
 			return err
 		}
 	}
@@ -1211,7 +1244,7 @@ func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wil
 // single left-to-right walk rather than a search over permutations: each
 // particle of R must match the next particle of B that it can, and every
 // particle of B skipped along the way must be emptiable.
-func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, w *restrictWalk) error {
 	if err := occurrenceRangeOK(r, b); err != nil {
 		return fmt.Errorf("%s group: %w", rg.Compositor, err)
 	}
@@ -1226,7 +1259,7 @@ func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded 
 		for bi < len(bps) {
 			bp := bps[bi]
 			bi++
-			if particleRestricts(rp, bp, expanded, v) == nil {
+			if particleRestricts(rp, bp, expanded, w) == nil {
 				matched = true
 				break
 			}
@@ -1262,7 +1295,7 @@ func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded 
 // Like Recurse, the mapping is order-preserving — but unlike Recurse, the
 // unmapped particles of B need not be emptiable: dropping an alternative from
 // a choice is exactly what restricting a choice means.
-func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, w *restrictWalk) error {
 	if err := occurrenceRangeOK(r, b); err != nil {
 		return fmt.Errorf("choice group: %w", err)
 	}
@@ -1275,8 +1308,8 @@ func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expand
 	// forbid it: particlesT002 and T009 are marked invalid under 1.0 and valid
 	// under 1.1, and they are the base's two alternatives swapped. So the
 	// relaxation is version-gated, exactly like the one-member-choice strip.
-	if v >= Version11 {
-		return recurseLaxUnordered(rg, b, bg, expanded, v)
+	if w.v >= Version11 {
+		return recurseLaxUnordered(rg, b, bg, expanded, w)
 	}
 	bi := 0
 	for _, rp := range rg.Particles {
@@ -1284,7 +1317,7 @@ func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expand
 		for bi < len(bg.Particles) {
 			bp := bg.Particles[bi]
 			bi++
-			if particleRestricts(rp, bp, expanded, v) == nil {
+			if particleRestricts(rp, bp, expanded, w) == nil {
 				matched = true
 				break
 			}
@@ -1308,7 +1341,7 @@ func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expand
 // the first free base alternative that fits is enough when each derived
 // alternative fits only one, and the fallback scan handles the case where an
 // earlier choice consumed the only match a later one had.
-func recurseLaxUnordered(rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+func recurseLaxUnordered(rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, w *restrictWalk) error {
 	used := make([]bool, len(bg.Particles))
 	for _, rp := range rg.Particles {
 		matched := false
@@ -1316,7 +1349,7 @@ func recurseLaxUnordered(rg *ModelGroup, b *Particle, bg *ModelGroup, expanded b
 			if used[i] {
 				continue
 			}
-			if particleRestricts(rp, bp, expanded, v) == nil {
+			if particleRestricts(rp, bp, expanded, w) == nil {
 				used[i] = true
 				matched = true
 				break
@@ -1336,7 +1369,7 @@ func recurseLaxUnordered(rg *ModelGroup, b *Particle, bg *ModelGroup, expanded b
 // group's particles in any order, which is the whole point of restricting an
 // all group to a sequence — but it must still be injective: clause 2.1 forbids
 // two particles of R mapping to one of B.
-func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, w *restrictWalk) error {
 	if err := occurrenceRangeOK(r, b); err != nil {
 		return fmt.Errorf("sequence restricting an all group: %w", err)
 	}
@@ -1356,13 +1389,13 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 			// alone claims the bucket here. Asking particleRestricts
 			// would fold in Occurrence Range OK against this one
 			// derived particle and refuse a bucket the sum fits.
-			if v >= Version11 && wildcardCovers(rp, bp) {
+			if w.v >= Version11 && wildcardCovers(rp, bp) {
 				used[i] = true
 				matched = true
 				spent[i] = effectiveTotalRange(rp)
 				break
 			}
-			if particleRestricts(rp, bp, expanded, v) == nil {
+			if particleRestricts(rp, bp, expanded, w) == nil {
 				used[i] = true
 				matched = true
 				spent[i] = effectiveTotalRange(rp)
@@ -1393,7 +1426,7 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 		// naming the same element are already summed by the element
 		// path, and an all group's elements are distinct by Unique
 		// Particle Attribution, so there is nothing to share.
-		if v >= Version11 {
+		if w.v >= Version11 {
 			for i, bp := range bg.Particles {
 				if !used[i] {
 					continue
@@ -1401,7 +1434,7 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 				if _, ok := bp.Term.(*Wildcard); !ok {
 					continue
 				}
-				if particleRestricts(rp, bp, expanded, v) != nil &&
+				if particleRestricts(rp, bp, expanded, w) != nil &&
 					!wildcardCovers(rp, bp) {
 					continue
 				}
@@ -1433,7 +1466,7 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 		// exceed what the base can supply. It is instead charged to the
 		// combined budget, and each bucket's own minimum is met by the
 		// clause 2.3 emptiability check below.
-		if !matched && v >= Version11 {
+		if !matched && w.v >= Version11 {
 			if cover := unionCovers(rp, bg.Particles); len(cover) > 1 {
 				var union occRange
 				for _, i := range cover {
@@ -1616,11 +1649,11 @@ func unionCovers(rp *Particle, bps []*Particle) []int {
 // nor injective — the same alternative may be chosen repeatedly — and clause 2
 // compares the *total* length of the unfolded sequence against the choice's
 // range.
-func mapAndSum(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+func mapAndSum(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, w *restrictWalk) error {
 	for _, rp := range rg.Particles {
 		matched := false
 		for _, bp := range bg.Particles {
-			if particleRestricts(rp, bp, expanded, v) == nil {
+			if particleRestricts(rp, bp, expanded, w) == nil {
 				matched = true
 				break
 			}

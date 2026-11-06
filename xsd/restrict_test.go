@@ -776,3 +776,35 @@ func TestAllGroupSkippableFloorsNeedSkippableRestriction(t *testing.T) {
 		}
 	})
 }
+
+// Two parallel group chains, g_i = sequence(g_{i+1}, g_{i+1}) with each ref
+// maxOccurs="2" and h_i likewise, share no particle, so the r == b shortcut
+// never fires, and each level's pair of members recursed into the next level's
+// pair: 2^n calls, hours for an 11 KB schema at n=40. Every pair is now
+// decided once.
+func TestRestrictionWalkVisitsEachPairOnce(t *testing.T) {
+	chain := func(n int) *Particle {
+		p := &Particle{MinOccurs: 1, MaxOccurs: 1,
+			Term: &ElementDecl{Name: xdm.QName{Local: "e"}}}
+		for i := 0; i < n; i++ {
+			g := &ModelGroup{Compositor: CompositorSequence, Particles: []*Particle{
+				{MinOccurs: 1, MaxOccurs: 2, Term: p.Term},
+				{MinOccurs: 1, MaxOccurs: 2, Term: p.Term},
+			}}
+			p = &Particle{MinOccurs: 1, MaxOccurs: 1, Term: g}
+		}
+		return p
+	}
+	// Under 1.1 each pair also runs the budgeted subsumption check, which
+	// is what costs time here; fewer levels show the same bound.
+	for v, n := range map[Version]int{Version10: 40, Version11: 4} {
+		w := &restrictWalk{v: v, memo: map[restrictPair]error{}}
+		if err := particleRestricts(chain(n), chain(n), false, w); err != nil {
+			t.Fatalf("version %v: a chain restricting an identical chain: %v", v, err)
+		}
+		if got := len(w.memo); got > 8*n {
+			t.Errorf("version %v: the walk decided %d pairs for two %d-level chains, "+
+				"want at most %d", v, got, n, 8*n)
+		}
+	}
+}
