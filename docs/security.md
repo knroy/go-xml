@@ -1908,6 +1908,7 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 **Twenty-third pass (round SC, audit run-2), 2026-11-06.**
 
 - **XQuery `validate lax` with no imported schema annotated the caller's tree** — integrity: it stamped `xsi:type` annotations onto the operand itself and returned it, so `data(.) instance of xs:integer` changed for every later query, through an unsynchronised write into a tree a concurrently used `Query` only reads. The §3.21 copy is now made first and annotated instead. Pinned by `TestValidateLaxWithoutSchemaCopiesOperand`. See CHANGELOG.
+- **Acyclic `xsl:use-package` diamonds were re-read and recompiled per path** — cost: a layered DAG of 32 empty packages exhausted 2 GiB under `compileMu`. A package's read is memoised per `Compile`; each use still compiles its own copy (§3.5.2: uses may override differently), and every read and compile charges `maxModuleVisits`. The W3C package cases peak at 16. Pinned by `TestUsePackageDiamondIsBounded`.
 
 **Twenty-second pass (round SB) — what round SA left open, 2026-11-06.**
 
