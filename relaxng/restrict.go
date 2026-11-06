@@ -102,6 +102,13 @@ type restrictor struct {
 	root *xdm.Node
 	// active guards a definition that reaches itself while being expanded.
 	active map[string]bool
+	// checked records each definition already walked without error, keyed by
+	// name, inDefine and the stack's signature (stackSig). Without it every
+	// <ref> re-walked its definition, so a chain of definitions each choosing
+	// between two refs to the next cost 2^N walks: 1.9 KB of schema took
+	// 8.7 s. A second walk from the same key does exactly what the first did,
+	// so skipping it changes no verdict.
+	checked map[string]bool
 	// inDefine is set while walking a <define> body that no <ref> has led to.
 	//
 	// §4.19 expands every <ref> in place and then discards the <define>, so a
@@ -271,8 +278,13 @@ func (r *restrictor) followRef(n *xdm.Node, stack []string) error {
 			"relaxng: definition %q is recursive within <list> or <attribute> "+
 				"(section 7.1)", name)
 	}
+	key := fmt.Sprintf("%s\x00%t\x00%s", name, r.inDefine, stackSig(stack))
+	if r.checked[key] {
+		return nil
+	}
 	if r.active == nil {
 		r.active = map[string]bool{}
+		r.checked = map[string]bool{}
 	}
 	r.active[name] = true
 	defer delete(r.active, name)
@@ -284,7 +296,44 @@ func (r *restrictor) followRef(n *xdm.Node, stack []string) error {
 			return fmt.Errorf("%w, through <ref name=%q>", err, name)
 		}
 	}
+	r.checked[key] = true
 	return nil
+}
+
+// stackSig reduces a stack to what the checks below it can observe, so that
+// two stacks a definition cannot tell apart share one memo entry in
+// followRef. Keying on the whole stack would not do: a chain that reaches
+// each definition once through <choice> and once through <group> gives it
+// 2^N distinct stacks.
+//
+// Everything a walk asks of its stack is one of: which prefixes of each
+// prohibited path it holds as a subsequence (matchSteps; greedy matching
+// makes the longest such prefix all that an extension can build on), whether
+// it holds a repetition (checkInfiniteAttributeName) or a restricted step
+// (restrictedStack), and its last step, which a data/except path needs to
+// see directly. Two stacks equal on all of these behave alike under every
+// extension.
+func stackSig(stack []string) string {
+	var b strings.Builder
+	for _, p := range prohibited {
+		for k := 1; k < len(p.steps); k++ {
+			if matchSteps(stack, p.steps[:k]) {
+				b.WriteByte('1')
+			} else {
+				b.WriteByte('0')
+			}
+		}
+	}
+	if restrictedStack(stack) {
+		b.WriteByte('r')
+	}
+	if slices.Contains(stack, "oneOrMore") || slices.Contains(stack, "zeroOrMore") {
+		b.WriteByte('m')
+	}
+	if len(stack) > 0 {
+		b.WriteString(stack[len(stack)-1])
+	}
+	return b.String()
 }
 
 // restrictedStack reports whether the path so far is one whose contents §7.1

@@ -1,6 +1,7 @@
 package relaxng
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -960,5 +961,41 @@ func TestDataQNameResolvesItsPrefix(t *testing.T) {
 		<param name="maxLength">2</param></data></element>`)
 	if err == nil || !strings.Contains(err.Error(), "no units of length") {
 		t.Errorf("a length facet on QName: got %v, want a refusal", err)
+	}
+}
+
+// Section 7 follows a <ref> into its definition from every restricted
+// context, and once did so with no memo: a chain d0..dN where each di offers
+// two refs to di+1 cost 2^N walks of the last definition, and 1.9 KB of
+// schema took 8.7 s. The second variant reaches each definition through one
+// <choice> and through two, so a memo keyed on the whole stack would still
+// see 2^N distinct contexts. The bound is asserted on bytes allocated:
+// measured at N=16, 262 MB unmemoised against about 64 KB memoised.
+func TestRestrictionWalkIsMemoised(t *testing.T) {
+	const n = 16
+	for _, body := range []string{
+		`<choice><ref name="d%[1]d"/><ref name="d%[1]d"/></choice>`,
+		`<choice><ref name="d%[1]d"/><choice><ref name="d%[1]d"/><notAllowed/></choice></choice>`,
+	} {
+		var sb strings.Builder
+		sb.WriteString(`<grammar xmlns="http://relaxng.org/ns/structure/1.0">` +
+			`<start><ref name="d0"/></start>`)
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(&sb, `<define name="d%d">`, i)
+			fmt.Fprintf(&sb, body, i+1)
+			sb.WriteString(`</define>`)
+		}
+		fmt.Fprintf(&sb, `<define name="d%d"><element name="a"><empty/></element></define></grammar>`, n)
+		tree, err := xdm.ParseString(sb.String(), xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b := allocated(func() { err = checkRestrictions(rootElement(tree.Root)) }); b > 1<<20 {
+			t.Errorf("checkRestrictions allocated %d bytes for %d definitions; "+
+				"the walk is not memoised", b, n)
+		}
+		if err != nil {
+			t.Errorf("legal schema refused: %v", err)
+		}
 	}
 }
