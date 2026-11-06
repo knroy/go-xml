@@ -518,14 +518,50 @@ func buildPackageUses(parent map[int]int) map[int][]int {
 	return out
 }
 
-// packageParent maps a used package to the package that used it.
-//
-// A component of a used package is visible to the using package, so a
-// reference written there must reach it: template "b" of use-package-175 is
-// declared in package B and refers to $v, which B's copy of D declares. The
-// reference carries B, the binding carries D, and only this chain relates
-// them. Guarded by compileSlot with the rest of the package state.
-var packageParent = map[int]int{}
+// compileEnv is the state one compilation keeps outside its compiler, for
+// code reached from it that has no compiler in scope. Each compilation makes
+// its own, a nested one included, so concurrent compilations share none of
+// it and a stylesheet compiles to the same thing whatever compiled before it.
+type compileEnv struct {
+	// packageParent maps a used package to the package that used it.
+	//
+	// A component of a used package is visible to the using package, so a
+	// reference written there must reach it: template "b" of
+	// use-package-175 is declared in package B and refers to $v, which B's
+	// copy of D declares. The reference carries B, the binding carries D,
+	// and only this chain relates them.
+	packageParent map[int]int
+	// packageSerial numbers the packages this compilation sees, so that each
+	// has an identity its declarations can be filed under.
+	packageSerial int
+	// originalSerial numbers the generated namespaces of xsl:original; see
+	// pkgEdits.rewriteOverride.
+	originalSerial int
+	// dynamicRefCache memoises makesDynamicReference per package tree.
+	dynamicRefCache map[*xdm.Node]bool
+	// composedVisibility is the effective visibility of a used package's
+	// component declarations, keyed by the declaration element.
+	//
+	// It is recorded during composition because that is the only moment the
+	// answer is known. A component's visibility comes from its own attribute
+	// AND the xsl:expose rules of its package manifest, 3.5.2, and
+	// composition consumes the manifest: by the time the declarations are
+	// compiled into functions the xsl:expose elements are gone from the
+	// tree, so exposedVisibility called then sees no rules and reports the
+	// private default for a component the manifest made public. expose-A
+	// declares p:f1 with no visibility attribute and exposes it with
+	// names="p:*", and reading the attribute at compile time called it
+	// private.
+	composedVisibility map[*xdm.Node]visibility
+}
+
+func newCompileEnv() *compileEnv {
+	return &compileEnv{
+		packageParent:      map[int]int{},
+		dynamicRefCache:    map[*xdm.Node]bool{},
+		composedVisibility: map[*xdm.Node]visibility{},
+	}
+}
 
 // packageSpace is one package's whitespace declarations.
 //
@@ -889,8 +925,8 @@ func (s *Stylesheet) globalByName() map[string]*Variable {
 // state in its own prologue and clears it on the way out, so the question is
 // only what the OUTER compilation still needs when the nested one returns.
 // The static phase runs at the very top of compileDocument, before
-// compileSchema, compilePackage, packageParent, overridingDecls,
-// dynamicRefCache and composedVisibility are written at all -- so at the one
+// compileSchema, compilePackage and overridingDecls are written at all --
+// the rest lives in each compilation's own compileEnv -- so at the one
 // point a nested compilation can start, every one of them is still zero, and
 // restoring a zero is what clearing already does. The two version pins are
 // set earlier, in the prologue, but neither is observable: overrideXPathVersion
@@ -941,6 +977,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 		}
 	}
 	c := &compiler{
+		env:  newCompileEnv(),
 		opts: opts,
 		sheet: &Stylesheet{
 			named:            map[string]*Template{},
@@ -989,18 +1026,6 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// one compilation cannot answer a question about another's nodes.
 	overridingDecls = nil
 	defer func() { overridingDecls = nil }()
-	// So is the memo of which package trees make a dynamic component
-	// reference; see makesDynamicReference.
-	dynamicRefCache = nil
-	defer func() { dynamicRefCache = nil }()
-	// And the visibility composition settled on for each used component; see
-	// composedVisibility.
-	composedVisibility = nil
-	defer func() { composedVisibility = nil }()
-	// Which package used which is package state on the same terms; see
-	// packageParent.
-	packageParent = map[int]int{}
-	defer func() { packageParent = map[int]int{} }()
 	// The XPath version override is package state on the same terms and under
 	// the same lock; see overrideXPathVersion.
 	overrideXPathVersion = opts.XPathVersion
@@ -1038,7 +1063,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	}
 	c.pruneOverriddenGlobals()
 	c.deferDependentGlobals()
-	c.sheet.packageUses = buildPackageUses(packageParent)
+	c.sheet.packageUses = buildPackageUses(c.env.packageParent)
 	// Character-map inclusion is resolved before the xsl:output tables are
 	// flattened, and both after every module, so that a map may name one
 	// declared later or in a module imported afterwards.

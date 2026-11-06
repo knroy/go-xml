@@ -1264,13 +1264,10 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 	// declaration's visibility attribute as adjusted by its xsl:expose rules
 	// -- which is the visibility 3.6.3.4 judges a call from the using package
 	// against. It is recorded now because the manifest does not survive
-	// composition; see composedVisibility.
-	if composedVisibility == nil {
-		composedVisibility = map[*xdm.Node]visibility{}
-	}
+	// composition; see compileEnv.composedVisibility.
 	for _, comp := range u.comps {
 		if comp.el != nil && !comp.reExported {
-			composedVisibility[comp.el] = comp.vis
+			c.env.composedVisibility[comp.el] = comp.vis
 		}
 	}
 	u.acceptedVis = vis
@@ -1828,7 +1825,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		if comp.declared == visAbstract &&
 			u.overriding[comp.sym.key()] == nil &&
 			!(u.hiddenByAccept[comp.sym.key()] &&
-				!referencedWithin(e, u.root, comp)) {
+				!referencedWithin(c.env, e, u.root, comp)) {
 			e.markAbstract(comp.el, comp.sym.String())
 			keep[comp.el] = true
 			continue
@@ -1836,7 +1833,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		if (v == visHidden || v == visAbsent) &&
 			u.overriding[comp.sym.key()] == nil &&
 			(u.hiddenByAccept[comp.sym.key()] ||
-				!referencedWithin(e, u.root, comp)) {
+				!referencedWithin(c.env, e, u.root, comp)) {
 			// A component the using package cannot see is deleted, so that a
 			// reference to it fails as XPST0017 or XTSE0650 rather than
 			// quietly binding -- which is what use-package-003 asks for.
@@ -1877,7 +1874,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		if ov, ok := u.overriding[comp.sym.String()]; ok {
 			noteOverridingDecl(ov, compilePackage)
 			e.setAttr(ov, spliced, "yes")
-			appended = append(appended, e.rewriteOverride(ov, comp.el))
+			appended = append(appended, e.rewriteOverride(c.env, ov, comp.el))
 		}
 	}
 	var kept []*xdm.Node
@@ -1937,7 +1934,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 				// compileDocument, with compilePackage set to the used
 				// package. See overridingPackage.
 				noteOverridingDecl(ov, compilePackage)
-				kept = append(kept, e.rewriteOverride(ov, ch))
+				kept = append(kept, e.rewriteOverride(c.env, ov, ch))
 				if !e.isAbstractDecl(ch) {
 					kept = append(kept, ch)
 				}
@@ -1947,7 +1944,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		kept = append(kept, ch)
 	}
 	kept = append(kept, appended...)
-	u.doc, u.root = e.rebuild(u.doc, u.root, kept)
+	u.doc, u.root = e.rebuild(c.env, u.doc, u.root, kept)
 	// The rebuilt tree has had its static phase: it is the pruned copy, with
 	// composition's changes made.
 	c.staticDone[u.doc] = u.doc
@@ -2012,9 +2009,9 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	// decremented, because a package used from inside another must not be
 	// mistaken for its user on the way back out.
 	savedPkg := compilePackage
-	packageSerial++
-	packageParent[packageSerial] = savedPkg
-	compilePackage = packageSerial
+	c.env.packageSerial++
+	c.env.packageParent[c.env.packageSerial] = savedPkg
+	compilePackage = c.env.packageSerial
 	defer func() { compilePackage = savedPkg }()
 	defer c.enterPkgFrame(u)() // streampkgframe_l7.go: a frame package's compile state
 	defer c.enterOwnPkg(u)()   // streamtrust_pkguse.go
@@ -2047,7 +2044,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 // spelling the same name counts -- but it errs towards keeping a declaration,
 // and keeping one the package does not use costs nothing while deleting one
 // it does use breaks the package outright.
-func referencedWithin(e pkgEdits, root *xdm.Node, comp *component) bool {
+func referencedWithin(env *compileEnv, e pkgEdits, root *xdm.Node, comp *component) bool {
 	name := comp.el.AttrValue("name")
 	if name == "" {
 		return false
@@ -2068,7 +2065,7 @@ func referencedWithin(e pkgEdits, root *xdm.Node, comp *component) bool {
 	//
 	// Keeping a declaration nothing uses costs nothing, which is the same
 	// trade the lexical scan already makes.
-	if makesDynamicReference(root) {
+	if makesDynamicReference(env, root) {
 		return true
 	}
 	local := name
@@ -2117,11 +2114,10 @@ func referencedWithin(e pkgEdits, root *xdm.Node, comp *component) bool {
 // The scan is lexical and deliberately loose -- a string mentioning
 // "function-lookup" counts -- because the only consequence of a false positive
 // is that a declaration nothing uses survives.
-func makesDynamicReference(root *xdm.Node) bool {
+func makesDynamicReference(env *compileEnv, root *xdm.Node) bool {
 	// Memoised on the root: referencedWithin asks once per component, and the
-	// answer is a property of the tree. Guarded by compileSlot with the rest of
-	// the package-composition state.
-	if v, ok := dynamicRefCache[root]; ok {
+	// answer is a property of the tree.
+	if v, ok := env.dynamicRefCache[root]; ok {
 		return v
 	}
 	var walk func(n *xdm.Node) bool
@@ -2149,32 +2145,9 @@ func makesDynamicReference(root *xdm.Node) bool {
 		return false
 	}
 	v := walk(root)
-	if dynamicRefCache == nil {
-		dynamicRefCache = map[*xdm.Node]bool{}
-	}
-	dynamicRefCache[root] = v
+	env.dynamicRefCache[root] = v
 	return v
 }
-
-// dynamicRefCache memoises makesDynamicReference per package tree. Cleared
-// with the rest of the compile-scoped package state; see Compile.
-var dynamicRefCache map[*xdm.Node]bool
-
-// composedVisibility is the effective visibility of a used package's component
-// declarations, keyed by the declaration element.
-//
-// It is recorded during composition because that is the only moment the answer
-// is known. A component's visibility comes from its own attribute AND the
-// xsl:expose rules of its package manifest, 3.5.2, and composition consumes
-// the manifest: by the time the declarations are compiled into functions the
-// xsl:expose elements are gone from the tree, so exposedVisibility called then
-// sees no rules and reports the private default for a component the manifest
-// made public. expose-A declares p:f1 with no visibility attribute and exposes
-// it with names="p:*", and reading the attribute at compile time called it
-// private.
-//
-// Cleared with the rest of the compile-scoped package state; see Compile.
-var composedVisibility map[*xdm.Node]visibility
 
 // namesDynamicFunction reports whether text mentions one of the functions that
 // take a component name as a value.
@@ -2289,13 +2262,6 @@ func overriddenNameOf(el *xdm.Node) string {
 // reExportedComponents and packageComponents.
 const spliced = "go-xml-spliced-override"
 
-// originalSerial numbers the generated namespaces. Two overrides in one
-// stylesheet each keep a distinct original -- override-t-015 overrides a
-// template in each of two used packages and calls xsl:original from both --
-// so the namespace has to differ per overriding declaration rather than per
-// stylesheet.
-var originalSerial int
-
 // rewriteOverride prepares an overriding declaration to stand in the used
 // package's tree in place of the declaration it overrides.
 //
@@ -2314,7 +2280,13 @@ var originalSerial int
 // so all six land on the generated name without a rewriter each. Element
 // names are not affected: they were resolved when the tree was parsed, and
 // the compiler reads Node.Name rather than re-expanding the prefix.
-func (e pkgEdits) rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
+//
+// The generated namespace is numbered by env.originalSerial. Two overrides in
+// one stylesheet each keep a distinct original -- override-t-015 overrides a
+// template in each of two used packages and calls xsl:original from both --
+// so the namespace has to differ per overriding declaration rather than per
+// stylesheet.
+func (e pkgEdits) rewriteOverride(env *compileEnv, overriding, original *xdm.Node) *xdm.Node {
 	// The overriding declaration is about to be spliced into the used
 	// package's tree, which detaches it from the xsl:override it was written
 	// under. [xsl:]default-mode is resolved by walking ancestors, so a
@@ -2330,8 +2302,8 @@ func (e pkgEdits) rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 			e.setAttr(overriding, "default-mode", clarkToEQName(dm))
 		}
 	}
-	originalSerial++
-	uri := fmt.Sprintf("%s%d", originalNS, originalSerial)
+	env.originalSerial++
+	uri := fmt.Sprintf("%s%d", originalNS, env.originalSerial)
 	// A mode is not reachable through xsl:original -- there is no syntax for
 	// it -- and renaming it would detach the used package's template rules
 	// from the mode they name.
@@ -2417,11 +2389,6 @@ func (e pkgEdits) rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 	}
 	return overriding
 }
-
-// packageSerial numbers the packages one compilation sees, so that each has
-// an identity its declarations can be filed under. It is guarded by compileSlot
-// with the rest of the compile-time package state.
-var packageSerial int
 
 // checkPackageVersionRange applies the PackageVersionRange grammar of 3.5.1
 // to an xsl:use-package/@package-version attribute.
