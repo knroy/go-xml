@@ -44,6 +44,12 @@ type DTD struct {
 	// caller can see what the DOCTYPE actually pulled in, which for a modular
 	// DTD is not something any single file contains.
 	ExternalSubset string
+
+	// name is the root element type the DOCTYPE names, as written. Validate
+	// holds a document's root to it (XML 1.0 §2.8 VC Root Element Type).
+	// Empty for a DTD a caller assembled, which then names no root and is
+	// checked as before.
+	name string
 }
 
 // ContentKind is what an element's content model permits.
@@ -132,6 +138,7 @@ func Parse(directive string) (*DTD, error) {
 	}
 	d := newDTD()
 	head, subset := splitSubset(directive)
+	d.name = doctypeName(head)
 	// A SYSTEM or PUBLIC identifier in the head names an external subset.
 	if f := fields(head); len(f) >= 2 {
 		for _, tok := range f[1:] {
@@ -146,6 +153,15 @@ func Parse(directive string) (*DTD, error) {
 		return nil, err
 	}
 	return d, nil
+}
+
+// doctypeName is the root element name in a DOCTYPE head, "DOCTYPE name ...",
+// or "" when the head is not in that form.
+func doctypeName(head string) string {
+	if f := fields(head); len(f) >= 2 && f[0] == "DOCTYPE" {
+		return f[1]
+	}
+	return ""
 }
 
 // newDTD is the empty ruleset both entry points start from.

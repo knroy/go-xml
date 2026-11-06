@@ -52,9 +52,18 @@ func (b *bindings) restore(mark int) {
 
 // ancestor is one element on the path from the walk's root to the current
 // element, with its membership, which C14N 1.1's xml:base fix-up needs.
+//
+// xml and bases memoise, for an element outside the set, what its apex
+// children inherit from it and above: see inherited and outBases. They are
+// computed at most once per element, so siblings sharing a parent do not each
+// walk every ancestor's attributes.
 type ancestor struct {
-	n  *xdm.Node
-	in bool
+	n       *xdm.Node
+	in      bool
+	xml     []*xdm.Node
+	xmlOK   bool
+	bases   []string
+	basesOK bool
 }
 
 // canon is one canonicalization in progress. Its stacks are sized by element
@@ -87,9 +96,23 @@ type canon struct {
 	axes  []map[string]string
 	util  bindings
 
+	// differ is, when track is set, every prefix whose binding in scope
+	// differs from the one rendered: the prefixes consider would render at
+	// an apex now. differAt indexes it. It is kept current on every change
+	// to scope and rendered, so an apex considers what it will render rather
+	// than scanning the whole scope; a node set with an apex at every
+	// element otherwise cost (apexes × bindings) with no output to show for
+	// it. Subtree and ExcludeSubtree sets have one apex, their root, and
+	// keep no differ.
+	track    bool
+	differ   []string
+	differAt map[string]int
+
 	// considered counts calls to consider: the work the namespace axis
-	// costs, which TestNamespaceScopeNotQuadratic bounds.
+	// costs, which TestNamespaceScopeNotQuadratic bounds. inspected counts
+	// the ancestor attributes inherit examines.
 	considered int
+	inspected  int
 }
 
 // noNode records in util that the utilising ancestor had no namespace node
@@ -129,6 +152,10 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 	}
 	c.nsSet, _ = ns.(NamespaceSet)
 	c.util = bindings{m: map[string]string{}}
+	if _, excl := ns.(excludeSet); !all && !excl && !c.excl && c.nsSet == nil {
+		c.track = true
+		c.differAt = map[string]int{}
+	}
 	if t := root.Tree(); t != nil && t.XMLVersion == "1.1" {
 		return nil, ErrXML11
 	}
@@ -140,6 +167,7 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 				return nil, err
 			}
 			c.scope.m[prefix] = uri
+			c.trackPrefix(prefix)
 		}
 	}
 	c.w = newOutBuf(w)
@@ -276,8 +304,9 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 			return err
 		}
 		c.scope.set(prefix, uri)
+		c.trackPrefix(prefix)
 	}
-	c.path = append(c.path, ancestor{e, in})
+	c.path = append(c.path, ancestor{n: e, in: in})
 
 	c.attrs = c.attrs[:0]
 	for a := range e.Attrs() {
@@ -329,8 +358,8 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 		writeQName(c.w, e.Name())
 		c.putByte('>')
 	}
-	c.scope.restore(scopeMark)
-	c.rendered.restore(renderedMark)
+	c.restoreTracked(&c.scope, scopeMark)
+	c.restoreTracked(&c.rendered, renderedMark)
 	c.util.restore(utilMark)
 	c.axes = c.axes[:axesMark]
 	c.path = c.path[:len(c.path)-1]
@@ -349,9 +378,11 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 // For inclusive canonicalization, an element whose parent was output needs to
 // consider only its own declarations: the parent rendered every binding in its
 // scope that differed from what was already rendered, so nothing inherited can
-// differ now. Only an apex — an element whose parent is not output — scans
-// the whole scope, which keeps the per-element cost to the element's own
-// declarations rather than every binding in scope.
+// differ now. Only an apex — an element whose parent is not output — looks
+// further, which keeps the per-element cost to the element's own declarations
+// rather than every binding in scope. An apex considers c.differ, the
+// bindings that differ from what is rendered, when the set can have more than
+// one apex; otherwise its single apex, the root, scans the scope once.
 func (c *canon) namespaces(e *xdm.Node, parentIn bool) {
 	c.nsOut = c.nsOut[:0]
 	if c.excl {
@@ -372,6 +403,10 @@ func (c *canon) namespaces(e *xdm.Node, parentIn bool) {
 		for prefix := range e.DeclaredNamespaces() {
 			c.consider(prefix)
 		}
+	} else if c.track {
+		for _, prefix := range c.differ {
+			c.consider(prefix)
+		}
 	} else {
 		for prefix := range c.scope.m {
 			c.consider(prefix)
@@ -379,6 +414,40 @@ func (c *canon) namespaces(e *xdm.Node, parentIn bool) {
 		c.consider("")
 	}
 	c.writeNamespaces()
+}
+
+// trackPrefix brings prefix's membership of c.differ up to date after its
+// binding in scope or rendered changed. The test is consider's.
+func (c *canon) trackPrefix(prefix string) {
+	if !c.track {
+		return
+	}
+	uri := c.scope.m[prefix]
+	want := prefix != "xml" && (prefix == "" || uri != "") && c.rendered.m[prefix] != uri
+	i, has := c.differAt[prefix]
+	switch {
+	case want && !has:
+		c.differAt[prefix] = len(c.differ)
+		c.differ = append(c.differ, prefix)
+	case !want && has:
+		last := c.differ[len(c.differ)-1]
+		c.differ[i] = last
+		c.differAt[last] = i
+		c.differ = c.differ[:len(c.differ)-1]
+		delete(c.differAt, prefix)
+	}
+}
+
+// restoreTracked is b.restore, then trackPrefix for every prefix it put back.
+// restore only truncates the log, so the entries are still there to read.
+func (c *canon) restoreTracked(b *bindings, mark int) {
+	undo := b.undo[mark:]
+	b.restore(mark)
+	if c.track {
+		for _, u := range undo {
+			c.trackPrefix(u.prefix)
+		}
+	}
 }
 
 // writeNamespaces renders c.nsOut, sorted by prefix, and records it as
@@ -400,6 +469,7 @@ func (c *canon) writeNamespaces() {
 	}
 	for _, b := range c.nsOut {
 		c.rendered.set(b.prefix, b.uri)
+		c.trackPrefix(b.prefix)
 	}
 }
 
@@ -603,18 +673,61 @@ func (c *canon) inherit(e *xdm.Node) {
 			}
 		}
 	}
-	for a := e.Parent(); a != nil && a.Kind() == xdm.KindElement; a = a.Parent() {
-		for at := range a.Attrs() {
-			if at.Name().URI != xdm.NSXML || !c.inheritable(at.Name().Local) ||
-				e.Attr(xdm.NSXML, at.Name().Local) != nil || hasXMLAttr(c.attrs, at.Name().Local) {
-				continue
-			}
+	for _, at := range c.inherited(len(c.path) - 2) {
+		if e.Attr(xdm.NSXML, at.Name().Local) == nil && !hasXMLAttr(c.attrs, at.Name().Local) {
 			c.attrs = append(c.attrs, at)
 		}
 	}
 	if c.v11 {
 		c.fixBase(e)
 	}
+}
+
+// inherited is the inheritable xml:* attributes of c.path[i] and its
+// ancestors, nearest first and one per local name; i < 0 means those above
+// the walk's root. It is memoised on the path entry, which is what keeps an
+// apex's cost to what it inherits: every apex under one parent used to walk
+// every attribute of every ancestor again.
+func (c *canon) inherited(i int) []*xdm.Node {
+	if i >= 0 && c.path[i].xmlOK {
+		return c.path[i].xml
+	}
+	var own, outer []*xdm.Node
+	if i < 0 {
+		// Above the root, once: the root is the only apex with no parent
+		// on the path.
+		if len(c.path) > 0 {
+			for a := c.path[0].n.Parent(); a != nil && a.Kind() == xdm.KindElement; a = a.Parent() {
+				own = c.xmlAttrsOf(a, own)
+			}
+		}
+		return own
+	}
+	own = c.xmlAttrsOf(c.path[i].n, nil)
+	outer = c.inherited(i - 1)
+	list := outer
+	if len(own) > 0 {
+		list = own
+		for _, at := range outer {
+			if !hasXMLAttr(own, at.Name().Local) {
+				list = append(list, at)
+			}
+		}
+	}
+	c.path[i].xml, c.path[i].xmlOK = list, true
+	return list
+}
+
+// xmlAttrsOf appends to list a's inheritable xml:* attributes whose local
+// name list does not already hold.
+func (c *canon) xmlAttrsOf(a *xdm.Node, list []*xdm.Node) []*xdm.Node {
+	for at := range a.Attrs() {
+		c.inspected++
+		if at.Name().URI == xdm.NSXML && c.inheritable(at.Name().Local) && !hasXMLAttr(list, at.Name().Local) {
+			list = append(list, at)
+		}
+	}
+	return list
 }
 
 // inheritable reports whether xml:local is copied from an ancestor. C14N 1.0
@@ -634,24 +747,44 @@ func hasXMLAttr(attrs []*xdm.Node, local string) bool {
 	return false
 }
 
+// outBases is the xml:base values, innermost first, of c.path[i] and the
+// ancestors above it up to the nearest one in the set; i < 0 means every
+// ancestor above the walk's root. It is memoised on the path entry, as
+// inherited is and for the same reason.
+func (c *canon) outBases(i int) []string {
+	if i >= 0 && c.path[i].in {
+		return nil
+	}
+	if i >= 0 && c.path[i].basesOK {
+		return c.path[i].bases
+	}
+	var bases []string
+	if i < 0 {
+		if len(c.path) > 0 {
+			for a := c.path[0].n.Parent(); a != nil && a.Kind() == xdm.KindElement; a = a.Parent() {
+				c.inspected++
+				if v, ok := xmlAttr(a, "base"); ok {
+					bases = append(bases, v)
+				}
+			}
+		}
+		return bases
+	}
+	outer := c.outBases(i - 1)
+	bases = outer
+	c.inspected++
+	if v, ok := xmlAttr(c.path[i].n, "base"); ok {
+		bases = append([]string{v}, outer...)
+	}
+	c.path[i].bases, c.path[i].basesOK = bases, true
+	return bases
+}
+
 // fixBase performs C14N 1.1 §2.4's xml:base fix-up on e, whose parent is not
 // in the set. It applies only when one of the contiguously omitted ancestors
 // carried xml:base; their values and e's own are joined innermost-last.
 func (c *canon) fixBase(e *xdm.Node) {
-	var bases []string // innermost first
-	i := len(c.path) - 2
-	a := e.Parent()
-	for ; a != nil && a.Kind() == xdm.KindElement; a = a.Parent() {
-		if i >= 0 {
-			if c.path[i].in {
-				break
-			}
-			i--
-		}
-		if v, ok := xmlAttr(a, "base"); ok {
-			bases = append(bases, v)
-		}
-	}
+	bases := c.outBases(len(c.path) - 2) // innermost first
 	if len(bases) == 0 {
 		return
 	}

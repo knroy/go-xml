@@ -216,6 +216,7 @@ func Load(directive string, opts LoadOptions) (*DTD, error) {
 		}
 		if d != nil {
 			d.HasExternalSubset = hasExternal
+			d.name = doctypeName(head)
 		}
 		return d, nil
 	}
@@ -263,6 +264,7 @@ func Load(directive string, opts LoadOptions) (*DTD, error) {
 	if d != nil {
 		d.HasExternalSubset = true
 		d.ExternalSubset = expandedExternal
+		d.name = doctypeName(head)
 	}
 	return d, nil
 }
@@ -584,9 +586,12 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 		}
 		j := strings.IndexByte(subset[i:], ';')
 		if j < 0 {
-			sb.WriteByte(subset[i])
-			i++
-			continue
+			// No ';' remains, so no reference in the tail can close, and no
+			// declaration in it can hold one either. Copying the tail whole
+			// keeps this linear: stepping one byte and rescanning for ';' at
+			// every later '%' cost the square of the subset.
+			sb.WriteString(subset[i:])
+			break
 		}
 		name := subset[i+1 : i+j]
 		p, ok := l.params[name]
@@ -632,7 +637,12 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 		// call and every subset a fresh allowance, which is the same defect
 		// one level up — a bomb split across the two subsets, or across two
 		// declarations, would meet the budget twice over and pass.
-		if err := l.chargeExpansion(len(text)); err != nil {
+		//
+		// A reference is charged at least its own length, so one that
+		// expands to nothing is not free: a ladder of rungs "%aN;%aN;" over
+		// an empty a0 doubles its calls a rung while producing no bytes, and
+		// without this floor the budget never moved.
+		if err := l.chargeExpansion(max(len(text), j+1)); err != nil {
 			return "", err
 		}
 		sb.WriteString(text)

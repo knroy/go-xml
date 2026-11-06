@@ -135,6 +135,16 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 		}
 	}
 	v.root = root
+	// XML 1.0 §2.8 VC Root Element Type: the document's root is the element
+	// the DOCTYPE names. Without it a document could send any other declared
+	// element as its root and escape the named one's attributes and model.
+	// Only a whole document has a root to hold to; a subtree passed in is
+	// validated as itself.
+	if doc.Kind() == xdm.KindDocument && root != doc && d.name != "" &&
+		root.Name().Lexical() != d.name {
+		v.fail(root, "root element %s is not the DOCTYPE's %s",
+			root.Name().Lexical(), d.name)
+	}
 	v.walk(root)
 	v.checkIDRefs()
 	if len(v.errs) == 0 {
