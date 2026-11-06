@@ -887,6 +887,15 @@ func applyFracGrouping(s string, positions []int, sep rune) string {
 	if regular := fracRegularInterval(positions); regular > 0 {
 		step = regular
 	}
+	// Irregular positions are counted once: scanning them all for every
+	// digit was quadratic in the picture's length.
+	var at map[int]int
+	if step == 0 {
+		at = make(map[int]int, len(positions))
+		for _, p := range positions {
+			at[p]++
+		}
+	}
 	runes := []rune(s)
 	var sb strings.Builder
 	for i, r := range runes {
@@ -896,10 +905,8 @@ func applyFracGrouping(s string, positions []int, sep rune) string {
 					sb.WriteRune(sep)
 				}
 			} else {
-				for _, p := range positions {
-					if p == i {
-						sb.WriteRune(sep)
-					}
+				for k := 0; k < at[i]; k++ {
+					sb.WriteRune(sep)
 				}
 			}
 		}
