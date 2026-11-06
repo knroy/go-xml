@@ -1,6 +1,7 @@
 package relaxng
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -178,6 +179,30 @@ func TestDiamondIncludeIsLegal(t *testing.T) {
 	}
 	if err := s.Validate(doc.Root); err != nil {
 		t.Errorf("the shared definition should apply: %v", err)
+	}
+}
+
+// Include fan-out is bounded per compilation, not only per chain: L0..L4 each
+// include the next level 8 times, so the leaf is reached by 8^5 routes and the
+// whole set costs 37449 fetches from about a kilobyte of schema. The refusal is
+// a resource limit, and a diamond (above) stays legal.
+func TestIncludeFanOutIsBounded(t *testing.T) {
+	const fan, depth = 8, 5
+	r := &mapResolver{docs: map[string]string{
+		fmt.Sprintf("L%d.rng", depth): `<grammar` + rngNS + `/>`,
+	}}
+	for i := 0; i < depth; i++ {
+		inc := strings.Repeat(fmt.Sprintf(`<include href="L%d.rng"/>`, i+1), fan)
+		r.docs[fmt.Sprintf("L%d.rng", i)] = `<grammar` + rngNS + `>` + inc + `</grammar>`
+	}
+	_, err := compileWith(t, `<grammar`+rngNS+`><include href="L0.rng"/>
+		<start><element name="a"><empty/></element></start></grammar>`,
+		Options{Resolver: r})
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Fatalf("got %v after %d fetches, want a resource limit", err, len(r.seen))
+	}
+	if len(r.seen) > maxSchemaFetches {
+		t.Errorf("%d fetches, above the bound of %d", len(r.seen), maxSchemaFetches)
 	}
 }
 

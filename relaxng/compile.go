@@ -120,6 +120,9 @@ type compiler struct {
 	// own, and the chain it is on is the same chain. Sharing the map is what
 	// makes a cycle that passes through an externalRef visible.
 	activeHrefs *map[string]bool
+	// fetches counts the include/externalRef fetches of the whole
+	// compilation, shared like activeHrefs; see maxSchemaFetches.
+	fetches *int
 	// expanding names the definitions currently being compiled, so that one
 	// reaching itself becomes a lazy reference rather than an infinite
 	// expansion.
@@ -187,6 +190,15 @@ type compiledDef struct {
 // A compiler built directly by Compile has none, and one is made here rather
 // than at every construction site so that the several places that build a
 // sub-compiler cannot each forget it in their own way.
+// fetchCount returns the compilation-wide fetch counter, creating it on the
+// first fetch.
+func (c *compiler) fetchCount() *int {
+	if c.fetches == nil {
+		c.fetches = new(int)
+	}
+	return c.fetches
+}
+
 func (c *compiler) active() *map[string]bool {
 	if c.activeHrefs == nil {
 		m := map[string]bool{}
@@ -650,7 +662,7 @@ func (c *compiler) compilePattern(n *xdm.Node) (pattern, error) {
 			combined: map[string][]*xdm.Node{}, how: map[string]string{},
 			depth: c.depth, parent: c, opts: c.opts,
 			includeDepth: c.includeDepth, activeHrefs: c.active(),
-			inheritedNs: c.inheritedNs}
+			fetches: c.fetchCount(), inheritedNs: c.inheritedNs}
 		return sub.compileGrammar(n)
 
 	case "parentRef":
@@ -894,6 +906,17 @@ func (c *compiler) fetch(n *xdm.Node) (*xdm.Node, string, error) {
 			"relaxng: resource limit exceeded: schemas nest more than %d "+
 				"includes deep at %q", maxIncludeDepth, href)
 	}
+	// The depth bound is per chain; this one is per compilation. A diamond is
+	// legal and re-fetched on every route, so without it a few schemas each
+	// including the next F times cost F^depth fetches and collects.
+	fetches := c.fetchCount()
+	if *fetches >= maxSchemaFetches {
+		return nil, "", fmt.Errorf(
+			"relaxng: resource limit exceeded: compiling this schema needs "+
+				"more than %d include/externalRef fetches at %q: %w",
+			maxSchemaFetches, href, xdm.ErrResourceLimit)
+	}
+	*fetches++
 	doc, err := c.opts.Resolver.ResolveSchema(href)
 	if err != nil {
 		return nil, "", fmt.Errorf("relaxng: <%s href=%q>: %w",
@@ -1056,7 +1079,7 @@ func (c *compiler) compileExternalRef(n *xdm.Node) (pattern, error) {
 		combined: map[string][]*xdm.Node{}, how: map[string]string{},
 		opts:         Options{Resolver: c.opts.Resolver, BaseURI: href},
 		includeDepth: c.includeDepth + 1, depth: c.depth,
-		activeHrefs: c.active(),
+		activeHrefs: c.active(), fetches: c.fetchCount(),
 		inheritedNs: inheritedNs(n, c.inheritedNs)}
 	// The referenced schema is on the active path while it compiles, and off
 	// it again afterwards, so that a second externalRef to the same schema
@@ -1112,8 +1135,8 @@ func (c *compiler) lazyRef(name string) pattern {
 		sub := &compiler{
 			defines: c.defines, combined: c.combined, how: c.how,
 			parent: c.parent, opts: c.opts, includeDepth: c.includeDepth,
-			activeHrefs: c.activeHrefs,
-			expanding:   map[string]bool{}, expandingAt: map[string]int{},
+			activeHrefs: c.activeHrefs, fetches: c.fetchCount(),
+			expanding: map[string]bool{}, expandingAt: map[string]int{},
 			lazy: c.lazy, compiled: c.compiled,
 			nodeNs: c.nodeNs,
 		}
