@@ -8,6 +8,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 	"github.com/knroy/go-xml/v2/xsd"
@@ -707,7 +708,8 @@ func stylesheetBase(doc *xdm.Node, opt string) string {
 // static variable calls it during the static phase -- can reach the same code
 // without asking for a mutex the outer call has not let go of. See
 // compileNestedLocked.
-func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
+func Compile(doc *xdm.Node, opts CompileOptions) (_ *Stylesheet, err error) {
+	defer xdmlimit.Recover(&err) // a node constructed past a tree's text blocks
 	compileMu.Lock()
 	defer compileMu.Unlock()
 	setSharedNS(map[*xdm.Node]map[string]string{})

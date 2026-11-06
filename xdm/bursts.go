@@ -7,6 +7,7 @@ import (
 
 	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/internal/xdmclone"
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 )
 
 // Burst-mode parsing: the incremental half of streamed XSLT execution.
@@ -34,7 +35,8 @@ import (
 // ParseBursts parses r and calls fn with each element whose ancestry of
 // element names, from the document element down, is path, of at most
 // xdmburst.MaxSteps names. An error from fn stops the parse and is returned.
-func ParseBursts(r io.Reader, opts ParseOptions, path []QName, fn func(*Node) error) error {
+func ParseBursts(r io.Reader, opts ParseOptions, path []QName, fn func(*Node) error) (err error) {
+	defer xdmlimit.Recover(&err)
 	steps := make([]xdmburst.Step, len(path))
 	for i, q := range path {
 		steps[i] = xdmburst.Step{URI: q.URI, Local: q.Local}

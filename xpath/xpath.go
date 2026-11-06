@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"sync/atomic"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -314,7 +315,8 @@ func (c *Compiled) Source() string { return c.src }
 func (c *Compiled) Expr() Expr { return c.expr }
 
 // Eval evaluates the expression in ctx.
-func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
+func (c *Compiled) Eval(ctx *Context) (_ xdm.Sequence, err error) {
+	defer xdmlimit.Recover(&err) // a node constructed past a tree's text blocks
 	// The item budget bounds one expression evaluation, not the transform.
 	// A stylesheet that evaluates a legitimate 500-item range once per node of
 	// a 20,000-node document is doing nothing wrong, and a budget carried
