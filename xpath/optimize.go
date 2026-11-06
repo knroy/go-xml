@@ -95,6 +95,27 @@ func (c *optimizeCanceller) tick() bool {
 	return false
 }
 
+// stop reports whether the compile context has ended, checked before each
+// fold. A fold evaluates, and one evaluation can outlast the whole stride.
+func (c *optimizeCanceller) stop() bool {
+	if c.err == nil {
+		c.err = c.ctx.Err()
+	}
+	return c.err != nil
+}
+
+// foldMaxItems is the item budget every fold of one optimisation pass shares.
+//
+// A fold only ever produces one atomic literal, so a fold that materialises
+// thousands of intermediate items is one that should not happen at compile
+// time: an aggregate over a range is answered arithmetically and charges
+// nothing, and anything else that size is cheaper left to run time, where the
+// caller's own budget applies. Before this each fold minted the evaluation
+// default (MaxItems, with MaxBytes) afresh, so twenty "1 to 999999" terms in
+// 241 bytes allocated 2.8 GB at compile. Exceeding it declines the fold,
+// exactly as an error does, so the result is never different, only unfolded.
+const foldMaxItems = 4096
+
 // exprFacts memoises the whole-subtree predicates the optimiser consults.
 //
 // Both isClosed and containsCompatSensitive answer a question about an entire
@@ -132,6 +153,11 @@ type exprFacts struct {
 	// whether folding is legal.
 	cancel *optimizeCanceller
 
+	// fold is the evaluation context every fold of the pass shares, so its
+	// counters bound the pass rather than each fold; see foldMaxItems. Built
+	// on the first fold, since most expressions fold nothing.
+	fold *Context
+
 	// walks counts uncached predicate evaluations. The cache bounds it by
 	// twice the node count; TestOptimizeNotQuadratic asserts that, since a
 	// count does not vary with machine load the way a compile time does.
@@ -143,6 +169,20 @@ func newExprFacts() *exprFacts {
 		closed:         make(map[Expr]bool),
 		compatSensitiv: make(map[Expr]bool),
 	}
+}
+
+// foldContext returns the pass's shared fold context, bound to the compile
+// context when there is one.
+func (f *exprFacts) foldContext() *Context {
+	if f.fold == nil {
+		f.fold = NewContext(nil, Builtins(), func(e *Env) {
+			e.MaxItems = foldMaxItems
+			if f.cancel != nil {
+				e.Ctx = f.cancel.ctx
+			}
+		})
+	}
+	return f.fold
 }
 
 func optimizeDepth(e Expr, depth int) Expr {
@@ -248,13 +288,24 @@ func foldConstant(e Expr, f *exprFacts) (Expr, bool) {
 		if isComparisonOp(v.Op) {
 			return nil, false
 		}
-		return evalToLiteral(e)
+		// A range of two different literal bounds is empty or longer than
+		// one item, and only a singleton folds, so evaluating it would build
+		// the range to throw it away. "5 to 5" still folds.
+		if v.Op == "to" {
+			l, lok := v.Left.(*Literal)
+			r, rok := v.Right.(*Literal)
+			if lok && rok && intBound(l) && intBound(r) &&
+				l.Val.Int64() != r.Val.Int64() {
+				return nil, false
+			}
+		}
+		return evalToLiteral(e, f)
 
 	case *UnaryOp:
 		if !isClosed(v.Operand, f) {
 			return nil, false
 		}
-		return evalToLiteral(e)
+		return evalToLiteral(e, f)
 
 	case *FuncCall:
 		if !foldableFunction(v.Name, len(v.Args)) {
@@ -265,20 +316,29 @@ func foldConstant(e Expr, f *exprFacts) (Expr, bool) {
 				return nil, false
 			}
 		}
-		return evalToLiteral(e)
+		return evalToLiteral(e, f)
 	}
 	return nil, false
 }
 
-// evalToLiteral evaluates e in an empty context and returns it as a literal.
+// intBound reports whether a literal is an xs:integer read exactly by Int64.
+// A bound that is not is left to evaluation, which types and refuses it.
+func intBound(l *Literal) bool {
+	return l.Val.Type == xdm.TypeInteger && l.Val.FitsInt64()
+}
+
+// evalToLiteral evaluates e in the pass's empty fold context and returns it as
+// a literal.
 //
 // A failure is not an error here: it means the expression raises at run time,
 // and the unfolded tree is returned so that it raises then, at the point the
 // stylesheet actually evaluates it. Folding "1 div 0" into an error at compile
 // time would refuse a stylesheet whose branch is never taken.
-func evalToLiteral(e Expr) (Expr, bool) {
-	ctx := NewContext(nil, Builtins())
-	seq, err := e.Eval(ctx)
+func evalToLiteral(e Expr, f *exprFacts) (Expr, bool) {
+	if f.cancel != nil && f.cancel.stop() {
+		return nil, false
+	}
+	seq, err := e.Eval(f.foldContext())
 	if err != nil || len(seq) != 1 {
 		return nil, false
 	}
