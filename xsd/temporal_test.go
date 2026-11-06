@@ -272,6 +272,41 @@ func TestValidateTemporalFractionDigitLimit(t *testing.T) {
 	}
 }
 
+// A duration's year and month fields are unbounded (duYearFrag), but they were
+// held as an int64 count of months. A field past int64 failed to parse and
+// compared as having no order, and one just inside it wrapped when multiplied
+// by twelve, so either way a bound facet let the value pass. The months are
+// now big integers and the comparison is exact.
+func TestValidateDurationBoundsLargeYear(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="d">
+	    <xs:restriction base="xs:duration">
+	      <xs:minInclusive value="-P1Y"/>
+	      <xs:maxInclusive value="P1Y"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	  <xs:simpleType name="big">
+	    <xs:restriction base="xs:duration">
+	      <xs:maxInclusive value="P100000000000000000000Y"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	  <xs:element name="d" type="d"/>
+	  <xs:element name="big" type="big"/>
+	</xs:schema>`
+
+	assertInvalid(t, schema, `<d>P100000000000000000000Y</d>`, "maxInclusive")
+	assertInvalid(t, schema, `<d>-P100000000000000000000Y</d>`, "minInclusive")
+	assertInvalid(t, schema, `<d>P800000000000000000Y</d>`, "maxInclusive")
+	assertInvalid(t, schema, `<d>P100000000000000000000M</d>`, "maxInclusive")
+	assertValid(t, schema, `<d>P11M30D</d>`)
+
+	assertValid(t, schema, `<big>P100000000000000000000Y</big>`)
+	assertValid(t, schema, `<big>P99999999999999999999Y11M</big>`)
+	assertInvalid(t, schema, `<big>P100000000000000000000Y1M</big>`, "maxInclusive")
+	assertInvalid(t, schema, `<big>P100000000000000000000YT1S</big>`, "maxInclusive")
+}
+
 func TestValidateDurationBounds(t *testing.T) {
 	schema := `
 	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">

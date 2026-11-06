@@ -364,8 +364,14 @@ func daysFromCivil(y, m, d int64) int64 {
 // so P1M and P30D have no fixed order. The spec makes duration only partially
 // ordered for exactly this reason, and comparing through a single "average
 // month" would invent an order the spec does not have.
+//
+// The months are a big integer because the year and month fields are
+// unbounded (duYearFrag, duMonthFrag). An int64 count failed to parse past its
+// range, and wrapped when a year just inside it was multiplied by twelve; a
+// value that cannot be compared passes every bound, so either way was a false
+// accept.
 type duration struct {
-	months  int64
+	months  *big.Int
 	seconds *big.Rat
 }
 
@@ -381,7 +387,7 @@ type duration struct {
 // The four references are the ones the spec names, chosen so that every
 // combination of leap year and month length is covered.
 func compareDuration(a, b duration) (int, bool) {
-	if a.months == b.months {
+	if a.months.Cmp(b.months) == 0 {
 		return a.seconds.Cmp(b.seconds), true
 	}
 
@@ -425,31 +431,32 @@ var durationReferences = [4]struct {
 // The months are added first and the day clamped to the length of the resulting
 // month, which is what makes "one month after 31 January" mean 28 or 29
 // February rather than an invalid date. Only then are the seconds added.
+//
+// The arithmetic is in big integers, with the year split into 400-year eras as
+// parseTemporal does, since the months are unbounded. DivMod is Euclidean, so
+// with a positive divisor it rounds toward negative infinity, which is what a
+// calendar needs for years before the epoch.
 func addDurationTo(ref struct {
 	y, m, d int64
 	secs    int64
 }, d duration) *big.Rat {
-	totalMonths := ref.y*12 + (ref.m - 1) + d.months
-	year := floorDiv(totalMonths, 12)
-	month := totalMonths - year*12 + 1
+	totalMonths := big.NewInt(ref.y*12 + (ref.m - 1))
+	totalMonths.Add(totalMonths, d.months)
+	year, month := new(big.Int).DivMod(totalMonths, big.NewInt(12), new(big.Int))
+	era, yoe := new(big.Int).DivMod(year, big.NewInt(400), new(big.Int))
+	m := month.Int64() + 1
 
 	day := ref.d
-	if max := daysInMonth(year, month); day > max {
+	if max := daysInMonth(yoe.Int64(), m); day > max {
 		day = max
 	}
 
-	out := new(big.Rat).SetInt64(daysFromCivil(year, month, day)*86400 + ref.secs)
+	days := era.Mul(era, big.NewInt(146097))
+	days.Add(days, big.NewInt(daysFromCivil(yoe.Int64(), m, day)))
+	secs := days.Mul(days, big.NewInt(86400))
+	secs.Add(secs, big.NewInt(ref.secs))
+	out := new(big.Rat).SetInt(secs)
 	return out.Add(out, d.seconds)
-}
-
-// floorDiv divides rounding toward negative infinity, which is what a calendar
-// needs for years before the epoch.
-func floorDiv(a, b int64) int64 {
-	q := a / b
-	if a%b != 0 && (a < 0) != (b < 0) {
-		q--
-	}
-	return q
 }
 
 // daysInMonth returns the length of a month in the proleptic Gregorian
@@ -479,23 +486,21 @@ func parseDuration(v string) (duration, bool) {
 	v = v[1:]
 
 	datePart, timePart, hasT := strings.Cut(v, "T")
-	var months int64
+	months := new(big.Int)
 	seconds := new(big.Rat)
 
 	if !scanDurationFields(datePart, "YMD", func(field byte, n *big.Rat) bool {
 		switch field {
 		case 'Y':
-			i, ok := ratToInt(n)
-			if !ok {
+			if !n.IsInt() {
 				return false
 			}
-			months += i * 12
+			months.Add(months, new(big.Int).Mul(n.Num(), big.NewInt(12)))
 		case 'M':
-			i, ok := ratToInt(n)
-			if !ok {
+			if !n.IsInt() {
 				return false
 			}
-			months += i
+			months.Add(months, n.Num())
 		case 'D':
 			seconds.Add(seconds, new(big.Rat).Mul(n, big.NewRat(86400, 1)))
 		}
@@ -519,7 +524,7 @@ func parseDuration(v string) (duration, bool) {
 	}
 
 	if neg {
-		months = -months
+		months.Neg(months)
 		seconds.Neg(seconds)
 	}
 	return duration{months: months, seconds: seconds}, true
@@ -554,18 +559,6 @@ func scanDurationFields(v, designators string, fn func(byte, *big.Rat) bool) boo
 		v = v[n+1:]
 	}
 	return true
-}
-
-// ratToInt returns the integer value of an exact whole rational.
-func ratToInt(r *big.Rat) (int64, bool) {
-	if !r.IsInt() {
-		return 0, false
-	}
-	n := r.Num()
-	if !n.IsInt64() {
-		return 0, false
-	}
-	return n.Int64(), true
 }
 
 // wrapDay reduces a seconds-of-day value into [0, 86400).
