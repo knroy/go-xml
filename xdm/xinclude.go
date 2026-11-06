@@ -173,37 +173,69 @@ type includeProc struct {
 	// expanded, so siblings each including the one before doubled the
 	// result per level, and fetches and depth never see it.
 	nodes int
+	// bytes counts the text and attribute values those nodes carry, against
+	// opts.Parse.MaxBytes: the node count cannot see a text node's length,
+	// and one 8000-byte text doubled per level held 65 MB in 25,000 nodes.
+	bytes int64
+	// visits counts the nodes the walks of href-less xpointers visit,
+	// against opts.Parse.MaxNodes: each walk starts at the root, so N
+	// includes naming an element after them cost N^2/2 visits.
+	visits int
+}
+
+// nodeLimit is the pass's node budget, or -1 for none.
+func (p *includeProc) nodeLimit() int {
+	switch limit := p.opts.Parse.MaxNodes; {
+	case limit == 0:
+		return DefaultMaxNodes
+	case limit < 0:
+		return -1
+	default:
+		return limit
+	}
 }
 
 // charge counts the nodes of picked, about to be copied in by an inclusion,
-// against the pass's node budget.
+// against the pass's node budget, and their values against its byte budget.
 func (p *includeProc) charge(picked []*Node) error {
-	limit := p.opts.Parse.MaxNodes
-	if limit == 0 {
-		limit = DefaultMaxNodes
-	}
-	if limit < 0 {
-		return nil
-	}
 	for _, n := range picked {
-		p.nodes += subtreeNodes(n)
+		c, b := subtreeCost(n)
+		p.nodes += c
+		p.bytes += b
 	}
-	if p.nodes > limit {
+	if limit := p.nodeLimit(); limit >= 0 && p.nodes > limit {
 		return fatalInclude{fmt.Errorf(
 			"resource limit exceeded: inclusions exceed %d nodes: %w",
+			limit, ErrResourceLimit)}
+	}
+	limit := p.opts.Parse.MaxBytes
+	if limit == 0 {
+		limit = DefaultMaxBytes
+	}
+	if limit >= 0 && p.bytes > limit {
+		return fatalInclude{fmt.Errorf(
+			"resource limit exceeded: inclusions exceed %d bytes: %w",
 			limit, ErrResourceLimit)}
 	}
 	return nil
 }
 
-// subtreeNodes counts n and its descendants, attributes and namespace
-// declarations, as a parse counts them.
-func subtreeNodes(n *Node) int {
-	c := 1 + n.NumAttrs() + n.NumNamespaceDecls()
-	for k := range n.Children() {
-		c += subtreeNodes(k)
+// subtreeCost counts n and its descendants, attributes and namespace
+// declarations, as a parse counts them, and the bytes of their values.
+func subtreeCost(n *Node) (nodes int, bytes int64) {
+	nodes = 1 + n.NumAttrs() + n.NumNamespaceDecls()
+	for a := range n.Attrs() {
+		bytes += int64(len(a.Value()))
 	}
-	return c
+	if n.Kind() != KindElement && n.Kind() != KindDocument {
+		bytes += int64(len(n.Value()))
+	}
+	for k := range n.Children() {
+		c, b := subtreeCost(k)
+		nodes += c
+		bytes += b
+	}
+	return nodes, bytes
 }
 
 // mentionsXInclude reports whether t could hold an XInclude-namespace element.
@@ -494,7 +526,15 @@ func (p *includeProc) expandInclude(dst, inc *Node, depth int) error {
 // written where the include element sat, not where they were read.
 func (p *includeProc) selectLocal(inc *Node, xptr, base string) (*Node, error) {
 	root := inc.Root()
-	picked, err := selectXPointerIn(root, xptr, p.viewOf)
+	picked, err := selectXPointerIn(root, xptr, func(n *Node) *Node {
+		p.visits++
+		return p.viewOf(n)
+	})
+	if limit := p.nodeLimit(); limit >= 0 && p.visits > limit {
+		return nil, fatalInclude{fmt.Errorf(
+			"resource limit exceeded: local xpointer searches visit more than %d nodes: %w",
+			limit, ErrResourceLimit)}
+	}
 	if err != nil {
 		return nil, err
 	}
