@@ -136,10 +136,10 @@ and maintains it as a project of his own.
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,193 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSLT 3.0** | 99.85% of the W3C XSLT suite filtered to 3.0 (11,501 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases; every one of the 151 cases that wants the XTSE3430 refusal gets it — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
-| **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
+| **XSD 1.1** | 99.90% instance (26,217 of 26,244); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 3,330 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 3,377 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -1099,9 +1099,11 @@ Both halves of `import` are implemented, through a store the caller fills:
 fetched and an import the store cannot answer raises `XQST0059`. See
 [docs/xquery.md](docs/xquery.md).
 
-**Collations.** Two are implemented: codepoint, and the ASCII
-case-insensitive collation the spec defines, which needs no locale data. Both
-are *applied* rather than merely validated — an `xsl:sort/@collation` that was
+**Collations.** Three are implemented: codepoint, the HTML ASCII
+case-insensitive collation the spec defines, and the UCA family
+(`http://www.w3.org/2013/collation/UCA` with its strength, language and
+tailoring parameters, from `golang.org/x/text/collate`); a host can add its own
+with `xpath.RegisterCollation`. All are *applied* rather than merely validated — an `xsl:sort/@collation` that was
 accepted and then sorted by codepoint anyway would be the silent-wrong-answer
 this engine exists to avoid. Relative URIs such as `collation/codepoint`
 resolve, because stylesheets write them that way. Anything else is refused.
@@ -1110,9 +1112,9 @@ resolve, because stylesheets write them that way. Anything else is refused.
 Swedish orders "ä" after "z" where German orders it next to "a", and codepoint
 order gets both wrong. `fn:normalize-unicode` implements all four standard
 forms. Both use `golang.org/x/text`. A `@lang` naming a language with no
-collation data is refused rather than quietly falling back to codepoint order,
-and `@collation` accepts only the codepoint URI — a language-sensitive
-collation is spelled with `@lang`.
+collation data sorts as if `@lang` were omitted, as XSLT 3.0 §13.1.3 allows;
+a value outside `xs:language` is an error. `@collation` accepts any collation
+above.
 
 **Canonical XML.** All three W3C algorithms — Canonical XML 1.0, Exclusive
 Canonical XML 1.0 with its InclusiveNamespaces PrefixList, and Canonical XML
@@ -1238,7 +1240,7 @@ Two figures, and the second is the one that matters.
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
+| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,244 (99.90%) |
 
 **Earlier revisions of this file reported a single "99.56%" for XSD 1.0 and
 "XSD 1.1: 100%". Both were measured wrongly, and the correction is large enough
@@ -1481,10 +1483,11 @@ the output looks fine and is wrong.
   categories included (`[\i-[:]]`, `[\p{L}-[x]]`). A hyphen between two classes (`[a-z]-[a-z]`, as in a UUID
   pattern) is not subtraction and is unaffected.
 
-One approximation is documented rather than hidden: `fn:id`/`fn:idref` use
-`xml:id` and conventional `id` attributes, because without a DTD or schema
-nothing declares which attributes are of type ID. A stylesheet relying on
-DTD-declared IDs gets an empty result rather than a wrong one.
+One approximation is documented rather than hidden: `fn:id`/`fn:idref` find
+the attributes a DTD or schema declares as `ID`/`IDREF`/`IDREFS`, and also
+treat `xml:id` and any unprefixed `id` (`idref`, `idrefs`) attribute as such,
+declared or not. A document that uses `id` for something other than an ID can
+therefore get a false match.
 
 ## How this was tested
 
@@ -1495,11 +1498,11 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (3,330 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (3,377 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,517 XQuery cases | XSLT (it is an XPath suite) |
-| **W3C xsdtests suite** | systematic XSD conformance across 25,000 instance and 14,388 schema-validity tests (XSD 1.0; 1.1 adds 26,222 and 15,354) | schemas nobody writes by hand |
+| **W3C xsdtests suite** | systematic XSD conformance across 25,000 instance and 14,388 schema-validity tests (XSD 1.0; 1.1 adds 26,244 and 15,354) | schemas nobody writes by hand |
 | **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
 | **Fuzzing** (12 targets) | a crash, hang or wrong refusal on input no author would write | anything a coverage-guided search does not reach in the time it is given |
 **Every suite feeds the parser well-formed input**, which is the gap fuzzing
@@ -1867,7 +1870,7 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
+| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,244 (99.90%) |
 
 Every failure is catalogued in
 [docs/conformance-gaps.md](docs/conformance-gaps.md), with a verdict on whether

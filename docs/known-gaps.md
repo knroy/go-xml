@@ -148,10 +148,6 @@ Found by the third memory audit (2026-11-01) and not fixed, each with the reason
 - **XQuery inline functions capture their whole scope.** The XPath and XSLT
   closure (`InlineFunctionExpr`) keeps only what its body reads;
   `xquery/inline.go` has its own implementation.
-- **A regex program over 4,096 estimated instructions is compiled on every
-  call**, because it is not cached. The estimate adds each character class's
-  rune table at ten runes to an instruction (`\w` counts 161), so a pattern
-  with more than about 25 `\w` or `\p{L}` is recompiled per call.
 
 ### Security audit at `e728478a`: what the fix round left open (security, resource limits)
 
@@ -167,21 +163,15 @@ reason:
   `xdm.ErrResourceLimit` and no result; a host calling `Node.SetValue`,
   `AppendCopy` or `xdmbuild` methods directly still gets a panic, whose value
   is an error matching `ErrResourceLimit`.
-- **Synchronous streamed grounding still copies ancestors per record**
-  (elements and attributes, both counted since round SD). A one-at-a-time `Ground` cannot share ancestor copies (each copy
-  is a tree of its own, and a tree that grows after it is handed out is not
-  safe), so it is bounded by a refusal past 16M copies at over 64 per record,
-  not cured. A cure needs shared growing trees or a `Ground` contract change.
-- **`Compile` holds a process-wide lock (`compileMu`) and takes no context**,
-  so one slow compile delays every other and cannot be cancelled. The audit
-  marked it needs-validation; audit run-2 measured a trivial compile waiting
-  944 ms behind a slow static phase.
-- **`c14n.FromXPathFilter` evaluates the filter once per node under a fresh,
-  uncancellable context** (`c14n/c14n.go`), so a 70-byte filter of nested
-  quantifiers held a CPU for 4 s on a 260-byte document in audit run-2.
-  Closing it needs a context-taking variant, which is new exported API (an
-  owner decision); it matters only to a verifier that evaluates the filter
-  before authenticating the signature.
+- **Compilations in one process still run one at a time** (`compileSlot` in
+  `xslt/stylesheet.go`), so one slow compile delays every other; audit run-2
+  measured a trivial compile waiting 944 ms behind a slow static phase. Since
+  round SE the wait is cancellable: `xslt.CompileContext` gives up with
+  `ctx.Err()` while it waits for the slot, and the static phase runs under
+  `ctx`. The slot stays because the compiler's remaining package globals feed
+  about 60 free functions in the streaming analyser; moving them into the
+  per-compilation `compileEnv` is the cure, and round SE moved the package
+  serials and composition caches there first.
 - **Audit run-2 (scoped, at `67d70cbc`) left three units deferred**, all
   closed since: the RELAX NG list-derivative `MaxPatternSize` check and the
   §7 restriction-walk memo in round SD, and the sibling resolvers' UNC
@@ -192,36 +182,48 @@ reason:
 
 ### Security audit run-3 at `1ef2de62`: what round SD left open (security, resource limits)
 
-Run-3's 46 confirmed findings were fixed in round SD (see the changelog and the
-Twenty-fourth pass in [security](security.md)). These remain, each with the
-reason:
+Run-3's 46 confirmed findings were fixed in round SD, and what round SD left
+open was worked in rounds SE and SF (see the changelog and the Twenty-fourth
+and Twenty-fifth passes in [security](security.md)). Closed since:
+`xsl:import-schema` closures are charged against `CompileOptions.MaxSchemaBytes`;
+`xdm.FlattenContext` and `XIncludeOptions.Context` make both walks
+cancellable, and the CLI's `-timeout` now covers `-xinclude`;
+`c14n.FromXPathFilterContext` and `FromXPathContext` take a context and spend
+one shared budget (go-xmlsec and other verifiers should switch to them, since
+`FromXPathFilter` still runs under `context.Background()`); and small
+streamed bursts share their ancestor copies, so the 16M spine-copy refusal is
+a backstop that only a spine of tens of thousands of attributes over large
+bursts reaches. These remain, each with the reason:
 
-- **`xsl:import-schema` reads its include and import closure uncharged**
-  (`xslt/importschema.go`): XSLT has no schema byte budget, so a fix needs a
-  new `CompileOptions` field, which is new exported API. Each document is
-  still capped by `SchemaParseOptions.MaxBytes`. This was also one of run-3's
-  deferred units.
-- **`xdm.Flatten` and `xdm.ProcessXInclude` take no context**, so neither can
-  be cancelled mid-walk; both are bounded (1<<24 items; pass-wide `MaxBytes`
-  and `MaxNodes`). The CLI's `-timeout` starts after the XInclude pass.
-- **Streamed spine copies are refused only past 16M copies.** Round SD counts
-  elements as well as attributes, but run-3's own example (about 1.8M copies)
-  is still below the floor; lowering it risks a hard error after output has
-  been written, where today a run backs off to the tree.
-- **Other `xdm.Flatten` and `AtomizeChecked` callers** (XSLT serialization and
-  stream paths, `xquery/eval.go`, general comparisons) are bounded by xdm's
-  ceiling, not the host's `MaxItems`; only `array:flatten` and `fn:data`
-  charge it.
+- **Other `xdm.Flatten` and `AtomizeChecked` callers take no context and are
+  bounded by xdm's ceiling, not the host's `MaxItems`**: XSLT serialization
+  and stream paths, general comparisons, and `xquery/eval.go`'s
+  `appendSequence`. `array:flatten`, `fn:data`, `xsl:copy-of`,
+  `xsl:value-of` and `xsl:attribute` flatten under the evaluation's context.
 - **`scopeBindings` and `declares` in `xslt/instructions.go` are quadratic in
   an element's in-scope namespaces** (time only, no retention).
 - **XSD 1.1 subsumption on a long group-ref chain still costs about 1 s per
   restriction type** after the sort fix.
+- **Query-side `fn:transform` gets a fresh compile budget per top-level
+  call.** Inside a transform every nested `fn:transform` shares one budget
+  (round SF), but an XPath or XQuery evaluation that calls `fn:transform`
+  several times starts each call's transform with its own.
+- **A stylesheet that declares the exact URI a generated `xsl:original`
+  namespace uses** (`http://go-xml.invalid/xslt/original/N`) has that
+  namespace excluded from its results along with the generated one. The
+  exclusion is now exact rather than by prefix, so only that spelling is
+  affected. Relatedly, the comments on `packageVarNS` and `overriddenMarkerNS`
+  call their `go-xml.invalid` URIs ones "no stylesheet can write", which is
+  false: a stylesheet can write any URI, and these are merely unlikely.
+- **A DTD content model of the shape `(a1*|…|an*)*` still stores about n²
+  follow entries.** Shared follow pieces made a repeated choice of plain
+  members linear, but not this shape; it is bounded by the 2²⁰ representation
+  budget (`maxSequenceMatcherEdges`), so a wide one is refused, not slow.
 - **Withheld and deferred from run-3, still open:** the NT `\??\` prefix fix
   is untested on a Windows host (string-level tests only); the run-3 deferred
   units (RELAX NG compact parser and `dtd.Parse` panic review, array walkers
   in serialize and deep-equal, UTF-16 decoding, RELAX NG XSD-datatype pattern
-  recompile, `xsl:import-schema` limits) need a run-4. `compileMu` and the
-  `c14n.FromXPathFilter` context remain owner decisions (above).
+  recompile) need a run-4.
 
 ### Memory: what the footprint round left open (performance)
 
@@ -1340,9 +1342,11 @@ deliberately rather than ship a partial one.
 ### `ste110`
 
 The remaining schema false reject on both versions, `queried` against W3C bug
-4957. Carried here rather than under *Deliberate divergences* because no
-reading has been recorded for it either way: it is a false reject, which is the
-direction that matters, and it has not been diagnosed.
+4957 (circular unions). `tests/conformance/results.json` records it as a
+deliberate divergence, and [conformance-gaps.md](conformance-gaps.md)
+spot-checked the `queried` defence: the engine disagrees in the direction the
+bug points. It stays listed here because it is a false reject, the direction
+that matters, and the schema has not been read beyond that check.
 
 ### `fn:transform` options F&O defines but this processor does not act on (XSLT 3.0)
 
@@ -1891,7 +1895,7 @@ choose how long the validation takes. Catastrophic backtracking is a denial of
 service with a one-line payload.
 
 Even enabled, a step budget bounds every match, and exhausting it raises
-`FORX0002` rather than returning a silent "no match" — a budget that guessed
+`XPDY0130` (`FORX0002` before round SF) rather than returning a silent "no match" — a budget that guessed
 would do it precisely on the inputs where the answer was hardest to get. The
 budget is measured from both ends: the hardest honest pattern in either
 conformance suite (`regex-032`, fifteen lazy groups and a `\14` against 180

@@ -543,7 +543,7 @@
           "note": "Open W3C bug 4113; one of the 22 MS-Regex instance cases read as a block in the xsd section."
         }
       ],
-      "unenumerated_note": "All 32 are enumerated, on the same basis as 1.0: 22 MS-Regex cases under bug 4113 sharing one note, and 10 read individually. 4 are fixture defects and 28 divergences. The driver runs the conforming defaults -- LaxUPA off (erratum E1-29) and XPathVersion at XPath 2.0, which is what XSD 1.1 requires for assertions -- and no case here is gated behind either: none fails on a UPA complaint and no assertion or CTA case disagrees at all."
+      "unenumerated_note": "All 31 are enumerated, on the same basis as 1.0: 22 MS-Regex cases under bug 4113 sharing one note, and 9 read individually. 2 are fixture defects and 29 divergences. The driver runs the conforming defaults -- LaxUPA off (erratum E1-29) and XPathVersion at XPath 2.0, which is what XSD 1.1 requires for assertions -- and no case here is gated behind either: none fails on a UPA complaint and no assertion or CTA case disagrees at all."
     },
     {
       "id": "relaxng",

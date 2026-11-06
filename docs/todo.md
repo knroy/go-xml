@@ -8,7 +8,7 @@ Current position:
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
+| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,244 (99.90%) |
 
 <!-- BEGIN GENERATED STATUS TABLE -->
 <!-- Generated from tests/conformance/results.json and the source tree by
@@ -23,7 +23,7 @@ Current position:
 | XSLT 3.0 | 99.85% — 11,501 of 11,518 in scope (17 failing) |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 3,330 `func Test` declarations, clean under `-race` |
+| Tests | 3,377 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -77,13 +77,13 @@ this engine has 1.1's character model but not the rest of 1.1. Admitting the
 1.1 half was measured and rejected: it takes XQuery from 29,952 passed / 12
 failed to 29,936 / 26.
 
-**What is still missing beyond `dtd` is `fn:serialize`'s `undeclare-prefixes`.**
-`xslt/serialize.go` implements it (11.7); `xpath/fn_serialize.go` writes
-`xmlns:p=""` unconditionally, so the 1.1-only `serialize-xml-035/036/135/136`
-cases would fail if they were admitted. The `version` parameter itself now
-reaches the XML declaration there, which it did not before.
+**`fn:serialize`'s `undeclare-prefixes` is implemented** (an earlier revision
+listed it as missing). `xpath/fn_serialize.go` writes `xmlns:p=""` only when
+the parameter asks for it, raises SEPM0010 when it is asked for with version
+1.0, and otherwise leaves the binding out, as `xslt/serialize.go` does (11.7).
+The `version` parameter itself reaches the XML declaration there.
 
-`undeclare-prefixes` is not the only one, but **`indent` is now honoured**:
+**`indent` is honoured** too:
 Serialization 3.1 §4's rules, including the significant-whitespace rule and
 the html comment/PI exception, so a document indents the same way through
 `fn:serialize` as through `xsl:result-document`.
@@ -225,7 +225,7 @@ scratch harness against `xmllint`; it is not yet vendored or run in CI, so the
 `XmlVersions` cases in the XSD suite (xv003, xv006, xv008, xv009 pass) remain
 the only 1.1 measurement the gate repeats.
 
-### 1.2 DTD validation — notations and entity-typed attributes outstanding
+### 1.2 DTD validation — the `xmlconf` suite outstanding
 
 The `dtd` package validates against `<!ELEMENT>`, `<!ATTLIST>` and
 `<!ENTITY>`: content models, attribute defaults, enumerations, `ID`/`IDREF`.
@@ -248,16 +248,14 @@ one shared budget, so a bomb split between them meets the same limit a wholly
 internal one does. See [security.md](security.md) and
 [options.md](options.md).
 
-**What is left**, and none of it is large:
+**What is left**:
 
-* **`NOTATION` is parsed but not enforced.** An `<!ATTLIST … NOTATION (a|b)>`
-  restricts the value to the listed names, which is checked, but nothing
-  verifies that each name was declared by a `<!NOTATION>`. XML 1.0 §3.3.1
-  makes the missing declaration a validity error.
-* **`ENTITY` and `ENTITIES` attribute types are not checked** against the
-  unparsed entities actually declared, for the same reason: the notion of a
-  declared-but-unparsed entity lives in `xdm`, and the check would have to
-  read it back out.
+* **`NOTATION` and `ENTITY`/`ENTITIES` attributes are checked** (an earlier
+  revision listed them here as missing). `dtd.Validate` applies both halves of
+  XML 1.0 §3.3.1: a `NOTATION` enumeration may name only declared
+  `<!NOTATION>`s, reported once per declaration, and an `ENTITY` or `ENTITIES`
+  value must name entities declared with `NDATA` (`dtd/validate.go`; see
+  [validation.md](validation.md)).
 * **The W3C `xmlconf` suite is not vendored.** It was measured once, on
   2026-10-02, against `xmllint`: under default options the parser now refuses
   every not-well-formed case that applies, and with DOCTYPEs enabled most of
@@ -771,20 +769,17 @@ minted its own item and byte allowances, and now adopts the caller's. See
 
 ### 2.4 Three spec divergences the ninth audit found and left open
 
-**Open.** The 2026-09-11 line-by-line audit against the five Recommendations
-confirmed these and they are not fixed. None has a W3C suite case, which is
+**One is still open** (XQST0104). The 2026-09-11 line-by-line audit against
+the five Recommendations confirmed all three; the other two are closed below. None has a W3C suite case, which is
 why every conformance lane stayed green across the four fixes committed beside
 them — see
 [audits/2026-09-11-spec-divergence-full.md](audits/2026-09-11-spec-divergence-full.md).
 
-* **`xsl:output/@normalization-form` and `@json-node-output-method` carry no
-  enumeration** in `xslt/elementtable.go`. Both have a closed set in the REC,
-  so a misspelling is accepted in silence. The sibling attributes on the same
-  element were enumerated in `1b7a25a`; these two were left because
-  `json-node-output-method` is also one of the nine "answered differently
-  depending on how it is spelled" splits — the map path is unvalidated where
-  the element path is checked — and narrowing the element alone would widen
-  that split rather than close it.
+* **`xsl:output/@json-node-output-method` is now enumerated** in
+  `xslt/elementtable.go` (`xml`, `html`, `xhtml`, `text` or an EQName), so this
+  bullet is closed. `@normalization-form` is held to an NMTOKEN by design: the
+  REC's summary gives it an `nmtoken` alternative, and a well-formed form this
+  engine does not support is SESU0011 at serialisation.
 
 * **XQST0104 is raised as XQDY0084** — a dynamic error where XQuery 3.1 wants
   a static one, for `validate type T` with `T` out of scope. This did *not*

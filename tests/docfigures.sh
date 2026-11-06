@@ -47,7 +47,7 @@ XSD11           41598 XSD-1.1
 XSD10S          14388 XSD-1.0-schema
 XSD10I          25000 XSD-1.0-instance
 XSD11S          15354 XSD-1.1-schema
-XSD11I          26222 XSD-1.1-instance
+XSD11I          26244 XSD-1.1-instance
 VendoredSchemas 230   vendored-schemas
 '
 

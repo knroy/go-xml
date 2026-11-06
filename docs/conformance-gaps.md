@@ -49,7 +49,7 @@ W3C disagreements: 0 + 0 + 0 + 1 + 8 + 17 + 30 + 31 + 0 = 87. Measured 2026-09-1
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 3,330 tests.
+The unit-test suite is 3,377 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -63,7 +63,7 @@ W3C XSLT sets.
 Two suites reach 100% — XPath at all three versions, and RELAX NG.
 
 **No block is left.** Every W3C case that wants an `XTSE3430` gets it (151
-of 151), so none of the 19 XSLT 3.0 failures is a streamability refusal. They
+of 151), so none of the 17 XSLT 3.0 failures is a streamability refusal. They
 are named case by case below, and every one of them is recorded with its verdict in
 [tests/conformance/results.json](../tests/conformance/results.json), which is
 where the table above comes from.
@@ -1267,12 +1267,13 @@ in §3.
 Two limits on the XSLT 3.0 evidence are worth stating, because several verdicts
 lean on them:
 
-**The XSLT 3.0 spec here is a 2012 Last Call Working Draft, not the 2017
-Recommendation.** `specs/xslt-lcwd30.xml` says so in its own status section. Any
-verdict of the form "the spec grants no such rule" is a claim about the LCWD.
-`strip-space-009` is the case most exposed to this: it was authored in December
-2012 by the spec's own editor, which is some evidence the WG intended a rule the
-LCWD does not state.
+**Both the 2017 Recommendation and a 2012 Last Call Working Draft are
+vendored.** `specs/xslt-30.html` is the Recommendation of 8 June 2017, and
+`specs/xslt-lcwd30.xml` the 2012 LCWD, which says so in its own status section.
+A verdict of the form "the spec grants no such rule" holds only if the
+Recommendation agrees; a section number or line cited from `xslt-lcwd30.xml`
+is the draft's. `strip-space-009` is the case most exposed to the difference: it was
+authored in December 2012 by the spec's own editor.
 
 **Saxon 9.8's submission is not a neutral referee.** It passes most of the XSLT
 3.0 failures this file reads individually, but several expectations were recorded

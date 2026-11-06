@@ -123,9 +123,11 @@ Four things to know before relying on it:
   declaration is kept rather than the parse failed, so the rest of the subset
   still applies.
 
-`ID`/`IDREF` are checked as a *validity* constraint, but the attribute types
-are not fed back into the data model, which is why `fn:id` still falls back to
-`xml:id` and a conventional `id` attribute.
+`ID`/`IDREF` are checked as a *validity* constraint, and the parser also feeds
+`ID`, `IDREF` and `IDREFS` declarations back into the data model as the is-id
+and is-idrefs properties (`xdm/dtd_defaults.go`), so `fn:id` and `fn:idref`
+find DTD-declared IDs. They also treat `xml:id` and an unprefixed `id`
+attribute as IDs whether or not anything declares them.
 
 `NOTATION` and `ENTITY`/`ENTITIES` are checked against the rest of the DTD
 rather than against a value space, so both are skipped when only half the DTD
@@ -294,8 +296,8 @@ That brings in `xs:assert`, conditional type assignment with
 `xs:alternative` and inheritable attributes, `xs:openContent` and
 `xs:defaultOpenContent`, `xs:override`, the `notNamespace` and `notQName`
 wildcard forms, `explicitTimezone`, conditional inclusion through the
-versioning attributes, and the 1.1 built-ins. It measures **99.98%** on the
-26,222 instance tests that apply to a 1.1 processor and **99.97%** on the
+versioning attributes, and the 1.1 built-ins. It measures **99.90%** on the
+26,244 instance tests that apply to a 1.1 processor and **99.97%** on the
 15,354 schema-validity tests. An earlier revision claimed 100%; that was
 measured over the explicitly-marked 1.1 groups only, about a sixteenth of the
 tests a 1.1 processor is meant to run. See [xsd.md](xsd.md).

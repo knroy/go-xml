@@ -111,7 +111,7 @@ syntax error does *not* carry the sentinel.
 | `maxIncludeDepth` / `maxIncludeFetches` | `xdm/xinclude.go` | *(none)* | the text already said "resource limit exceeded"; now `errors.Is` agrees |
 | XInclude node budget (`Parse.MaxNodes`) | `xdm/xinclude.go` | *(none)* | as above; counts everything one pass's inclusions copy in, href-less xpointer selections included |
 | text store blocks (`textBlocks`, 1<<17, about 1 GiB of copied text in one tree) | `xdm/record.go` | *(none)* | was a panic; returned by every entry point with an error return (methods with none still panic with this error) |
-| streamed ancestor attributes (`spineAttrsPerRecord`, 64) | `xdm/bursts.go` | *(none)* | reads as a malformed document; a streamed parse that has copied over 16M ancestor attributes, more than 64 per record, is refused where Parse + Transform succeeds |
+| streamed ancestor copies (`spineCopiesPerRecord`, 64) | `xdm/bursts.go` | *(none)* | reads as a malformed document; a streamed parse that has copied over 16M ancestor records (elements and their attributes), more than 64 per record of its bursts, is refused where Parse + Transform succeeds. Small bursts share their ancestor copies, so only a spine of tens of thousands of attributes over large bursts reaches it |
 | `maxParseDepth` (expression) | `xpath/parser.go` | `XPDY0130` | (the code §2.3.1 names for a limit; it borrowed `XPST0003`, "syntactically invalid", until 2026-09-14) |
 | `maxParseDepth` (type) | `xpath/parser_path.go` | `XPDY0130` | as above; a *type* nests through a path the expression counter never sees |
 | `maxChainLength` | `xpath/parser.go` | `XPDY0130` | as above; the expression is well-formed, and it is the *length* of one flat operator chain that is refused, not its nesting |
@@ -427,7 +427,9 @@ err := schema.CheckConstraints(xsd.CheckOptions{Version: xsd.Version11})
 
 ## xslt.CompileOptions
 
-Passed to `xslt.Compile`. Compilation is the expensive step — do it once and
+Passed to `xslt.Compile`, or to `xslt.CompileContext` to bound the compile
+with a context (see [Bounding a compile with a context](#bounding-a-compile-with-a-context)).
+Compilation is the expensive step — do it once and
 share the `*Stylesheet`.
 
 ```go
@@ -447,7 +449,7 @@ sty, err := xslt.Compile(sheet.Root, xslt.CompileOptions{
 | `StaticParams` | `map[string]xdm.Sequence` | none | Values for `xsl:param static="yes"`, keyed by the parameter's `{uri}local` name. A static parameter is bound before static analysis begins, so its value must come from the caller rather than from `Transform`'s runtime `Params`. |
 | `SchemaResolver` | `xsd.Resolver` | disabled | Loads schemas for `xsl:import-schema`. |
 | `SchemaParseOptions` | `xdm.ParseOptions` | refuses a DOCTYPE | Parser options for every schema document `xsl:import-schema` loads, and for what those documents include and import. A document a `CatalogResolver` answers from its own table may carry a DOCTYPE regardless. |
-| `MaxSchemaBytes` | `int64` | *(none)* | Total schema source one compilation may read through `SchemaResolver`, cumulatively across every `xsl:import-schema` of every module and package, every document its `xs:include`/`xs:import`/`xs:redefine` closure reaches, and every compilation `fn:transform` starts from the static phase. An inline `<xs:schema>` is not charged; what it includes is. Zero means `DefaultMaxSchemaBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`, never `XTSE0220`. |
+| `MaxSchemaBytes` | `int64` | `DefaultMaxSchemaBytes` = 16 MB | Total schema source one compilation may read through `SchemaResolver`, cumulatively across every `xsl:import-schema` of every module and package, every document its `xs:include`/`xs:import`/`xs:redefine` closure reaches, and every compilation `fn:transform` starts from the static phase. An inline `<xs:schema>` is not charged; what it includes is. Zero means `DefaultMaxSchemaBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`, never `XTSE0220`. |
 | `XPathVersion` | `*xpath.Version` | derive | Pins the XPath version for every expression in the stylesheet, overriding what the stylesheet declares. Nil derives it from the `version` attribute. See [Choosing a language version](#choosing-a-language-version). |
 
 ### Choosing a language version
@@ -1134,6 +1136,13 @@ does for `xdm.ParseOptions.MaxDepth`. There is no unlimited setting — the walk
 recurses — so raise it with a number, before canonicalizing and not
 concurrently with a canonicalization. The parser's own `MaxDepth` applies
 first.
+
+An XPath node set takes a context: `c14n.FromXPathContext(ctx, doc, expr, ns)`
+and `c14n.FromXPathFilterContext(ctx, doc, filter, ns)` stop when `ctx` is
+done, and a filter's per-node evaluations spend one shared `xpath.MaxItems` and
+`xpath.MaxBytes` budget. `FromXPath` and `FromXPathFilter` are these with
+`context.Background()`; use the context forms for a filter that arrives in a
+signature.
 
 See [c14n.md](c14n.md) for the guide.
 

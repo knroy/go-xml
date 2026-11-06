@@ -141,12 +141,16 @@ derivative bound · the XPath regex step and depth budgets ·
 "Refused loudly" needed qualifying, and now it holds in both halves. Most
 limits that raise an error have to borrow a *semantic* error code, because
 the specs define none for "I gave up" — `XPDY0001` for a depth cap,
-`FORX0002` for a valid pattern whose budget ran out, `cvc-elt.1` for a
-document that was never assessed. Read alone, each of those tells the caller
-something untrue about its input. XPath is the exception: §2.3.1 defines
-`XPDY0130` for an implementation-dependent limit, and the parser's depth,
-chain and type-nesting caps and XQuery's constructor and nesting caps report
-it, having borrowed the syntax code `XPST0003` until 2026-09-14. Every such
+`cvc-elt.1` for a document that was never assessed. Read alone, each of those
+tells the caller something untrue about its input. XPath is the exception:
+§2.3.1 defines `XPDY0130` for an implementation-dependent limit, and the
+parser's depth, chain and type-nesting caps and XQuery's constructor and
+nesting caps report it, having borrowed the syntax code `XPST0003` until
+2026-09-14. So, since round SF (2026-11-06), do the regex limits — a valid
+pattern refused for its compiled size, the backtracking step and depth
+budgets, the backreference-analysis bound — which borrowed `FORX0002`, and
+the `xdm.Flatten` step bound, which had no code; `xsl:analyze-string` passes
+them through rather than re-wrapping them as `XTDE1140`. Every such
 site also wraps `xdm.ErrResourceLimit`, so `errors.Is` separates a refusal
 from a fault while the message stays byte-identical for the suites;
 `docs/options.md` tabulates the sites.
@@ -1297,8 +1301,8 @@ head once per nesting level: "(a)" 16,000 times with every group referenced
 took 13 s, and 500 nested groups around a 20 KB class took 9 s, in one call
 that never checks its context. So the analysis runs once per distinct group (a
 group referenced 16,000 times is analysed once) and its total is capped at 4 M
-steps (`backrefAnalysisMax`); beyond it the pattern fails with `FORX0002`
-wrapping `xdm.ErrResourceLimit`. Pinned by `TestBackrefManyGroups` (65 to 1000
+steps (`backrefAnalysisMax`); beyond it the pattern fails with `XPDY0130`
+(`FORX0002` until round SF) wrapping `xdm.ErrResourceLimit`. Pinned by `TestBackrefManyGroups` (65 to 1000
 groups still accepted) and `TestBackrefAnalysisBounded`.
 
 **A backtracking matcher is available, and is off by default.**
@@ -1310,11 +1314,13 @@ may be caller-supplied, and `matches($s, $node/@pattern)` takes one from
 choose how long the validation takes.
 
 Even enabled it is bounded. Every match attempt is counted against a step
-budget, and exhausting the budget raises `FORX0002` rather than returning a
+budget, and exhausting the budget raises `XPDY0130` rather than returning a
 silent "no match" — a budget that guessed would do it precisely on the inputs
-where the answer was hardest to get. `FORX0002` means "invalid regular
-expression", which this pattern is not; it also carries `xdm.ErrResourceLimit`
-so a caller can tell the two apart without reading the prose. Measured from both ends: the hardest
+where the answer was hardest to get. Until round SF it raised `FORX0002`,
+which F&O defines for a pattern that "is syntactically invalid", which this
+one is not; `XPDY0130` is XPath 3.1 §2.3.1's code for an exceeded limit. It
+also carries `xdm.ErrResourceLimit`, so `errors.Is` answers the same question
+without reading the code. Measured from both ends: the hardest
 honest pattern in either conformance suite answers in 525 steps, while
 `(a*)*\1b` against sixty `a`s exhausts the whole budget in about 200 ms. So the
 worst case is a fifth of a second of wasted work, not a hang — but it is still
@@ -1324,8 +1330,9 @@ work an attacker can ask for, which is why the default stands.
 missing.** `errors.Is(err, xdm.ErrResourceLimit)` is only worth asking if the
 answer does not depend on which function was called, and five wrappers reach
 the engine by five different routes: `fn:matches`, `fn:replace`,
-`fn:tokenize`, `fn:analyze-string`, and `xsl:analyze-string`, which re-wraps
-the result in its own `XTDE1140`. `fn:analyze-string` was the odd one out. It
+`fn:tokenize`, `fn:analyze-string`, and `xsl:analyze-string`, which reports a
+malformed pattern as its own `XTDE1140` but, since round SF, passes a limit's
+`XPDY0130` through unchanged. `fn:analyze-string` was the odd one out. It
 compiled through RE2 alone, so a backreference pattern never reached the
 backtracking engine at all: `analyze-string($s, "(abc)\1")` raised `FORX0002:
 backreference \1 is not supported` where its four siblings answered normally,
@@ -1598,8 +1605,10 @@ The default now follows the grant the caller has already made:
   locations come from the instance, the least trusted input the package takes,
   so the unrooted default was worst of all here. Its dedup step asks the
   filesystem for a location's identity only when the location lies inside one
-  of those directories; any other instance-named path is compared by its
-  cleaned text and reaches the filesystem only through the resolver.
+  of those directories. Since round SD a local location outside them is
+  never opened, whatever the resolver, and since round SF it is declined
+  (XSD 1.1 §4.3.2 makes the location a hint) rather than failing the call, as
+  is a document that does not define the namespace it was named for.
 
 Two refusals are also made *loud*, which is a change in kind rather than
 degree. §4.2.1 permits dropping an `xs:include` whose location cannot be
@@ -1766,13 +1775,18 @@ and facets still apply to the substituted type.
   name differently AND a signature naming it. Closing it means giving the
   static context an environment of its own; the four reads are marked in the
   file.
-- The `xpath` regex cache is bounded at 1024, as is the backtracking engine's
-  single-character-atom cache; the UCA collation cache is bounded at 256. The
-  bound is on entries, so a key over 1 KB (`maxCachedKey`) is never cached. Nor
-  is a program estimated over 4,096 instructions, where each character class
-  counts its rune table at ten runes to an instruction: `\w` is 1,612 runes, so
-  504 copies of it (a 1 KB key that retained 4 MB) are recompiled per use rather
-  than cached. All
+- The `xpath` regex cache is bounded at 1024 entries, as is the backtracking
+  engine's single-character-atom cache; the UCA collation cache is bounded at
+  256. A key over 1 KB (`maxCachedKey`) is never cached. The regex cache is
+  also weighed by the bytes each compiled program retains, estimated from the
+  same parse that checks `MaxRegexpProgram` (40 bytes an instruction, each
+  character class's rune table at ten runes to an instruction, so `\w`'s
+  1,612 runes count 161), and it clears when the total would pass 32 MiB
+  (`regexCacheBytes`); an entry over 4 MB (`regexEntryBytes`) is not kept.
+  The old gate instead refused to cache any program over 4,096 estimated
+  instructions, so 504 copies of `\w` (a 1 KB key that retained 4 MB) were
+  compiled again, three times over, on every call; since round SF a pattern is
+  compiled once and then served from the cache. All
   three hold their bound under concurrent use, not merely on a single goroutine:
   each is a `boundedCache` (`xpath/cache.go`) that performs the full-check and
   the insert under one lock hold. An earlier form checked an atomic size counter
@@ -1913,12 +1927,23 @@ Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
 
+**Twenty-fifth pass (rounds SE and SF), 2026-11-06.** Round SE closed most of what round SD left open; round SF is the review of rounds SD and SE, and its fixes correct several SD changes. Each is pinned by a test; the rows are in CHANGELOG, and what is left is in [known gaps](known-gaps.md).
+
+- **Budgets that reset at a host boundary** — cost: `xsl:import-schema` closures are charged against `CompileOptions.MaxSchemaBytes` (16 MB, `xslt.DefaultMaxSchemaBytes`) across modules, packages and static `fn:transform`; a transform's run-time `fn:transform` calls share one compile budget; c14n XPath filters spend one item and byte budget across every per-node evaluation instead of a fresh one per node.
+- **Walks that could not be cancelled** — liveness: `xslt.CompileContext` waits for the compile slot on a channel and gives up with `ctx.Err()`, and the static phase and a running transform's `fn:transform` compile under the caller's context; `xdm.FlattenContext`, `XIncludeOptions.Context` (the CLI's `-timeout` now covers `-xinclude`), `c14n.FromXPathFilterContext`/`FromXPathContext`, and a poll on every function-item call in `fold-left`, `for-each`, `sort` and their kin.
+- **Copies and caches** — cost: small streamed bursts share their ancestor copies, so the 16M spine-copy refusal is a backstop; a repeated DTD choice stores shared follow pieces, about 2n rather than n²; a regex is compiled once and cached by program weight (32 MiB total, 4 MB an entry) rather than recompiled three times per call past 4,096 instructions; `unparsed-text-available` refunds its probe, so a guarded read is not charged twice.
+- **Error codes** — the regex size, backtracking step and depth, and backreference-analysis limits, and the `Flatten` step bound, report `XPDY0130` (XPath 3.1 §2.3.1), not `FORX0002` or nothing, and `xsl:analyze-string` no longer re-wraps them as `XTDE1140`.
+- **Schema documents an instance names** — `WithInstanceLocations` now *declines* a location outside the schema's directories, one the resolver cannot supply, and a document defining another namespace (XSD 1.1 §4.3.2: the hints may be declined) instead of failing the call; the security property is unchanged. Errors about documents reached from an instance quote the location as written, never the host path it was joined into. `MaxDocuments` is charged only for a document not read yet, after resolve and before parse, so a cyclic set of exactly `MaxDocuments` loads.
+- **Verdicts** — XSD date, time and duration fields over 1000 digits are refused with `xdm.ErrResourceLimit` (Part 2 §5.4) rather than costing seconds per comparison; long date years are accepted, and duration years and months compare exactly, where an int64 wrap was a false accept.
+- **Results and paths** — the generated `xsl:original` namespace is kept out of literal result elements, by exact URI, and package serials are per compilation, so generated names no longer depend on what the process compiled before; on Linux an `os.Root` symlink escape reports the outside-roots refusal that names only the href.
+- **Also fixed while there:** a comparison of two numeric literals folds again (round SD had stopped all comparison folding), the backtracker releases its depth without a deferred closure (2.8× faster), the race lane samples the stream differentials (1081 s to 404 s locally), and the RELAX NG §7 memo is pinned against an unmemoised walk.
+
 **Twenty-fourth pass (round SD, audit run-3), 2026-11-06.** Run-3 confirmed 46 findings at `1ef2de62`; each is fixed and pinned by a test that fails against the previous code. One line per area; the rows are in CHANGELOG, and what is left is in [known gaps](known-gaps.md).
 
 - **Shared array members and namespace frames grew without charge** — availability: `[$a,$a]` doubled to 2^k leaves for `Flatten`, and `AddNamespace` re-copied a frame per binding (a 63 KB input kept 256 MB). `Flatten` refuses past 1<<24 and charges `MaxItems` in `array:flatten`/`fn:data`; a large trailing frame is extended in place and scope copies build their frame once.
 - **Content models and restriction walks** — cost, driven by schema or DTD text: a dense DTD model built n²/2 edges per element (36 s, 4 GB), nested scopes logged edges per scope (216 MB), and Particle Valid (Restriction) and the RELAX NG §7 walk were exponential in group-ref and `<ref>` fan-out. The DTD matcher stops at 2²⁰ follow edges, each edge is recorded once, and both walks memoise per pair or per context.
 - **Per-step budgets that never added up** — cost: XInclude bytes and local searches, DTD entity ladders and `;`-less scans, RELAX NG list tokens and repeated fetches, XQuery `group by`, windows and schema closures across modules, the JSON functions, resource text, XSLT sequence constructors, nested merges, module compiles by size and static `fn:transform` fan-out, streamed spine elements, assertion scope copies, union member lists in the global type table, and c14n apex rescans. Each now charges an existing budget for the whole operation.
-- **Process liveness** — a fatal stack overflow from composed XPath operator spines (now XPDY0130 past 10,000) and from the opt-in backtracking regex (FORX0002 past 50,000 calls), a `parse-ietf-date` index panic, and two compile caches (`dynParams`, `pkgFrameRoots`) that pinned every stylesheet; both are now weak.
+- **Process liveness** — a fatal stack overflow from composed XPath operator spines (now XPDY0130 past 10,000) and from the opt-in backtracking regex (FORX0002 past 50,000 calls, XPDY0130 since round SF), a `parse-ietf-date` index panic, and two compile caches (`dynParams`, `pkgFrameRoots`) that pinned every stylesheet; both are now weak.
 - **Verdicts** — false accepts: very large XSD and gYear years wrapped and passed facets, a nilled element skipped its own keys, `dtd.Validate` never checked the root element name, and an instance-named schema document could define a namespace it was not named for. Each is now checked; years compare exactly.
 - **Files and output** — `WithInstanceLocations` under `HTTPResolver` could read any host file through the unrooted fallback, and `\??\` NT paths slipped the UNC pre-check; both are refused. Map-form `fn:serialize` doctype parameters are checked like the element form (SEPM0016).
 - **Also fixed while there:** XSD `MaxDocuments` is checked before each fetch (run-3 needs-validation), and a comparison under a non-codepoint default collation is no longer folded at compile time by codepoint order.
