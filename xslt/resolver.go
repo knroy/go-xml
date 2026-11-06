@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -287,7 +288,15 @@ func (r *FileResolver) openConfined(path, name string, use func(f *os.File) erro
 		f, err := rt.Open(filepath.ToSlash(rel))
 		if err != nil {
 			rt.Close()
-			return err
+			// A missing file is not found. Anything else os.Root refuses
+			// here -- on Linux a symlink whose target is outside the root,
+			// even a dangling one, fails with its unexported "path escapes
+			// from parent" -- is the same refusal as no root containing
+			// the path, and names only the href (A4-F3).
+			if errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			return &outsideRootsError{href: name}
 		}
 		err = use(f)
 		f.Close()
