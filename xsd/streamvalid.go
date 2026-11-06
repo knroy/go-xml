@@ -464,9 +464,24 @@ func (s *streamV) startElement(f *svFrame, el *xdm.Node, decl *ElementDecl) {
 				v.fail(el, "cvc-elt.3.2.2",
 					"an element with xsi:nil=\"true\" may not have a fixed value constraint")
 			}
-			if st, ok := typ.(*SimpleType); ok && st != nil {
+			switch t := typ.(type) {
+			case *SimpleType:
 				v.checkNoForeignAttributes(el, nil, nil)
+			case *ComplexType:
+				// nilledComplex: the assertions run at the end tag.
+				if t.Abstract {
+					v.fail(el, "cvc-type.2", "type {%s}%s is abstract and cannot validate an element directly",
+						t.Name.URI, t.Name.Local)
+					break
+				}
+				if v.schema.Version == Version11 && len(t.Assertions) > 0 {
+					f.ct, f.assert = t, true
+					v.assertScopes++
+				}
+				v.validateAttributes(el, t)
+				s.applyDefaults(el)
 			}
+			f.pre = xdm.TypingOf(el)
 			v.annotate(el, typ)
 			t := v.typingOf(el)
 			t.IsNilled = true
@@ -658,7 +673,7 @@ func (s *streamV) end(depth int) {
 	case svMixed:
 		s.endModel(f)
 	}
-	if f.held != nil && f.kind != svSkip && f.kind != svNil && f.typ != nil {
+	if f.held != nil && f.kind != svSkip && (f.typ != nil || f.kind == svNil) {
 		if f.assert && len(v.errs) == 0 {
 			f.held.ApplyTyping(f.pre)
 			if f.kind == svSimple && f.st != nil {

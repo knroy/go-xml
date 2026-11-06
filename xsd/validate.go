@@ -729,8 +729,18 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			// typeDef01202m1 are the pair: xsi:nil="true" with
 			// xsi:type="xsd:string" and an ordinary attribute
 			// alongside, expected invalid.
-			if st, ok := typ.(*SimpleType); ok && st != nil {
+			//
+			// The same holds for a complex type: Element Locally Valid
+			// (Complex Type) conditions only its clause 2, the content, on
+			// nilling. The type must not be abstract (1), the attributes
+			// must be valid and the required ones present (3, 4, which is
+			// also where xs:ID attributes are recorded), and its
+			// assertions hold (6).
+			switch t := typ.(type) {
+			case *SimpleType:
 				v.checkNoForeignAttributes(el, nil, nil)
+			case *ComplexType:
+				v.nilledComplex(el, t)
 			}
 			v.annotate(el, typ)
 			// dm:nilled is recorded on the node rather than left to be
@@ -954,6 +964,25 @@ func (v *validator) validateAgainstType(el *xdm.Node, typ Type, decl *ElementDec
 
 	v.annotate(el, typ)
 	return tables
+}
+
+// nilledComplex is validateComplexType for a nilled element: everything but
+// the content.
+func (v *validator) nilledComplex(el *xdm.Node, t *ComplexType) {
+	if t.Abstract {
+		v.fail(el, "cvc-type.2",
+			"type {%s}%s is abstract and cannot validate an element directly",
+			t.Name.URI, t.Name.Local)
+		return
+	}
+	if v.schema.Version == Version11 && len(t.Assertions) > 0 {
+		v.assertScopes++
+		defer func() {
+			v.checkAssertions(el, t)
+			v.assertScopes--
+		}()
+	}
+	v.validateAttributes(el, t)
 }
 
 // validateComplexType checks an element against a complex type.
