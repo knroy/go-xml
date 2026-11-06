@@ -25,7 +25,10 @@ func TestFoldingIsBoundedPerCompilation(t *testing.T) {
 		"if (false()) then (" + terms + ") else ()",
 		"(" + calls + ")",
 	} {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		// The deadline only has to outlast a bounded compile on a loaded CI
+		// runner; the allocation check below is what tells bounded from
+		// materialised (the unbounded fold allocated 2.8 GB).
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		var before, after runtime.MemStats
 		runtime.GC()
 		runtime.ReadMemStats(&before)
