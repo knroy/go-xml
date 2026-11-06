@@ -21,16 +21,21 @@ package xslt
 // transformation supplying it does not stream (dynParamSupplied).
 
 import (
+	goruntime "runtime"
 	"strings"
 	"sync"
+	"weak"
 
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // dynParams maps a stylesheet document to the Clark names of the global
-// xsl:params whose accumulator function items the view check relied on.
-var dynParams sync.Map // *xdm.Node -> *sync.Map (string -> bool)
+// xsl:params whose accumulator function items the view check relied on. The
+// key is weak and the value holds no node, so an entry dies with its
+// document: each compile has a fresh copy, and a strong key would pin every
+// compiled stylesheet for the life of the process.
+var dynParams sync.Map // weak.Pointer[xdm.Node] -> *sync.Map (string -> bool)
 
 // accumFnGlobal reports whether q, named at el, is a global variable or
 // parameter bound to accumulator-before#1 or accumulator-after#1, with no
@@ -53,7 +58,12 @@ func accumFnGlobal(el *xdm.Node, q xdm.QName) bool {
 		return false
 	}
 	if isXSL(d, "param") {
-		m, _ := dynParams.LoadOrStore(d.Root(), &sync.Map{})
+		root := d.Root()
+		key := weak.Make(root)
+		m, loaded := dynParams.LoadOrStore(key, &sync.Map{})
+		if !loaded {
+			goruntime.AddCleanup(root, func(k weak.Pointer[xdm.Node]) { dynParams.Delete(k) }, key)
+		}
 		m.(*sync.Map).Store(q.Clark(), true)
 	}
 	return true
@@ -105,7 +115,7 @@ func (s *Stylesheet) dynParamSupplied(opts *TransformOptions) bool {
 	if opts == nil || len(opts.Params) == 0 || s.source == nil {
 		return false
 	}
-	m, ok := dynParams.Load(s.source)
+	m, ok := dynParams.Load(weak.Make(s.source))
 	if !ok {
 		return false
 	}

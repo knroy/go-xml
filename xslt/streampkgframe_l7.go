@@ -68,9 +68,12 @@ type pkgFrameState struct {
 	rpDone     bool
 }
 
-// pkgFrameRoots maps a package root (weakly) to its state, so the free
-// functions of the inline code can tell a frame package's nodes.
-var pkgFrameRoots sync.Map // weak.Pointer[xdm.Node] -> *pkgFrameState
+// pkgFrameRoots maps a package root (weakly) to its state (weakly), so the
+// free functions of the inline code can tell a frame package's nodes. The
+// compiler owns the state (l7PkgFrames): it holds the root, so a strong value
+// would keep the key alive and the entry for the life of the process. With
+// both weak, the state goes with its compile and the entry with the root.
+var pkgFrameRoots sync.Map // weak.Pointer[xdm.Node] -> weak.Pointer[pkgFrameState]
 
 func pkgFrameOf(root *xdm.Node) *pkgFrameState {
 	if root == nil {
@@ -80,7 +83,7 @@ func pkgFrameOf(root *xdm.Node) *pkgFrameState {
 	if !ok {
 		return nil
 	}
-	return v.(*pkgFrameState)
+	return v.(weak.Pointer[pkgFrameState]).Value()
 }
 
 // enterPkgFrame records u's state when u qualifies, and makes it the
@@ -117,7 +120,7 @@ func (c *compiler) enterPkgFrame(u *usePackageDecl) func() {
 		return none
 	}
 	key := weak.Make(u.root)
-	if _, loaded := pkgFrameRoots.Swap(key, st); !loaded {
+	if _, loaded := pkgFrameRoots.Swap(key, weak.Make(st)); !loaded {
 		goruntime.AddCleanup(u.root, func(k weak.Pointer[xdm.Node]) { pkgFrameRoots.Delete(k) }, key)
 	}
 	if c.l7PkgFrames == nil {
@@ -168,7 +171,7 @@ func keyOfFn(f *streamFunc) funcKey {
 func pkgTarget(e xpath.Expr, root *xdm.Node) (*xpath.FuncCall, *xdm.Node) {
 	var states []*pkgFrameState
 	pkgFrameRoots.Range(func(_, v any) bool {
-		if st := v.(*pkgFrameState); st.top == root {
+		if st := v.(weak.Pointer[pkgFrameState]).Value(); st != nil && st.top == root {
 			states = append(states, st)
 		}
 		return true
