@@ -17,10 +17,17 @@ import (
 // for it and, for a shallow copy, its source's bindings, so that its
 // children read their parent's answers. Shallower results walk as before:
 // their walks are short, and a frame per element would cost each of them.
+//
+// Eight, not 32: a frame costs an allocation (32 B) per element whose body
+// runs, about 3% of a transform's time, but a walk costs a step per level
+// for every element under the frameless levels. 100 000 leaves under 28
+// levels of p:e literal result elements or xsl:copy took 14-18% longer with
+// frames from 32 than from 8; from 8 the two agree to within noise for
+// 1-7 levels, which have no frames, tie at 10 and are 3-11% faster from 13.
 
 // nsFrameDepth is the apply-templates depth from which result elements get
 // frames (a variable for the tests, which give every element one).
-var nsFrameDepth = 32
+var nsFrameDepth = 8
 
 // nsFrame is el, a result element whose body is running; src, for a shallow
 // copy, is the source element copied. x, made only when there is something

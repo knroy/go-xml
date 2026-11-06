@@ -411,3 +411,26 @@ func TestDeepIdentityHoldsNoMoreThanTree(t *testing.T) {
 		t.Errorf("the streamed identity held %d KB at depth %d, the tree %d KB", stream>>10, d, tree>>10)
 	}
 }
+
+// TestNSFramesFromEight: a recursion through literal result elements or
+// xsl:copy walked the ancestors in namespace fixup for its first 32 levels,
+// one step per level for every element made there: 100 000 leaves under 28
+// levels took 14-18% longer than with frames (nsscope.go). Frames start at
+// apply-templates depth 8 now, where a walk is still short.
+func TestNSFramesFromEight(t *testing.T) {
+	doc, err := xdm.ParseString(`<e/>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	el := doc.Root.FirstChild()
+	for _, c := range []struct {
+		depth int
+		frame bool
+	}{{7, false}, {8, true}} {
+		rt := &runtime{depth: c.depth}
+		enterNS(rt, el, nil, nil, nil)
+		if got := rt.ns != nil; got != c.frame {
+			t.Errorf("at apply-templates depth %d, a frame %v, want %v", c.depth, got, c.frame)
+		}
+	}
+}
