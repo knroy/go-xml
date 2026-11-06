@@ -245,8 +245,8 @@ func validateAtomicValueBoundsIn(lexical string, t *SimpleType, version Version,
 	if err := checkLexicalSpaceVersion(normalized, prim, version); err != nil {
 		return "", err
 	}
-	// Before any facet or key converts it; see maxYearDigits.
-	if err := checkYearDigits(normalized, prim); err != nil {
+	// Before any facet or key converts it; see maxTemporalDigits.
+	if err := checkTemporalDigits(normalized, prim); err != nil {
 		return "", err
 	}
 	// The integer branch narrows the *lexical* space, not only the value

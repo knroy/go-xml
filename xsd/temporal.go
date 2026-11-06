@@ -221,7 +221,8 @@ func parseTime(v string, out *big.Rat) bool {
 	}
 	out.SetInt64(h*3600 + m*60 + s)
 	if len(v) > 8 {
-		if v[8] != '.' {
+		// Bounded before the conversion; see maxTemporalDigits.
+		if v[8] != '.' || len(v)-9 > maxTemporalDigits {
 			return false
 		}
 		frac, ok := new(big.Rat).SetString("0" + v[8:])
@@ -233,61 +234,58 @@ func parseTime(v string, out *big.Rat) bool {
 	return true
 }
 
-// maxYearDigits is the most year digits a date or time value may have.
+// maxTemporalDigits is the longest run of digits a date, time or duration
+// literal may have: its year, its fractional seconds, or one duration field.
 //
-// The year is unbounded in the lexical space, but converting it is not free:
-// big.Int.SetString is superlinear in the digit count, so a megabyte-long year
-// cost seconds every time a facet, enumeration or key compared it. XSD 1.1
-// Part 2 §5.4 (Partial Implementation of Infinite Datatypes) lets a processor
-// limit the year digits it supports, provided it supports at least four. A
-// thousand is far past any year a document means and keeps one conversion in
-// microseconds.
-const maxYearDigits = 1000
+// None of them is bounded in the lexical space, but converting one is not
+// free: big.Int.SetString and big.Rat.SetString are superlinear in the digit
+// count, so a megabyte-long year or fraction cost seconds every time a facet,
+// enumeration or key compared it. XSD 1.1 Part 2 §5.4 (Partial Implementation
+// of Infinite Datatypes) lets a processor limit the year digits and the
+// fractional-second precision it supports, provided it supports at least four
+// and three. A thousand is far past anything a document means and keeps one
+// conversion in microseconds.
+const maxTemporalDigits = 1000
 
-// yearDigits returns the length of the year of a date or time literal of a
-// primitive with a year (0 for the others): the run of digits after an
-// optional leading '-'. The literal is already in the lexical space, so that
-// run is the whole year.
-func yearDigits(v, primitive string) int {
+// checkTemporalDigits refuses a date, time or duration value with a run of
+// digits longer than maxTemporalDigits. The literal is already in the lexical
+// space, so its digit runs are exactly its numeric fields. The refusal wraps
+// xdm.ErrResourceLimit: the value is not invalid, this processor declines to
+// decide it, and a caller has to be able to tell the two apart.
+func checkTemporalDigits(normalized, primitive string) error {
 	switch primitive {
-	case "dateTime", "date", "gYear", "gYearMonth":
+	case "dateTime", "date", "time", "gYear", "gYearMonth", "duration":
 	default:
-		return 0
+		return nil
 	}
-	v = strings.TrimPrefix(v, "-")
-	n := 0
-	for n < len(v) && v[n] >= '0' && v[n] <= '9' {
-		n++
-	}
-	return n
-}
-
-// checkYearDigits refuses a value whose year runs past maxYearDigits. The
-// refusal wraps xdm.ErrResourceLimit: the value is not invalid, this
-// processor declines to decide it, and a caller has to be able to tell the two
-// apart.
-func checkYearDigits(normalized, primitive string) error {
-	if n := yearDigits(normalized, primitive); n > maxYearDigits {
-		return fmt.Errorf(
-			"the year of %s has %d digits, more than the %d this processor "+
-				"supports (XSD 1.1 Part 2 §5.4): %w",
-			truncate(normalized), n, maxYearDigits, xdm.ErrResourceLimit)
+	run := 0
+	for i := 0; i < len(normalized); i++ {
+		if normalized[i] < '0' || normalized[i] > '9' {
+			run = 0
+			continue
+		}
+		if run++; run > maxTemporalDigits {
+			return fmt.Errorf(
+				"%s has a field of more than %d digits, the most this "+
+					"processor supports (XSD 1.1 Part 2 §5.4): %w",
+				truncate(normalized), maxTemporalDigits, xdm.ErrResourceLimit)
+		}
 	}
 	return nil
 }
 
-// parseYear reads an optionally negative decimal year of up to maxYearDigits
-// digits.
+// parseYear reads an optionally negative decimal year of up to
+// maxTemporalDigits digits.
 //
 // The year is unbounded in the lexical space, and refusing one too long for
 // an int64 left every facet, enumeration and key that compares it
 // unconstrained: a caller that cannot compare a value lets it pass. A longer
-// year is refused before it reaches here, by checkYearDigits, as a resource
+// year is refused before it reaches here, by checkTemporalDigits, as a resource
 // limit. The digits are checked first because SetString also takes a '+',
 // which the lexical space does not.
 func parseYear(v string, out *big.Int) bool {
 	digits := strings.TrimPrefix(v, "-")
-	if digits == "" || len(digits) > maxYearDigits {
+	if digits == "" || len(digits) > maxTemporalDigits {
 		return false
 	}
 	for i := 0; i < len(digits); i++ {
@@ -544,6 +542,11 @@ func scanDurationFields(v, designators string, fn func(byte, *big.Rat) bool) boo
 		}
 		pos += d + 1
 
+		// Bounded before the conversion; see maxTemporalDigits. The
+		// field may carry a '.', so a run of the limit takes one more.
+		if n > maxTemporalDigits+1 {
+			return false
+		}
 		val, ok := new(big.Rat).SetString(v[:n])
 		if !ok || !fn(v[n], val) {
 			return false

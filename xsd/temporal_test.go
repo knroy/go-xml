@@ -160,7 +160,7 @@ func TestValidateTemporalBoundsLargeYear(t *testing.T) {
 
 // big.Int.SetString is superlinear in the digit count, so a megabyte-long year
 // cost seconds per comparison. Part 2 §5.4 lets a processor limit the year
-// digits it supports (to no fewer than four), so a year past maxYearDigits is
+// digits it supports (to no fewer than four), so a year past maxTemporalDigits is
 // refused as a resource limit, a verdict of "cannot decide" rather than
 // "invalid". A year well inside the limit still compares exactly.
 func TestValidateTemporalYearDigitLimit(t *testing.T) {
@@ -196,13 +196,79 @@ func TestValidateTemporalYearDigitLimit(t *testing.T) {
 
 	// SetString accepts a sign, so the year is checked as digits first.
 	var y big.Int
-	for _, v := range []string{"+2024", "2_024", "", "-", "1" + strings.Repeat("0", maxYearDigits)} {
+	for _, v := range []string{"+2024", "2_024", "", "-", "1" + strings.Repeat("0", maxTemporalDigits)} {
 		if parseYear(v, &y) {
 			t.Errorf("parseYear(%q) accepted", v)
 		}
 	}
-	if !parseYear("-"+strings.Repeat("9", maxYearDigits), &y) {
-		t.Errorf("parseYear refused a year of maxYearDigits digits")
+	if !parseYear("-"+strings.Repeat("9", maxTemporalDigits), &y) {
+		t.Errorf("parseYear refused a year of maxTemporalDigits digits")
+	}
+}
+
+// yearFrag is unbounded (Part 2 §3.3.9), but the date lexical check read the
+// year as an int64 for the leap rule, so an xs:date or xs:dateTime with a year
+// of more than 18 digits was reported invalid. The leap rule needs only the
+// year mod 400, which the last four digits settle.
+func TestDateLexicalLongYear(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="d" type="xs:date"/>
+	  <xs:element name="dt" type="xs:dateTime"/>
+	</xs:schema>`
+	assertValid(t, schema, `<d>1234567890123456789012-02-29</d>`)       // 9012: leap
+	assertValid(t, schema, `<d>-1234567890123456788000-02-29Z</d>`)     // 8000: leap
+	assertInvalid(t, schema, `<d>1234567890123456789000-02-29</d>`, "") // 9000: not
+	assertInvalid(t, schema, `<d>1234567890123456789012-02-30</d>`, "")
+	assertValid(t, schema, `<dt>1234567890123456789012-12-31T23:59:59Z</dt>`)
+
+	err := validateString(t, schema, `<d>1`+strings.Repeat("0", 1999)+`-01-01</d>`)
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("a 2000-digit date year: Validate = %v, want a resource-limit refusal", err)
+	}
+}
+
+// big.Rat.SetString is superlinear in the digit count too, and it read every
+// fractional second and every duration field. Part 2 §5.4 lets a processor
+// limit the fractional-second precision it supports, so a digit run past
+// maxTemporalDigits is refused as a resource limit. A long fraction inside
+// the limit still compares exactly.
+func TestValidateTemporalFractionDigitLimit(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="t">
+	    <xs:restriction base="xs:time">
+	      <xs:maxInclusive value="00:00:00.000000000000000000000000000001Z"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	  <xs:element name="t" type="t"/>
+	  <xs:element name="tm" type="xs:time"/>
+	  <xs:element name="dt" type="xs:dateTime"/>
+	  <xs:element name="du" type="xs:duration"/>
+	</xs:schema>`
+
+	long := strings.Repeat("1", 2000)
+	for _, doc := range []string{
+		`<tm>00:00:00.` + long + `</tm>`,
+		`<dt>2024-01-01T00:00:00.` + long + `Z</dt>`,
+		`<du>PT1.` + long + `S</du>`,
+		`<du>P` + long + `D</du>`,
+	} {
+		err := validateString(t, schema, doc)
+		if !errors.Is(err, xdm.ErrResourceLimit) {
+			t.Errorf("%.40s: Validate = %v, want a resource-limit refusal", doc, err)
+		}
+	}
+
+	assertValid(t, schema, `<t>00:00:00.000000000000000000000000000001Z</t>`)
+	assertInvalid(t, schema, `<t>00:00:00.000000000000000000000000000002Z</t>`, "maxInclusive")
+
+	var r big.Rat
+	if parseTime("00:00:00."+strings.Repeat("1", maxTemporalDigits+1), &r) {
+		t.Error("parseTime converted a fraction past the limit")
+	}
+	if _, ok := parseDuration("PT1." + strings.Repeat("1", maxTemporalDigits+1) + "S"); ok {
+		t.Error("parseDuration converted a field past the limit")
 	}
 }
 
