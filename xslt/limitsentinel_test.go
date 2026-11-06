@@ -91,8 +91,11 @@ func TestAnalyzeStringBudgetCarriesTheResourceSentinel(t *testing.T) {
 		t.Errorf("errors.Is(%v, ErrResourceLimit) = false; xsl:analyze-string "+
 			"loses the classification its XPath siblings keep", terr)
 	}
-	if code := xdm.ErrorCode(terr); code != "XTDE1140" {
-		t.Errorf("code = %q, want XTDE1140; the sentinel must be ADDED to the "+
-			"instruction's own code, not replace it", code)
+	// XTDE1140 is for a regex that "does not conform to the required syntax"
+	// (XSLT 3.0 §17.1); this one is valid and ran out of budget, which is
+	// the implementation limit XPDY0130 (XPath 3.1 §2.3.1).
+	if code := xdm.ErrorCode(terr); code != "XPDY0130" {
+		t.Errorf("code = %q, want XPDY0130: a budget refusal is not an "+
+			"invalid regex", code)
 	}
 }

@@ -291,11 +291,13 @@ func compileArgRegexp(args []xdm.Sequence, pat, flags int, v Version) (*regexp.R
 // a count alone does not bound the memory.
 const regexCacheMax = 1024
 
-// regexCacheBytes is the most the regex cache retains, 160 MiB: the bound it
-// had as 1024 entries of at most 4096 instructions each, at
-// regexBytesPerInst. That per-entry cap left a larger program uncached, so it
-// was compiled again on every call; such a program is now cached by weight.
-const regexCacheBytes = regexCacheMax * 4096 * regexBytesPerInst
+// regexCacheBytes is the most the regex cache retains, 32 MiB: room for
+// eight entries at regexEntryBytes, and far more of the small programs real
+// patterns compile to. The old per-entry cap of 4096 instructions left a
+// larger program uncached, so it was compiled again on every call; such a
+// program is now cached by weight. The bound is a process-wide default, so it
+// is held well under the 160 MiB that 1024 such entries could have reached.
+const regexCacheBytes = 32 << 20
 
 // regexEntryBytes is the heaviest single entry the regex cache keeps, the
 // size of a program at MaxRegexpProgram, about 4 MB. Only a pattern whose

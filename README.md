@@ -753,7 +753,7 @@ ever seen — 17.6 MB after 20,000 patterns, still climbing. It is now bounded a
 1024 entries and clears wholesale when full, which measures at 0.6 MB for the
 same load and stays flat at five times it. Each entry is also weighed by the
 bytes its compiled program retains, and the cache clears when the total would
-pass 160 MiB, so a large pattern is compiled once and cached rather than
+pass 32 MiB, so a large pattern is compiled once and cached rather than
 recompiled on every call; only an entry over about 4 MB is not kept.
 
 Clearing rather than evicting one entry at a time is deliberate: a true LRU

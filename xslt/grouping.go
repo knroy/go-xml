@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -717,7 +718,13 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// xsl:analyze-string has its own error codes for the two ways the
 		// regex can be rejected, and a caller matching on the code needs
 		// them rather than the function library's FORX0001/FORX0002: an
-		// unusable flag is XTDE1145 and an unusable pattern XTDE1140.
+		// unusable flag is XTDE1145 and an unusable pattern XTDE1140. A valid
+		// pattern refused for a processor limit is neither (§17.1 defines
+		// XTDE1140 for a regex that does not conform to the syntax): it keeps
+		// its XPDY0130.
+		if errors.Is(err, xdm.ErrResourceLimit) {
+			return err
+		}
 		if strings.Contains(err.Error(), "FORX0001") {
 			return fmt.Errorf(
 				"XTDE1145: invalid xsl:analyze-string/@flags %q: %w", flags, err)
@@ -733,6 +740,9 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// the answer was hardest to get — which is the guess this package
 	// declines to make everywhere else. See xpath.RegexpErr.
 	if err := xpath.RegexpErr(re); err != nil {
+		if errors.Is(err, xdm.ErrResourceLimit) {
+			return err
+		}
 		return fmt.Errorf(
 			"XTDE1140: invalid xsl:analyze-string/@regex %q: %w", pattern, err)
 	}
@@ -754,6 +764,9 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// and that is not known until the whole input has been scanned.
 	runs, err := analyzeStringRuns(re, input)
 	if err != nil {
+		if errors.Is(err, xdm.ErrResourceLimit) {
+			return err
+		}
 		return fmt.Errorf(
 			"XTDE1140: invalid xsl:analyze-string/@regex %q: %w", pattern, err)
 	}
