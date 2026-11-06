@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,6 +214,56 @@ func TestDocumentLimitIsEnforced(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "MaxDocuments") {
 		t.Errorf("error %q does not mention the limit", err)
+	}
+}
+
+// countingResolver counts the fetches it is asked for.
+type countingResolver struct {
+	Resolver
+	fetches int
+}
+
+func (r *countingResolver) Resolve(namespace, location, base string) (io.ReadCloser, string, error) {
+	r.fetches++
+	return r.Resolver.Resolve(namespace, location, base)
+}
+
+// The limit is checked before a fetch, not when the fetched document is
+// dequeued: the latter let the last document's references, and every path
+// given to LoadFiles, be fetched and parsed past it.
+func TestDocumentLimitRefusesBeforeFetch(t *testing.T) {
+	docs := map[string]string{}
+	var paths []string
+	for i := 0; i < 20; i++ {
+		name := "d" + string(rune('a'+i)) + ".xsd"
+		next := ""
+		if i < 19 {
+			next = `<xs:include schemaLocation="d` + string(rune('a'+i+1)) + `.xsd"/>`
+		}
+		docs[name] = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">` + next + `</xs:schema>`
+		paths = append(paths, name)
+	}
+	tree, err := xdm.ParseString(docs["da.xsd"], xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &countingResolver{Resolver: &MapResolver{ByLocation: docs}}
+	if _, err := Load(tree.Root, "da.xsd", Options{Resolver: r, MaxDocuments: 5}); err == nil ||
+		!strings.Contains(err.Error(), "MaxDocuments") {
+		t.Fatalf("Load = %v, want the document limit", err)
+	}
+	// The root was handed over in memory; four more fill the limit.
+	if r.fetches != 4 {
+		t.Errorf("Load fetched %d documents under a limit of 5, want 4", r.fetches)
+	}
+
+	r = &countingResolver{Resolver: &MapResolver{ByLocation: docs}}
+	if _, err := LoadFiles(paths, Options{Resolver: r, MaxDocuments: 3}); err == nil ||
+		!strings.Contains(err.Error(), "MaxDocuments") {
+		t.Fatalf("LoadFiles = %v, want the document limit", err)
+	}
+	if r.fetches != 3 {
+		t.Errorf("LoadFiles fetched %d of 20 paths under a limit of 3, want 3", r.fetches)
 	}
 }
 
