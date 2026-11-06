@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -206,5 +207,31 @@ func TestUnparsedTextChargesTheByteBudget(t *testing.T) {
 			_, err := Eval(expr, ctx, nil)
 			wantByteRefusal(t, err)
 		})
+	}
+}
+
+// fn:unparsed-text-available answers whether fn:unparsed-text would succeed
+// (F&O 3.1 §14.6.7), so it reads the resource, but it keeps nothing: charging
+// the probe's bytes made `if (available(A)) then unparsed-text(A)` pay for A
+// twice and refused it with room for one copy. A probe of a resource the
+// remaining budget cannot hold still raises XPDY0130, as the read would.
+func TestUnparsedTextAvailableDoesNotCharge(t *testing.T) {
+	const text = "0123456789"
+	probe := func(room int, expr string) (xdm.Sequence, error) {
+		ctx := nearlyExhausted(t, room, 1000)
+		ctx = ctx.WithEnv(func(e *Env) { e.Texts = fixedTextResolver{text: text} })
+		ctx = ctx.WithVersion(XPath31)
+		return Eval(expr, ctx, testNS{})
+	}
+	got, err := probe(15, `if (unparsed-text-available('r.txt')) then unparsed-text('r.txt') else ()`)
+	if err != nil {
+		t.Fatalf("room for one copy: %v", err)
+	}
+	if s := renderSeq(got); s != text {
+		t.Errorf("got %q, want %q", s, text)
+	}
+	_, err = probe(5, `unparsed-text-available('r.txt')`)
+	if xdm.ErrorCode(err) != "XPDY0130" || !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("probe past the budget = %v, want XPDY0130", err)
 	}
 }

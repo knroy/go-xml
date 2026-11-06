@@ -363,3 +363,20 @@ func TestFlattenContextStopsOnCancel(t *testing.T) {
 		t.Fatalf("FlattenContext of [1]: %v, %v", out, err)
 	}
 }
+
+// A sequence that holds no array is already flat, so FlattenContext returns it
+// as it stands rather than copying it: fn:data paid an O(n) copy for every
+// call even with no array in sight.
+func TestFlattenContextWithoutArraysDoesNotCopy(t *testing.T) {
+	seq := make(Sequence, 10000)
+	for i := range seq {
+		seq[i] = NewInteger(int64(i))
+	}
+	if n := testing.AllocsPerRun(10, func() {
+		if _, err := FlattenContext(nil, seq); err != nil {
+			t.Fatal(err)
+		}
+	}); n != 0 {
+		t.Errorf("FlattenContext of 10k atomics allocated %v times, want 0", n)
+	}
+}

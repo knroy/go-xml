@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"slices"
 	"sort"
 	"strings"
 
@@ -478,7 +479,13 @@ const flattenCheckEvery = 1024
 // refusal past maxFlattenSteps as its error rather than panicking.
 //
 // A nil ctx is never cancelled, as with xpath.CompileOptions.Context.
+//
+// A seq holding no array is already flat and is returned as it stands, not
+// copied, so the result may alias seq. No caller writes into either.
 func FlattenContext(ctx context.Context, seq Sequence) (Sequence, error) {
+	if !slices.ContainsFunc(seq, isArray) {
+		return seq, nil
+	}
 	out := make(Sequence, 0, len(seq))
 	// An explicit stack rather than recursion: an array nested a million deep
 	// is a value a query can build, and recursing on it overflows the Go stack.
@@ -511,7 +518,9 @@ func FlattenContext(ctx context.Context, seq Sequence) (Sequence, error) {
 			}
 		}
 		if steps > maxFlattenSteps {
-			return nil, fmt.Errorf("xdm: flattening an array visits more than %d items: %w",
+			// XPDY0130 is XPath 3.1 §2.3.1's code for an exceeded limit; with
+			// it a catch clause naming the code catches this refusal.
+			return nil, fmt.Errorf("XPDY0130: flattening an array visits more than %d items: %w",
 				maxFlattenSteps, ErrResourceLimit)
 		}
 		if arr, ok := it.(*ArrayItem); ok {
@@ -521,6 +530,11 @@ func FlattenContext(ctx context.Context, seq Sequence) (Sequence, error) {
 		}
 	}
 	return out, nil
+}
+
+func isArray(it Item) bool {
+	_, ok := it.(*ArrayItem)
+	return ok
 }
 
 // mapArrayString renders a map or array for an error message. It is

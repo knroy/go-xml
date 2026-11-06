@@ -180,13 +180,20 @@ func registerUnparsedText(l *Library, since Version) {
 				return nil, err
 			}
 		}
-		if _, err := unparsedText(ctx, args); err != nil {
-			// A budget refusal is not an answer about the resource.
+		text, err := unparsedText(ctx, args)
+		if err != nil {
+			// A budget refusal is not an answer about the resource. It is
+			// raised exactly when unparsed-text itself would raise it, which
+			// §2.3.1's XPDY0130 permits.
 			if errors.Is(err, xdm.ErrResourceLimit) {
 				return nil, err
 			}
 			return boolSeq(false), nil
 		}
+		// The probe keeps nothing, so its charge is handed back: charged,
+		// "if (available(A)) then unparsed-text(A)" paid for A twice and was
+		// refused with room for the one copy it holds.
+		ctx.refundBytes(len(text))
 		return boolSeq(true), nil
 	})
 
@@ -213,7 +220,7 @@ func unparsedText(ctx *Context, args []xdm.Sequence) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	text, err := readText(ctx, s, enc)
+	text, err := fetchText(ctx, s, enc)
 	if err != nil {
 		return "", err
 	}
@@ -246,13 +253,33 @@ func unparsedText(ctx *Context, args []xdm.Sequence) (string, error) {
 				code, s, c)
 		}
 	}
+	// Charged last, so a call that fails above has charged nothing and
+	// fn:unparsed-text-available, which refunds a success, nets to zero.
+	if err := ctx.countBytes(len(text)); err != nil {
+		return "", err
+	}
 	return text, nil
 }
 
 // readText retrieves one resource as text, with no restriction on the
-// characters it may hold. fn:unparsed-text layers its own on top; fn:json-doc
-// takes the text as it stands and lets the JSON parser judge it.
+// characters it may hold, and charges it to the byte budget. fn:unparsed-text
+// layers its own restriction on top of fetchText; fn:json-doc takes the text
+// as it stands and lets the JSON parser judge it.
 func readText(ctx *Context, s, enc string) (string, error) {
+	text, err := fetchText(ctx, s, enc)
+	if err != nil {
+		return "", err
+	}
+	// The resolver caps one read, not their sum, and caches nothing, so
+	// every call is a fresh string the evaluation may retain.
+	if err := ctx.countBytes(len(text)); err != nil {
+		return "", err
+	}
+	return text, nil
+}
+
+// fetchText is readText without the charge.
+func fetchText(ctx *Context, s, enc string) (string, error) {
 	// A fragment identifier names a part of a resource, and these functions
 	// retrieve whole resources: F&O 3.0 14.8.5 makes it a dynamic error
 	// rather than something to ignore -- "[err:FOUT1170] if $href contains a
@@ -293,11 +320,6 @@ func readText(ctx *Context, s, enc string) (string, error) {
 			return "", err
 		}
 		return "", fmt.Errorf("FOUT1170: cannot retrieve %q: %w", s, err)
-	}
-	// The resolver caps one read, not their sum, and caches nothing, so
-	// every call is a fresh string the evaluation may retain.
-	if err := ctx.countBytes(len(text)); err != nil {
-		return "", err
 	}
 	return text, nil
 }

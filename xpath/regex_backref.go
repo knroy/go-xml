@@ -655,8 +655,7 @@ func buildBackrefRegexp(pattern, flags string, v Version) (*backrefRegexp, error
 	}
 	re, err := CompileBounded(translated)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"FORX0002: invalid regular expression %q: %w", original, err)
+		return nil, regexCompileError(original, err)
 	}
 	// There is deliberately no ceiling on the group count: 65 groups is valid
 	// under both regex grammars. What is bounded is the analysis itself. Each
@@ -685,7 +684,7 @@ func buildBackrefRegexp(pattern, flags string, v Version) (*backrefRegexp, error
 		analysed[refs[i].group] = true
 		if int64(len(analysed))*cost > backrefAnalysisMax {
 			return nil, fmt.Errorf(
-				"FORX0002: invalid regular expression %q: backreference analysis exceeds %d steps: %w",
+				"XPDY0130: regular expression %q: backreference analysis exceeds %d steps: %w",
 				original, backrefAnalysisMax, xdm.ErrResourceLimit)
 		}
 		if !fixedWidthGroup(head, refs[i].group) {

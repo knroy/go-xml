@@ -104,3 +104,29 @@ func TestFoldLeavesCollationSensitiveComparisonsToRuntime(t *testing.T) {
 		}
 	}
 }
+
+// Only a comparison that may compare strings reads the default collation. Two
+// numeric literals compare the same under any context, so "1 eq 1" and its
+// ancestors fold again, while a string operand still keeps the comparison
+// for run time.
+func TestFoldNumericComparisons(t *testing.T) {
+	for _, c := range []struct {
+		src   string
+		folds bool
+	}{
+		{`1 eq 1`, true},
+		{`not(1.5 lt 2)`, true},
+		{`(1 + 2) = 3`, true},
+		{`'a' eq 'A'`, false},
+		{`not('a' eq 'A')`, false},
+		{`1 = '1'`, false},
+	} {
+		e, err := Parse(c.src, nil)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", c.src, err)
+		}
+		if _, ok := optimize(e).(*Literal); ok != c.folds {
+			t.Errorf("%s: folded = %v, want %v", c.src, ok, c.folds)
+		}
+	}
+}

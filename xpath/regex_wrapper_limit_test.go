@@ -76,11 +76,10 @@ func TestEveryRegexWrapperClassifiesTheBudgetAsAResourceLimit(t *testing.T) {
 					"wrapper's caller cannot tell an expensive input from an "+
 					"invalid pattern, though its siblings' callers can", err)
 			}
-			// The sentinel is ADDED, never substituted: FORX0002 is what the
-			// conformance suites read and roughly thirty sites in this repo
-			// match on the message text.
-			if code := xdm.ErrorCode(err); code != "FORX0002" {
-				t.Errorf("code = %q, want FORX0002", code)
+			// XPDY0130, XPath 3.1 §2.3.1's code for an exceeded limit: the
+			// pattern is valid, so FORX0002 would misdescribe it.
+			if code := xdm.ErrorCode(err); code != "XPDY0130" {
+				t.Errorf("code = %q, want XPDY0130", code)
 			}
 			if !strings.Contains(err.Error(), "backtracking step budget") {
 				t.Errorf("message %q no longer names the budget", err)

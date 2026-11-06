@@ -14,8 +14,8 @@ import (
 func TestRegexProgramSizeIsBounded(t *testing.T) {
 	big := strings.Repeat(`\pL{1000}`, 150)
 	_, err := CompileRegexp(big, "")
-	if !errors.Is(err, xdm.ErrResourceLimit) || !strings.Contains(err.Error(), "FORX0002") {
-		t.Fatalf("150 x \\pL{1000}: want FORX0002 + ErrResourceLimit, got %v", err)
+	if !errors.Is(err, xdm.ErrResourceLimit) || xdm.ErrorCode(err) != "XPDY0130" {
+		t.Fatalf("150 x \\pL{1000}: want XPDY0130 + ErrResourceLimit, got %v", err)
 	}
 	if _, err := CompileBounded(big); !errors.Is(err, xdm.ErrResourceLimit) {
 		t.Fatalf("CompileBounded: want ErrResourceLimit, got %v", err)
