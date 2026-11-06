@@ -1737,6 +1737,9 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	if err := c.visitModule(u.el, u.name); err != nil {
 		return err
 	}
+	if err := c.compileModuleNodes(u.el, u.name, u.doc); err != nil {
+		return err
+	}
 	e := pkgEdits{}
 	keep := map[*xdm.Node]bool{}
 	for _, comp := range u.comps {
