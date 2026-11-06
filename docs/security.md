@@ -1905,6 +1905,10 @@ Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
 
+**Twenty-third pass (round SC, audit run-2), 2026-11-06.**
+
+- **XQuery `validate lax` with no imported schema annotated the caller's tree** — integrity: it stamped `xsi:type` annotations onto the operand itself and returned it, so `data(.) instance of xs:integer` changed for every later query, through an unsynchronised write into a tree a concurrently used `Query` only reads. The §3.21 copy is now made first and annotated instead. Pinned by `TestValidateLaxWithoutSchemaCopiesOperand`. See CHANGELOG.
+
 **Twenty-second pass (round SB) — what round SA left open, 2026-11-06.**
 
 - **Shared `xsl:import` targets were recompiled per path** — cost: each import occurrence has its own precedence (§3.11.3), so nothing can be shared, and imports doubling per level cost 2^N under `compileMu`. `maxModuleVisits` (10,000) per `Compile`, counted in both module walks; xslTNG, XSpec and the W3C suite peak at 120. Pinned by `TestImportDiamondIsBounded`.

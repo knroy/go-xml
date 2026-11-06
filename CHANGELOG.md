@@ -375,12 +375,14 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `dtd.Validate` ignored undeclared attributes and matched names by local part, missing `xml:lang` | Undeclared attributes are reported and names matched as written. | [`915eb63`][915eb63] |
 | RELAX NG include and externalRef fan-out had no total bound, so a few tiny schemas cost F^depth fetches | One compilation makes at most 10,000 fetches, then `ErrResourceLimit`. | [`cfc090e`][cfc090e] |
 | A module imported on several paths was compiled once per path, so imports doubling per level cost 2^N | One compilation resolves at most 10,000 include/import occurrences, then `ErrResourceLimit`. | [`77c3c5d`][77c3c5d] |
+| XQuery `validate lax` with no imported schema wrote `xsi:type` annotations into the caller's tree | It annotates and returns the §3.21 copy; the input is left as it was. | [`f46ec7b`][f46ec7b] |
 
 ### Changed — behaviour
 
 | Change | What it means | Commit |
 |---|---|---|
 | `dtd.Validate` reports undeclared attributes | A document that validated before may now fail; `Options.AllowUndeclared` skips them, as it skips undeclared elements. | [`915eb63`][915eb63] |
+| XQuery `validate lax` with no imported schema returns a copy of its operand | The result is a new node, not the input node, as §3.21 requires; the input keeps no annotation. | [`f46ec7b`][f46ec7b] |
 | A tree past the text store's block ceiling is an error, not a panic | Entry points that return an error return `xdm.ErrResourceLimit`; `xdm`/`xdmbuild` methods with no error return still panic, with an error value that matches it. | [`91f30c9`][91f30c9] |
 | `ParseOptions.MaxNodes` counts text that is not all white space, comments and PIs | A document near the bound may now be refused; whitespace-only text is still not counted. | [`9e9a6f9`][9e9a6f9], [`089c346`][089c346] |
 | One XInclude pass shares a node budget | Everything its inclusions copy in counts against `Parse.MaxNodes`, once per level it is copied through. | [`eb4d0ae`][eb4d0ae] |
@@ -2606,6 +2608,7 @@ here so every entry in this file sits under a release.
 [43ca7b2]: https://github.com/knroy/go-xml/commit/43ca7b2
 [ad032d1]: https://github.com/knroy/go-xml/commit/ad032d1
 [91f30c9]: https://github.com/knroy/go-xml/commit/91f30c9
+[f46ec7b]: https://github.com/knroy/go-xml/commit/f46ec7b
 [eb4d0ae]: https://github.com/knroy/go-xml/commit/eb4d0ae
 [734f53c]: https://github.com/knroy/go-xml/commit/734f53c
 [e720aa3]: https://github.com/knroy/go-xml/commit/e720aa3
