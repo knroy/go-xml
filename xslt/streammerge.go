@@ -291,10 +291,12 @@ type mergeInput struct {
 // errMergeTree sends a merge to the tree before anything was read.
 var errMergeTree = errors.New("streaming: the merge runs on the tree")
 
-// mergeStreamsMax is how many documents a streamed merge reads at once:
-// each holds its file, its cursor and a coroutine until the merge ends, so
-// a merge of more (a for-each-source of many URIs, repeats included) runs
-// on the tree, which reads each document once into its cache.
+// mergeStreamsMax is how many documents streamed merges read at once: each
+// holds its file, its cursor and a coroutine until its merge ends, so a
+// merge that would take the count past it (a for-each-source of many URIs,
+// repeats included, or a merge run from the action of others that are
+// still open: transformState.mergeOpen) runs on the tree, which reads each
+// document once into its cache.
 const mergeStreamsMax = 64
 
 // errMergeStop ends the walk of an input the merge no longer reads.
@@ -422,7 +424,7 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 				}
 				return err
 			}
-			if len(docs)+len(uris) > mergeStreamsMax {
+			if rt.mergeOpenCount()+len(docs)+len(uris) > mergeStreamsMax {
 				return errMergeTree
 			}
 			base := src.baseURI
@@ -448,6 +450,10 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 		inputs = append(inputs, l...)
 	}
 	streamtrace.Run(streamtrace.Merge)
+	if rt.mergeOpen != nil {
+		*rt.mergeOpen += len(docs)
+		defer func() { *rt.mergeOpen -= len(docs) }()
+	}
 	var accs []*mergeAccums
 	var open func(j int) error
 	open = func(j int) error {
@@ -508,6 +514,14 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 		})
 	}
 	return open(0)
+}
+
+// mergeOpenCount is how many documents enclosing streamed merges hold open.
+func (rt *runtime) mergeOpenCount() int {
+	if rt.mergeOpen == nil {
+		return 0
+	}
+	return *rt.mergeOpen
 }
 
 // mergeDocOf finds how to stream href: through the resolvers Transform

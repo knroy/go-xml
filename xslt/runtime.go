@@ -87,6 +87,13 @@ type transformState struct {
 	// noGlobal says the global context item is absent (streamglobal_l7.go).
 	noGlobal bool
 
+	// mergeOpen counts the documents streamed merges hold open at once
+	// (streammerge.go), shared with the transform that started this one by
+	// fn:transform: a merge action may run another streamed merge, so
+	// mergeStreamsMax bounds the total, not each merge. Read and written
+	// under the EvalLock, which nested transforms share. Nil counts nothing.
+	mergeOpen *int
+
 	// accumHeld holds the accumulator values of the snapshots of streamed
 	// merge items (streammerge_accum.go) and of copies of streamed nodes
 	// (streamaccum_ground_l4.go), each while the copy lives (copyTable).
@@ -788,6 +795,17 @@ func (rt *runtime) EvalLock() *xpath.EvalLock { return rt.evalLock }
 // Locals implements xpathleaf.LocalsHost.
 func (rt *runtime) Locals() *xpathleaf.Locals { return rt.locals }
 
+// mergeOpenOf is the open merge document count of the transform whose
+// evaluation ctx is, or a fresh one.
+func mergeOpenOf(ctx *xpath.Context) *int {
+	if ctx != nil {
+		if p := runtimeOf(ctx); p != nil && p.mergeOpen != nil {
+			return p.mergeOpen
+		}
+	}
+	return new(int)
+}
+
 // newRuntime builds a runtime for one transform.
 func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts TransformOptions) (*runtime, error) {
 	maxDepth := opts.MaxDepth
@@ -799,6 +817,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 			sheet:       s,
 			evalLock:    opts.nestedLock,
 			noGlobal:    opts.noGlobalItem,
+			mergeOpen:   mergeOpenOf(opts.nestedBudget),
 			maxDepth:    maxDepth,
 			keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
 			keyBuilding: map[keyCacheKey]bool{},
