@@ -621,6 +621,7 @@ func tokenMatchesAny(r *exposeRule, t nameToken, comps []*component) bool {
 type usePackageDecl struct {
 	el        *xdm.Node
 	name      string
+	key       string // packageKey of the resolved package
 	versions  string
 	accepts   []*exposeRule
 	overrides []*xdm.Node
@@ -952,6 +953,12 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 	if u.root == nil {
 		return nil, fmt.Errorf("XTSE3000: the package named %s is empty", u.name)
 	}
+	u.key = packageKey(u.root, u.name)
+	leave, err := c.enterPackage(u.key)
+	if err != nil {
+		return nil, err
+	}
+	defer leave()
 	// The used package's own manifest is processed first: its components
 	// include what it in turn accepted from the packages it uses.
 	//
@@ -1038,8 +1045,8 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 // answer for a component the manifest does not mention, which likewise stops
 // here.
 //
-// Recursion is bounded by the package graph, which use-package cycles are
-// already rejected for elsewhere.
+// Recursion is bounded by the package graph: readUsePackage refuses a
+// package already on the path as XTSE3005.
 func (c *compiler) reExportedComponents(root *xdm.Node, own []*component) ([]*component, error) {
 	haveOwn := map[string]bool{}
 	for _, comp := range own {
@@ -1963,6 +1970,11 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	// allocates the number and runs every check the module deserves.
 	c.usedPackageDepth++
 	defer func() { c.usedPackageDepth-- }()
+	leave, err := c.enterPackage(u.key)
+	if err != nil {
+		return err
+	}
+	defer leave()
 	// A used package's whitespace declarations are its own, on the same
 	// terms as its schema components below. 4.4: "The effect of
 	// xsl:strip-space and xsl:preserve-space is local to the package in
@@ -2755,4 +2767,30 @@ func ncNameByte(b byte) bool {
 		return true
 	}
 	return false
+}
+
+// packageKey names a resolved package for the cycle check: its declared name
+// and version, or the name it was requested by when it declares none.
+func packageKey(root *xdm.Node, requested string) string {
+	name := strings.TrimSpace(root.AttrValue("name"))
+	if name == "" {
+		name = requested
+	}
+	return name + "#" + strings.TrimSpace(root.AttrValue("package-version"))
+}
+
+// enterPackage marks a package as being read or compiled until the returned
+// func runs. 3.5.2, XTSE3005: "It is a static error if a package is
+// dependent on itself." Without the check a package that uses itself,
+// directly or through another, recursed through readUsePackage and
+// reExportedComponents until a fatal stack overflow.
+func (c *compiler) enterPackage(key string) (func(), error) {
+	if c.activePackages[key] {
+		return nil, fmt.Errorf("XTSE3005: package %s is dependent on itself", strings.TrimSuffix(key, "#"))
+	}
+	if c.activePackages == nil {
+		c.activePackages = map[string]bool{}
+	}
+	c.activePackages[key] = true
+	return func() { delete(c.activePackages, key) }, nil
 }
