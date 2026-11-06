@@ -30,7 +30,9 @@ type SequenceMatcher struct {
 // one goes through Load, where Options.MaxContentModelPositions applies.
 //
 // There is no UPA gate in front of a DTD, so the follow width is not bounded
-// here; the total follow entries are, by maxSequenceMatcherEdges.
+// here. The model is built shared — a repeated group's follow sets are one
+// reference to its first set — and the stored representation is bounded by
+// maxSequenceMatcherEdges.
 func NewSequenceMatcher(p *Particle) (*SequenceMatcher, error) {
 	m, err := compileForChecks(p, 0, 0, maxSequenceMatcherEdges)
 	if err != nil {

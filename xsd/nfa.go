@@ -388,14 +388,17 @@ func accepting(m *contentModel, st matchState, buf []int) bool {
 	return true
 }
 
-// candidates returns the positions reachable from a state, which is the
-// automaton's follow set — the counters are what filters them, and that happens
-// in stepCounts.
-func candidates(m *contentModel, st matchState) []int {
+// candidates returns the positions reachable from a state as runs, which
+// together are the automaton's follow set — the counters are what filters
+// them, and that happens in stepCounts. start is the initial state's one run.
+//
+// The runs are walked rather than joined: a follow set may be as wide as the
+// model, and in a shared model it exists only as pieces.
+func candidates(m *contentModel, st matchState, start []piece) []piece {
 	if st.pos < 0 {
-		return m.first
+		return start
 	}
-	return m.follow[st.pos]
+	return m.pieces[st.pos]
 }
 
 // matchNames is the counter-exact walk, used by SequenceMatcher and by the
@@ -413,6 +416,7 @@ func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int) (ok
 	cur := make([]int, len(m.counters))
 	enter := make([]int, len(m.counters))
 	var vecs [][]int
+	start := []piece{{to: m.first, scope: -1}}
 
 	// Two sets, swapped each step: a fresh map per child was three quarters
 	// of the DTD validator's allocation.
@@ -422,20 +426,22 @@ func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int) (ok
 		clear(next.seen)
 		next.order = next.order[:0]
 		for _, st := range states.order {
-			for _, pos := range candidates(m, st) {
-				if !match(i, pos) {
-					continue
-				}
-				if st.pos < 0 {
-					enterCounts(m, reach, pos, enter)
-					next.add(matchState{pos: pos, counts: encodeCounts(enter)})
-					continue
-				}
-				decodeCounts(st.counts, cur)
-				vecs = vecs[:0]
-				stepCounts(m, reach, st.pos, pos, cur, &vecs)
-				for _, v := range vecs {
-					next.add(matchState{pos: pos, counts: encodeCounts(v)})
+			for _, run := range candidates(m, st, start) {
+				for _, pos := range run.to {
+					if !match(i, pos) {
+						continue
+					}
+					if st.pos < 0 {
+						enterCounts(m, reach, pos, enter)
+						next.add(matchState{pos: pos, counts: encodeCounts(enter)})
+						continue
+					}
+					decodeCounts(st.counts, cur)
+					vecs = vecs[:0]
+					stepCounts(m, reach, st.pos, pos, cur, &vecs)
+					for _, v := range vecs {
+						next.add(matchState{pos: pos, counts: encodeCounts(v)})
+					}
 				}
 			}
 		}

@@ -96,6 +96,11 @@ func checkRestrictions(root *xdm.Node) error {
 	return r.walk(root, stack)
 }
 
+// restrictNoMemo turns off followRef's memo. It is a var only so the
+// differential test can compare verdicts with and without it; it is never
+// assigned in production.
+var restrictNoMemo = false
+
 type restrictor struct {
 	defines map[string]*xdm.Node
 	// root is the schema's document element; any other <grammar> is nested.
@@ -279,7 +284,7 @@ func (r *restrictor) followRef(n *xdm.Node, stack []string) error {
 				"(section 7.1)", name)
 	}
 	key := fmt.Sprintf("%s\x00%t\x00%s", name, r.inDefine, stackSig(stack))
-	if r.checked[key] {
+	if r.checked[key] && !restrictNoMemo {
 		return nil
 	}
 	if r.active == nil {
@@ -312,7 +317,11 @@ func (r *restrictor) followRef(n *xdm.Node, stack []string) error {
 // it holds a repetition (checkInfiniteAttributeName) or a restricted step
 // (restrictedStack), and its last step, which a data/except path needs to
 // see directly. Two stacks equal on all of these behave alike under every
-// extension.
+// extension. The last step is what covers the one adjacency rule, data/except:
+// a stack ending in data completes that prefix when the extension begins with
+// except, whatever the path's length after it. TestStackSigIsSound checks the
+// claim over every stack of up to three steps, and the memo-off differentials
+// in restrict_memo_test.go check the verdicts.
 func stackSig(stack []string) string {
 	var b strings.Builder
 	for _, p := range prohibited {
