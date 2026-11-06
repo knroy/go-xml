@@ -200,7 +200,17 @@ func native(fn *xdm.FunctionItem) *xdm.FunctionItem {
 
 // callItem calls the function item fn at ctx. An item this module did not
 // make was built by the host, so the call runs host code: see hostCall.
+//
+// It polls Env.Ctx first, once per call, as path steps and quantified
+// expressions do once per item. The higher-order functions -- fold-left,
+// fold-right, for-each, filter, for-each-pair, the sort keys, their array:
+// forms and map:for-each -- loop calling a function item and evaluate
+// nothing else that polls, so without this a cancelled 4M-item fold ran to
+// the end.
 func callItem(ctx *Context, fn *xdm.FunctionItem, args []xdm.Sequence) (xdm.Sequence, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if xdmfunc.Native(fn) {
 		return fn.Invoke(ctx, args)
 	}
