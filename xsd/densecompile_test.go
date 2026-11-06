@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -39,11 +40,11 @@ func TestDenseModelRefusedBeforeFullCompile(t *testing.T) {
 	}
 }
 
-// The width bound belongs to the shared build, not only to the schema-check
-// caller. NewSequenceMatcher is how dtd.Validate compiles a children model,
-// and a DTD has no UPA gate in front of it: <!ELEMENT r (a?,a?,...)> was built
-// in full, ~n²/2 follow edges with a linear dedup scan per edge, before the
-// position budget refused it, and the build was repeated for every <r/>.
+// NewSequenceMatcher is how dtd.Validate compiles a children model, and a DTD
+// has no UPA gate in front of it: <!ELEMENT r (a?,a?,...)> was built in full,
+// ~n²/2 follow edges with a linear dedup scan per edge, before the position
+// budget refused it, and the build was repeated for every <r/>. The total
+// follow entries are now bounded by maxSequenceMatcherEdges.
 func TestSequenceMatcherRefusesDenseModel(t *testing.T) {
 	dense := func(n int) *Particle {
 		ps := make([]*Particle, n)
@@ -56,16 +57,16 @@ func TestSequenceMatcherRefusesDenseModel(t *testing.T) {
 	}
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	_, err := NewSequenceMatcher(dense(1024))
+	_, err := NewSequenceMatcher(dense(8192))
 	runtime.ReadMemStats(&after)
-	if err == nil {
-		t.Fatal("a 1024-wide dense model compiled; its follow sets exceed maxUPAStateWidth")
+	if err == nil || !strings.Contains(err.Error(), "follow edges") {
+		t.Fatalf("an 8192-member dense model: err = %v, want the follow-edge budget refusal", err)
 	}
-	if got := after.TotalAlloc - before.TotalAlloc; got > 8<<20 {
-		t.Errorf("refusing the dense model allocated %d MB, want under 8 MB", got>>20)
+	if got := after.TotalAlloc - before.TotalAlloc; got > 128<<20 {
+		t.Errorf("refusing the dense model allocated %d MB, want under 128 MB", got>>20)
 	}
-	if _, err := NewSequenceMatcher(dense(200)); err != nil {
-		t.Errorf("a 200-wide model is within maxUPAStateWidth and must compile: %v", err)
+	if _, err := NewSequenceMatcher(dense(1000)); err != nil {
+		t.Errorf("a 1000-member dense model is within the edge budget and must compile: %v", err)
 	}
 }
 

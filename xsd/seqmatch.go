@@ -28,8 +28,11 @@ type SequenceMatcher struct {
 // DTD has no Options to carry — so there is no per-load budget to honour here
 // and the default is the only bound available. A caller needing a different
 // one goes through Load, where Options.MaxContentModelPositions applies.
+//
+// There is no UPA gate in front of a DTD, so the follow width is not bounded
+// here; the total follow entries are, by maxSequenceMatcherEdges.
 func NewSequenceMatcher(p *Particle) (*SequenceMatcher, error) {
-	m, err := compileContentModel(p, 0)
+	m, err := compileForChecks(p, 0, 0, maxSequenceMatcherEdges)
 	if err != nil {
 		return nil, err
 	}

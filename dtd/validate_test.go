@@ -1,6 +1,7 @@
 package dtd
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -552,5 +553,31 @@ func TestHandBuiltDTDWithoutNameSets(t *testing.T) {
 	}
 	if err := Validate(tree.Root, d, Options{}); err != nil {
 		t.Errorf("nil name sets must not make everything undeclared: %v", err)
+	}
+}
+
+// A DTD has no UPA gate, so its content models are not bounded by follow
+// width: a repeated choice of 1000 alternatives is 1000 wide in every state
+// and must validate. Only the total number of follow edges is bounded.
+func TestWideRepeatedChoiceValidates(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<!DOCTYPE r [\n<!ELEMENT r (")
+	for i := 0; i < 1000; i++ {
+		if i > 0 {
+			b.WriteByte('|')
+		}
+		fmt.Fprintf(&b, "a%d", i)
+	}
+	b.WriteString(")*>\n")
+	for i := 0; i < 1000; i++ {
+		fmt.Fprintf(&b, "<!ELEMENT a%d EMPTY>\n", i)
+	}
+	b.WriteString("]><r><a999/><a0/><a500/><a0/></r>")
+	if err := check(t, b.String()); err != nil {
+		t.Fatalf("a repeated 1000-alternative choice must validate: %v", err)
+	}
+	bad := strings.Replace(b.String(), "<a500/>", "<b/>", 1)
+	if err := check(t, bad); err == nil {
+		t.Fatal("an undeclared child of the same model must be rejected")
 	}
 }

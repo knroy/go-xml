@@ -40,6 +40,13 @@ type contentModel struct {
 	// maxFollow, when positive, bounds every follow set while the model is
 	// being built. Zero means unbounded; see compileForChecks.
 	maxFollow int
+	// maxEdges, when positive, bounds the total number of follow entries
+	// the build adds; edgeCount is how many it has added so far.
+	maxEdges, edgeCount int
+	// stamp and stampGen mark the existing follow set of one position
+	// while a loop-back is deduplicated against it.
+	stamp    []int
+	stampGen int
 
 	// positions are the leaf terms, one per occurrence in the tree.
 	positions []*position
@@ -142,18 +149,27 @@ type counter struct {
 // checked under — see Schema.maxPositions.
 //
 // Every follow set is bounded by maxUPAStateWidth, the width checkUPA already
-// refuses at load. A schema that loaded never reaches it, so for modelFor it
-// changes nothing; what it covers is NewSequenceMatcher, whose DTD caller has
-// no UPA gate in front of it. A DTD <!ELEMENT r (a?,a?,...)> of 8192 members
-// otherwise built ~n²/2 edges with a linear dedup per edge — 36 s and 4 GB for
-// a 24 KB internal subset — before the position budget refused it, and did so
-// again for every <r/>. The bound refuses that model after ~256 positions.
+// refuses at load, so a schema that loaded never reaches it.
 func compileContentModel(p *Particle, limit int) (*contentModel, error) {
-	return compileForChecks(p, limit, maxUPAStateWidth)
+	return compileForChecks(p, limit, maxUPAStateWidth, 0)
 }
 
+// maxSequenceMatcherEdges bounds the total follow entries a NewSequenceMatcher
+// build adds.
+//
+// The DTD validator compiles through NewSequenceMatcher, and a DTD has no UPA
+// gate, so the width bound XSD models live under would refuse legitimate DTDs:
+// (a1|a2|...|a300)* has a follow width of 300, and TEI and DocBook have choices
+// that wide. What has to be bounded is the total. <!ELEMENT r (a?,a?,...)> of
+// 8192 members otherwise built ~n²/2 edges — 36 s and 4 GB for a 24 KB
+// internal subset — before the position budget refused it, and again for
+// every <r/>. At 1<<20 that model is refused at about 1450 positions, while a
+// repeated choice of 1000 alternatives (10^6 entries) still compiles.
+const maxSequenceMatcherEdges = 1 << 20
+
 // compileForChecks is compileContentModel with every follow set bounded by
-// maxFollow (zero: unbounded, which only tests use).
+// maxFollow and the total follow entries by maxEdges (zero: unbounded; both
+// unbounded only in tests).
 //
 // checkUPA refuses any state wider than maxUPAStateWidth, and a dense model —
 // a sequence of n optional elements — has follow sets that wide long before
@@ -162,12 +178,12 @@ func compileContentModel(p *Particle, limit int) (*contentModel, error) {
 // Bounding the build at the same width stops at the first follow set the gate
 // would refuse, so the refusal costs what the gate allows rather than what
 // the model would.
-func compileForChecks(p *Particle, limit, maxFollow int) (*contentModel, error) {
+func compileForChecks(p *Particle, limit, maxFollow, maxEdges int) (*contentModel, error) {
 	if limit <= 0 {
 		limit = maxPositions
 	}
 	m := &contentModel{active: map[*ModelGroup]bool{}, maxPositions: limit, maxFollow: maxFollow,
-		edgeScope: map[[2]int]int{}}
+		maxEdges: maxEdges, edgeScope: map[[2]int]int{}}
 	if p == nil {
 		m.nullable = true
 		return m, nil
@@ -362,7 +378,7 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		// edge, for nothing.
 		inner.looped = true
 		for _, l := range inner.last {
-			if err := m.addFollow(l, inner.first, enclosing); err != nil {
+			if err := m.addFollow(l, inner.first, enclosing, true); err != nil {
 				return frag{}, err
 			}
 		}
@@ -422,7 +438,10 @@ func (m *contentModel) buildSequence(g *ModelGroup, scope int) (frag, error) {
 		// Everything that could end the sequence so far may be followed
 		// by anything that starts this particle.
 		for _, l := range out.last {
-			if err := m.addFollow(l, f.first, scope); err != nil {
+			// No dedup: f's positions were created by this
+			// particle, so no edge into them from an earlier one
+			// exists yet.
+			if err := m.addFollow(l, f.first, scope, false); err != nil {
 				return frag{}, err
 			}
 		}
@@ -493,31 +512,45 @@ func (m *contentModel) buildAll(g *ModelGroup, scope int) (frag, error) {
 }
 
 // addFollow records that every position in to may follow from, inside one
-// repetition of scope. It refuses a follow set wider than m.maxFollow when
-// that is set.
+// repetition of scope. It refuses a follow set wider than m.maxFollow, or a
+// build past m.maxEdges entries, when those are set.
+//
+// dedup is needed only for loop-back edges, the one place an edge can be laid
+// twice. It marks the existing set once rather than scanning it per edge, so
+// the call costs |existing| + |to| rather than their product.
 //
 // A duplicate keeps the scope it was first laid down in: a later copy can only
 // come from an enclosing scope's loop-back, which is further out.
-func (m *contentModel) addFollow(from int, to []int, scope int) error {
+func (m *contentModel) addFollow(from int, to []int, scope int, dedup bool) error {
 	existing := m.follow[from]
-	for _, t := range to {
-		dup := false
-		for _, e := range existing {
-			if e == t {
-				dup = true
-				break
-			}
+	if dedup {
+		if len(m.stamp) < len(m.positions) {
+			m.stamp = append(m.stamp, make([]int, len(m.positions)-len(m.stamp))...)
 		}
-		if !dup {
-			existing = append(existing, t)
-			if m.maxFollow > 0 && len(existing) > m.maxFollow {
-				return fmt.Errorf(
-					"a state of the content model has more than %d competing positions",
-					m.maxFollow)
+		m.stampGen++
+		for _, e := range existing {
+			m.stamp[e] = m.stampGen
+		}
+	}
+	for _, t := range to {
+		if dedup {
+			if m.stamp[t] == m.stampGen {
+				continue
 			}
-			if scope >= 0 {
-				m.edgeScope[[2]int{from, t}] = scope
-			}
+			m.stamp[t] = m.stampGen
+		}
+		existing = append(existing, t)
+		if m.maxFollow > 0 && len(existing) > m.maxFollow {
+			return fmt.Errorf(
+				"a state of the content model has more than %d competing positions",
+				m.maxFollow)
+		}
+		if m.edgeCount++; m.maxEdges > 0 && m.edgeCount > m.maxEdges {
+			return fmt.Errorf(
+				"content model has more than %d follow edges", m.maxEdges)
+		}
+		if scope >= 0 {
+			m.edgeScope[[2]int{from, t}] = scope
 		}
 	}
 	m.follow[from] = existing
