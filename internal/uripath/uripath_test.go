@@ -102,6 +102,15 @@ func TestIsForeignNetworkPath(t *testing.T) {
 		{`\\?\UNC\host\share\x.xml`, nil, true},
 		{`\\?\C:\x.xml`, nil, true},
 		{`\\.\pipe\x`, nil, true},
+		{`\\.\UNC\host\share\x.xml`, nil, true},
+		{`\\?\GLOBALROOT\Device\Mup\host\share\x.xml`, nil, true},
+		// The NT object namespace: Windows hands these to the object
+		// manager as written, so the UNC form reaches the host.
+		{`\??\UNC\host\share\x.xml`, nil, true},
+		{`\??\C:\x.xml`, nil, true},
+		{`/??/UNC/host/share/x.xml`, nil, true},
+		{`\??\UNC\host\share\x.xml`, []string{`\\host\share`}, true},
+		{`\??\C:\root\x.xml`, []string{`C:\root`}, true},
 		{`//host/share/x.xml`, []string{`C:\root`, "/srv/root"}, true},
 		{`\\evil\share\x.xml`, []string{`\\host\share\root`}, true},
 		{`\\host\other\x.xml`, []string{`\\host\share\root`}, true},
@@ -120,6 +129,9 @@ func TestIsForeignNetworkPath(t *testing.T) {
 		{"sub/x.xml", nil, false},
 		{"", nil, false},
 		{"/", nil, false},
+		{`?\x.xml`, nil, false},
+		{`\?x.xml`, nil, false},
+		{`??\x.xml`, nil, false},
 	} {
 		if got := IsForeignNetworkPath(c.p, c.roots...); got != c.want {
 			t.Errorf("IsForeignNetworkPath(%q, %q) = %v, want %v", c.p, c.roots, got, c.want)
