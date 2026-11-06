@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -156,6 +157,37 @@ func TestResultDocumentDistinctURIsStillAllowed(t *testing.T) {
 		}
 		if len(res.Secondary) != 2 {
 			t.Fatalf("base %q: got %d secondary results, want 2", base, len(res.Secondary))
+		}
+	}
+}
+
+// TestResultDocumentComputedStandaloneRefused covers a standalone AVT whose
+// value is not yes, no or omit. The static enumeration skips an AVT, and the
+// value was written into the XML declaration as it stood, so a document
+// could end the declaration and add a DOCTYPE with an internal subset.
+func TestResultDocumentComputedStandaloneRefused(t *testing.T) {
+	src := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+	  <xsl:template match="/">
+	    <xsl:result-document href="out.xml" method="xml" standalone="{/doc/s}"><r/></xsl:result-document>
+	  </xsl:template>
+	</xsl:stylesheet>`
+	sheet, err := Compile(mustParse(t, src), CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, c := range []struct{ s, want string }{
+		{`yes"?&gt;&lt;!DOCTYPE r [&lt;!ATTLIST r admin CDATA "true"&gt;]&gt;&lt;?x y="`, "SEPM0016"},
+		{`true`, `standalone="yes"?><r/>`},
+	} {
+		res, err := sheet.Transform(context.Background(),
+			mustParse(t, `<doc><s>`+c.s+`</s></doc>`), TransformOptions{})
+		if err != nil {
+			t.Fatalf("transform: %v", err)
+		}
+		var sb strings.Builder
+		err = res.Secondary[0].Serialize(&sb, nil)
+		if got := fmt.Sprint(err) + sb.String(); !strings.Contains(got, c.want) {
+			t.Errorf("standalone %q: got %q, want %s", c.s, got, c.want)
 		}
 	}
 }

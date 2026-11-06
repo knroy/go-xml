@@ -1638,14 +1638,9 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	// that fails to parse must not count as read here either (unread).
 	unread := func() {}
 	if rd != nil && docURI != "" {
-		if !hasDoc(rd.read, docURI) {
-			unread = func() { delDoc(rd.read, docURI) }
-		}
-		addDoc(rd.read, docURI)
-		if hasDoc(rd.written, docURI) {
-			return true, fmt.Errorf(
-				"XTDE1500: this transformation reads %q, which xsl:result-document "+
-					"has already written", docURI)
+		var err error
+		if unread, err = rd.markRead(href, base, docURI); err != nil {
+			return true, err
 		}
 	}
 	if traceBursts != nil {

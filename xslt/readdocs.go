@@ -82,6 +82,9 @@ func (r *readDocResolver) cached(k docKey, load func() (*xdm.Tree, error)) (*xdm
 		if werr := r.checkWrittenThenRead(t); werr != nil {
 			return nil, werr
 		}
+		if _, werr := r.markRead(k.uri, k.base, ""); werr != nil {
+			return nil, werr
+		}
 		if r.docs != nil {
 			r.docs[k] = t
 		}
@@ -112,6 +115,46 @@ func (r *readDocResolver) checkWrittenThenRead(t *xdm.Tree) error {
 			"has already written", u)
 }
 
+// markRead records a read of uri against base under doc, the document URI
+// the resolver names it by, and under the absolute URI it was asked for, and
+// is XTDE1500 if either was written. It returns what takes back the URIs it
+// added, for a streamed read that then fails.
+//
+// FileResolver names a document by the real path it admitted, while an href
+// resolves against its base as written: under a symbolically linked
+// directory (macOS's /var, t.TempDir) the two spell one file differently.
+// The URI as asked for is the spelling a write against the same base meets,
+// so recording both lets them meet without the write side touching the
+// filesystem (docIdentity).
+func (r *readDocResolver) markRead(uri, base, doc string) (func(), error) {
+	// Only a file: URI: the two spellings are a filesystem's, and a request
+	// left relative (no usable base) is not an absolute URI to compare.
+	asked := resolveAgainst(base, uri)
+	if !strings.HasPrefix(asked, "file:") {
+		asked = ""
+	}
+	var added []string
+	for _, u := range []string{doc, asked} {
+		if u == "" {
+			continue
+		}
+		if !hasDoc(r.read, u) {
+			added = append(added, u)
+		}
+		addDoc(r.read, u)
+		if hasDoc(r.written, u) {
+			return func() {}, fmt.Errorf(
+				"XTDE1500: this transformation reads %q, which xsl:result-document "+
+					"has already written", u)
+		}
+	}
+	return func() {
+		for _, u := range added {
+			delDoc(r.read, u)
+		}
+	}, nil
+}
+
 // ResolveDocumentIn implements xpath.ContextDocumentResolver, so that wrapping
 // a resolver that strips whitespace per package does not lose that behaviour.
 // A resolver that does not implement the richer interface is still reached
@@ -138,8 +181,8 @@ func (r *readDocResolver) NativeResolver() {}
 // comparison of absolute URIs. One file: URI has two spellings, though, when
 // a directory on its path is a symbolic link: FileResolver records what it
 // reads under the real path, while an href resolves against a base URI as
-// written (t.TempDir on macOS is under /var, a link to /private/var). So both
-// sets hold docIdentity as well, and the comparison is of that.
+// written (t.TempDir on macOS is under /var, a link to /private/var). So a
+// read is recorded under the URI it was asked for as well (markRead).
 func checkReadThenWrite(rt *runtime, href string) error {
 	if href == "" || rt.readDocs == nil || !hasDoc(*rt.readDocs, href) {
 		return nil
@@ -150,11 +193,12 @@ func checkReadThenWrite(rt *runtime, href string) error {
 }
 
 // docIdentity is u as the read and written sets compare it: a file: URI with
-// the symbolic links of its path resolved, as FileResolver resolves what it
-// reads, as far as the path exists (a result not yet written has no file, but
-// its directory may); any other URI is itself. Both sides go through it, so
-// whatever filepath.EvalSymlinks makes of a path (the real directory on macOS,
-// the long form on Windows), a file named two ways meets itself.
+// its path cleaned; any other URI is itself. It is lexical on purpose. An
+// href is the stylesheet's or the document's choice, and resolving its
+// symbolic links ran lstat and readlink on any host path with no file access
+// granted -- an oracle for whether two paths name one file, and on Windows a
+// UNC path reaches the network. The symbolic-link spelling a read can differ
+// by is recorded at read time instead (markRead).
 func docIdentity(u string) string {
 	if !strings.HasPrefix(u, "file:") {
 		return u
@@ -163,20 +207,7 @@ func docIdentity(u string) string {
 	if !filepath.IsAbs(p) {
 		return u
 	}
-	return fileURIOf(realPath(filepath.Clean(p)))
-}
-
-// realPath is filepath.EvalSymlinks of p, or of its longest existing prefix
-// with the rest joined on.
-func realPath(p string) string {
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
-	}
-	d := filepath.Dir(p)
-	if d == p {
-		return p
-	}
-	return filepath.Join(realPath(d), filepath.Base(p))
+	return fileURIOf(filepath.Clean(p))
 }
 
 // addDoc records u in set, as written and by its identity; hasDoc and delDoc
