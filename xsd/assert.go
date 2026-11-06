@@ -263,6 +263,10 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 		// error rather than a value that failed the test.
 		ok, err := a.Test.EvalBool(ctx)
 		if err != nil {
+			// An evaluation the run's deadline cut short is no verdict.
+			if v.checkCancelled() {
+				return
+			}
 			// A resource refusal is the one evaluation error that is
 			// not a false result. The rule above is about the
 			// expression being wrong for the value; XPDY0130 says the
@@ -477,6 +481,9 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 		}
 		ctx := v.assertContext(scoped).WithStaticBaseURI(alt.staticBaseURI)
 		ok, err := alt.Test.EvalBool(ctx)
+		if err != nil && v.checkCancelled() {
+			return decl.Type
+		}
 		if err != nil || !ok {
 			continue
 		}
@@ -634,8 +641,14 @@ func collectElementDecls(p *Particle, out map[xdm.QName]*ElementDecl, seen map[*
 // charges once per assertion and put the counter back where it started.
 func (v *validator) assertEpisode() *xpath.Context {
 	if v.assertCtx == nil {
-		v.assertCtx = newAssertContext(nil).
-			HoldItemBudget().HoldByteBudget()
+		ctx := newAssertContext(nil)
+		// An assertion is one expression and may be quadratic in the
+		// instance, so the run's deadline has to reach inside it, not
+		// only between steps.
+		if v.ctx != nil {
+			ctx = ctx.WithEnv(func(e *xpath.Env) { e.Ctx = v.ctx })
+		}
+		v.assertCtx = ctx.HoldItemBudget().HoldByteBudget()
 	}
 	return v.assertCtx
 }
