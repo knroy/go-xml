@@ -658,16 +658,14 @@ func buildBackrefRegexp(pattern, flags string, v Version) (*backrefRegexp, error
 		return nil, fmt.Errorf(
 			"FORX0002: invalid regular expression %q: %w", original, err)
 	}
-	// There is deliberately no ceiling on the group count. A large one was
-	// here on the theory that the width analysis is quadratic in the nesting,
-	// but the cost is driven by the pattern's source length, not by how many
-	// groups it declares: 20000 flat groups are analysed in about 120us, while
-	// a 12-deep alternation declaring only 12 groups takes eight times as long
-	// because it is 16KB of source text. A cap on groups therefore refused
-	// cheap patterns — 65 groups is valid under both the XSD and the XPath
-	// regex grammars — while admitting the expensive ones, and reaching a
-	// depth costly enough to matter requires megabytes of pattern that the
-	// caller has already had to supply and parse.
+	// There is deliberately no ceiling on the group count: 65 groups is valid
+	// under both regex grammars. What is bounded is the analysis itself. Each
+	// group's checks rescan the head, once per nesting level, so they are run
+	// once per distinct group and their total is capped. Unbounded, "(a)" 16000
+	// times with every group referenced took 13 s, and 500 nested groups around
+	// a 20 KB class took 9 s, in one call that never checks its context.
+	analysed := map[int]bool{}
+	cost := int64(len(head)+1) * int64(parenDepth(head)+1)
 	for i := range refs {
 		// A backreference number is greedy: "\11" is group 11 when eleven
 		// groups exist, and group 1 followed by a literal "1" otherwise.
@@ -679,6 +677,16 @@ func buildBackrefRegexp(pattern, flags string, v Version) (*backrefRegexp, error
 			}
 			refs[i].group = g
 			refs[i].literal = lit
+		}
+		// Both checks depend only on the head and the group.
+		if analysed[refs[i].group] {
+			continue
+		}
+		analysed[refs[i].group] = true
+		if int64(len(analysed))*cost > backrefAnalysisMax {
+			return nil, fmt.Errorf(
+				"FORX0002: invalid regular expression %q: backreference analysis exceeds %d steps: %w",
+				original, backrefAnalysisMax, xdm.ErrResourceLimit)
 		}
 		if !fixedWidthGroup(head, refs[i].group) {
 			return nil, fmt.Errorf(
@@ -702,6 +710,29 @@ func buildBackrefRegexp(pattern, flags string, v Version) (*backrefRegexp, error
 		stripped: re, refs: refs, src: original,
 		fold: strings.ContainsRune(flags, 'i'),
 	}, nil
+}
+
+// backrefAnalysisMax bounds the fixed-width analysis of one pattern, in bytes
+// scanned: distinct referenced groups times head length times paren depth.
+// Real patterns need a few thousand.
+const backrefAnalysisMax = 1 << 22
+
+// parenDepth is the deepest paren nesting in p, counted the way fixedWidth
+// counts it: escapes skipped, classes not.
+func parenDepth(p string) int {
+	d, deepest := 0, 0
+	for i := 0; i < len(p); i++ {
+		switch p[i] {
+		case '\\':
+			i++
+		case '(':
+			d++
+			deepest = max(deepest, d)
+		case ')':
+			d = max(d-1, 0)
+		}
+	}
+	return deepest
 }
 
 // splitGreedyRef re-reads "\NM" as group N followed by the literal digits M
