@@ -17,7 +17,7 @@ func TestParseMaxNodesCountsLeaves(t *testing.T) {
 			t.Errorf("%q x2000 under MaxNodes 100: err = %v, want the node limit", leaf, err)
 		}
 	}
-	// At the limit is accepted, and stripped whitespace is not a node.
+	// At the limit is accepted.
 	doc := "<r>t<!--c--><?p?></r>"
 	if _, err := ParseString(doc, ParseOptions{MaxNodes: 4}); err != nil {
 		t.Errorf("4-node document under MaxNodes 4: %v", err)
@@ -25,10 +25,11 @@ func TestParseMaxNodesCountsLeaves(t *testing.T) {
 	if _, err := ParseString(doc, ParseOptions{MaxNodes: 3}); !errors.Is(err, ErrResourceLimit) {
 		t.Errorf("4-node document under MaxNodes 3: err = %v, want the node limit", err)
 	}
-	// 51 elements and 51 whitespace runs.
+	// Whitespace-only text is not counted, stripped or not, so that a tree
+	// stripped after the parse and a stream stripped during it agree.
 	ws := "<r>" + strings.Repeat("\n <b/>", 50) + "\n</r>"
-	if _, err := ParseString(ws, ParseOptions{MaxNodes: 101}); !errors.Is(err, ErrResourceLimit) {
-		t.Errorf("kept whitespace under MaxNodes 101: err = %v, want the node limit", err)
+	if _, err := ParseString(ws, ParseOptions{MaxNodes: 51}); err != nil {
+		t.Errorf("kept whitespace under MaxNodes 51: %v", err)
 	}
 	stripAll := func(QName) bool { return true }
 	if _, err := ParseString(ws, ParseOptions{MaxNodes: 51, StripSpace: stripAll}); err != nil {

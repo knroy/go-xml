@@ -392,8 +392,11 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 			// hold its value before anything -- whitespace stripping at an end
 			// tag, a new sibling -- can look at it.
 			if _, text := tok.(*xml.CharData); !text {
-				// A text run is a node once it is kept, so a stripped one
-				// costs nothing.
+				// A text run that is not all white space is a node. One that
+				// is costs nothing: it lies between two nodes that are
+				// counted, and whether it is stripped here or later (a tree
+				// a stylesheet strips, against a stream it strips as it
+				// reads) must not change what the limit refuses.
 				if ps.run.flush(&ps.spaces, stripSpaceAt) {
 					if err := charge(1); err != nil {
 						return nil, err
@@ -575,11 +578,12 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 			case *xml.Comment:
 				t := *tok
 				ps.sawPrologToken = true
-				if bs != nil && ps.cur == tree.Root && !bs.leaves {
-					continue // a burst's tree holds no prolog (see bursts.go)
-				}
+				// Counted before a burst skips it, as a tree counts it.
 				if err := charge(1); err != nil {
 					return nil, err
+				}
+				if bs != nil && ps.cur == tree.Root && !bs.leaves {
+					continue // a burst's tree holds no prolog (see bursts.go)
 				}
 				c := ps.cur.appendChild(KindComment)
 				c.v0, c.v1 = tree.text.addBytes(t, 0)
@@ -605,11 +609,11 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 					return nil, fmt.Errorf("parse XML: processing-instruction target %q contains a colon", t.Target)
 				}
 				ps.sawPrologToken = true
-				if bs != nil && ps.cur == tree.Root && !bs.leaves {
-					continue
-				}
 				if err := charge(1); err != nil {
 					return nil, err
+				}
+				if bs != nil && ps.cur == tree.Root && !bs.leaves {
+					continue
 				}
 				pi := ps.cur.appendChild(KindPI)
 				pi.name = tree.intern(QName{Local: t.Target})
@@ -1134,7 +1138,8 @@ func (r *textRun) add(parent *Node, b []byte, dec *xml.Decoder) {
 // flush stores the value of the node being built, if any, and ends the run.
 // A whitespace-only run inside an element strip selects is taken back out:
 // it is the last record appended, so dropping it leaves the tree as if it
-// had never been made. It reports whether a text node was kept.
+// had never been made. It reports whether the run held anything but white
+// space.
 func (r *textRun) flush(spaces *spaceTable, strip func(*Node) bool) bool {
 	if r.node == nil {
 		return false
@@ -1146,13 +1151,14 @@ func (r *textRun) flush(spaces *spaceTable, strip func(*Node) bool) bool {
 		return true
 	}
 	t := n.tree
-	if onlySpace(r.buf) && strip(n.Parent()) {
+	space := onlySpace(r.buf)
+	if space && strip(n.Parent()) {
 		t.rec(n.parent).v1 = n.prev
 		t.n--
 		return false
 	}
 	n.v0, n.v1 = spaces.text(&t.text, r.buf)
-	return true
+	return !space
 }
 
 // spaceTable shares one stored value among the whitespace-only text runs of a
