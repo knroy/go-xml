@@ -66,9 +66,18 @@ type contentModel struct {
 	scopeFirst []map[int]bool
 	scopeLast  []map[int]bool
 
-	// scopeInner[c] are the follow edges that lie *inside* one repetition
-	// of counter c: every edge the compiler added while building c's
-	// subtree, before it added c's own loop-back edges.
+	// edgeScope records, for each follow edge, the counter it lies *inside*
+	// one repetition of: the innermost scope whose subtree was being built
+	// when the edge was first laid down. An edge laid as c's own loop-back
+	// belongs to c's parent, not to c. Edges outside every scope are absent.
+	//
+	// Only the innermost scope is stored. An edge joins two positions that
+	// both lie in that scope, so the innermost scope the two positions share
+	// — the only one the runtime ever asks about — is that scope exactly
+	// when the edge is inside it. Storing the edge once per enclosing scope
+	// instead, as a map per scope filled from a log of every edge added,
+	// held d copies of the same edges for a chain of d nested repeated
+	// group references: 6.5M entries and 216 MB for a 14.6 KB schema.
 	//
 	// scopeFirst and scopeLast alone cannot tell a restart from a
 	// continuation once every member of a repeated group is optional. A
@@ -79,11 +88,7 @@ type contentModel struct {
 	// different edge from the one that wraps around, even though the two
 	// can join the same pair of positions, so the edges are what has to be
 	// recorded.
-	scopeInner []map[[2]int]bool
-
-	// edges is the append-only log of follow edges, so that build can tell
-	// which ones a subtree contributed: the ones added since it started.
-	edges [][2]int
+	edgeScope map[[2]int]int
 
 	// active is the set of model groups on the path currently being built,
 	// used to detect a group that reaches itself.
@@ -161,7 +166,8 @@ func compileForChecks(p *Particle, limit, maxFollow int) (*contentModel, error) 
 	if limit <= 0 {
 		limit = maxPositions
 	}
-	m := &contentModel{active: map[*ModelGroup]bool{}, maxPositions: limit, maxFollow: maxFollow}
+	m := &contentModel{active: map[*ModelGroup]bool{}, maxPositions: limit, maxFollow: maxFollow,
+		edgeScope: map[[2]int]int{}}
 	if p == nil {
 		m.nullable = true
 		return m, nil
@@ -174,9 +180,6 @@ func compileForChecks(p *Particle, limit, maxFollow int) (*contentModel, error) 
 	m.last = f.last
 	m.nullable = f.nullable
 	m.bindSiblings()
-	// The log has served its purpose; scopeInner holds what the runtime
-	// needs, and a model is kept for the lifetime of the schema.
-	m.edges = nil
 	return m, nil
 }
 
@@ -276,12 +279,8 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		})
 		m.scopeFirst = append(m.scopeFirst, map[int]bool{})
 		m.scopeLast = append(m.scopeLast, map[int]bool{})
-		m.scopeInner = append(m.scopeInner, map[[2]int]bool{})
 		scope = len(m.counters) - 1
 	}
-	// Every edge added from here until the loop-back edges below lies
-	// within one repetition of scope.
-	mark := len(m.edges)
 
 	var inner frag
 	var err error
@@ -349,13 +348,12 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		for _, l := range inner.last {
 			m.scopeLast[scope][l] = true
 		}
-		for _, e := range m.edges[mark:] {
-			m.scopeInner[scope][e] = true
-		}
 	}
 	if p.MaxOccurs == Unbounded || p.MaxOccurs > 1 {
+		// The loop-back edges wrap around scope, so they lie inside
+		// one repetition of the enclosing scope, not of this one.
 		for _, l := range inner.last {
-			if err := m.addFollow(l, inner.first); err != nil {
+			if err := m.addFollow(l, inner.first, enclosing); err != nil {
 				return frag{}, err
 			}
 		}
@@ -415,7 +413,7 @@ func (m *contentModel) buildSequence(g *ModelGroup, scope int) (frag, error) {
 		// Everything that could end the sequence so far may be followed
 		// by anything that starts this particle.
 		for _, l := range out.last {
-			if err := m.addFollow(l, f.first); err != nil {
+			if err := m.addFollow(l, f.first, scope); err != nil {
 				return frag{}, err
 			}
 		}
@@ -483,9 +481,13 @@ func (m *contentModel) buildAll(g *ModelGroup, scope int) (frag, error) {
 	return out, nil
 }
 
-// addFollow records that every position in to may follow from. It refuses a
-// follow set wider than m.maxFollow when that is set.
-func (m *contentModel) addFollow(from int, to []int) error {
+// addFollow records that every position in to may follow from, inside one
+// repetition of scope. It refuses a follow set wider than m.maxFollow when
+// that is set.
+//
+// A duplicate keeps the scope it was first laid down in: a later copy can only
+// come from an enclosing scope's loop-back, which is further out.
+func (m *contentModel) addFollow(from int, to []int, scope int) error {
 	existing := m.follow[from]
 	for _, t := range to {
 		dup := false
@@ -502,11 +504,21 @@ func (m *contentModel) addFollow(from int, to []int) error {
 					"a state of the content model has more than %d competing positions",
 					m.maxFollow)
 			}
+			if scope >= 0 {
+				m.edgeScope[[2]int{from, t}] = scope
+			}
 		}
-		m.edges = append(m.edges, [2]int{from, t})
 	}
 	m.follow[from] = existing
 	return nil
+}
+
+// innerEdge reports whether the edge from -> to was laid down inside one
+// repetition of counter c. c must be the innermost counter the two positions
+// share; see edgeScope.
+func (m *contentModel) innerEdge(c, from, to int) bool {
+	s, ok := m.edgeScope[[2]int{from, to}]
+	return ok && s == c
 }
 
 // matches reports whether a position's term accepts an element name.
