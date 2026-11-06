@@ -192,6 +192,8 @@ type transformState struct {
 	// so the promise is only kept by evaluating once and reusing. Keyed by
 	// functionCallKey; see apply.go.
 	funcResults map[callHash]xdm.Sequence
+	// funcResultItems is the number of items funcResults holds.
+	funcResultItems int64
 
 	// itemIDs numbers the nodes and function items functionCallKey keys by
 	// identity; see identityNumber.
@@ -208,6 +210,8 @@ type transformState struct {
 	// full document scan, so it is done once per (key, document) pair on
 	// first use rather than eagerly for every declared key.
 	keyIndex map[keyCacheKey]map[string]xdm.Sequence
+	// keyItems is the number of entries keyIndex holds.
+	keyItems int64
 
 	// keyBuilding marks the (key, document) pairs whose index is currently
 	// being built. keyIndex is only written once a build has *finished*, so

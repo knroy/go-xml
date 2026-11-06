@@ -1333,11 +1333,13 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 	// Every key entry is retained until the transform ends, and Eval resets
 	// the item counter per expression, so the running total is kept here
 	// and checked against the item bound. use="1 to 1000" over 100,000 nodes
-	// was a hundred million entries and 3.2 GB.
+	// was a hundred million entries and 3.2 GB. The bound covers every index
+	// the transform holds, not each one: an index per temporary tree each
+	// just under it kept 1.8 million entries under a bound of 100,000.
 	var held int64
 	addKeys := func(ks []string, n *xdm.Node) error {
 		held += int64(len(ks))
-		if err := ctx.ItemsRefused(held); err != nil {
+		if err := ctx.ItemsRefused(rt.keyItems + held); err != nil {
 			return err
 		}
 		for _, k := range ks {
@@ -1460,6 +1462,7 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 	}
 
 	rt.keyIndex[ck] = idx
+	rt.keyItems += held
 	return idx, nil
 }
 

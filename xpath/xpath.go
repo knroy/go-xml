@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync/atomic"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -327,8 +328,19 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	// Unless a host language has taken the boundary over: a FLWOR reaches
 	// this once per tuple, and resetting there would clear the counter under
 	// the loop that is the thing worth bounding. See Context.HoldItemBudget.
+	//
+	// The reset gives a nested evaluation -- an xsl:function body, an
+	// xsl:evaluate target, a key's use expression -- an allowance of its own,
+	// but it must not erase the charges of the expression still running
+	// around it: count(for $a in 1 to 2000, $b in 1 to 1000 return f:id($b))
+	// cleared the outer loop's count on every call and materialised 2,000,000
+	// items under a bound of 100,000. So the enclosing count is put back on
+	// return, and the enclosing construct charges the result itself.
 	if ctx == nil || !ctx.heldItems {
-		ctx.resetItems()
+		if p := ctx.ev().items; p != nil {
+			saved := atomic.SwapInt64(p, 0)
+			defer atomic.StoreInt64(p, saved)
+		}
 	}
 	// The byte budget takes the same boundary for the same reason, and is held
 	// separately: a stylesheet that builds a legitimate string once per node
@@ -336,8 +348,12 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	// all of them would refuse it. The two holds are independent because the
 	// natural unit differs -- a FLWOR for items, one constructed value for
 	// bytes -- and a host that holds one does not thereby hold the other.
+	// The enclosing count is restored for the same reason as items.
 	if ctx == nil || !ctx.heldBytes {
-		ctx.resetBytes()
+		if p := ctx.ev().bytes; p != nil {
+			saved := atomic.SwapInt64(p, 0)
+			defer atomic.StoreInt64(p, saved)
+		}
 	}
 	if ctx != nil && ctx.foreign {
 		return c.evalForeign(ctx)
