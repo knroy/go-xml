@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -755,5 +756,50 @@ func TestParameterEntityCharRefsAreLegal(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "illegal character code U+FFFE") {
 		t.Errorf("external subset PE: err = %v, want it refused", err)
+	}
+}
+
+// A "%" or "&" with no ";" after it, or with one far away, used to be
+// searched from again at every later "%" or "&": a run of them was quadratic
+// (200,000 "%" in an internal subset took 2.5 s). semiFinder searches once per
+// ";" and must give every position the answer strings.IndexByte would.
+func TestSemiFinderMatchesIndexByte(t *testing.T) {
+	for _, s := range []string{"", ";", "%%%%", "&a;&&b;;x&", strings.Repeat("&#", 50) + ";" + strings.Repeat("%", 50)} {
+		f := semiFinder{s: s, at: -1}
+		for i := 0; i < len(s); i++ {
+			if got, want := f.from(i), strings.IndexByte(s[i:], ';'); got != want {
+				t.Fatalf("%q at %d: got %d, want %d", s, i, got, want)
+			}
+		}
+	}
+	// With no ";" at all, one search settles every later position.
+	f := semiFinder{s: strings.Repeat("%", 1000), at: -1}
+	f.from(0)
+	if f.at != len(f.s) {
+		t.Fatalf("after a miss at = %d, want %d", f.at, len(f.s))
+	}
+}
+
+// The stray "%" run still reaches the declarations around it, and a ladder
+// of parameter entities over an empty one is refused by the byte budget:
+// each level's text pays for the references it holds, so an empty leaf is
+// not free.
+func TestParameterEntityStrayPercentAndEmptyLadder(t *testing.T) {
+	opts := ParseOptions{AllowDOCTYPE: true, ExternalEntities: &dirResolver{root: t.TempDir()}}
+	doc := `<!DOCTYPE r [<!ENTITY % p "<!ENTITY e 'x'>">%p;` + strings.Repeat("%", 1000) + `]><r>&e;</r>`
+	tree, err := ParseString(doc, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tree.Root.FirstChild().StringValue(); got != "x" {
+		t.Errorf("&e; after a stray %% run = %q, want x", got)
+	}
+	ladder := `<!DOCTYPE r [<!ENTITY % e0 "">`
+	for i := 1; i <= 9; i++ {
+		ladder += fmt.Sprintf(`<!ENTITY %% e%d "%s">`, i, strings.Repeat(fmt.Sprintf("%%e%d;", i-1), 10))
+	}
+	ladder += `%e9;]><r/>`
+	if _, err := ParseString(ladder, opts); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("10^9 empty references: err = %v, want ErrResourceLimit", err)
 	}
 }

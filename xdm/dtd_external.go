@@ -535,6 +535,7 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 		return subset, nil
 	}
 	var sb strings.Builder
+	semis := semiFinder{s: subset, at: -1}
 	for i := 0; i < len(subset); {
 		// A declaration is copied across whole. The "%" that marks a
 		// parameter-entity DECLARATION is not a reference, and scanning it as
@@ -553,7 +554,7 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 			i++
 			continue
 		}
-		j := strings.IndexByte(subset[i:], ';')
+		j := semis.from(i)
 		if j < 0 {
 			sb.WriteByte(subset[i])
 			i++
@@ -750,13 +751,14 @@ func (t *entityTable) externalSpansIn(raw string, at int, depth int) []entityBas
 	}
 	var out []entityBaseSpan
 	pos := at
+	semis := semiFinder{s: raw, at: -1}
 	for i := 0; i < len(raw); {
 		if raw[i] != '&' {
 			pos++
 			i++
 			continue
 		}
-		j := strings.IndexByte(raw[i:], ';')
+		j := semis.from(i)
 		if j < 0 {
 			pos++
 			i++
