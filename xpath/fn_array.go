@@ -227,8 +227,18 @@ func registerArrayFuncs(l *Library) {
 	// Defined over an arbitrary sequence rather than over an array, which is
 	// why it takes item()* and why a map passes through untouched: only
 	// arrays are opened up.
-	l.registerArray("flatten", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		return xdm.Flatten(seqArg(args, 0)), nil
+	//
+	// An array holds its members by reference, so k charged doublings
+	// describe 2^k leaves. The items flattening adds beyond its input are
+	// charged here, so the host's MaxItems bounds them and not only
+	// xdm.Flatten's own fixed ceiling. fn:data charges the same way.
+	l.registerArray("flatten", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		in := seqArg(args, 0)
+		out := xdm.Flatten(in)
+		if err := ctx.countItems(len(out) - len(in)); err != nil {
+			return nil, err
+		}
+		return out, nil
 	})
 
 	// array:for-each($array, $action as function(item()*) as item()*) as array(*)
