@@ -262,3 +262,35 @@ func TestYearBoundIsExact(t *testing.T) {
 		}
 	}
 }
+
+// xs:gYear and xs:gYearMonth reach the same daysFromCivil day count as
+// xs:date (through ToSeconds), so they need the same year bound. Without it
+// two different years past the bound wrapped to the same day count and
+// compared equal.
+func TestGregorianYearBound(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("a 32-bit int cannot hold the bounds; strconv.Atoi refuses such a year first")
+	}
+	for _, c := range []struct {
+		lex string
+		tc  TypeCode
+		ok  bool
+	}{
+		{"25252734927766554", TypeGYear, true},
+		{"25252734927766555", TypeGYear, false},
+		{"-25252734927764584", TypeGYear, true},
+		{"-25252734927764585", TypeGYear, false},
+		{"8869833747866042037", TypeGYear, false},
+		{"-9223372036854773563", TypeGYear, false},
+		{"8869833747866042037-01", TypeGYearMonth, false},
+		{"25252734927766554-01", TypeGYearMonth, true},
+	} {
+		_, err := ParseGregorian(c.lex, c.tc)
+		if (err == nil) != c.ok {
+			t.Errorf("ParseGregorian(%q): err=%v, want ok=%v", c.lex, err, c.ok)
+		}
+		if err != nil && !isOverflow(err) {
+			t.Errorf("ParseGregorian(%q): err=%v, want FODT0001", c.lex, err)
+		}
+	}
+}

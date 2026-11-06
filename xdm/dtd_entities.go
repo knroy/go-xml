@@ -332,6 +332,7 @@ func (t *entityTable) parseDecls(subset, base string) *entityTable {
 func markupDecls(subset string) iter.Seq2[string, string] {
 	return func(yield func(string, string) bool) {
 		s := subset
+		semis := semiFinder{s: s, at: -1}
 		for i := 0; i < len(s); {
 			rest := s[i:]
 			switch {
@@ -368,7 +369,7 @@ func markupDecls(subset string) iter.Seq2[string, string] {
 			case s[i] == '%':
 				// A parameter-entity reference between declarations is
 				// yielded with the keyword "%" and its name.
-				j := strings.IndexByte(rest, ';')
+				j := semis.from(i)
 				if j > 1 && isEntityName(rest[1:j]) {
 					if !yield("%", rest[1:j]) {
 						return
@@ -382,6 +383,30 @@ func markupDecls(subset string) iter.Seq2[string, string] {
 			}
 		}
 	}
+}
+
+// semiFinder finds the next ";" for a scan that only moves forward. It keeps
+// the last one found, so a run of "&" or "%" with no ";" after them, or with
+// one far away, costs one search in all rather than one per character, which
+// was quadratic in the run.
+type semiFinder struct {
+	s  string
+	at int // the ";" found by the last search, len(s) for none, -1 before any
+}
+
+// from returns the offset from i of the first ";" at or after i, or -1. i
+// must not be less than in the previous call.
+func (f *semiFinder) from(i int) int {
+	if f.at < i {
+		f.at = len(f.s)
+		if j := strings.IndexByte(f.s[i:], ';'); j >= 0 {
+			f.at = i + j
+		}
+	}
+	if f.at == len(f.s) {
+		return -1
+	}
+	return f.at - i
 }
 
 // skipPast returns the offset just past the first end at or after i, or
@@ -492,6 +517,7 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 			maxEntityDepth, ErrResourceLimit)
 	}
 	var sb strings.Builder
+	semis := semiFinder{s: s, at: -1}
 	for i := 0; i < len(s); {
 		c := s[i]
 		// "&foo;" inside a CDATA section or a comment is text, not a
@@ -516,7 +542,7 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 			i++
 			continue
 		}
-		j := strings.IndexByte(s[i:], ';')
+		j := semis.from(i)
 		if j < 0 {
 			sb.WriteByte(c)
 			i++
@@ -629,9 +655,10 @@ func replacementText(raw string) string {
 		return raw
 	}
 	var sb strings.Builder
+	semis := semiFinder{s: raw, at: -1}
 	for i := 0; i < len(raw); {
 		if strings.HasPrefix(raw[i:], "&#") {
-			if j := strings.IndexByte(raw[i:], ';'); j > 0 {
+			if j := semis.from(i); j > 0 {
 				if r, ok := decodeCharRef(raw[i+1 : i+j]); ok {
 					sb.WriteRune(r)
 					i += j + 1
@@ -1012,11 +1039,12 @@ func declaresMarkup(raw string) bool {
 	if strings.ContainsRune(raw, '<') {
 		return true
 	}
+	semis := semiFinder{s: raw, at: -1}
 	for i := 0; i < len(raw); i++ {
 		if raw[i] != '&' || i+1 >= len(raw) || raw[i+1] != '#' {
 			continue
 		}
-		j := strings.IndexByte(raw[i:], ';')
+		j := semis.from(i)
 		if j < 0 {
 			continue
 		}
@@ -1065,6 +1093,7 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 	// below.
 	var inTag bool
 	var attrQuote byte
+	semis := semiFinder{s: src, at: -1}
 	for i := start; i < len(src); {
 		// CDATA sections, comments and processing instructions are regions
 		// where XML does *not* recognise an entity reference: inside them
@@ -1111,7 +1140,7 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 			written++
 			continue
 		}
-		j := strings.IndexByte(src[i:], ';')
+		j := semis.from(i)
 		if j < 0 {
 			sb.WriteByte(c)
 			i++
@@ -1502,6 +1531,7 @@ func escapeAttrLiteral(s string) string {
 // CDATA section, comment or PI is not a reference and must not be charged.
 func (t *entityTable) chargeReferences(src string) error {
 	total := t.total()
+	semis := semiFinder{s: src, at: -1}
 	for i := endOfInternalSubset(src); i < len(src); {
 		if skip := unscannedRegion(src, i); skip > i {
 			i = skip
@@ -1511,7 +1541,7 @@ func (t *entityTable) chargeReferences(src string) error {
 			i++
 			continue
 		}
-		j := strings.IndexByte(src[i:], ';')
+		j := semis.from(i)
 		if j < 0 {
 			i++
 			continue

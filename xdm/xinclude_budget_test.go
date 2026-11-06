@@ -224,3 +224,65 @@ func TestXIncludeLocalInclusionsShareTheNodeBudget(t *testing.T) {
 		t.Errorf("four levels: %d copies of l0, want 31", l0)
 	}
 }
+
+// The node budget cannot see text: one text node of 8000 bytes, doubled per
+// level by href-less inclusions, held 65 MB under MaxBytes 16384 in about
+// 25,000 nodes. The inclusions now share a byte budget, opts.Parse.MaxBytes.
+func TestXIncludeLocalInclusionsShareTheByteBudget(t *testing.T) {
+	doc := func(levels int) string {
+		var b strings.Builder
+		b.WriteString(`<r xmlns:xi="http://www.w3.org/2001/XInclude"><a xml:id="l0">` + strings.Repeat("x", 8000) + `</a>`)
+		for i := 1; i <= levels; i++ {
+			fmt.Fprintf(&b, `<a xml:id="l%d"><xi:include xpointer="l%d"/><xi:include xpointer="l%d"/></a>`, i, i-1, i-1)
+		}
+		b.WriteString(`</r>`)
+		return b.String()
+	}
+	po := ParseOptions{MaxBytes: 16384}
+	tree, err := ParseString(doc(12), po)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ProcessXInclude(tree, XIncludeOptions{Parse: po})
+	if !errors.Is(err, ErrResourceLimit) || !strings.Contains(err.Error(), "16384 bytes") {
+		t.Fatalf("12 doubling levels of 8000 bytes under MaxBytes 16384: err = %v, want the byte budget", err)
+	}
+	// One level, 16,000 bytes copied, fits under the default.
+	tree, err = ParseString(doc(1), ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ProcessXInclude(tree, XIncludeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A shorthand xpointer is resolved by walking the document from its root, so
+// N includes naming an element after them cost N^2/2 visits for a node charge
+// of 2 each. The walks now share the pass's node budget as a visit count.
+func TestXIncludeLocalSearchesShareTheNodeBudget(t *testing.T) {
+	doc := func(n int) string {
+		return `<r xmlns:xi="http://www.w3.org/2001/XInclude">` +
+			strings.Repeat(`<xi:include xpointer="z"/>`, n) + `<t xml:id="z"/></r>`
+	}
+	po := ParseOptions{MaxNodes: 10000}
+	tree, err := ParseString(doc(400), po)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ProcessXInclude(tree, XIncludeOptions{Parse: po})
+	if !errors.Is(err, ErrResourceLimit) || !strings.Contains(err.Error(), "searches") {
+		t.Fatalf("400 searches of a 400-node document under MaxNodes 10000: err = %v, want the visit budget", err)
+	}
+	tree, err = ParseString(doc(20), po)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := ProcessXInclude(tree, XIncludeOptions{Parse: po})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := out.Root.FirstChild(); n == nil {
+		t.Fatal("no result")
+	}
+}
