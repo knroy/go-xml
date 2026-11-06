@@ -434,3 +434,50 @@ func TestNSFramesFromEight(t *testing.T) {
 		}
 	}
 }
+
+// TestDeepCopyRuleHoldsNoMoreThanTree: an identity through an xsl:copy
+// rule matched at every level, with every element open (the probe at the
+// leaf), holds what the tree does but for the views the rules were given:
+// one shallow copy (a record, 40 bytes) per open level, under which the views
+// below share it (the view batch's path; 2 MB at 50 000 levels, the heap
+// profile's only difference). With siblings at each level the stream holds
+// less than the tree. A view per level that copied its ancestors again, or
+// a batch per level kept alive, fails this.
+func TestDeepCopyRuleHoldsNoMoreThanTree(t *testing.T) {
+	const d = 50000
+	sheet := outSheet(t, `<xsl:mode streamable="yes"/>`,
+		`<xsl:template match="*"><xsl:copy><xsl:apply-templates/></xsl:copy></xsl:template>`+
+			`<xsl:template match="text()"><xsl:value-of select="environment-variable('m')"/><xsl:value-of select="."/></xsl:template>`)
+	run := func(main bool) (string, uint64) {
+		env := &heapEnv{}
+		var opts TransformOptions
+		opts.MaxDepth = 2 * d
+		opts.SourceParseOptions.MaxDepth = 2 * d
+		opts.MaxNodes, opts.MaxBytes = -1, -1
+		opts.Environment = env
+		env.base = liveHeap()
+		var res *Result
+		var err error
+		if main {
+			res, err = sheet.TransformReader(context.Background(), &deepReader{d: d}, opts)
+		} else {
+			var src *xdm.Tree
+			if src, err = xdm.Parse(&deepReader{d: d}, opts.SourceParseOptions); err == nil {
+				res, err = sheet.Transform(context.Background(), src.Root, opts)
+			}
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.String(), env.peak
+	}
+	want, tree := run(false)
+	got, stream := run(true)
+	t.Logf("at the leaf: stream %d KB, tree %d KB", stream>>10, tree>>10)
+	if got != want {
+		t.Fatal("the streamed identity differs from the tree's")
+	}
+	if stream > tree+tree/50+40*d {
+		t.Errorf("the streamed xsl:copy identity held %d KB at depth %d, the tree %d KB", stream>>10, d, tree>>10)
+	}
+}
