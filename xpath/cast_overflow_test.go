@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -252,5 +253,24 @@ func TestWeekOfYearIsBoundedForAnyYear(t *testing.T) {
 	}
 	if w := weekOfYear(&xdm.DateTime{Year: 2000, Month: 12, Day: 20, Second: new(big.Rat)}); w != 51 {
 		t.Errorf("2000-12-20 [W] = %d, want 51", w)
+	}
+}
+
+// TestDateYearBoundsMatchTheParser: cast.go keeps its own copy of xdm's year
+// range (dateMaxYear, dateMinYear). Pin it to what the parser accepts so the
+// two cannot drift apart.
+func TestDateYearBoundsMatchTheParser(t *testing.T) {
+	for _, c := range []struct {
+		year int64
+		ok   bool
+	}{{dateMaxYear, true}, {dateMaxYear + 1, false}, {dateMinYear, true}, {dateMinYear - 1, false}} {
+		lex := fmt.Sprintf("%d-01-01", c.year)
+		if c.year < 0 {
+			lex = fmt.Sprintf("-%d-01-01", -c.year)
+		}
+		_, err := eval31(t, "string(xs:date('"+lex+"'))", nil)
+		if (err == nil) != c.ok {
+			t.Errorf("xs:date(%q): err = %v, want accepted=%v", lex, err, c.ok)
+		}
 	}
 }
