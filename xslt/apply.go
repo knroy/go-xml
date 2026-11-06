@@ -894,6 +894,15 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		// caching one would make a failure that depended on transient state
 		// -- an unavailable document, say -- permanent for the rest of the
 		// transform.
+		//
+		// What the memo holds stays until the transform ends, so its items
+		// are totalled across calls and checked against the item bound;
+		// each call's body was only bounded on its own. Refusing rather than
+		// not storing: the same-result promise above needs the store.
+		rt.funcResultItems += int64(len(res))
+		if err := sub.ctx.ItemsRefused(rt.funcResultItems); err != nil {
+			return nil, err
+		}
 		rt.funcResults[cacheKey] = res
 	}
 	return res, nil

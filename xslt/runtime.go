@@ -192,6 +192,8 @@ type transformState struct {
 	// so the promise is only kept by evaluating once and reusing. Keyed by
 	// functionCallKey; see apply.go.
 	funcResults map[callHash]xdm.Sequence
+	// funcResultItems is the number of items funcResults holds.
+	funcResultItems int64
 
 	// itemIDs numbers the nodes and function items functionCallKey keys by
 	// identity; see identityNumber.

@@ -64,3 +64,18 @@ func TestNestedEvalKeepsEnclosingItemCount(t *testing.T) {
 		t.Fatalf("default limits: out=%q err=%v, want 1600", out, err)
 	}
 }
+
+// A memoised function keeps every distinct call's result until the transform
+// ends, so the results it holds count against the item bound together, not
+// one call at a time.
+func TestFunctionMemoCountsHeldItems(t *testing.T) {
+	for _, attr := range []string{`new-each-time="no"`, `cache="yes"`} {
+		decls := `<xsl:function name="f:r" ` + attr + `><xsl:param name="i"/><xsl:sequence select="(1 to 300) ! (. + $i)"/></xsl:function>
+			<xsl:template match="/"><xsl:value-of select="sum(for $i in 1 to 10 return count(f:r($i)))"/></xsl:template>`
+		out, err := budgetRun(t, decls, 1000)
+		wantItemsRefused(t, attr, out, err)
+		if out, err := budgetRun(t, decls, 0); err != nil || out != "3000" {
+			t.Fatalf("%s default limits: out=%q err=%v, want 3000", attr, out, err)
+		}
+	}
+}
