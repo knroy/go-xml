@@ -206,6 +206,39 @@ func TestIncludeFanOutIsBounded(t *testing.T) {
 	}
 }
 
+// The fetch count bounds how often a Resolver is asked, not what it returns.
+// Each fetch is parsed afresh and stays reachable until the compile ends, so
+// a 256 KB leaf included 800 times held 207 MB, and the count allowed 2.6 GB.
+// What the fetched documents hold is summed over the compilation against
+// one document's limits; here a 1 MB leaf included 70 times passes 64 MB of
+// text. The resolver hands back one parsed tree each time, so the test parses
+// it once.
+func TestIncludedDocumentsShareOneBudget(t *testing.T) {
+	leaf, err := xdm.ParseString(`<grammar`+rngNS+`><define name="x" combine="choice">`+
+		`<element name="e"><empty/></element></define><f:pad xmlns:f="urn:f">`+
+		strings.Repeat("a", 1<<20)+`</f:pad></grammar>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sameResolver{leaf.Root}
+	top := func(k int) string {
+		return `<grammar` + rngNS + `><start><ref name="x"/></start>` +
+			strings.Repeat(`<include href="leaf.rng"/>`, k) + `</grammar>`
+	}
+	if _, err := compileWith(t, top(2), Options{Resolver: r}); err != nil {
+		t.Fatalf("two includes of one leaf were refused: %v", err)
+	}
+	_, err = compileWith(t, top(70), Options{Resolver: r})
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Fatalf("got %v, want a resource limit", err)
+	}
+}
+
+// sameResolver returns one tree for every href.
+type sameResolver struct{ doc *xdm.Node }
+
+func (r sameResolver) ResolveSchema(string) (*xdm.Node, error) { return r.doc, nil }
+
 // A sibling pair of externalRefs to one schema is the same shape as the
 // diamond, on the path that builds a compiler of its own. It must compile,
 // which is what makes removing the href from the active path on the way out

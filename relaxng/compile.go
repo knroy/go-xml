@@ -121,8 +121,9 @@ type compiler struct {
 	// makes a cycle that passes through an externalRef visible.
 	activeHrefs *map[string]bool
 	// fetches counts the include/externalRef fetches of the whole
-	// compilation, shared like activeHrefs; see maxSchemaFetches.
-	fetches *int
+	// compilation and what they brought in, shared like activeHrefs; see
+	// fetchBudget.
+	fetches *fetchBudget
 	// expanding names the definitions currently being compiled, so that one
 	// reaching itself becomes a lazy reference rather than an infinite
 	// expansion.
@@ -192,11 +193,44 @@ type compiledDef struct {
 // sub-compiler cannot each forget it in their own way.
 // fetchCount returns the compilation-wide fetch counter, creating it on the
 // first fetch.
-func (c *compiler) fetchCount() *int {
+func (c *compiler) fetchCount() *fetchBudget {
 	if c.fetches == nil {
-		c.fetches = new(int)
+		c.fetches = new(fetchBudget)
 	}
 	return c.fetches
+}
+
+// fetchBudget is what the include/externalRef fetches of one compilation
+// have cost so far.
+//
+// The count alone (maxSchemaFetches) bounded how often a Resolver is asked,
+// not what it hands back: every fetch is parsed afresh and its definitions
+// stay reachable until the compile ends, so one 256 KB leaf included K times
+// held K times its tree, 207 MB at K=800, and 2.6 GB was in reach of the
+// count. The nodes and text the fetched documents hold are therefore summed
+// over the compilation and held to xdm's limits for one document
+// (DefaultMaxNodes, DefaultMaxBytes): a schema set may be spread over many
+// files, but not cost more than the largest single document would. The node
+// total also bounds the <ref> expansions of the externalRef sub-compilers,
+// each of which counts its own maxRefExpansions, since a definition is a
+// node of some fetched document.
+type fetchBudget struct {
+	count int
+	nodes int
+	bytes int64
+}
+
+// charge adds a fetched document to the budget, reporting whether it is
+// still within the limits.
+func (b *fetchBudget) charge(doc *xdm.Node) bool {
+	b.nodes += doc.SubtreeEnd() - doc.Index()
+	for d := range doc.Descendants() {
+		b.bytes += int64(len(d.Value()))
+		for a := range d.Attrs() {
+			b.bytes += int64(len(a.Value()))
+		}
+	}
+	return b.nodes <= xdm.DefaultMaxNodes && b.bytes <= xdm.DefaultMaxBytes
 }
 
 func (c *compiler) active() *map[string]bool {
@@ -910,13 +944,13 @@ func (c *compiler) fetch(n *xdm.Node) (*xdm.Node, string, error) {
 	// legal and re-fetched on every route, so without it a few schemas each
 	// including the next F times cost F^depth fetches and collects.
 	fetches := c.fetchCount()
-	if *fetches >= maxSchemaFetches {
+	if fetches.count >= maxSchemaFetches {
 		return nil, "", fmt.Errorf(
 			"relaxng: resource limit exceeded: compiling this schema needs "+
 				"more than %d include/externalRef fetches at %q: %w",
 			maxSchemaFetches, href, xdm.ErrResourceLimit)
 	}
-	*fetches++
+	fetches.count++
 	doc, err := c.opts.Resolver.ResolveSchema(href)
 	if err != nil {
 		return nil, "", fmt.Errorf("relaxng: <%s href=%q>: %w",
@@ -926,6 +960,13 @@ func (c *compiler) fetch(n *xdm.Node) (*xdm.Node, string, error) {
 		return nil, "", fmt.Errorf(
 			"relaxng: <%s href=%q>: the resolver returned nothing",
 			n.Name().Local, href)
+	}
+	if !fetches.charge(doc) {
+		return nil, "", fmt.Errorf(
+			"relaxng: resource limit exceeded: the include/externalRef "+
+				"documents of this schema hold more than %d nodes or %d bytes "+
+				"of text at %q: %w",
+			xdm.DefaultMaxNodes, xdm.DefaultMaxBytes, href, xdm.ErrResourceLimit)
 	}
 	return rootElement(doc), href, nil
 }

@@ -22,8 +22,9 @@ import "github.com/knroy/go-xml/v2/xdm"
 // derivative it took last time instead of rebuilding it. It belongs to one
 // validation, so a Schema shared between goroutines shares no mutable state.
 //
-// A nil patBuilder interns and remembers nothing, which is how the compiler,
-// and a validation until memoAfter elements, use the same code.
+// A nil patBuilder interns and remembers nothing, which is how the compiler
+// uses the same code; so does one whose tables are not made yet (on), which
+// is a validation until memoAfter elements.
 //
 // Interning changes no pattern's shape: choice() merges exactly what patEq
 // merges, so patternSize and MaxPatternSize see the patterns they saw before.
@@ -39,7 +40,15 @@ type patBuilder struct {
 	// pattern alone, so their lookups hash one pointer, not a memoKey.
 	closeM, endM map[pattern]pattern
 	ctxUsed      bool // the derivative consulted the namespace context; see att
+	// maxPattern is ValidateOptions.MaxPatternSize as resolved, checked
+	// between the tokens of a list (listDeriv); a negative value means no
+	// bound. tooBig records that it fired.
+	maxPattern int
+	tooBig     bool
 }
+
+// on reports whether pb interns and remembers.
+func (pb *patBuilder) on() bool { return pb != nil && pb.intern != nil }
 
 type internKey struct {
 	k    uint8
@@ -72,8 +81,15 @@ const (
 const maxMemo = 1 << 16
 
 func newPatBuilder() *patBuilder {
-	return &patBuilder{intern: map[internKey]pattern{}, memo: map[memoKey]pattern{},
-		closeM: map[pattern]pattern{}, endM: map[pattern]pattern{}}
+	pb := &patBuilder{maxPattern: -1}
+	pb.startMemo()
+	return pb
+}
+
+// startMemo makes the tables, from which point pb interns and remembers.
+func (pb *patBuilder) startMemo() {
+	pb.intern, pb.memo = map[internKey]pattern{}, map[memoKey]pattern{}
+	pb.closeM, pb.endM = map[pattern]pattern{}, map[pattern]pattern{}
 }
 
 // mk returns the interned node; pb is not nil.
@@ -116,7 +132,7 @@ func (pb *patBuilder) usedCtx() {
 // open, att, closeTag and end are the derivatives the validator takes,
 // remembered by the state they are taken of.
 func (pb *patBuilder) open(p pattern, name xdm.QName) pattern {
-	if pb == nil {
+	if !pb.on() {
 		return pb.startTagOpenDeriv(p, name)
 	}
 	k := memoKey{op: opOpen, p: p, name: name}
@@ -132,7 +148,7 @@ func (pb *patBuilder) open(p pattern, name xdm.QName) pattern {
 // not in the key, so a derivative that consulted it (a QName value) is not
 // remembered.
 func (pb *patBuilder) att(p pattern, a attr, ctx nsContext) pattern {
-	if pb == nil {
+	if !pb.on() {
 		return pb.attDeriv(p, a, ctx)
 	}
 	k := memoKey{op: opAtt, p: p, name: a.name, s: a.value}
@@ -148,7 +164,7 @@ func (pb *patBuilder) att(p pattern, a attr, ctx nsContext) pattern {
 }
 
 func (pb *patBuilder) closeTag(p pattern) pattern {
-	if pb == nil {
+	if !pb.on() {
 		return pb.startTagCloseDeriv(p)
 	}
 	if v, ok := pb.closeM[p]; ok {
@@ -162,7 +178,7 @@ func (pb *patBuilder) closeTag(p pattern) pattern {
 }
 
 func (pb *patBuilder) end(p pattern) pattern {
-	if pb == nil {
+	if !pb.on() {
 		return pb.endTagDeriv(p)
 	}
 	if v, ok := pb.endM[p]; ok {
@@ -225,7 +241,7 @@ func (pb *patBuilder) choice(a, b pattern) pattern {
 	if c, ok := b.(*choicePat); ok && altCount(a)*altCount(b) <= maxMergePairs {
 		return pb.choice(pb.choice(a, c.Left), c.Right)
 	}
-	if pb != nil {
+	if pb.on() {
 		return pb.mk(kChoice, a, b)
 	}
 	return newChoicePat(a, b)
@@ -323,7 +339,7 @@ func (pb *patBuilder) group(a, b pattern) pattern {
 	if _, ok := b.(emptyPat); ok {
 		return a
 	}
-	if pb != nil {
+	if pb.on() {
 		return pb.mk(kGroup, a, b)
 	}
 	return newGroupPat(a, b)
@@ -342,7 +358,7 @@ func (pb *patBuilder) interleave(a, b pattern) pattern {
 	if _, ok := b.(emptyPat); ok {
 		return a
 	}
-	if pb != nil {
+	if pb.on() {
 		return pb.mk(kInterleave, a, b)
 	}
 	return newInterleavePat(a, b)
@@ -355,7 +371,7 @@ func (pb *patBuilder) after(a, b pattern) pattern {
 	if _, ok := b.(notAllowedPat); ok {
 		return notAllowedPat{}
 	}
-	if pb != nil {
+	if pb.on() {
 		return pb.mk(kAfter, a, b)
 	}
 	return newAfterPat(a, b)
@@ -365,7 +381,7 @@ func (pb *patBuilder) oneOrMore(p pattern) pattern {
 	if _, ok := p.(notAllowedPat); ok {
 		return notAllowedPat{}
 	}
-	if pb != nil {
+	if pb.on() {
 		return pb.mk(kOneOrMore, p, nil)
 	}
 	return newOneOrMorePat(p)
@@ -643,8 +659,19 @@ func (pb *patBuilder) textDeriv(p pattern, s string, ctx nsContext) pattern {
 }
 
 // listDeriv applies a pattern to the tokens of a whitespace-separated list.
+//
+// The pattern bound is checked before each token, for the reason
+// validator.attsDeriv checks it before each attribute: a oneOrMore nested
+// in a oneOrMore duplicates its operand on every token, and the result
+// collapses to empty or notAllowed before any check outside this loop can
+// see it. Measured, a 46-byte instance of twenty tokens cost 25 s and
+// 224 MB with MaxPatternSize set to 1.
 func (pb *patBuilder) listDeriv(p pattern, tokens []string, ctx nsContext) pattern {
 	for _, tok := range tokens {
+		if pb != nil && pb.maxPattern >= 0 && (pb.tooBig || patternSize(p) > pb.maxPattern) {
+			pb.tooBig = true
+			return notAllowedPat{}
+		}
 		p = pb.textDeriv(p, tok, ctx)
 	}
 	if p.nullable() {

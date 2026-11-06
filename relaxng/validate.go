@@ -105,7 +105,8 @@ func (s *Schema) ValidateWithOptions(doc *xdm.Node, opts ValidateOptions) error 
 	if maxPattern == 0 {
 		maxPattern = DefaultMaxPatternSize
 	}
-	v := &validator{maxDepth: maxDepth, maxPattern: maxPattern}
+	v := &validator{maxDepth: maxDepth, maxPattern: maxPattern,
+		pb: &patBuilder{maxPattern: maxPattern}}
 	p := v.childDeriv(s.start, root)
 	if v.tooBig {
 		return &Error{
@@ -164,7 +165,7 @@ type validator struct {
 	// limit.
 	tooBig bool
 	// pb interns and remembers this run's derivatives, from the
-	// memoAfter'th element on.
+	// memoAfter'th element on, and carries the pattern bound into them.
 	pb    *patBuilder
 	elems int
 	// kids is a stack of the content children of the elements being
@@ -276,10 +277,17 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 		v.depth++
 		v.elems++
 		if v.elems == memoAfter {
-			v.pb = newPatBuilder()
+			v.pb.startMemo()
 		}
 		v.path = append(v.path, n.Name().Local)
 		defer func() {
+			// The list-token bound fires inside the derivative, where no
+			// path is known (patBuilder.listDeriv); the innermost element
+			// it fired in is named here.
+			if v.pb.tooBig && !v.tooBig {
+				v.tooBig = true
+				v.deepPath = tailPath(v.path[:len(v.path)-1], n.Name().Local)
+			}
 			v.depth--
 			v.path = v.path[:len(v.path)-1]
 		}()
