@@ -935,8 +935,10 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	})
 	// A transform started by fn:transform continues its caller's item and byte
 	// allowances rather than restarting on fresh ones, the same policy the
-	// recursion depth above follows. The counters travel with their held flags;
-	// see xpath.Context.AdoptBudget.
+	// recursion depth above follows. The item counter travels with its held
+	// flag, and the byte counter arrives held, so HoldByteBudget below
+	// continues an unheld caller's count instead of resetting it; see
+	// xpath.Context.AdoptBudget.
 	xctx = xctx.AdoptBudget(opts.nestedBudget)
 	// The expression depth continues the count too. rt.depth alone bounds a
 	// stylesheet that calls fn:transform on itself, but not one that leaves

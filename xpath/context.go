@@ -1840,7 +1840,8 @@ func (c *Context) HoldByteBudget() *Context {
 // already follows is that a budget is monotonic: a nested evaluation may spend
 // the parent's remaining allowance, never reset it.
 //
-// Each counter is carried WITH its held flag, never without. The flag is what
+// The item counter is carried WITH its held flag, never without, and the
+// byte counter is always held (below). The flag is what
 // says where the budget's boundary is, and a counter forwarded without it
 // would be reset by Compiled.Eval once per expression in the nested
 // evaluation -- which would clear the CALLER's accumulated charges through the
@@ -1867,8 +1868,14 @@ func (c *Context) AdoptBudget(src *Context) *Context {
 		// The bound travels with the counter it is checked against.
 		env.items, n.heldItems, env.MaxItems = from.items, src.heldItems, from.MaxItems
 	}
+	// The byte counter is held whatever the caller's flag. The caller's
+	// charges are already in it, and a nested evaluation that arms its own
+	// construction -- newRuntime's HoldByteBudget -- would reset an unheld
+	// one, erasing them through the shared pointer at every fn:transform.
+	// Held, it continues the count and never resets it; the caller's own
+	// Compiled.Eval still draws its per-expression boundary around the call.
 	if from.bytes != nil {
-		env.bytes, n.heldBytes = from.bytes, src.heldBytes
+		env.bytes, n.heldBytes = from.bytes, true
 	}
 	// The entity allowance is inherited on the same house rule as the other
 	// two: a nested evaluation may spend the parent's remainder, never reset
