@@ -1,7 +1,6 @@
 package xslt
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -918,7 +917,7 @@ func (p *staticPhase) staticRuntime() *runtime {
 		static:   true,
 		opts:     &TransformOptions{},
 		sheet:    p.c.sheet,
-		goCtx:    context.Background(),
+		goCtx:    p.c.goCtx(),
 		maxDepth: maxDepth,
 	}, depth: p.c.opts.nestedDepth}
 	// Only a ModuleResolver that is also a DocumentResolver can answer
@@ -965,7 +964,7 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 	} else {
 		// A 2.0 processor runs no nested transformation. Left to the xpath
 		// stub, the call would reach the processor this package's init
-		// registers, which compiles under the compileMu this Compile already
+		// registers, which compiles under the compileSlot this Compile already
 		// holds -- a deadlock -- so the stub's FOXT0004 is given here instead.
 		lib.Add(xpath.Function{
 			Name:  xdm.QName{URI: xdm.NSFN, Local: "transform"},
@@ -1006,6 +1005,8 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 		p.now = time.Now()
 	}
 	ctx = ctx.WithEnv(func(e *xpath.Env) {
+		// The static phase stops when the CompileContext caller gives up.
+		e.Ctx = p.c.goCtx()
 		if processorAtLeast30() {
 			e.LibraryVersion = xpath.XPath31
 			e.RegexVersion = xpath.XPath31

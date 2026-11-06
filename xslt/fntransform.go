@@ -66,7 +66,7 @@ func registerTransformFuncWith(l *xpath.Library, budget *compileBudget) {
 // transformCaller is what a nested transform inherits from whoever called
 // fn:transform: the resolvers and settings in opts, the package resolver, the
 // recursion count and its bound, the deadline, and whether the call is made
-// from inside a Compile that holds compileMu. The body of fn:transform reads
+// from inside a Compile that holds compileSlot. The body of fn:transform reads
 // these and nothing else, so a stylesheet and a caller with no stylesheet at
 // all -- an XQuery query, a bare xpath.Eval -- run the one implementation.
 type transformCaller struct {
@@ -946,16 +946,20 @@ func compileNested(
 		budget:       rt.budget,
 		StaticParams: static,
 		MaxVersion:   maxVersion,
+		// The nested compilation is cancelled with the transformation, or
+		// the static phase, that asked for it.
+		ctx: rt.goCtx,
 	}
 	// A transform reached from the static phase is running INSIDE a Compile
-	// that holds compileMu, so it must not ask for the lock again. rt.static
+	// that holds compileSlot, so it must not ask for the lock again. rt.static
 	// is set only from the runtime the static phase builds, and is the only
 	// thing that distinguishes the two paths.
-	compile := Compile
+	var sheet *Stylesheet
 	if rt.static {
-		compile = compileNestedLocked
+		sheet, err = compileNestedLocked(root, copts)
+	} else {
+		sheet, err = CompileContext(rt.goCtx, root, copts)
 	}
-	sheet, err := compile(root, copts)
 	if err != nil {
 		if xdm.ErrorCode(err) != "" {
 			return nil, fmt.Errorf("fn:transform: compiling the stylesheet: %w", err)

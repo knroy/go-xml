@@ -22,7 +22,7 @@ import (
 // when the memo stayed on). It comes back empty when the phase ends.
 // Outside a compilation m is nil and every call walks. It has its own mutex
 // for the reason sharedNS does: a running transform, which does not hold
-// compileMu, reaches these functions too.
+// compileSlot, reaches these functions too.
 var versionMemo struct {
 	sync.Mutex
 	on      bool

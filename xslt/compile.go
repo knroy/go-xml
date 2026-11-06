@@ -12,6 +12,9 @@ import (
 
 // compiler holds state while compiling a stylesheet and its included modules.
 type compiler struct {
+	// env is the state this compilation shares with code that has no
+	// compiler in scope; see compileEnv.
+	env *compileEnv
 	// inline is the substitution of a streamed call's first argument for
 	// its function's first parameter while the inlined body compiles
 	// (streamfn_inline.go).
@@ -1815,7 +1818,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 		if overridingPackage(el, compilePackage) != compilePackage {
 			vis = "public"
 		}
-		if v, ok := composedVisibility[el]; ok && vis == "" {
+		if v, ok := c.env.composedVisibility[el]; ok && vis == "" {
 			vis = string(v)
 		}
 		if vis == "" {
@@ -2112,7 +2115,7 @@ const maxModuleNodes = 500_000
 // visits maxModuleVisits bounds and the nodes maxModuleNodes bounds. It is
 // minted by compileLocked and shared with every compilation fn:transform
 // starts from the static phase, which runs inside it under the same
-// compileMu: the house rule that a nested operation spends the parent's
+// compileSlot: the house rule that a nested operation spends the parent's
 // remainder rather than restarting it.
 //
 // The schema bytes are here for the same reason: a nested compilation spends

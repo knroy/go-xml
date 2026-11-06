@@ -513,6 +513,25 @@ go-xml validate -xsd s.xsd -xsd-version 1.1 -xpath-version 3.1 in.xml
 For the transform it defaults to deriving from the stylesheet; for `validate`
 it defaults to `2.0`, since there is nothing in a schema to derive it from.
 
+### Bounding a compile with a context
+
+`xslt.CompileContext(ctx, doc, opts)` is `Compile` with a cancellable context.
+`Compile` itself is unchanged and delegates with `context.Background()`.
+
+```go
+ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+defer cancel()
+sty, err := xslt.CompileContext(ctx, sheet.Root, xslt.CompileOptions{})
+```
+
+Compilations in one process run one at a time. A `CompileContext` call
+waiting for its turn returns `ctx.Err()` as soon as its context is done, and
+one already running observes the context throughout its static phase —
+`use-when`, shadow attributes and `static="yes"` variables, including a
+compilation an `fn:transform` call there starts. A stylesheet that
+`fn:transform` compiles while a transform runs is compiled under that
+transform's context.
+
 ---
 
 ## xslt.TransformOptions

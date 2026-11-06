@@ -127,7 +127,7 @@ func (e pkgEdits) addNS(el *xdm.Node, prefix, uri string) {
 // the copy. Source positions travel with every node.
 //
 // The bookkeeping kept by node for declarations follows them to their copies.
-func (e pkgEdits) rebuild(doc, root *xdm.Node, kept []*xdm.Node) (newDoc, newRoot *xdm.Node) {
+func (e pkgEdits) rebuild(env *compileEnv, doc, root *xdm.Node, kept []*xdm.Node) (newDoc, newRoot *xdm.Node) {
 	tree := xdm.NewTree()
 	tree.CopySourceFrom(root.Tree())
 	shell := tree.Root
@@ -159,8 +159,8 @@ func (e pkgEdits) rebuild(doc, root *xdm.Node, kept []*xdm.Node) (newDoc, newRoo
 		if pkg, ok := overridingDecls[orig]; ok {
 			overridingDecls[cp] = pkg
 		}
-		if v, ok := composedVisibility[orig]; ok {
-			composedVisibility[cp] = v
+		if v, ok := env.composedVisibility[orig]; ok {
+			env.composedVisibility[cp] = v
 		}
 	}
 	return shell, newRoot

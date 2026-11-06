@@ -155,7 +155,7 @@ func TestTransformRecursionThroughAnotherHostIsBounded(t *testing.T) {
 
 // A use-when under a 2.0 processor that calls fn:transform is refused with
 // FOXT0004, as before the processor was registered. Reaching it instead would
-// Compile under the compileMu the outer Compile holds, and hang.
+// Compile under the compileSlot the outer Compile holds, and hang.
 func TestStaticTransformUnderA20ProcessorIsRefused(t *testing.T) {
 	src := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
   <xsl:template match="/" use-when="exists(transform(map{'stylesheet-text': '&lt;x/>'}))"><a/></xsl:template>
