@@ -479,6 +479,9 @@ func loadFiles(paths []string, opts Options, named map[int]instanceLocation) (*S
 		// faults are not attributed to a file they did not expect.
 		a.rootBases[resolved] = true
 		a.push(tree.Root, resolved, "", false)
+		if isInst {
+			a.queue[len(a.queue)-1].shown = inst.location
+		}
 	}
 
 	if err := a.run(); err != nil {
@@ -646,6 +649,10 @@ type pending struct {
 
 	// redefining marks a document reached through xs:redefine.
 	redefining bool
+
+	// shown, when set, is how errors name the document instead of base: the
+	// location an instance wrote, rather than the host path it resolved to.
+	shown string
 }
 
 // assembler reads a schema document and everything it references.
@@ -880,18 +887,22 @@ func (a *assembler) run() error {
 			return a.tooManyDocuments()
 		}
 
+		shown := item.base
+		if item.shown != "" {
+			shown = item.shown
+		}
 		root := item.root
 		if root.Kind() == xdm.KindDocument {
 			els := root.ChildElements()
 			if len(els) == 0 {
-				return fmt.Errorf("schema document at %q is empty", item.base)
+				return fmt.Errorf("schema document at %q is empty", shown)
 			}
 			root = els[0]
 		}
 		if !root.IsElement(NSSchema, "schema") {
 			return fmt.Errorf(
 				"schema document at %q has root {%s}%s, want {%s}schema",
-				item.base, root.Name().URI, root.Name().Local, NSSchema)
+				shown, root.Name().URI, root.Name().Local, NSSchema)
 		}
 
 		if err := a.readOne(root, item); err != nil {

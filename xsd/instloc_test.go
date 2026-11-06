@@ -323,29 +323,36 @@ func TestInstanceLocationConfinedWhateverResolver(t *testing.T) {
 }
 
 // An error about a document the instance named quotes the location the
-// instance wrote, never the host path it was joined into.
+// instance wrote, never the host path it was joined into: a document that is
+// not XML, and one whose root is not xs:schema.
 func TestInstanceLocationErrorQuotesOnlyTheLocation(t *testing.T) {
 	dir, main := writeSchemaSet(t)
-	if err := os.WriteFile(filepath.Join(dir, "broken.xsd"), []byte("<xs:schema"), 0o644); err != nil {
-		t.Fatal(err)
+	for name, src := range map[string]string{
+		"broken.xsd": "<xs:schema", "notschema.xsd": "<x/>",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	s, err := LoadFiles([]string{main}, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tree, err := xdm.ParseString(`<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`+
-		` xsi:noNamespaceSchemaLocation="broken.xsd"><x>1</x></doc>`, xdm.ParseOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = s.WithInstanceLocations(tree.Root, InstanceLocationPolicy{AllowNoNamespace: true}, Options{})
-	if err == nil {
-		t.Fatal("a malformed document the instance named loaded")
-	}
 	abs, _ := filepath.Abs(dir)
-	if !strings.Contains(err.Error(), `"broken.xsd"`) ||
-		strings.Contains(err.Error(), dir) || strings.Contains(err.Error(), abs) {
-		t.Errorf("error %q should quote only the instance's location", err)
+	for _, name := range []string{"broken.xsd", "notschema.xsd"} {
+		tree, err := xdm.ParseString(`<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`+
+			` xsi:noNamespaceSchemaLocation="`+name+`"><x>1</x></doc>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.WithInstanceLocations(tree.Root, InstanceLocationPolicy{AllowNoNamespace: true}, Options{})
+		if err == nil {
+			t.Fatalf("%s: a document the instance named that is not a schema loaded", name)
+		}
+		if !strings.Contains(err.Error(), `"`+name+`"`) ||
+			strings.Contains(err.Error(), dir) || strings.Contains(err.Error(), abs) {
+			t.Errorf("error %q should quote only the instance's location", err)
+		}
 	}
 }
 
