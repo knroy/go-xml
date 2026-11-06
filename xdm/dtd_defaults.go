@@ -242,9 +242,19 @@ func applyAttDefaults(t xml.StartElement, defs []attDefault, ix declIndex) xml.S
 	// written, prefix included. Matching the local name alone missed
 	// "p:doc", and with it a defaulted xmlns:p the element's own name
 	// needs. The local-name match stays, as applyAttTypes has it.
-	for _, i := range ix.at(t.Name.Space, t.Name.Local) {
+	at := ix.at(t.Name.Space, t.Name.Local)
+	// A tag the declarations give many attributes is looked up rather than
+	// scanned once per default: k defaults on a tag of k attributes cost k*k.
+	var given map[string]bool
+	if len(at)*len(t.Attr) > smallAttrScan {
+		given = make(map[string]bool, len(t.Attr))
+		for _, a := range t.Attr {
+			given[attrLexical(a.Name)] = true
+		}
+	}
+	for _, i := range at {
 		d := defs[i]
-		if hasAttrNamed(t.Attr, d.name) {
+		if given != nil && given[d.name] || given == nil && hasAttrNamed(t.Attr, d.name) {
 			continue
 		}
 		add = append(add, xml.Attr{Name: attrNameOf(d.name), Value: d.value})
@@ -259,6 +269,47 @@ func applyAttDefaults(t xml.StartElement, defs []attDefault, ix declIndex) xml.S
 	copy(attrs, t.Attr)
 	t.Attr = append(attrs, add...)
 	return t
+}
+
+// smallAttrScan is the declarations-times-attributes product up to which a
+// tag's attributes are scanned for each declaration rather than indexed.
+const smallAttrScan = 64
+
+// attrsByName indexes a tag's n attributes by the names an ATTLIST
+// declaration can match them by, their lexical and their local name, when
+// the tag has many declarations as well as many attributes: scanning them for
+// each declaration cost k declarations on a tag of k attributes k*k. A small
+// tag is scanned, and gets nil.
+func attrsByName(decls, n int, name func(i int) (prefix, local string)) map[string][]int {
+	if decls*n <= smallAttrScan {
+		return nil
+	}
+	by := make(map[string][]int, 2*n)
+	for i := range n {
+		p, l := name(i)
+		by[l] = append(by[l], i)
+		if p != "" {
+			lex := p + ":" + l
+			by[lex] = append(by[lex], i)
+		}
+	}
+	return by
+}
+
+// eachAttrNamed calls f with the position of each attribute, in order, that
+// a declaration of attr names: by its lexical name, or by its local name.
+func eachAttrNamed(by map[string][]int, n int, name func(i int) (prefix, local string), attr string, f func(i int)) {
+	if by != nil {
+		for _, i := range by[attr] {
+			f(i)
+		}
+		return
+	}
+	for i := range n {
+		if p, l := name(i); lexicalIs(p, l, attr) || l == attr {
+			f(i)
+		}
+	}
 }
 
 func hasAttrNamed(attrs []xml.Attr, name string) bool {
@@ -317,12 +368,17 @@ func lexicalIs(prefix, local, s string) bool {
 // both.
 func applyAttTypes(el *Node, types []attDeclaredType, ix declIndex) {
 	en := el.Name()
-	for _, i := range ix.at(en.Prefix, en.Local) {
+	at := ix.at(en.Prefix, en.Local)
+	n := el.NumAttrs()
+	name := func(i int) (string, string) {
+		an := el.AttrAt(i).Name()
+		return an.Prefix, an.Local
+	}
+	by := attrsByName(len(at), n, name)
+	for _, i := range at {
 		t := types[i]
-		for a := range el.Attrs() {
-			if an := a.Name(); !lexicalIs(an.Prefix, an.Local, t.attr) && an.Local != t.attr {
-				continue
-			}
+		eachAttrNamed(by, n, name, t.attr, func(j int) {
+			a := el.AttrAt(j)
 			// XML 1.0 §3.3.3: a value whose declared type is not CDATA
 			// loses leading and trailing spaces, and each run of spaces
 			// becomes one. Only #x20: a tab written as &#9; survives.
@@ -334,7 +390,7 @@ func applyAttTypes(el *Node, types []attDeclaredType, ix declIndex) {
 			switch t.typ {
 			case "ID", "IDREF", "IDREFS":
 			default:
-				continue
+				return
 			}
 			if a.TypeAnnotation() == "" {
 				// SetTypeAnnotation rather than a bare assignment: a DTD
@@ -344,7 +400,7 @@ func applyAttTypes(el *Node, types []attDeclaredType, ix declIndex) {
 				// even though the annotation itself does not.
 				a.SetTypeAnnotation(t.typ)
 			}
-		}
+		})
 	}
 }
 
