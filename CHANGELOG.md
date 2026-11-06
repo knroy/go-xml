@@ -104,7 +104,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | An `xsl:try` under `TransformOptions.Output` held its whole output as a tree until it ended | Each item it completes is written provisionally and rolled back on a caught error: a 100 MB loop in 41 MB heap, not 430 MB. | [`4cce5af`][4cce5af] |
 | `rollback-output="no"` under `Output` buffered like "yes" | With a catch for every error its output is written through; XTDE3530 exactly as the tree raises it. | [`ba1fbb6`][ba1fbb6] |
 | `TransformReader` gave "streaming: internal error" when a result-document body held a node of the stream | The stylesheet compiles to the tree path instead: the refusal is made at compile time. | [`971e795`][971e795] |
-| XTDE1500 was missed when a read and a written `file:` URI named one file through a symlink (macOS `/var`) | Both sides compare by the file's real path. | [`c5dbb81`][c5dbb81] |
+| XTDE1500 was missed when a read and a written `file:` URI named one file through a symlink (macOS `/var`) | A read is recorded under its real path and the URI it was asked for; hrefs compare lexically ([`e7f1116`][e7f1116]). | [`c5dbb81`][c5dbb81] |
 | A union of a streamed path with a variable's nodes under `copy-of`, `sum` or a filter sent the container to the tree | The split hands the matches to the outer, which unions them as the tree does. | [`96d1d94`][96d1d94] |
 | A `group-by` over a streamed population in `xsl:fork` sent the container to the tree | The population is held as copies under the tree's cap and grouped by the tree's code. | [`d1005db`][d1005db] |
 | A union of two streamed paths sharing a tail (`A/ancestor::* union B/ancestor::*`) sent the container to the tree | It streams as `(A union B)/T`. | [`fe113df`][fe113df] |
@@ -334,6 +334,58 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A rule pattern calling `accumulator-before` left its streamable mode unverified | Verified when the accumulator is (§19.8.9.2). | [`7e2bec4`][7e2bec4] |
 | Streamed loops were refused after ~1M records of flat state | The node and byte budgets counted every temporary ever built. A loop item that writes no output now hands back what it dropped. | [`294b965`][294b965] |
 | `fn:copy-of` and `fn:snapshot` copies were not charged to the result-node budget | Unlike `xsl:copy-of`. They are charged before the copy, so a transform making over 2M such copies is now refused. | [`294b965`][294b965] |
+
+
+### Fixed
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `ParseOptions.MaxNodes` charged only start tags, so a document of PIs or comments passed any bound | Text that is not all white space, comments and PIs now count one node each. | [`9e9a6f9`][9e9a6f9], [`089c346`][089c346] |
+| k ATTLIST defaults on one tag cost k×k comparisons, reachable from `fn:parse-xml` | A tag whose declarations times attributes pass 64 indexes its attributes by name. | [`43ca7b2`][43ca7b2] |
+| Copying one long text node into many elements used up the text store's blocks and panicked | One string reuses its block; past half the block space values are copied and packed. | [`ad032d1`][ad032d1] |
+| Href-less `xi:include xpointer` copies doubled per level, with no fetch or depth charged | One pass's inclusions count what they copy in against `Parse.MaxNodes`. | [`eb4d0ae`][eb4d0ae] |
+| A date plus `xs:yearMonthDuration` built a year the parser refuses, which compared wrongly and hung `format-date` `[W]` | It raises FODT0001; the ISO week-year search tests ±1 only. | [`734f53c`][734f53c], [`e720aa3`][e720aa3] |
+| `format-number` found an exponent picture's exponent one power of ten per step, quadratic in digits | It is estimated from the digit counts. | [`eb5b289`][eb5b289] |
+| Irregular grouping in `format-integer` and `format-number` scanned every separator per digit, quadratic in the picture | Separators are indexed by position. | [`78d92a8`][78d92a8] |
+| The regex cache gate counted a character class as one instruction, so a class-heavy 1 KB key pinned megabytes | Each class's rune table counts, ten runes to an instruction. | [`a97b803`][a97b803] |
+| Backreference width analysis rescanned the pattern per reference and per nesting level | It runs once per group, capped at 4M steps (`ErrResourceLimit`). | [`ba64164`][ba64164] |
+| A nested function body or `xsl:evaluate` in a `for` reset the shared item count, so `MaxItems` never bound it | `Compiled.Eval` restores the enclosing item and byte count on return. | [`ab7d256`][ab7d256] |
+| A `cache="yes"` or `new-each-time="no"` function memo held its results with no total against `MaxItems` | The memo totals what it holds and raises XPDY0130 past the bound. | [`3926b3e`][3926b3e] |
+| Each `xsl:key` index, one per temporary tree, got a fresh `MaxItems` | Key entries are totalled across every index the transform holds. | [`d06d0f3`][d06d0f3] |
+| A static `fn:transform` of its own stylesheet overflowed the stack: the static phase had no depth bound | It takes `DefaultMaxDepth` and the caller's depth (`ErrResourceLimit`). | [`a97ca6a`][a97ca6a] |
+| A package using itself, directly or through another, overflowed the stack through `xsl:use-package` | Packages on the path are tracked; a revisit is XTSE3005. | [`dce8830`][dce8830] |
+| An attribute value, comment, PI or nested element inside an html `<script>` or `<style>` could write `</` and close it | Every raw write there is held to the text rule: SERE0007. | [`f09487b`][f09487b] |
+| A computed `xsl:result-document/@standalone` was written raw into the XML declaration, so `"?>` injected markup | Values other than yes, no and omit raise SEPM0016. | [`877b3af`][877b3af] |
+| Result-document hrefs were symlink-resolved on the host with no file access granted | Hrefs compare lexically; a read is also recorded under its URI, so XTDE1500 holds. | [`e7f1116`][e7f1116] |
+| A streamed `xsl:merge` held every `for-each-source` document open at once, two descriptors and a goroutine each | A merge of more than 64 inputs runs on the tree. | [`e621bf7`][e621bf7] |
+| Streamed grounding copied every ancestor's attributes per record: N records × S attributes | Batches wait for 4× their spine copy; past 16M copies, over 64 per record is refused. | [`f90e97d`][f90e97d] |
+| `xsi:nil` on a nillable complex-typed element skipped its attribute, ID, abstract-type and assertion checks | A nilled element gets every check except content, tree and stream. | [`50492e0`][50492e0] |
+| Under XSD 1.1, `xsi:type` naming the declared type escaped an `xs:error` or tighter type alternative | `xsi:type` must derive from the selected type, tree and stream. | [`9aed5a3`][9aed5a3] |
+| A key or unique duplicate in a nested scope below a lax or `xsi:type` wildcard child went unreported | The child's identity tables now go up, tree and stream. | [`7fdea1e`][7fdea1e] |
+| The streamed identity check buffered text in every open complex-typed field, depth × text bytes | Complex fields keep no text and fail at their end tag. | [`9a34abe`][9a34abe] |
+| A dense XSD content model was compiled in full before the UPA width gate refused it | The compile stops at the first follow set wider than `maxUPAStateWidth`. | [`2a27fc6`][2a27fc6] |
+| Particle Valid (Restriction) flattened a group-ref DAG to one member per path | Flattened lengths are memoised per group and refused past the position budget. | [`df96ba9`][df96ba9] |
+| XSD 1.1 assertions ignored the `ValidateContext` deadline and returned a verdict | The assertion carries the run's context; a cut-short evaluation returns `ctx.Err()`. | [`f065ab2`][f065ab2] |
+| Each union member reference kept its own `{namespace}local` copy in the never-evicted global type tables | Duplicate members are dropped and one string is shared per name. | [`9e39b51`][9e39b51] |
+| `WithInstanceLocations` statted instance-named paths before the resolver saw them | Its dedup asks the filesystem only inside the schema's own directories. | [`aeae707`][aeae707] |
+| `xsdnet.HTTPResolver` passed a `file:` location in a remote schema to an unrooted `FileResolver`, so a remote author read local files | It is refused before `Files` is asked. | [`a85f40a`][a85f40a] |
+| `c14n.FromXPath` and `FromXPathFilter` ran XML-DSig XPath 1.0 transforms by 2.0 rules, so `"10" < "9"` was true | They evaluate in XPath 1.0 compatibility mode. | [`0c70a04`][0c70a04] |
+| `dtd.Validate` ignored undeclared attributes and matched names by local part, missing `xml:lang` | Undeclared attributes are reported and names matched as written. | [`915eb63`][915eb63] |
+| RELAX NG include and externalRef fan-out had no total bound, so a few tiny schemas cost F^depth fetches | One compilation makes at most 10,000 fetches, then `ErrResourceLimit`. | [`cfc090e`][cfc090e] |
+
+### Changed — behaviour
+
+| Change | What it means | Commit |
+|---|---|---|
+| `dtd.Validate` reports undeclared attributes | A document that validated before may now fail; `Options.AllowUndeclared` skips them, as it skips undeclared elements. | [`915eb63`][915eb63] |
+| `ParseOptions.MaxNodes` counts text that is not all white space, comments and PIs | A document near the bound may now be refused; whitespace-only text is still not counted. | [`9e9a6f9`][9e9a6f9], [`089c346`][089c346] |
+| One XInclude pass shares a node budget | Everything its inclusions copy in counts against `Parse.MaxNodes`, once per level it is copied through. | [`eb4d0ae`][eb4d0ae] |
+| An `xsl:use-package` cycle is XTSE3005 | A package that uses itself, directly or through another, is a static error, not a crash. | [`dce8830`][dce8830] |
+| A streamed parse refuses over 64 ancestor attributes per record past 16M copies | It returns `ErrResourceLimit` where Parse + Transform succeeds; back off to the tree on `errors.Is`. | [`f90e97d`][f90e97d] |
+| A streamed `xsl:merge` of more than 64 inputs runs on the tree | Output is unchanged; memory is the tree's. | [`e621bf7`][e621bf7] |
+| `Serialize` refuses an `OutputSettings.Standalone` other than "", omit, yes or no | SEPM0016, where a value such as "true" was written raw. | [`877b3af`][877b3af] |
+| `xsl:key` entries are bounded per transform | They are totalled across every index against `MaxItems`, so many keyed temporary trees can raise XPDY0130. | [`d06d0f3`][d06d0f3] |
+| c14n XPath transforms use XPath 1.0 rules | A relational comparison of two strings converts both to numbers, as XML-DSig requires. | [`0c70a04`][0c70a04] |
 
 ## v2.2.0 — 2026-11-01
 
@@ -2544,3 +2596,37 @@ here so every entry in this file sits under a release.
 [13ecb6e]: https://github.com/knroy/go-xml/commit/13ecb6e
 [615676a]: https://github.com/knroy/go-xml/commit/615676a
 [95338d5]: https://github.com/knroy/go-xml/commit/95338d5
+[9e9a6f9]: https://github.com/knroy/go-xml/commit/9e9a6f9
+[089c346]: https://github.com/knroy/go-xml/commit/089c346
+[43ca7b2]: https://github.com/knroy/go-xml/commit/43ca7b2
+[ad032d1]: https://github.com/knroy/go-xml/commit/ad032d1
+[eb4d0ae]: https://github.com/knroy/go-xml/commit/eb4d0ae
+[734f53c]: https://github.com/knroy/go-xml/commit/734f53c
+[e720aa3]: https://github.com/knroy/go-xml/commit/e720aa3
+[eb5b289]: https://github.com/knroy/go-xml/commit/eb5b289
+[78d92a8]: https://github.com/knroy/go-xml/commit/78d92a8
+[a97b803]: https://github.com/knroy/go-xml/commit/a97b803
+[ba64164]: https://github.com/knroy/go-xml/commit/ba64164
+[ab7d256]: https://github.com/knroy/go-xml/commit/ab7d256
+[3926b3e]: https://github.com/knroy/go-xml/commit/3926b3e
+[d06d0f3]: https://github.com/knroy/go-xml/commit/d06d0f3
+[a97ca6a]: https://github.com/knroy/go-xml/commit/a97ca6a
+[dce8830]: https://github.com/knroy/go-xml/commit/dce8830
+[f09487b]: https://github.com/knroy/go-xml/commit/f09487b
+[877b3af]: https://github.com/knroy/go-xml/commit/877b3af
+[e7f1116]: https://github.com/knroy/go-xml/commit/e7f1116
+[e621bf7]: https://github.com/knroy/go-xml/commit/e621bf7
+[f90e97d]: https://github.com/knroy/go-xml/commit/f90e97d
+[50492e0]: https://github.com/knroy/go-xml/commit/50492e0
+[9aed5a3]: https://github.com/knroy/go-xml/commit/9aed5a3
+[7fdea1e]: https://github.com/knroy/go-xml/commit/7fdea1e
+[9a34abe]: https://github.com/knroy/go-xml/commit/9a34abe
+[2a27fc6]: https://github.com/knroy/go-xml/commit/2a27fc6
+[df96ba9]: https://github.com/knroy/go-xml/commit/df96ba9
+[f065ab2]: https://github.com/knroy/go-xml/commit/f065ab2
+[9e39b51]: https://github.com/knroy/go-xml/commit/9e39b51
+[aeae707]: https://github.com/knroy/go-xml/commit/aeae707
+[a85f40a]: https://github.com/knroy/go-xml/commit/a85f40a
+[0c70a04]: https://github.com/knroy/go-xml/commit/0c70a04
+[915eb63]: https://github.com/knroy/go-xml/commit/915eb63
+[cfc090e]: https://github.com/knroy/go-xml/commit/cfc090e

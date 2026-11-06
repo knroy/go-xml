@@ -109,6 +109,8 @@ syntax error does *not* carry the sentinel.
 | `MaxBytes` | `xdm/parse.go` | *(none)* | as above |
 | entity expansion budget | `xdm/dtd_entities.go`, `xdm/dtd_external.go` | *(none)* | as above; shared across every document one XInclude pass parses and every parse one XPath evaluation performs, not per parse |
 | `maxIncludeDepth` / `maxIncludeFetches` | `xdm/xinclude.go` | *(none)* | the text already said "resource limit exceeded"; now `errors.Is` agrees |
+| XInclude node budget (`Parse.MaxNodes`) | `xdm/xinclude.go` | *(none)* | as above; counts everything one pass's inclusions copy in, href-less xpointer selections included |
+| streamed ancestor attributes (`spineAttrsPerRecord`, 64) | `xdm/bursts.go` | *(none)* | reads as a malformed document; a streamed parse that has copied over 16M ancestor attributes, more than 64 per record, is refused where Parse + Transform succeeds |
 | `maxParseDepth` (expression) | `xpath/parser.go` | `XPDY0130` | (the code §2.3.1 names for a limit; it borrowed `XPST0003`, "syntactically invalid", until 2026-09-14) |
 | `maxParseDepth` (type) | `xpath/parser_path.go` | `XPDY0130` | as above; a *type* nests through a path the expression counter never sees |
 | `maxChainLength` | `xpath/parser.go` | `XPDY0130` | as above; the expression is well-formed, and it is the *length* of one flat operator chain that is refused, not its nesting |
@@ -117,13 +119,15 @@ syntax error does *not* carry the sentinel.
 | `MaxNodes` (result tree) | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own. Distinct from `xdm/parse.go`'s `MaxNodes`, which bounds a *parse*: this one bounds the nodes a transform or query **constructs**, and the wording says "result-tree nodes" so the three refusals that share the code are told apart) |
 | `Env.MaxDepth` | `xpath/context.go` | `XPDY0001` | no context item is defined |
 | `backtrackBudget` | `xpath/regex_backtrack.go` | `FORX0002` | the regular expression is invalid |
+| `backrefAnalysisMax` (4M steps) | `xpath/regex_backref.go` | `FORX0002` | as above; bounds the backreference fixed-width analysis at compile |
 | range bound | `xpath/operators.go` | `FOAR0002` | a numeric operation overflowed |
 | `maxNestDepth` | `xquery/nested.go` | `XPDY0130` | as the XPath caps; it borrowed `XPST0003` until 2026-09-14 |
 | `maxConstructorDepth` | `xquery/enclosed.go` | `XPDY0130` | as above |
 | `MaxModules` / `MaxModuleBytes` | `xquery/module.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the module is not there |
 | `MaxSchemaBytes` | `xquery/schemaimport.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the schema is not there |
 | `ValidateOptions.MaxDepth` | `xsd/validate.go` | `cvc-elt.1` | the element is invalid against its declaration |
-| `fn:transform` nesting | `xslt/fntransform.go` | `XPDY0001` | no context item is defined; the depth is `TransformOptions.MaxDepth`, charged from the call so that a stylesheet transforming itself accumulates it |
+| `maxSchemaFetches` (10,000) | `relaxng/resolve.go` | *(none)* | include/externalRef fetches per RELAX NG compilation, all routes; the refusal names the budget |
+| `fn:transform` nesting | `xslt/fntransform.go` | `XPDY0001` | no context item is defined; the depth is `TransformOptions.MaxDepth`, charged from the call so that a stylesheet transforming itself accumulates it, including across nested compilations; `DefaultMaxDepth` in the static phase |
 
 The XSD case reaches a caller through `xsd.ValidationErrors`, which now
 unwraps to the individual `*ValidationError`s, so `errors.Is` over the whole
@@ -183,7 +187,7 @@ tree, err := xdm.ParseString(src, xdm.ParseOptions{
 | `TrackPositions` | `bool` | off | Records where each element starts, so a validation error can name a line. Keeps each line's start offset and each element's column, not the source text: about 10% more retained memory (parse-10mb 37.2 → 41.5 MB), no extra parse time. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Nesting limit. Deep input is the cheapest route to stack exhaustion. |
 | `MaxBytes` | `int64` | `DefaultMaxBytes` = 64 MB | Source size limit, enforced on the read. |
-| `MaxNodes` | `int` | `DefaultMaxNodes` = 10,000,000 | Node count limit, counting attributes and namespaces. |
+| `MaxNodes` | `int` | `DefaultMaxNodes` = 10,000,000 | Node count limit: elements, attributes, namespace declarations, text, comments and PIs. Whitespace-only text is not counted (it always sits between two counted nodes, and a tree strips it after the parse where a stream strips it during, so counting it would make the two disagree). |
 
 ### Why there are two size limits
 
@@ -548,6 +552,13 @@ reach the stack instead of the limit, which is a Go runtime fatal that
 from the runtime the stylesheet was entered with, and the refusal is
 `XPDY0001` wrapping `xdm.ErrResourceLimit`.
 
+The same count covers a static variable or parameter that calls
+`fn:transform` while the stylesheet is still compiling: the nested
+compilation's static phase continues the caller's depth under its bound
+(`DefaultMaxDepth` for a top-level `Compile`), so a stylesheet that passes
+its own text to `fn:transform` from a static expression is refused rather
+than overflowing the stack.
+
 The nested transform's XPath context starts at that depth too, not at zero, so
 the count survives a hop through another language: an XQuery query or
 `xpath.Eval` caller (which reaches `fn:transform` when the program links
@@ -910,17 +921,21 @@ either; they are a DocBook convention layered on `parse="text"`, not part of
 XInclude, and an unsupported pointer part falls through by the XPointer
 Framework's own rule rather than being an error.
 
-Two resource budgets apply to one pass: at most 200 resources are read in
-total, and inclusions may nest at most 40 deep. Both report `resource limit
-exceeded`, and neither substitutes for the other — a fan-out of a thousand
-distinct files repeats nothing and still costs a thousand parses.
+Three resource budgets apply to one pass: at most 200 resources are read in
+total, inclusions may nest at most 40 deep, and everything the inclusions copy
+in (fetched documents and href-less xpointer selections alike) counts against
+`Parse.MaxNodes` (zero: `DefaultMaxNodes`; negative: no bound). All report
+`resource limit exceeded`, and none substitutes for the others — a fan-out of a
+thousand distinct files repeats nothing and still costs a thousand parses, and
+a local xpointer re-including an earlier, already-expanded sibling reads
+nothing and nests nothing, so only the node budget stops it.
 
-Neither is loop detection. An inclusion loop is caught by URI, on the path of
+None is loop detection. An inclusion loop is caught by URI, on the path of
 inclusions currently in progress, and reported as `circular xi:include loop`
 naming the URI — at depth one for a document that includes itself, rather than
 after forty fetches. The path is keyed on the URI the resolver reports, so two
 spellings of one file are one entry, and it is popped on the way out, so a
-diamond of inclusions is legal. Neither budget is configurable: they bound one
+diamond of inclusions is legal. The fetch and depth budgets are not configurable: they bound one
 pass of an opt-in transformation, and the switch that decides whether
 inclusions happen at all is the resolver the caller supplies.
 

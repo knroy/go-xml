@@ -148,8 +148,51 @@ Found by the third memory audit (2026-11-01) and not fixed, each with the reason
 - **XQuery inline functions capture their whole scope.** The XPath and XSLT
   closure (`InlineFunctionExpr`) keeps only what its body reads;
   `xquery/inline.go` has its own implementation.
-- **A regex program over 4,096 instructions is compiled on every call**,
-  because it is not cached; the largest QT3 pattern is 4,059.
+- **A regex program over 4,096 estimated instructions is compiled on every
+  call**, because it is not cached. The estimate adds each character class's
+  rune table at ten runes to an instruction (`\w` counts 161), so a pattern
+  with more than about 25 `\w` or `\p{L}` is recompiled per call.
+
+### Security audit at `e728478a`: what the fix round left open (security, resource limits)
+
+The audit's findings were fixed in round SA (see the changelog and the
+Twenty-first pass in [security](security.md)). These remain, each with the
+reason:
+
+- **Shared `xsl:import` targets are recompiled per path**
+  (`xslt/compile.go` `compileIncludeImpl`). A module imported on several paths
+  is resolved, parsed and compiled once per path, so a chain where each module
+  imports the next twice costs 2^N. Caching a compiled module is unsafe: each
+  import occurrence gets its own import precedence (§3.11.3). Needs a
+  `ModuleResolver` serving untrusted modules; the candidate fix is a
+  per-`Compile` module-visit ceiling, whose value is an owner decision to be
+  measured against xslTNG and XSpec first.
+- **Many distinct XSD types under one long namespace still retain
+  namespace length × type count process-wide.** Union references no longer
+  multiply an entry, but each distinct type keeps its `{namespace}local` name
+  in the never-evicted global type tables: 49 MB from a 783 KB schema of
+  10,000 types under a 4 KB namespace. Closing it changes the global tables'
+  behaviour.
+- **The text store's block ceiling still panics** (`xdm/record.go`
+  `newBlock`, 1<<17 blocks). One string now reuses its block and values are
+  packed past half the block space, so reaching it needs about 1 GiB of
+  genuinely copied text in one tree. Turning it into an error needs a recover
+  at the public entry points or an error return through the builders.
+- **Synchronous streamed grounding still copies ancestor attributes per
+  record.** A one-at-a-time `Ground` cannot share ancestor copies (each copy
+  is a tree of its own, and a tree that grows after it is handed out is not
+  safe), so it is bounded by a refusal past 16M copies at over 64 per record,
+  not cured. A cure needs shared growing trees or a `Ground` contract change.
+- **`Compile` holds a process-wide lock (`compileMu`) and takes no context**,
+  so one slow compile delays every other and cannot be cancelled. The audit
+  marked it needs-validation.
+- **Three units the audit deferred on budget were not reviewed:** lazy cache
+  writes on objects documented as safe for concurrent use (possible data
+  races), the XPath constant-folding budgets (`evalToLiteral` mints a fresh
+  default-budget context per fold), and RELAX NG validation-time cost
+  (`textDeriv`/`listDeriv` against `MaxPatternSize`).
+- **UNC paths on Windows in `xslt.FileResolver.resolvePath`** were flagged
+  needs-validation and are untested on Windows.
 
 ### Memory: what the footprint round left open (performance)
 
@@ -235,7 +278,9 @@ map per record runs on a grounded copy of the record. The cursor parses in
 steps on the reader's goroutine; where goroutines remain (a tee's prongs, a
 merge's inputs) each hands xpath's `EvalLock` back at each switch, so a host
 function item cannot hang it. `xsl:merge` streams the documents of a
-`for-each-source` merge source each on a cursor, merged by key as the tree
+`for-each-source` merge source each on a cursor, up to 64 at once (each holds
+its file, cursor and coroutine until the merge ends; a merge of more runs on
+the tree), merged by key as the tree
 merges (an action may call a named template of its module, write
 `xsl:result-document`, or apply templates: no rule it reaches sees the
 action's focus, and a rule's messages are taken back on a re-run); any error re-runs the merge on the tree,

@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,182 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,259 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -788,7 +788,9 @@ on a cursor's events against the typed copy) and `go test ./xslt -run
 nesting, indent, html, namespaces, `rollback-output="no"` and XTDE3530, against
 `Result.Serialize`); `go test ./xslt -run TestSecondaryOutput` (each writer's
 bytes against `SecondaryResult.Serialize`, held results, errors and
-`MaxNodes`); `go test ./xslt -run TestXTDE1500SymlinkedPath`. For the
+`MaxNodes`); `go test ./xslt -run
+'TestXTDE1500SymlinkedPath|TestResultHrefNotSymlinkResolved'` (doc() and
+streamed source-document, both directions; hrefs compared lexically). For the
 completion lanes: `go test ./xslt -run
 'TestStreamForeignUnionOrder|TestStreamHeldGroupCap'` (unions with a
 variable's nodes in either creation order, the held group-by's cap);

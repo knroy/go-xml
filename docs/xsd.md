@@ -190,6 +190,11 @@ RFC1918 ranges are all refused by default. Set `AllowPrivateAddresses: true`
 to re-permit them, which is what a caller fetching from an internal mirror —
 or a test against a server on loopback — needs.
 
+A location that is not remote (a `file:` URI or a path) written in a schema
+that was itself fetched over the network is refused, whatever `Files` is set
+to: the remote author does not get to read the host's filesystem. Locations in
+local schemas still go to `Files` (an unrooted `xsd.FileResolver` when nil).
+
 Network resolution is off by default because turning it on hands control of
 what this process fetches to whoever wrote the schema.
 

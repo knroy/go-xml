@@ -191,9 +191,12 @@ n=512 216ms, n=1024 1.67s, n=2048 12.0s and 1,431,655,424 pair tests, about 8x
 per doubling. Extrapolated to a model of 8192 positions that is roughly
 fourteen minutes and over a gigabyte for one ~320 KB schema document.
 
-That extrapolation describes the **dense** shape, and it is now historical
-rather than reachable: `maxUPAStateWidth` refuses a dense model of 1024
-positions in 68ms, long before the position budget is approached. The
+That extrapolation describes the **dense** shape, and it is now unreachable:
+the compile for the content-model checks applies `maxUPAStateWidth` while it
+builds the follow relation, so a dense model is refused at the first follow set
+wider than 256, before the rest is built. Before that, the build ran in full
+first — 229 MB and about half a second for n=2048, refused by the gate only
+afterwards (`TestDenseModelRefusedBeforeFullCompile`). The
 projection is kept because it is why the width gate exists, not because it is
 what the position budget prevents — those are two different bounds guarding two
 different shapes, and the section below separates them.
@@ -428,6 +431,13 @@ Time makes that model look affordable; memory is what makes it an attack. "An
 unbounded model is a way to be handed an unbounded allocation" was the right
 half of the original reasoning and is still exactly right.
 
+Particle Valid (Restriction) runs before the content-model compile, and its
+Recurse step flattens nested same-compositor groups. On a group-ref DAG that
+was one member per path (1.19 GB for n=22 under both versions). The flattened
+length is now measured per group, memoised, and a restriction whose groups
+flatten past the position budget is refused with `xdm.ErrResourceLimit` before
+anything is flattened (`TestRestrictedGroupDAGRefusedBeforeFlattening`).
+
 The gate is **incremental**: it fires having already allocated in proportion to
 the limit, so the limit is what a hostile schema can actually reserve, not
 merely the point at which it is turned away.
@@ -548,15 +558,17 @@ every network scheme against a canary HTTP server that records **zero** hits,
 an end-to-end hostile document whose `xi:include` names an `http://` URL, and
 that an `xi:fallback` cannot be used to launder a refusal into a read.
 
-Three **resource budgets** hold the cost of one pass: at most 200 resources
-read in total, at most 40 levels of nesting, and the document's
-`maxTotalEntityBytes` entity-expansion allowance, which spans every included
-document rather than restarting for each. All three report `resource limit
-exceeded`, and none substitutes for another — a fan-out of a thousand distinct
-small files repeats nothing and would otherwise cost a thousand parses, while a
-chain recurses in Go, and neither counts a byte of what the files expand to.
+Four **resource budgets** hold the cost of one pass: at most 200 resources
+read in total, at most 40 levels of nesting, the inclusions' node count against
+`Parse.MaxNodes` (local xpointer selections included, which no fetch or depth
+counter sees), and the document's `maxTotalEntityBytes` entity-expansion
+allowance, which spans every included document rather than restarting for each.
+All four report `resource limit exceeded`, and none substitutes for another — a
+fan-out of a thousand distinct small files repeats nothing and would otherwise
+cost a thousand parses, while a chain recurses in Go, and neither counts a byte
+of what the files expand to.
 
-The third was the seventh instance of the recurring seam. `ProcessXInclude`
+The entity allowance was the seventh instance of the recurring seam. `ProcessXInclude`
 parses each included resource with `ParseString`, `ParseString` built a fresh
 `entityTable`, and a fresh table restarted the byte count at zero — so the 1 MB
 ceiling documented as bounding "one document" bounded each of two hundred of
@@ -1279,15 +1291,15 @@ patterns; one that guesses is not safe at any setting.
 here refused any pattern declaring more than 64 capturing groups. Neither the
 XSD nor the XPath regex grammar sets such a ceiling, so that rejected valid
 patterns — `fn:matches` with 65 groups raised `FORX0002` — and it did not buy
-the safety it was aimed at. The width analysis it was protecting costs time in
-proportion to the pattern's *source length*, not its group count: 20,000 flat
-groups are analysed in about 120 µs, while a 12-deep alternation declaring only
-12 groups takes eight times as long, because it is 16 KB of pattern text. The
-cap therefore refused the cheap shape and admitted the expensive one. Reaching
-a nesting depth that costs even half a second requires roughly 4 MB of pattern
-the caller has already had to supply and parse, so the input bounds the work
-without a ceiling on groups. Pinned by `TestBackrefManyGroups`; the step budget
-above is unchanged and still converts exhaustion into `FORX0002`.
+the safety it was aimed at. The width analysis it was protecting costs groups
+referenced x head length x paren depth, because each group's checks rescan the
+head once per nesting level: "(a)" 16,000 times with every group referenced
+took 13 s, and 500 nested groups around a 20 KB class took 9 s, in one call
+that never checks its context. So the analysis runs once per distinct group (a
+group referenced 16,000 times is analysed once) and its total is capped at 4 M
+steps (`backrefAnalysisMax`); beyond it the pattern fails with `FORX0002`
+wrapping `xdm.ErrResourceLimit`. Pinned by `TestBackrefManyGroups` (65 to 1000
+groups still accepted) and `TestBackrefAnalysisBounded`.
 
 **A backtracking matcher is available, and is off by default.**
 `xpath.SetBacktrackingRegex(true)`, or `-backtracking-regex` on the command
@@ -1405,7 +1417,12 @@ through it. The regression test that caught that is `TestEntityExpansionBlowupIs
 `<include>` and `<externalRef>` reach a caller-supplied `Resolver`, which may
 read a file or the network, so a chain of them costs a fetch per level even
 when every href is distinct. `maxIncludeDepth` (40) is the budget for that, and
-exceeding it reports `resource limit exceeded`.
+exceeding it reports `resource limit exceeded`. That bound is per chain. A
+second one, `maxSchemaFetches` (10,000), counts every include/externalRef fetch
+of one compilation across all routes: a diamond is legal and is fetched once
+per route, so levels that each include the next F times cost F^depth fetches
+(F=12 over five levels was 271,453 fetches from 1.7 KB). Exceeding it wraps
+`xdm.ErrResourceLimit`.
 
 A circular schema — `a` includes `b` includes `a` — is a different failure, and
 is detected separately by the set of hrefs on the active inclusion path. A
@@ -1579,7 +1596,10 @@ The default now follows the grant the caller has already made:
   set of its arguments' directories and nothing else.
 - **`WithInstanceLocations` is rooted at the schema's own directories.** Its
   locations come from the instance, the least trusted input the package takes,
-  so the unrooted default was worst of all here.
+  so the unrooted default was worst of all here. Its dedup step asks the
+  filesystem for a location's identity only when the location lies inside one
+  of those directories; any other instance-named path is compared by its
+  cleaned text and reaches the filesystem only through the resolver.
 
 Two refusals are also made *loud*, which is a change in kind rather than
 degree. §4.2.1 permits dropping an `xs:include` whose location cannot be
@@ -1695,7 +1715,15 @@ and facets still apply to the substituted type.
   retain 2,000 entries and about 0.20 MB after GC.
   `xsd.TestSchemaTypeRegistryRetainsPerType` pins both facts. A caller who can
   be made to load unbounded *distinct* schemas grows this without bound; one
-  that replays the same schemas does not.
+  that replays the same schemas does not. The figure assumes short names: each
+  entry holds its expanded name `{namespace}local`, so the cost is the
+  qualified-name length per distinct type. A union's duplicate members are
+  dropped and every occurrence of one name within a load shares one string, so
+  references no longer multiply it (88 KB of `memberTypes="t:a t:a …"` under a
+  4 KB namespace used to retain 97 MB). Still open: many *distinct* types under
+  one long namespace retain namespace length × type count (49 MB from a 783 KB
+  schema of 10,000 types under a 4 KB namespace); see
+  [known gaps](known-gaps.md).
 - The semantic risk of a shared registry — two schemas defining `{uri}T`
   differently, so a node atomises as whichever loaded last — is closed in two
   layers. The first records the resolved typing on the node at validation
@@ -1732,7 +1760,11 @@ and facets still apply to the substituted type.
   file.
 - The `xpath` regex cache is bounded at 1024, as is the backtracking engine's
   single-character-atom cache; the UCA collation cache is bounded at 256. The
-  bound is on entries, so a key over 1 KB (`maxCachedKey`) is never cached. All
+  bound is on entries, so a key over 1 KB (`maxCachedKey`) is never cached. Nor
+  is a program estimated over 4,096 instructions, where each character class
+  counts its rune table at ten runes to an instruction: `\w` is 1,612 runes, so
+  504 copies of it (a 1 KB key that retained 4 MB) are recompiled per use rather
+  than cached. All
   three hold their bound under concurrent use, not merely on a single goroutine:
   each is a `boundedCache` (`xpath/cache.go`) that performs the full-check and
   the insert under one lock hold. An earlier form checked an atomic size counter
@@ -1806,7 +1838,8 @@ No `unsafe`, no `cgo`, no `reflect` in any non-test file.
    but a `context` deadline is what bounds the general case. Use
    `xsd.Schema.ValidateContext` rather than `Validate`, and
    `xslt.Stylesheet.Transform`, which already takes one — a deadline the
-   library never looks at bounds nothing.
+   library never looks at bounds nothing. The deadline reaches inside an XSD
+   1.1 assertion or type alternative, not only between elements.
 7. **Resolve `xsl:result-document` hrefs yourself, and confine them.** The
    library never creates a file: there is no `os.Create` anywhere in `xslt`.
    `xsl:result-document` returns its href to you as a `SecondaryResult.Href`
@@ -1872,6 +1905,29 @@ Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
 
+**Twenty-first pass — a security audit at `e728478a`, 2026-11-06.** One line per fixed finding; the open ones are in [known gaps](known-gaps.md).
+
+- **`ParseOptions.MaxNodes` counted start tags only** — availability, driven by document data: PIs, comments and text were free, so 2,000 PIs parsed under a bound of 100. Text that is not all white space, comments and PIs now count. See CHANGELOG.
+- **ATTLIST defaults were matched to a tag's attributes pairwise** — cost, driven by document data and reachable from `fn:parse-xml`. A large tag indexes its attributes by name. See CHANGELOG.
+- **One long text node copied into many elements used up the text store's blocks** — availability: the host panicked at 45 MB. One string reuses its block, and past half the block space values are copied and packed; the ceiling remains (see known gaps). See CHANGELOG.
+- **Href-less XInclude xpointer copies doubled per level** — availability: no fetch or depth counter saw them. A pass's inclusions count against `Parse.MaxNodes`. See CHANGELOG.
+- **Out-of-range years and quadratic picture work in the date and number builtins** — cost: a year the parser refuses hung `format-date` `[W]`; exponent pictures and irregular grouping were quadratic in digits. FODT0001, ±1 week-year search, estimated exponents, indexed separators. See CHANGELOG.
+- **The regex cache gate and the backreference analysis undercounted** — cost: class rune tables were free to the cache gate, and the width analysis rescanned per reference and per nesting level. See the regex sections above and CHANGELOG.
+- **A nested evaluation cleared its caller's item count** — cost: `Compiled.Eval` zeroed the shared counter on every expression, including an `xsl:function` body or `xsl:evaluate` target inside a running `for`, so the outer loop never bound. The enclosing count is now restored on return (bytes likewise). See CHANGELOG.
+- **The function memo and the key cache held items with no transform total** — cost: each memoised call and each index (one per temporary tree) got its own `MaxItems`. Both now keep a running total and refuse with `XPDY0130`. See CHANGELOG.
+- **Two compile-time recursions reached the Go stack** — availability, unrecoverable: a static `fn:transform` of the stylesheet itself had no depth bound, and an `xsl:use-package` cycle recursed. The static phase takes `DefaultMaxDepth` (`TestStaticTransformNestingIsBounded`); a cycle is XTSE3005 (§3.5.2), which the W3C suite has no case for, so `TestUsePackageCycleIsXTSE3005` alone covers it.
+- **Raw writes other than text inside html `<script>`/`<style>`** — false accept: an attribute value, comment, PI or nested element could write `</`. SERE0007, beside the Twelfth pass below. See CHANGELOG.
+- **A computed `standalone` could close the XML declaration** — false accept: `xsl:result-document/@standalone` was written raw, so `"?>` injected a DOCTYPE. Values other than yes, no and omit are now `SEPM0016`. Pinned by `TestResultDocumentComputedStandaloneRefused`.
+- **`xsl:result-document` hrefs were symlink-resolved with no access granted** — a host path oracle (UNC on Windows): docIdentity ran `filepath.EvalSymlinks` on any write href; now lexical. Pinned by `TestResultHrefNotSymlinkResolved`; XTDE1500 through a link still pinned by `TestXTDE1500SymlinkedPath`, now with streamed cases.
+- **A streamed `xsl:merge` held every input open** — availability: two descriptors and a goroutine per `for-each-source` document. Over 64 inputs the merge runs on the tree. See CHANGELOG.
+- **Streamed grounding copied ancestor attributes per record** — cost, driven by document data: N records under S attributes cost N × S. Batches wait for 4× their spine copy; synchronous grounding is refused past 16M copies at over 64 per record (a bound, not a cure; see known gaps). See CHANGELOG.
+- **Four XSD verdicts were bypassable** — false accept: a nilled complex element skipped its attribute and assertion checks; XSD 1.1 `xsi:type` escaped the selected alternative; identity tables were lost below a wildcard child; the streamed identity check buffered complex-field text. See CHANGELOG.
+- **XSD load cost and global state** — cost: a dense model compiled in full before the width gate, restriction flattening was per path, assertions ignored the deadline, union references multiplied the global type tables, and `WithInstanceLocations` statted paths outside its roots. See the XSD sections above and CHANGELOG.
+- **`xsdnet.HTTPResolver` let a remote schema read local files** — false accept: a `file:` location in a fetched schema reached an unrooted `FileResolver`. Refused before `Files`. Pinned by `TestHTTPResolverRefusesLocalUnderRemoteBase`.
+- **c14n XPath transforms ran by XPath 2.0 rules** — false accept or reject in a signature's node set: `"10" < "9"` was true. Evaluated in XPath 1.0 compatibility mode. Pinned by `TestXPathTransformsUseXPath10Comparison`.
+- **`dtd.Validate` ignored undeclared and prefixed attributes** — false accept. Undeclared attributes are reported (`AllowUndeclared` opts out) and names matched as written. Pinned by `TestUndeclaredAndPrefixedAttributes`.
+- **RELAX NG include fan-out had no total** — cost: F^depth fetches from a few KB. `maxSchemaFetches` (10,000) per compilation. Pinned by `TestIncludeFanOutIsBounded`.
+
 **Twentieth pass — go-xmlsec's measurements against v2.1.0, 2026-11-01.**
 
 - **`c14n.ParsePrefixList` was quadratic in its tokens** — cost, driven by a signed document. It parses the `PrefixList` of an `ec:InclusiveNamespaces` element, which the document under verification supplies, and deduplicated each token with a scan of those before it: 1 MiB of distinct prefixes took 10.9 s of CPU. It deduplicates with a map, keeping first-seen order: about 0.02 s. go-xmlsec caps the list at 1,024 prefixes before calling it; other callers were exposed. Pinned by `TestParsePrefixListLinear` in `c14n/prefixlist_test.go`. Fixed in v2.1.1.
@@ -1890,7 +1946,7 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 - **The DTD validator built every element's path, quadratic in depth** — cost, driven by document data. The path string was rebuilt at each element whether or not anything failed: a *valid* 990-deep chain of 4 KB names allocated 2 GB. It is rendered from the ancestors only when a failure is recorded, and an IDREF keeps its element rather than a path. Its `#FIXED`, enum and ID values are clipped to 1 KB too. Pinned by `TestPathBuiltOnlyForFailures` and `TestValidityMessagesClipLongValues` in `dtd/`.
 - **Deeply nested maps and arrays overflowed the Go stack** — availability, driven by a query or stylesheet. `serialize(..., map{"method":"json"})`, the adaptive method, `fn:deep-equal` and `map:find` recursed once per level, so `fold-left(1 to 400000, [], function($a,$i){[$a]})` (96 bytes) ended the process with `fatal error: stack overflow`, which no `recover` can catch; v2.0.3 has it too. Serialization refuses past 1,000 levels (the `parse-json` limit) with XPDY0130, `deep-equal` and `map:find` past 1,000 levels on a counter of their own (XPDY0001), so function recursion does not lower it, and `xdm.Flatten` is iterative. Pinned by `TestDeepNestedValuesAreRefused` in `xpath/deepnest_test.go`.
 - **A built-in rule returned a truncated result tree as a success** — correctness, driven by document size. The result builder latches a `MaxNodes` refusal, but only instruction bodies checked it, so `<xsl:mode on-no-match="shallow-copy"/>` over 1M elements emptied a third of them and exited 0; v2.0.3 has it too. The transform now fails with XPDY0130 whenever the node budget was crossed anywhere, through `xpath.Context.NodesRefused`. Pinned by `TestBuiltInRuleResultTreeOverrunIsRefused`.
-- **`fn:replace`, picture widths, `xsl:key` and `group-by` grew past their budgets** — cost, driven by document or stylesheet data. `replace` charged its result after building it (12.8 GB for a 500 KB input and a 4 KB replacement); a `format-date` width of `[D01,1000000000]` (52 bytes) allocated 2.8 GB through `strings.Repeat`; `use="1 to 1000"` over 100k nodes built 100M key entries at 3.2 GB peak, since the item counter resets per expression. `replace` charges first on the RE2 path (the other two engines are a known gap), widths over 65,536 are FOFD1340, and keys are totalled per index and grouping against `MaxItems`.
+- **`fn:replace`, picture widths, `xsl:key` and `group-by` grew past their budgets** — cost, driven by document or stylesheet data. `replace` charged its result after building it (12.8 GB for a 500 KB input and a 4 KB replacement); a `format-date` width of `[D01,1000000000]` (52 bytes) allocated 2.8 GB through `strings.Repeat`; `use="1 to 1000"` over 100k nodes built 100M key entries at 3.2 GB peak, since the item counter resets per expression. `replace` charges first on the RE2 path (the other two engines are a known gap), widths over 65,536 are FOFD1340, and keys are totalled across every index the transform holds, and grouping per grouping, against `MaxItems`.
 - **Caches bounded by entry count held gigabytes** — cost, driven by document data or the host. 1,024 cached regexes of 200 KB, 256 failed 1 MB collation URIs, or 256 large `FileResolver` documents each held hundreds of MB to GB. Keys over 1 KB are not cached, and the document cache is also bounded by 32 MB of source.
 - **The nested `fn:transform` cache kept compiles for collected resolvers** — cost, driven by the host. The key held each resolver by identity, so a service that made one per request kept up to 16 dead compiles a stylesheet: 49 MB on DocBook after 20 resolvers. Resolvers are weak keys and `put` drops entries whose resolver is gone: 0.3 MB. Pinned by `TestTransformCache/dead_resolver_dropped`.
 
@@ -1921,7 +1977,7 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 
 **Twelfth pass — the raw-text guard at a text-node boundary, 2026-09-13.**
 
-- **The `SERE0007` raw-text guard looked at one text node at a time** — false accept. The html method writes `<script>` and `<style>` content raw and refuses a value holding `"</"`, but it tested each text node alone while adjacent text nodes are written into one run: `"var a=1<"` followed by `"/script><svg onload=alert(1)>"` emitted a byte-contiguous `</script>` with no error. Parsing and `Transform` both coalesce adjacent text, so the only route is a tree the caller builds and hands to the exported `xslt.Serialize`. The serializer now remembers whether the last raw write ended with `"<"`, reset when the raw element opens, and a following node starting with `"/"` is refused with the same error; an empty node in between does not clear it. Pinned by `TestRawTextGuardSpansTextNodes` beside the original test. See CHANGELOG.
+- **The `SERE0007` raw-text guard looked at one text node at a time** — false accept. The html method writes `<script>` and `<style>` content raw and refuses a value holding `"</"`, but it tested each text node alone while adjacent text nodes are written into one run: `"var a=1<"` followed by `"/script><svg onload=alert(1)>"` emitted a byte-contiguous `</script>` with no error. Parsing and `Transform` both coalesce adjacent text, so the only route is a tree the caller builds and hands to the exported `xslt.Serialize`. The serializer now remembers whether the last raw write ended with `"<"`, reset when the raw element opens, and a following node starting with `"/"` is refused with the same error; an empty node in between does not clear it. Pinned by `TestRawTextGuardSpansTextNodes` beside the original test. See CHANGELOG. Later (SA6, `f09487b`) the same refusal was extended to every other raw write inside the element: a descendant's attribute value, a comment, a processing instruction, and a nested script/style element, each of which closed the raw-text element with no error. Pinned by `TestSerializerRawTextBreakouts`.
 
 **Tenth pass — a compile-time complexity defect and an SSRF, 2026-09-13.**
 
@@ -1948,7 +2004,7 @@ than as a description.
 
 - **`fn:transform` minted a fresh depth allowance at every nesting level** — availability, and the third of this shape: a stylesheet calling `fn:transform` on itself reached a Go stack overflow, which is a runtime fatal `recover()` cannot catch, so the host process died — with `MaxDepth` explicitly set. `rt.depth` is per-runtime and each nested transform built one at zero, so the bound held within a level and never across one. The charge now comes from the call rather than the entry runtime, and the nested runtime continues the count. See CHANGELOG.
 - **A nested `fn:transform` began its own 1 GiB and 5M-item allowances** — availability, and the same boundary as the depth escape above, which was fixed while the other two budgets at that seam were not: `newRuntime` builds its context with `xpath.NewContext`, which mints `items` and `bytes` from scratch, so a stylesheet recursing through `fn:transform` was handed the full `MaxBytes` again at every level and could build unbounded string content while the depth bound alone held. Measured at 500 levels of ~11 MB — about 5.5 GB of charged string content with no refusal — where the nest now stops at `XPDY0130`. The caller's context travels through `TransformOptions.nestedBudget` and is adopted by `xpath.Context.AdoptBudget`, which carries each counter **with its held flag**: the counter alone would be reset per expression by `Compiled.Eval` inside the nested transform and, through the shared pointer, would clear the caller's own charges — worse than the fresh allowance it replaced. See CHANGELOG.
-- **Every XSD assertion began its own 1 GiB allowance** — cost: `xpath.NewContext` per assertion per element, so a schema with many assertions over a large document had no aggregate bound. Validation has no caller budget to inherit, so the boundary is the validation episode, a third instance of the one `xslt` draws at "one transform". The budget alone was inert: XSD 1.1 makes an evaluation error a false result, so the refusal was reported as `cvc-assertion.3` "not satisfied" — calling the document invalid on a ground the schema never stated — and the walk kept spending. A resource refusal now stops the run, as the depth and error limits do. See CHANGELOG.
+- **Every XSD assertion began its own 1 GiB allowance** — cost: `xpath.NewContext` per assertion per element, so a schema with many assertions over a large document had no aggregate bound. Validation has no caller budget to inherit, so the boundary is the validation episode, a third instance of the one `xslt` draws at "one transform". The budget alone was inert: XSD 1.1 makes an evaluation error a false result, so the refusal was reported as `cvc-assertion.3` "not satisfied" — calling the document invalid on a ground the schema never stated — and the walk kept spending. A resource refusal now stops the run, as the depth and error limits do. See CHANGELOG. The episode context also carries the ValidateContext deadline, so a quadratic assertion stops at it and the run returns `context.DeadlineExceeded`.
 - **The two commonest resource refusals could not be told from bad input** — classification, not a false accept: `xslt`'s template-recursion limit and `xpath`'s oversize-range limit returned bare strings while every sibling bound wrapped `xdm.ErrResourceLimit`. A caller deciding whether to abort a walk or report a fault in its input has only `errors.Is` to ask with, and the range case answered differently depending on how far past the bound the expression was — the counted path carried `XPDY0130` and the early exit carried nothing. Both wrap the sentinel now. See CHANGELOG.
 - **`xsl:result-document` wrote outside `-result-dir` through a symlink** — false accept, and the only *write* the program makes by name after checking the name: `writeSecondary` resolved symlinks on the root and then `os.Create`d the destination, so a link planted at the href, or at any directory component of it, was followed out of the root. `..` traversal was already refused, so the string check worked and only the filesystem question was unasked. The href may come from the source document through an attribute value template, which puts the untrusted *document* in charge of where the bytes land. It now opens through `os.OpenRoot`, and the directories are created one component at a time through the same root. See CHANGELOG.
 - **A function applying itself through its own name recursed uncharged** — availability, and the same defect `35c2e77` closed for a self-applying inline function, in the sibling path: `withRetainedFocus` forwarded the caller's item and byte counters and not `Depth`, so a named reference (`local:f#2`) carried the depth it was *written* at and the charge never accumulated. 100,000 levels returned no error where the inline form refuses at 500, and `TransformOptions.MaxDepth` was bypassed entirely from XSLT. A second instance in `xquery/inline.go` discarded the call context whenever an inline body held XQuery-only syntax, so wrapping a body in `<a>{…}</a>` decided whether the recursion was bounded. `Depth` is an `int` where `items` and `bytes` are pointers, so it is the one budget lost by copying a context rather than forwarding it. See CHANGELOG.

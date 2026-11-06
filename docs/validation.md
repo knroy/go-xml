@@ -63,11 +63,16 @@ err = dtd.Validate(tree.Root, d, dtd.Options{})
 // /r: element b is not permitted here in the content of r
 ```
 
-That checks `<!ELEMENT>` content models, attribute presence (`#REQUIRED` and
-`#FIXED`), enumerated values, `ID`/`IDREF`, and §3.3.1's two cross-referencing
-rules — a `NOTATION` attribute's enumeration must name only declared
-`<!NOTATION>`s, and an `ENTITY`/`ENTITIES` attribute must name entities
-declared with `NDATA`. The content models go through
+That checks `<!ELEMENT>` content models, that every attribute is declared
+(VC Attribute Value Type; `xmlns` and `xmlns:*` are exempt when undeclared),
+attribute presence (`#REQUIRED` and `#FIXED`), enumerated values,
+`ID`/`IDREF`, and §3.3.1's two cross-referencing rules — a `NOTATION`
+attribute's enumeration must name only declared `<!NOTATION>`s, and an
+`ENTITY`/`ENTITIES` attribute must name entities declared with `NDATA`.
+Element and attribute names are matched as written, prefix included
+(`xml:lang`, `o:order`), because a DTD declares them that way.
+`Options.AllowUndeclared` skips undeclared attributes as well as elements.
+The content models go through
 the same Glushkov automaton the XSD validator uses — a DTD model is a strict
 subset of what an `xsd.Particle` expresses, so there is no second engine.
 

@@ -23,7 +23,7 @@ Current position:
 | XSLT 3.0 | 99.85% — 11,501 of 11,518 in scope (17 failing) |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 3,182 `func Test` declarations, clean under `-race` |
+| Tests | 3,259 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -698,6 +698,13 @@ The guarantee extends to `fn:transform` called from XQuery or `xpath.Eval`
 starts at the inherited depth, so a cycle through another host language
 accumulates too. `TestTransformRecursionThroughAnotherHostIsBounded`; removing
 the seed fails it.
+
+The static phase was a third path: its runtime was a struct literal with
+`maxDepth` 0, which disables the check, and each nested compilation
+restarted the count. Fixed in `a97ca6a`: the static runtime takes
+`DefaultMaxDepth` (or the caller's bound) and the charged depth travels
+into the nested compilation through unexported `CompileOptions.nestedDepth`.
+`TestStaticTransformNestingIsBounded`; removing either half fails it.
 
 ### 2.2 A function item does not inherit the byte budget
 
