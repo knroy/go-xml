@@ -377,8 +377,12 @@ func requireQName(n xml.Name) error {
 // attributes to the raw tag, ahead of validateStartElement. Namespaces in
 // XML §3 binds a prefix to the attribute's *normalized* value, so xmlns:b
 // declared NMTOKEN and written " urn:x " binds urn:x — and p:a, b:a collide.
-func normalizeAttTokens(t xml.StartElement, types []attDeclaredType, ix declIndex) xml.StartElement {
+//
+// It also names one attribute whose value the collapse changed and whose type
+// an external markup declaration gave, or "" (XML 1.0 §2.9).
+func normalizeAttTokens(t xml.StartElement, types []attDeclaredType, ix declIndex) (xml.StartElement, string) {
 	var attrs []xml.Attr
+	outside := ""
 	at := ix.at(t.Name.Space, t.Name.Local)
 	name := func(i int) (string, string) {
 		return t.Attr[i].Name.Space, t.Attr[i].Name.Local
@@ -394,6 +398,9 @@ func normalizeAttTokens(t xml.StartElement, types []attDeclaredType, ix declInde
 			if c == a.Value {
 				return
 			}
+			if d.outside {
+				outside = d.attr
+			}
 			if attrs == nil {
 				// Copy: the tokeniser's attribute slice is not ours to write.
 				attrs = append([]xml.Attr(nil), t.Attr...)
@@ -404,7 +411,7 @@ func normalizeAttTokens(t xml.StartElement, types []attDeclaredType, ix declInde
 	if attrs != nil {
 		t.Attr = attrs
 	}
-	return t
+	return t, outside
 }
 
 // namespaceDecl recognizes the lexical representation RawToken preserves.

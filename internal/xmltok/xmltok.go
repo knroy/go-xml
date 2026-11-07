@@ -152,6 +152,11 @@ type Decoder struct {
 	// in Entity.
 	AttrEntity map[string]string
 
+	// EscapedEntity names the entities in Entity whose replacement text is
+	// white space owed in part to a character reference. A reference to one
+	// makes the CharData Escaped, as the character reference itself would.
+	EscapedEntity map[string]bool
+
 	// Undeclared, when set, is asked about a reference to an entity that is
 	// neither predefined nor in Entity, and what it returns is added to the
 	// error the reference is. xdm uses it to say why: where XML 1.0 §4.1's
@@ -203,6 +208,7 @@ type Decoder struct {
 	declSeen bool // the first <?xml?> has been read; the version is fixed
 
 	literal bool // the last CharData had no reference and was not CDATA
+	escaped bool // the last CharData had a character reference or was CDATA
 
 	// The values RawToken returns pointers to, one per kind, reused.
 	tokStart   StartElement
@@ -247,6 +253,13 @@ func (d *Decoder) IsVersion11() bool { return d.v11 }
 // needs this as well as the text to tell "&#32;" or "<![CDATA[]]>" there from
 // a space.
 func (d *Decoder) Literal() bool { return d.literal }
+
+// Escaped reports whether the CharData last returned is a CDATA section or
+// holds a character reference. Where XML 1.0 §3 VC: Element Valid admits only
+// white space, between the children of element content, neither is white
+// space whatever its characters (erratum E15), while an entity reference
+// whose replacement text is white space is.
+func (d *Decoder) Escaped() bool { return d.escaped }
 
 // InputOffset returns the stream offset just past the last token returned,
 // counted in the bytes the tokeniser read — after CharsetReader conversion,
@@ -370,7 +383,7 @@ func (d *Decoder) RawToken() (Token, error) {
 	}
 	if b != '<' {
 		d.ungetc()
-		d.literal = true // until reference says otherwise
+		d.literal, d.escaped = true, false // until reference says otherwise
 		data, ok := d.text(0, false)
 		if !ok {
 			return nil, d.err
@@ -704,7 +717,7 @@ func (d *Decoder) bang() (Token, error) {
 				return nil, d.syntaxError("invalid <![ sequence")
 			}
 		}
-		d.literal = false
+		d.literal, d.escaped = false, true
 		data, ok := d.text(0, true)
 		if !ok {
 			return nil, d.err
@@ -1286,6 +1299,7 @@ func (d *Decoder) reference(out []byte, spans []refSpan, attr bool) ([]byte, []r
 					return out, spans, false
 				}
 				repl, found, charRef = string(r), true, true
+				d.escaped = true
 			}
 		}
 	} else {
@@ -1309,6 +1323,9 @@ func (d *Decoder) reference(out []byte, spans []refSpan, attr bool) ([]byte, []r
 				}
 				if !found && d.Entity != nil {
 					repl, found = d.Entity[string(name)]
+					if found && d.EscapedEntity[string(name)] {
+						d.escaped = true
+					}
 				}
 				if !found && d.Undeclared != nil {
 					if note := d.Undeclared(string(name)); note != "" {

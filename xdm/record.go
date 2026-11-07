@@ -188,6 +188,9 @@ type treeSource struct {
 	// declarations a validator on the stream added to its start tag
 	// (xdmburst.AddNamespace), which the parse did not bind.
 	nsAdded map[uint32]int
+	// dtdNotes are the validity errors the parse saw that the tree cannot
+	// show, for dtd.Validate (see dtdnote.go).
+	dtdNotes []dtdNote
 }
 
 // ownSource returns t's source part, made on first use.

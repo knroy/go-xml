@@ -377,21 +377,25 @@ func TestExternalSubsetSuppliesEntities(t *testing.T) {
 }
 
 // WFC: Entity Declared (XML 1.0 §4.1): under standalone="yes" a reference in
-// the document must match a declaration outside the external subset, so one
-// the external subset alone declares is refused, in content and in an
+// the document must match a declaration outside the external subset or a
+// parameter entity, so one the external subset alone declares, or one an
+// internal parameter entity brings in, is refused, in content and in an
 // attribute value, while the internal declaration of the same name binds.
 // W3C xmlconf not-wf-sa03, ibm32n09, ibm68n06.
 func TestStandaloneRefusesExternallyDeclaredEntity(t *testing.T) {
 	const sa = `<?xml version="1.0" standalone="yes"?>`
 	dir := writeFiles(t, map[string]string{
-		"d.dtd":    `<!ENTITY greeting "from-external"><!ENTITY other "external-only"><!ENTITY frag "<b/>">`,
-		"text.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
-		"attr.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r a="&other;"/>`,
-		"frag.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&frag;</r>`,
-		"ok.xml":   sa + `<!DOCTYPE r SYSTEM "d.dtd" [<!ENTITY greeting "from-internal">]><r>&greeting;</r>`,
-		"nosa.xml": `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
+		"d.dtd":     `<!ENTITY greeting "from-external"><!ENTITY other "external-only"><!ENTITY frag "<b/>">`,
+		"text.xml":  sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
+		"attr.xml":  sa + `<!DOCTYPE r SYSTEM "d.dtd"><r a="&other;"/>`,
+		"frag.xml":  sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&frag;</r>`,
+		"ok.xml":    sa + `<!DOCTYPE r SYSTEM "d.dtd" [<!ENTITY greeting "from-internal">]><r>&greeting;</r>`,
+		"nosa.xml":  `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
+		"pe.xml":    sa + `<!DOCTYPE r [<!ENTITY % p "<!ENTITY e 'by-pe'>">%p;]><r>&e;</r>`,
+		"pe2.xml":   sa + `<!DOCTYPE r [<!ENTITY e 'literal'><!ENTITY % p "<!ENTITY e 'by-pe'>">%p;]><r>&e;</r>`,
+		"nosa2.xml": `<!DOCTYPE r [<!ENTITY % p "<!ENTITY e 'by-pe'>">%p;]><r>&e;</r>`,
 	})
-	for _, name := range []string{"text.xml", "attr.xml", "frag.xml"} {
+	for _, name := range []string{"text.xml", "attr.xml", "frag.xml", "pe.xml"} {
 		if err := parseExternalErr(t, dir, name); err == nil {
 			t.Errorf("%s: parsed, want WFC: Entity Declared refused", name)
 		}
@@ -401,6 +405,32 @@ func TestStandaloneRefusesExternallyDeclaredEntity(t *testing.T) {
 	}
 	if got := mustParseExternal(t, dir, "nosa.xml").Root.StringValue(); got != "external-only" {
 		t.Errorf("nosa.xml: got %q, want external-only", got)
+	}
+	if got := mustParseExternal(t, dir, "pe2.xml").Root.StringValue(); got != "literal" {
+		t.Errorf("pe2.xml: got %q, want literal", got)
+	}
+	if got := mustParseExternal(t, dir, "nosa2.xml").Root.StringValue(); got != "by-pe" {
+		t.Errorf("nosa2.xml: got %q, want by-pe", got)
+	}
+}
+
+// The validity faults a parse records for dtd.Validate (dtdnote.go) are
+// bounded, as Validate's own report is, and one recurring in a row is kept
+// once: here an external default applied to 150 elements under
+// standalone="yes", and white space written five times by character reference
+// in one element's element content.
+func TestDTDNotesAreBounded(t *testing.T) {
+	const sa = `<?xml version="1.0" standalone="yes"?>`
+	dir := writeFiles(t, map[string]string{
+		"d.dtd":    `<!ELEMENT r (c*)><!ELEMENT c EMPTY><!ATTLIST c a CDATA "v">`,
+		"many.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>` + strings.Repeat("<c/>", 150) + `</r>`,
+		"runs.xml": `<!DOCTYPE r [<!ELEMENT r (c*)><!ELEMENT c EMPTY>]><r>` + strings.Repeat("&#32;<c/>", 5) + `</r>`,
+	})
+	if n := len(mustParseExternal(t, dir, "many.xml").source.dtdNotes); n != maxDTDNotes {
+		t.Errorf("many.xml: %d notes, want %d", n, maxDTDNotes)
+	}
+	if n := len(mustParseExternal(t, dir, "runs.xml").source.dtdNotes); n != 1 {
+		t.Errorf("runs.xml: %d notes, want 1", n)
 	}
 }
 

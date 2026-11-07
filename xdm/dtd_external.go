@@ -514,6 +514,37 @@ func (t *entityTable) mergeUnder(sub *entityTable) {
 	}
 }
 
+// markPEDeclared marks outside each general entity whose binding (first)
+// declaration in the expanded internal subset came in through a parameter
+// entity (peSpans), as mergeUnder marks the external subset's. XML 1.0 §4.1
+// WFC: Entity Declared counts both alike: a standalone document's reference
+// must match "an entity declaration that does not occur within the external
+// subset or a parameter entity".
+func (t *entityTable) markPEDeclared(subset string) {
+	if len(t.peSpans) == 0 {
+		return
+	}
+	seen := map[string]bool{}
+	scanMarkupDecls(subset, func(at int, kw, body string) bool {
+		body = strings.TrimSpace(body)
+		if kw != "ENTITY" || strings.HasPrefix(body, "%") {
+			return true
+		}
+		f := attListFields(body)
+		if len(f) == 0 || seen[f[0]] {
+			return true
+		}
+		seen[f[0]] = true
+		if inSpans(t.peSpans, at) {
+			if t.outside == nil {
+				t.outside = map[string]bool{}
+			}
+			t.outside[f[0]] = true
+		}
+		return true
+	})
+}
+
 // expandParameterEntities substitutes parameter-entity references in a DTD
 // subset, so that the declarations a referenced module makes become visible.
 //
@@ -619,6 +650,9 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 				return "", fmt.Errorf("parameter entity %%%s between declarations "+
 					"(WFC: PE Between Declarations): %w", name, err)
 			}
+		}
+		if depth == 0 && t.externalDepth == 0 {
+			t.peSpans = append(t.peSpans, [2]int{sb.Len(), sb.Len() + len(text)})
 		}
 		sb.WriteString(text)
 		if sb.Len() > maxTotalEntityBytes {

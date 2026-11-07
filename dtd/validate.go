@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/dtdnote"
 	"github.com/knroy/go-xml/v2/internal/xmlname"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xsd"
@@ -90,6 +91,15 @@ const DefaultMaxErrors = 100
 // only LoadOptions.InternalSubsetOnly or Parse produces) may be missing the
 // very declarations they look for, and reporting them would reject a valid
 // document.
+//
+// Also reported are the faults xdm.Parse saw and the tree cannot show, which
+// it records as it reads: a CDATA section or character reference where
+// element content admits only white space, an entity reference in an EMPTY
+// element (§3, VC: Element Valid), and under standalone="yes" an external
+// markup declaration that defaulted or normalized an attribute or declared
+// element content holding white space (§2.9, VC: Standalone Document
+// Declaration). The external ones are seen only when the parse read the
+// external subset (ParseOptions.ExternalEntities).
 //
 // An attribute whose declared type or default declaration is outside the sets
 // XML 1.0 §3.3 closes is reported here rather than skipped. Such a declaration
@@ -178,6 +188,26 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 	}
 	for _, msg := range d.nesting {
 		v.fail(root, "%s", msg)
+	}
+	// The faults the parser saw that the tree cannot show (internal/dtdnote):
+	// white space written as a reference where only white space may be, and
+	// under standalone="yes" what external declarations defaulted or
+	// normalized. A fault about the document is one about its root; those
+	// outside the subtree being validated are not this call's.
+	for n, msg := range dtdnote.Notes(doc) {
+		el := n.(*xdm.Node)
+		if el.Kind() == xdm.KindDocument {
+			if doc.Kind() != xdm.KindDocument {
+				continue
+			}
+			el = root
+		}
+		for a := el; a != nil; a = a.Parent() {
+			if a == root {
+				v.fail(el, "%s", msg)
+				break
+			}
+		}
 	}
 	v.walk(root)
 	v.checkIDRefs()
