@@ -8,81 +8,54 @@ import (
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
-// TestStreamAndSourceDocumentAreOneInstruction pins that xsl:stream is
-// accepted beside xsl:source-document, and that each carries its own
-// attribute list.
-//
-// The vendored working draft (testdata/xslt30-test/specs/xslt-lcwd30.xml,
-// §18.1) names the instruction xsl:stream and mentions it 160 times;
-// "source-document" appears there not at all. The W3C suite is the mirror
-// image -- 500 stylesheets write xsl:source-document and none writes
-// xsl:stream -- because the rename happened between the two texts. The
-// element table carried only the suite's spelling, so a stylesheet written
-// against the specification this repository vendors was rejected outright
-// with XTSE0010.
-//
-// §18.1's signature is href, use-accumulators, validation and type. It has no
-// @streamable: xsl:stream streams by definition, where xsl:source-document
-// takes the attribute to say whether it does. That asymmetry is the reason
-// the two need separate table entries rather than an alias.
-func TestStreamAndSourceDocumentAreOneInstruction(t *testing.T) {
-	const head = `<xsl:stylesheet version="3.0" ` +
-		`xmlns:xsl="http://www.w3.org/1999/XSL/Transform">`
-
-	// Both spellings compile. The href is never dereferenced -- no resolver is
-	// configured -- so the transform fails at run time with FODC0002, which is
-	// itself the proof that compilation reached the instruction rather than
-	// rejecting the element.
-	for _, name := range []string{"source-document", "stream"} {
-		t.Run(name+" compiles", func(t *testing.T) {
-			src := head + `<xsl:template name="main"><out>` +
-				`<xsl:` + name + ` href="in.xml"><x/></xsl:` + name + `>` +
-				`</out></xsl:template></xsl:stylesheet>`
-			doc, err := xdm.ParseString(src, xdm.ParseOptions{})
-			if err != nil {
-				t.Fatalf("parse: %v", err)
-			}
-			sheet, err := Compile(doc.Root, CompileOptions{})
-			if err != nil {
-				t.Fatalf("xsl:%s was refused: %v", name, err)
-			}
-			_, err = sheet.Transform(context.Background(), nil,
-				TransformOptions{InitialTemplate: "main"})
-			if err == nil {
-				t.Fatalf("xsl:%s: expected FODC0002 with no resolver", name)
-			}
-			if !strings.Contains(err.Error(), "FODC0002") {
-				t.Errorf("xsl:%s: got %v, want FODC0002", name, err)
-			}
-		})
+// TestStreamIsNotAnInstruction pins that xsl:stream, the last-call working
+// draft's name for §18.1's instruction, is refused under version 3.0. The
+// Recommendation renamed it (testdata/xslt30-test/specs/xslt-30.html, change
+// log, Bug29747): "The xsl:stream instruction has been generalized to handle
+// both streamed and unstreamed processing, and it has accordingly been
+// renamed xsl:source-document". §3.4 (XTSE0010) then refuses an element in
+// the XSLT namespace that the specification does not define, outside
+// forwards-compatible mode. No suite case writes <xsl:stream.
+func TestStreamIsNotAnInstruction(t *testing.T) {
+	sheet := func(version, name, body string) string {
+		return `<xsl:stylesheet version="` + version + `" ` +
+			`xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+			`<xsl:template name="main"><out>` +
+			`<xsl:` + name + ` href="in.xml">` + body + `</xsl:` + name + `>` +
+			`</out></xsl:template></xsl:stylesheet>`
+	}
+	compile := func(t *testing.T, src string) (*Stylesheet, error) {
+		t.Helper()
+		doc, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		return Compile(doc.Root, CompileOptions{})
 	}
 
-	// @streamable belongs to xsl:source-document alone.
-	t.Run("streamable is source-document's alone", func(t *testing.T) {
-		ok := head + `<xsl:template name="main"><out>` +
-			`<xsl:source-document href="in.xml" streamable="yes"><x/></xsl:source-document>` +
-			`</out></xsl:template></xsl:stylesheet>`
-		doc, err := xdm.ParseString(ok, xdm.ParseOptions{})
+	t.Run("source-document compiles", func(t *testing.T) {
+		if _, err := compile(t, sheet("3.0", "source-document", "<x/>")); err != nil {
+			t.Errorf("xsl:source-document was refused: %v", err)
+		}
+	})
+	t.Run("stream is XTSE0010 under 3.0", func(t *testing.T) {
+		_, err := compile(t, sheet("3.0", "stream", "<x/>"))
+		if err == nil || !strings.Contains(err.Error(), "XTSE0010") {
+			t.Errorf("xsl:stream: got %v, want XTSE0010", err)
+		}
+	})
+	t.Run("stream takes its fallback in forwards-compatible mode", func(t *testing.T) {
+		s, err := compile(t, sheet("4.0", "stream", "<xsl:fallback>fb</xsl:fallback>"))
 		if err != nil {
-			t.Fatalf("parse: %v", err)
+			t.Fatalf("forwards-compatible xsl:stream was refused: %v", err)
 		}
-		if _, err := Compile(doc.Root, CompileOptions{}); err != nil {
-			t.Errorf("source-document/@streamable was refused: %v", err)
-		}
-
-		bad := head + `<xsl:template name="main"><out>` +
-			`<xsl:stream href="in.xml" streamable="yes"><x/></xsl:stream>` +
-			`</out></xsl:template></xsl:stylesheet>`
-		doc, err = xdm.ParseString(bad, xdm.ParseOptions{})
+		res, err := s.Transform(context.Background(), nil,
+			TransformOptions{InitialTemplate: "main"})
 		if err != nil {
-			t.Fatalf("parse: %v", err)
+			t.Fatalf("transform: %v", err)
 		}
-		_, err = Compile(doc.Root, CompileOptions{})
-		if err == nil {
-			t.Fatal("xsl:stream accepted @streamable, which §18.1 does not give it")
-		}
-		if !strings.Contains(err.Error(), "XTSE0090") {
-			t.Errorf("got %v, want XTSE0090", err)
+		if out := res.String(); !strings.Contains(out, "<out>fb</out>") {
+			t.Errorf("got %q; want the fallback's output", out)
 		}
 	})
 }

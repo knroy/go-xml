@@ -727,8 +727,8 @@ func (a *analyzer) dynamicCallUsages(x *xpath.DynamicCall) []usage {
 	case strings.HasPrefix(as, "map(") || strings.HasPrefix(as, "array("):
 		// The note: the argument type is xs:anyAtomicType, so absorption.
 		return []usage{usageAbsorption}
-	case strings.HasPrefix(as, "function("):
-		params, ok := functionParamTypes(as)
+	case strings.HasPrefix(as, "function"):
+		params, ok := functionParamTypes(as, newNSResolver(a.decl, ""))
 		if !ok {
 			// function(*): no signature.
 			return nil
@@ -742,37 +742,32 @@ func (a *analyzer) dynamicCallUsages(x *xpath.DynamicCall) []usage {
 	return nil
 }
 
-// functionParamTypes splits the parameter list of a declared function type,
-// "function(A, B) as R", at its top-level commas. It reports false for
-// function(*), which declares no signature.
-func functionParamTypes(as string) ([]string, bool) {
-	depth, start := 0, -1
-	var params []string
-	for i, c := range as {
-		switch c {
-		case '(':
-			depth++
-			if depth == 1 {
-				start = i + 1
-			}
-		case ')':
-			depth--
-			if depth == 0 {
-				params = append(params, as[start:i])
-				if len(params) == 1 && strings.TrimSpace(params[0]) == "*" {
-					return nil, false
-				}
-				return params, true
-			}
-		case ',':
-			if depth == 1 {
-				params = append(params, as[start:i])
-				start = i + 1
-			}
-		}
+// functionParamTypes reads the parameter types of a declared function type,
+// "function(A, B) as R", with the XPath SequenceType parser, so a comma inside
+// a braced URI and a space before the parenthesis are read as XPath reads
+// them. It reports false for function(*), which declares no signature, and
+// for anything that does not parse as a typed function test.
+func functionParamTypes(as string, ns *nsResolver) ([]string, bool) {
+	st, err := xpath.ParseSequenceType(as, anySchemaType{ns})
+	if err != nil || !st.IsFunctionTest || !st.HasFunctionArity {
+		return nil, false
 	}
-	return nil, false
+	params := make([]string, len(st.FunctionParams))
+	for i, p := range st.FunctionParams {
+		params[i] = p.String()
+	}
+	return params, true
 }
+
+// anySchemaType reads every type and declaration name as known. The analyzer
+// has no imported schema to hand, and the compiler has already refused an
+// unknown name; all functionParamTypes needs is the type's shape. A schema
+// type it cannot see renders as its name, which instrTypeDeterminedUsage
+// reads as navigation.
+type anySchemaType struct{ *nsResolver }
+
+func (anySchemaType) LookupSchemaType(xdm.QName) (xdm.TypeCode, bool, bool) { return 0, false, true }
+func (anySchemaType) LookupSchemaDeclaration(xdm.QName, bool) bool          { return true }
 
 // declaredTypeOf finds the "as" attribute of the declaration that binds the
 // variable name at el, by the syntactic scoping rules of §9.7: a local

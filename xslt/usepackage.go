@@ -1408,14 +1408,12 @@ func checkOverrideSignature(overriding, original *xdm.Node) error {
 }
 
 // functionDeterminism reads xsl:function/@new-each-time, whose default is
-// "maybe": the processor may or may not re-evaluate the body, 10.3. The
+// "yes": "By default, stylesheet functions are proactive" (10.3.7). The
 // boolean spellings the attribute also admits are folded onto "yes" and "no",
 // so new-each-time="false" is the deterministic function "no" declares.
 func functionDeterminism(el *xdm.Node) string {
 	switch v := strings.TrimSpace(el.AttrValue("new-each-time")); v {
-	case "":
-		return "maybe"
-	case "true", "1":
+	case "", "true", "1":
 		return "yes"
 	case "false", "0":
 		return "no"

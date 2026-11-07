@@ -79,11 +79,10 @@ var declaredDivergences = []policyDivergence{
 	{element: "output", attr: "method", values: []string{}},
 }
 
-// declaredExtraElements are the two elements with no syntax summary at all:
-// xsl:stream is the draft's name for xsl:source-document (renamed by
-// Bug29747), and xsl:original is a symbolic reference rather than an element,
-// carried so the xsl:override content walk does not report XTSE0010 on it.
-var declaredExtraElements = []string{"original", "stream"}
+// declaredExtraElements are the elements with no syntax summary at all:
+// xsl:original is a symbolic reference rather than an element, carried so the
+// xsl:override content walk does not report XTSE0010 on it.
+var declaredExtraElements = []string{"original"}
 
 // TestElementTablePolicyDeclaresEveryDivergence checks the table against the
 // document's list in both directions.
@@ -141,7 +140,7 @@ func TestElementTablePolicyDeclaresEveryDivergence(t *testing.T) {
 		}
 	}
 
-	// The two elements with no syntax summary are enumerated too; a third
+	// The elements with no syntax summary are enumerated too; another
 	// invented element is caught by TestElementTableMatchesRecommendation.
 	for _, el := range declaredExtraElements {
 		if _, ok := xsltElements()[el]; !ok {

@@ -774,8 +774,13 @@ type userFunction struct {
 	// an obligation, not a licence: 10.3.7 makes such a function
 	// deterministic in F&O 1.7.4's sense, so two calls with identical
 	// arguments must return identical results -- the SAME nodes, not merely
-	// equal ones.
+	// equal ones. cache="yes" on an elidable function sets it too.
 	deterministic bool
+	// cacheAtomic is cache="yes" on a proactive function: a result is
+	// reused only when it holds atomic values alone, since 10.3.7 makes
+	// such a function create new nodes on each invocation, and a map,
+	// array or function item may hold nodes.
+	cacheAtomic bool
 	// baseURI is the xsl:function element's base URI; see Template.baseURI.
 	baseURI string
 }
@@ -804,7 +809,7 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	// must be keyed on the setting and not merely be an optimisation.
 	var cacheKey callHash
 	var haveKey bool
-	if f.deterministic {
+	if f.deterministic || f.cacheAtomic {
 		switch k, err := rt.functionCallKey(f, args); {
 		case errors.Is(err, errNotCacheable):
 			// An argument functionCallKey cannot key, so this call is
@@ -889,7 +894,7 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	if err != nil {
 		return nil, err
 	}
-	if f.deterministic && haveKey {
+	if haveKey && (f.deterministic || allAtomic(res)) {
 		// Only a successful call is remembered. An error is not a result, and
 		// caching one would make a failure that depended on transient state
 		// -- an unavailable document, say -- permanent for the rest of the
@@ -906,6 +911,16 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		rt.funcResults[cacheKey] = res
 	}
 	return res, nil
+}
+
+// allAtomic reports whether seq holds atomic values only.
+func allAtomic(seq xdm.Sequence) bool {
+	for _, it := range seq {
+		if _, ok := it.(*xdm.Atomic); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // callHash is the first 128 bits of the SHA-256 of a functionCallKey. The memo

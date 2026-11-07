@@ -108,11 +108,11 @@ what let `@export` be refused at all.
 
 ### Draft spellings accepted
 
-One entry, and it is an element rather than an attribute.
-
-| Element | Attribute | Reason |
-|---|---|---|
-| `xsl:stream` (element) | — | §18.1's instruction in the draft; the Recommendation renamed it `xsl:source-document`. The change log says so in as many words (Bug29747): *"The `xsl:stream` instruction has been generalized to handle both streamed and unstreamed processing, and it has accordingly been renamed `xsl:source-document`, and has a `streamable` attribute."* A stylesheet written against either text is a legal one, so both names are accepted and `compileSourceDocument` serves both — it reads attributes, never the local name. The `xsl:stream` entry deliberately has no `@streamable`: that is precisely what the rename added. No suite case writes `<xsl:stream`, so this is invisible to the ratchet in both directions. |
+None. `xsl:stream`, §18.1's instruction in the last-call draft, was accepted
+here until round SG. The Recommendation renamed it `xsl:source-document`
+(Bug29747), so it is not an XSLT 3.0 element, and the table no longer carries
+it: under version 3.0 it is `XTSE0010`, and in forwards-compatible mode it
+takes its `xsl:fallback`.
 
 ### Enumerations left to the check that owns the error
 
@@ -126,7 +126,6 @@ One entry, and it is an element rather than an attribute.
 | Element | Reason |
 |---|---|
 | `xsl:original` | It has no syntax summary because it is not an element in the ordinary sense: §3.5.3 makes `xsl:original` a *symbolic reference*, the name used in `xsl:call-template/@name` or a function call within an `xsl:override` to reach the overridden component. The table carries it with no attributes so that the content-model walk of `xsl:override` does not report XTSE0010 on a legitimate reference. |
-| `xsl:stream` | Above, under draft spellings accepted. |
 
 ### Required-ness that differs
 

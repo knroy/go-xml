@@ -148,6 +148,29 @@ func TestDynamicCallDeclaredType(t *testing.T) {
 				"first argument type A': xs:string is atomic, so absorption",
 		},
 		{
+			name: "function (xs:string) with a space is a function type",
+			sheet: rule(`<xsl:variable name="f" as="function (xs:string) as xs:integer"
+			                 select="function($s as xs:string) { 1 }"/>
+			             <xsl:value-of select="$f(@class)"/>`),
+			why: "whitespace may separate the keyword from its parenthesis " +
+				"(XPath A.2.2), so the signature is read and the argument absorbed",
+		},
+		{
+			name: "a comma inside a braced URI is not a parameter separator",
+			sheet: modeSheet(`<xsl:import-schema namespace="urn:a,b">
+			      <xs:schema targetNamespace="urn:a,b">
+			        <xs:simpleType name="t"><xs:restriction base="xs:integer"/></xs:simpleType>
+			      </xs:schema>
+			    </xsl:import-schema>
+			    <xsl:template match="item" mode="s">
+			      <xsl:variable name="f" as="function(Q{urn:a,b}t, xs:string) as xs:integer"
+			          select="function($t, $s as xs:string) { 1 }"/>
+			      <xsl:value-of select="$f(1, @class)"/>
+			    </xsl:template>`),
+			why: "the second parameter is xs:string, so @class is absorbed; " +
+				"splitting at the URI's comma read it as 'b}t' and navigated",
+		},
+		{
 			name: "function(node()) navigates from a streamed child",
 			sheet: rule(`<xsl:variable name="f" as="function(node()) as xs:integer"
 			                 select="function($n as node()) { 1 }"/>

@@ -188,14 +188,12 @@ Accepting a key and ignoring what it asks for is indistinguishable from
 rejecting it, which is why `serialize-xml-120` and `-120b` only caught this
 once indentation started working.
 
-**`xsl:stream` is accepted beside `xsl:source-document`.** The vendored
-working draft (§18.1) names the instruction `xsl:stream` and never mentions
-`source-document`; the W3C suite writes `xsl:source-document` in 500
-stylesheets and `xsl:stream` in none. The table carried the suite's spelling
-alone, so a stylesheet written against the vendored specification was refused
-with `XTSE0010`. Both are now accepted, with §18.1's attribute list for
-`xsl:stream` — which has no `@streamable`, since it streams by definition.
-No suite case exercises it, so the change is invisible to the ratchet.
+**`xsl:stream` is refused again.** It is the last-call working draft's name
+(`xslt-lcwd30.xml` §18.1); the Recommendation renamed it `xsl:source-document`
+(`xslt-30.html`, change log, Bug29747). It was accepted beside
+`xsl:source-document` for a while, on the mistaken reading that the vendored
+draft was the specification. Under version 3.0 it is now `XTSE0010`; in
+forwards-compatible mode it takes its `xsl:fallback`. No suite case writes it.
 
 **`build-tree` now applies to the principal result.** §26.1 covers "the raw
 principal result or secondary result", and §24.1 says what the yes case means:
