@@ -604,8 +604,11 @@ func (p *dtdScan) entityDecl() error {
 	if pe && !p.space() {
 		return dtdErr("expected white space after %% in <!ENTITY")
 	}
-	if _, ok := p.name(); !ok {
+	// Namespaces in XML 1.0 §7 (NE08): no entity name contains a colon.
+	if n, ok := p.name(); !ok {
 		return dtdErr("expected an entity name in <!ENTITY, found %q", p.rest())
+	} else if strings.IndexByte(n, ':') >= 0 {
+		return dtdErr("entity name %q contains a colon", n)
 	}
 	if !p.space() {
 		return dtdErr("expected white space after the entity name")
@@ -647,8 +650,11 @@ func (p *dtdScan) notationDecl() error {
 	if !p.space() {
 		return dtdErr("expected white space after <!NOTATION")
 	}
-	if _, ok := p.name(); !ok {
+	// Namespaces in XML 1.0 §7 (NE08): no notation name contains a colon.
+	if n, ok := p.name(); !ok {
 		return dtdErr("expected a notation name in <!NOTATION")
+	} else if strings.IndexByte(n, ':') >= 0 {
+		return dtdErr("notation name %q contains a colon", n)
 	}
 	if !p.space() {
 		return dtdErr("expected white space after the notation name")
