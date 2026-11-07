@@ -48,12 +48,14 @@ func (p *parser) parseOrderedUnordered() (node, bool, error) {
 	// K-OrderExpr-1a and -2a assert exactly that, under an XQ31+ dependency
 	// and citing the bug that made the change.
 	//
-	// Left at 3.1's reading whatever the module declares, even though the
-	// version is now recorded on the static context. A 1.0 module writing
-	// "ordered{}" is accepted here where a conforming 1.0 processor would
-	// raise XPST0003, which is a permissive divergence: nothing is given a
-	// wrong answer, only a query is accepted that need not have been. Routing
-	// it would mean sc.xqVersion.atLeast31() around the empty case here.
+	// A 1.0 or 3.0 module is held to its own grammar, where the Expr is
+	// required: K-OrderExpr-1 asserts XPST0003 for "ordered{}" under
+	// "XQ10 XQ30".
+	if body.expr == nil && body.items == nil && !p.sc.xqVersion.atLeast31() {
+		return nil, true, p.errorAt(save,
+			"XPST0003: XQuery %s requires an expression inside %q",
+			p.sc.xqVersion, "{}")
+	}
 	return body, true, nil
 }
 
@@ -114,16 +116,17 @@ func (p *parser) parsePragma() error {
 	// QName because parseQName would take the "Q" for a local name and stop
 	// at the brace.
 	var prefix, local string
-	if _, ok, err := p.parseBracedURI(); err != nil {
+	_, braced, err := p.parseBracedURI()
+	if err != nil {
 		return err
-	} else if ok {
+	}
+	if braced {
 		// A braced URI may be empty — "Q{}name" is a name in no namespace,
 		// which 3.1 admits; see below.
 		if local = p.scanNCName(); local == "" {
 			return p.errorAt(start, "XPST0003: expected a local name after %q", "Q{...}")
 		}
 	} else {
-		var err error
 		if prefix, local, err = p.parseQName(); err != nil {
 			return err
 		}
@@ -141,10 +144,15 @@ func (p *parser) parsePragma() error {
 	// well-formed, and whether the extension expression is an error is
 	// decided by parseExtension, on whether an enclosed expression follows.
 	//
-	// Left at 3.1's reading whatever the module declares, on the same
-	// permissive-divergence reasoning as parseOrderedUnordered above: a 1.0 or
-	// 3.0 module writing an unprefixed pragma name is accepted rather than
-	// refused. Routing it would mean sc.xqVersion.atLeast31() here.
+	// A 1.0 or 3.0 module keeps the earlier rule, under which a pragma name
+	// had to be prefixed: K-ExtensionExpression-4 asserts XPST0081 for
+	// "(#name content #)" under "XQ10 XQ30". "Q{}name" is left as 3.1 reads
+	// it at every version; the suite pairs no pre-3.1 case with it.
+	if prefix == "" && !braced && !p.sc.xqVersion.atLeast31() {
+		return p.errorAt(start,
+			"XPST0081: XQuery %s requires a prefix on the pragma name %q",
+			p.sc.xqVersion, local)
+	}
 	//
 	// The content runs to the first "#)". It is not parsed: a pragma's
 	// contents are whatever the implementation that recognises it says they

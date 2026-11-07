@@ -190,3 +190,37 @@ func TestVariableCycleErrorByVersion(t *testing.T) {
 		}
 	}
 }
+
+// TestVersionGatedSyntaxByVersion covers the three rules the suite pairs
+// across versions over identical source, each with a pre-3.1 case and a 3.1
+// one: K-OrderExpr-1/-1a, K-ExtensionExpression-4/-4a and Axes127/Axes128.
+func TestVersionGatedSyntaxByVersion(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want map[string]string // version prefix -> error code, "" = compiles
+	}{
+		// 1.0 and 3.0 write "ordered" "{" Expr "}"; 3.1's EnclosedExpr makes
+		// the Expr optional.
+		{`ordered{}`, map[string]string{"1.0": "XPST0003", "3.0": "XPST0003", "3.1": ""}},
+		{`unordered{ }`, map[string]string{"1.0": "XPST0003", "3.0": "XPST0003", "3.1": ""}},
+		{`ordered{1}`, map[string]string{"1.0": "", "3.0": "", "3.1": ""}},
+		// Before 3.1 a pragma name had to be prefixed; 3.1 reads an
+		// unprefixed one as a name in no namespace.
+		{`(#name content #) {1}`, map[string]string{"1.0": "XPST0081", "3.0": "XPST0081", "3.1": ""}},
+		{`declare namespace p = "urn:p"; (#p:name#) {1}`, map[string]string{"1.0": "", "3.0": "", "3.1": ""}},
+		// namespace-node() is a kind test from 3.0 on; 1.0 reads it as a call
+		// to a function that does not exist.
+		{`<a/>/namespace-node()`, map[string]string{"1.0": "XPST0017", "3.0": "XQST0134", "3.1": "XQST0134"}},
+	} {
+		for v, code := range tc.want {
+			src := `xquery version "` + v + `"; ` + tc.body
+			_, err := Compile(src, Options{})
+			switch {
+			case code == "" && err != nil:
+				t.Errorf("%s: %v", src, err)
+			case code != "" && (err == nil || !strings.Contains(err.Error(), code)):
+				t.Errorf("%s: want %s, got %v", src, code, err)
+			}
+		}
+	}
+}
