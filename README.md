@@ -1123,7 +1123,7 @@ above.
 Canonical XML 1.0 with its InclusiveNamespaces PrefixList, and Canonical XML
 1.1 with its `xml:base` fix-up — each with and without comments, over a whole
 document, a subtree, the enveloped-signature subset or any XPath-selected
-node set. Two inputs the specifications leave undefined are refused rather
+node set, XML-DSig's `here()` included. Two inputs the specifications leave undefined are refused rather
 than guessed at: an XML 1.1 document, and a relative namespace URI. See
 [docs/c14n.md](docs/c14n.md) for how namespace nodes are handled, including
 XPath filters that keep part of an element's namespace axis, and for where it
