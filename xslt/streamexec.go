@@ -1681,6 +1681,10 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	if cerr := rt.ctx.Err(); cerr != nil {
 		return true, cerr // cancelled: no rerun on the tree
 	}
+	if fe, ok := err.(*treesError); ok {
+		rt.localsPop(mark)
+		return true, fe.err // streamvalidin.go: the tree's error, no rerun
+	}
 	if err == nil {
 		// Not a failure: the tree has the nodes this result must hold.
 		streamtrace.Fallback()
@@ -1790,7 +1794,7 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 			run.used = true
 		}
 		if err := execSequence(i.body, sub, out); err != nil {
-			return err
+			return run.settle(err, valid, acc) // streamvalidin.go
 		}
 		if !run.used {
 			if err := run.drain(); err != nil {
