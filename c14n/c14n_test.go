@@ -527,6 +527,37 @@ func TestXPathTransformsUseXPath10Comparison(t *testing.T) {
 	}
 }
 
+// The XPath 1.0 behaviours an XML-DSig filter relies on (XPath 1.0 §3.4
+// comparisons, §4.2 number(), §4.3 boolean(), §4.1 count(), §5.4 namespace
+// nodes per element), under the XPath 2.0 compatibility-mode evaluation
+// FromXPathFilter uses. Each want is xmlsec1 1.2.41's pre-digest output for
+// the same ds:Reference (enveloped signature, this filter, C14N 1.0), so a
+// difference here is a difference from libxml2's XPath 1.0 engine.
+func TestXPathFilterXPath10Semantics(t *testing.T) {
+	const src = `<r xmlns:a="urn:a" xmlns:b="urn:b"><x n="10">5</x><y n="abc"/><z/></r>`
+	for _, tc := range []struct{ filter, want string }{
+		// A node-set converts to boolean by emptiness; | unions two of them.
+		{`not(ancestor-or-self::y | ancestor-or-self::z)`, `<r xmlns:a="urn:a" xmlns:b="urn:b"><x n="10">5</x></r>`},
+		// A node-set against a number compares number(string(node)): "abc" is NaN.
+		{`not(ancestor-or-self::*[@n > 5])`, `<r xmlns:a="urn:a" xmlns:b="urn:b"><y n="abc"></y><z></z></r>`},
+		{`not(ancestor-or-self::*[@n = 10.0])`, `<r xmlns:a="urn:a" xmlns:b="urn:b"><y n="abc"></y><z></z></r>`},
+		// < converts both operands to numbers, even a string: 5 < 10, where "5" < "10" is false.
+		{`not(ancestor-or-self::x[. < "10"])`, `<r xmlns:a="urn:a" xmlns:b="urn:b"><y n="abc"></y><z></z></r>`},
+		// Arithmetic on an empty node-set is NaN, and NaN != NaN is true.
+		{`not(@n + 0 != @n + 0)`, `<x></x>`},
+		// Each element has its own namespace nodes: . is in ../namespace::* only for namespace nodes.
+		{`count(. | ../namespace::*) != count(../namespace::*) or name() != 'b'`, `<r xmlns:a="urn:a"><x n="10">5</x><y n="abc"></y><z></z></r>`},
+		// A child's namespace nodes are distinct from its parent's, so the union doubles the count.
+		{`not(self::*) or count(namespace::* | ../namespace::*) = 2 * count(namespace::*)`,
+			` xmlns:a="urn:a" xmlns:b="urn:b"<x xmlns:a="urn:a" xmlns:b="urn:b" n="10">5</x><y xmlns:a="urn:a" xmlns:b="urn:b" n="abc"></y><z xmlns:a="urn:a" xmlns:b="urn:b"></z>`},
+		{`count(ancestor::*) != 1 or count(@*) = 0`, `<r xmlns:a="urn:a" xmlns:b="urn:b"> n="10"5 n="abc"<z></z></r>`},
+	} {
+		if got := canonFilter(t, src, tc.filter, nil, Inclusive10); got != tc.want {
+			t.Errorf("%s\n got %q\nwant %q", tc.filter, got, tc.want)
+		}
+	}
+}
+
 func TestFromXPathErrors(t *testing.T) {
 	doc := parse(t, `<a xml:lang="en"><b/></a>`)
 	if _, err := FromXPath(doc, "((", nil); err == nil {
