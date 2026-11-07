@@ -439,6 +439,10 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 	if err := checkExtSubsetGrammar(text); err != nil {
 		return fmt.Errorf("external DTD subset %s: %w", resolved, err)
 	}
+	// XML 1.0 §3.4 (from memory): the contents of an IGNORE section are not
+	// declarations. Resolved after substitution, which is what decides a
+	// "<![%draft;[" keyword, and before anything reads declarations out.
+	text = resolveConditionals(text)
 	// Retained for the attribute defaults and declared types the caller
 	// reads out of it: those only exist once parameter entities have been
 	// substituted, which is what the text above now is.
@@ -684,9 +688,16 @@ func (t *entityTable) parseParameterDecls(subset, base string) (map[string]param
 //
 // Only whole constructs are skipped, so a parameter-entity reference between
 // two declarations — the position where DTD modularisation puts one — is
-// still seen.
+// still seen. A conditional section's "<![" is not a construct: its keyword
+// is usually a reference ("<![%draft;[") and an INCLUDE's contents are
+// declarations whose references must be substituted, so both are scanned;
+// resolveConditionals then drops what an IGNORE held. dtd's loader does the
+// same (endOfConstruct).
 func endOfDTDConstruct(s string, i int) int {
 	rest := s[i:]
+	if strings.HasPrefix(rest, "<![") {
+		return i
+	}
 	if strings.HasPrefix(rest, "<!--") {
 		end := strings.Index(rest[len("<!--"):], "-->")
 		if end < 0 {
@@ -804,4 +815,52 @@ func (t *entityTable) externalSpansIn(raw string, at int, depth int) []entityBas
 		i += j + 1
 	}
 	return out
+}
+
+// resolveConditionals unwraps the INCLUDE sections of an expanded external
+// subset and drops its IGNORE sections, counting nested "<![" and "]]>" as
+// §3.4 requires. checkExtSubsetGrammar has already held the text to [61]-[65];
+// a "<![" whose keyword is not INCLUDE or IGNORE (an undeclared "%kw;") is
+// copied through, as dtd's loader does.
+func resolveConditionals(s string) string {
+	var sb strings.Builder
+	for {
+		i := strings.Index(s, "<![")
+		if i < 0 {
+			sb.WriteString(s)
+			return sb.String()
+		}
+		sb.WriteString(s[:i])
+		rest := strings.TrimLeft(s[i+len("<!["):], " \t\r\n")
+		include := strings.HasPrefix(rest, "INCLUDE")
+		if !include && !strings.HasPrefix(rest, "IGNORE") {
+			sb.WriteString("<![")
+			s = s[i+len("<!["):]
+			continue
+		}
+		rest = strings.TrimLeft(strings.TrimPrefix(strings.TrimPrefix(rest, "INCLUDE"), "IGNORE"), " \t\r\n")
+		body := strings.TrimPrefix(rest, "[")
+		end, depth := -1, 0
+		for j := 0; j+3 <= len(body) && end < 0; j++ {
+			switch {
+			case strings.HasPrefix(body[j:], "<!["):
+				depth++
+			case strings.HasPrefix(body[j:], "]]>") && depth == 0:
+				end = j
+			case strings.HasPrefix(body[j:], "]]>"):
+				depth--
+			}
+		}
+		if end < 0 { // unclosed: the grammar check refuses this first
+			sb.WriteString(s[i:])
+			return sb.String()
+		}
+		if include {
+			// An INCLUDE's own sections are resolved when the loop reaches
+			// them, so its contents go back in front of the rest.
+			s = body[:end] + body[end+len("]]>"):]
+		} else {
+			s = body[end+len("]]>"):]
+		}
+	}
 }

@@ -392,6 +392,29 @@ func TestExternalSubsetAttlistWithoutEntities(t *testing.T) {
 	}
 }
 
+// An IGNORE section of the external subset contributes no declarations: XML
+// 1.0 §3.4 (from memory), "the contents of ignored conditional sections MUST
+// be ignored when parsing the DTD". The keyword here comes from a parameter
+// entity of the internal subset (xmlconf valid-not-sa-015); the ATTLIST inside
+// used to default @a1 onto the element anyway.
+func TestExternalSubsetIgnoreSection(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"d.dtd": `<!ELEMENT doc (#PCDATA)>` +
+			`<![ %e; [<!ATTLIST doc a1 CDATA "v1"><![INCLUDE[<!ATTLIST doc a3 CDATA "v3">]]>]]>` +
+			`<![INCLUDE[<!ATTLIST doc a4 CDATA "v4">]]>` +
+			`<!ATTLIST doc a2 CDATA "v2">`,
+		"doc.xml": `<!DOCTYPE doc SYSTEM "d.dtd" [<!ENTITY % e "IGNORE">]><doc></doc>`,
+	})
+	tree := mustParseExternal(t, dir, "doc.xml")
+	var got []string
+	for a := range kids(tree.Root)[0].Attrs() {
+		got = append(got, a.Name().Local+"="+a.Value())
+	}
+	if strings.Join(got, " ") != "a4=v4 a2=v2" {
+		t.Fatalf("attributes %v, want [a4=v4 a2=v2]", got)
+	}
+}
+
 // A relative system identifier inside an external subset resolves against the
 // SUBSET's URI, not the document's — XML section 4.4.3. Getting this wrong
 // makes a modular DTD resolve against the wrong directory, and it is only
