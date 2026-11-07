@@ -311,7 +311,10 @@ merge's inputs) each hands xpath's `EvalLock` back at each switch, so a host
 function item cannot hang it. `xsl:merge` streams the documents of a
 `for-each-source` merge source each on a cursor, up to 64 at once (each holds
 its file, cursor and coroutine until the merge ends; a merge of more runs on
-the tree), merged by key as the tree
+the tree: `mergeStreamsMax`, a resource limit kept from rounds SC/SE; §2.1
+gives "limits on the size of source documents that can be transformed" as its
+example of an implementation-dependent feature; no W3C case merges more than
+64), merged by key as the tree
 merges (an action may call a named template of its module, write
 `xsl:result-document`, or apply templates: no rule it reaches sees the
 action's focus, and a rule's messages are taken back on a re-run); any error re-runs the merge on the tree,
@@ -826,8 +829,52 @@ modes, 606 before `TransformReader`, 629 before grouping, 707 before `xsl:try` a
 877 before accumulators, fork, merge and streamed output, 922 before the
 §19.8 analysis was completed, 1,009 before the gap lanes, 2,124 before
 validated inputs, 2,180 before the completion lanes J1–J4, 2,281 before rounds
-L, F and M): core 2,468 runs, main 175, merge 34; 26 fall back and 137 re-run
-on the tree, with 0 guard hits.
+L, F and M): core 2,468 runs, main 175, merge 34; 23 fall back (26 before
+`P instance of T*` was counted, round SG) and 137 re-run on the tree, with 0
+guard hits. Where each of those builds the tree is the next paragraph.
+
+**Where a requested, guaranteed-streamable construct still builds the tree
+(T1, §27.5: a processor claiming the feature "must use streamed processing"),
+measured at round SG on the W3C run.** Each bucket, its count, why, and the
+plan:
+- *A select at the document node that gives up* (23 cases, all at runtime,
+  the select re-read on the tree: `streamtrace` fallbacks). 13 hold their
+  matches and pass the tree's record count (`streamhold.go`): the nine
+  `sx-square-array-040`–`-043`, `-117`, `-140`–`-143`
+  (`[$x, P/copy-of()]?*!PRICE`: a copy of every record, which is most of the
+  small document), and `sx-treat-102`, `-103`, `si-try-022`, `-023`
+  (`(P, $b) treat as node()*`, its matches held for the treat). 10 would ground
+  the document element (`noRoot`, `streamsplit.go`): `si-copy-of-121`, `-122`,
+  `-125`–`-128` (a validated copy of `*` held in a variable: the copy is the
+  document, whole-document memory by the stylesheet's own demand),
+  `sx-instance-of-010` and `sx-treat-010` (`(.//* | .//text())` under
+  `instance of`/`treat as`), and `si-try-001`, `-010`
+  (`outermost(.//node()) treat as comment()*` and the union). Plan: `treat as`
+  as a per-item check on the view ahead of the outer (as `P instance of T*` is
+  now: `streamsplit_instance.go` counts the items failing T's kind test, so
+  `sx-instance-of-001`, `-102`, `-103` no longer fall back), and the same
+  rewrite for a union, which the split does not yet take with predicates on
+  its branches at the document node. The square-array and copy-of shapes keep
+  memory equal to the tree's, as the whole-document cases below do.
+- *Any error re-runs the container on the tree* (137 cases): the bullet below.
+  Each is a container that failed (XTTE1510/1512/1540 on validated input 37,
+  XPDY0050 treats 17, FORG0006 16, XPTY0004 14, FOCH0002 collations 10,
+  FORG0004/0005 8, the rest one to three each, 24 codes). The memory is
+  spent only on the failing path; streaming the error directly needs, per
+  construct, a proof that the stream's first error is the tree's, which the
+  differential checks and no construct has yet.
+- *A `DocumentResolver` that is not a `FileResolver`* (0 W3C cases: the
+  harness uses `FileResolver`): see the bullet below. It needs new API.
+- *An unverified or unknown §19.8 verdict* (static, the analysis's figure:
+  56 unverified and 100 unknown containers in the W3C streaming stylesheets,
+  §19.8 below). A case counts as streamed when any of its containers streams,
+  so these do not show in the runtime census; they belong to the analysis.
+- *A merge of more than 64 inputs* (0 W3C cases): kept, a resource limit (above).
+- *No `TransformOptions.Output`* (every case the harness runs without it): the
+  result tree is the output, so it is built; inherent. With `Output` the
+  held parts are listed in the bullet below.
+- *Whole-document memory* (the list above): they stream, holding what the tree
+  holds.
 Also:
 
 - **Without `TransformOptions.Output` the result is built in memory**, so a
@@ -892,6 +939,17 @@ Also:
   an error as in tree mode.
 - **Only `FileResolver` streams**; another `DocumentResolver` builds the tree.
   The streamed document is not cached, so a later `fn:doc` of it reads it again.
+  `xpath.DocumentResolver` returns a built `*xdm.Tree`, so there is nothing to
+  stream through it, and the one exported interface with a reader,
+  `xdm.EntityResolver`, resolves external entities, which a document is not.
+  The design, which needs new exported API and the owner's approval: an
+  optional `xslt.StreamingDocumentResolver` with
+  `OpenDocument(uri, base string) (io.ReadCloser, docURI string, err error)`,
+  tried by `executeStream` where it now asks for `burstResolver`, the stream
+  parsed with `xdm.ParseOptions` the resolver supplies (or the defaults) and
+  `TransformOptions`' byte and node limits; `readDocResolver` and
+  `stripSpaceResolver` already wrap any resolver, so XTDE1500 and stripping
+  carry over.
 - **The `FileResolver` limits apply to the whole file**: raise `MaxBytes` and
   `MaxNodes` to stream a document past 64 MB or 10M nodes.
 
