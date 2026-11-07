@@ -417,7 +417,7 @@ func (r *Results) renderReadmeMethods() string {
 		"| **Spec inventories** | features absent entirely | features present but behaving wrongly |\n" +
 		"| **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |\n" +
 		"| **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |\n" +
-		"| **W3C xsdtests suite** | systematic XSD conformance across 25,000 instance and 14,388 schema-validity tests (XSD 1.0; 1.1 adds 26,222 and 15,354) | schemas nobody writes by hand |\n" +
+		"| **W3C xsdtests suite** | systematic XSD conformance across 25,000 instance and 14,388 schema-validity tests (XSD 1.0; 1.1 adds 26,244 and 15,354) | schemas nobody writes by hand |\n" +
 		"| **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |\n" +
 		fmt.Sprintf("| **Fuzzing** (%d targets) | a crash, hang or wrong refusal on input no author would write | anything a coverage-guided search does not reach in the time it is given |\n", f.Value)
 }

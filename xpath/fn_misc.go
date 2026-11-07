@@ -507,7 +507,8 @@ func lookupByID(ctx *Context, args []xdm.Sequence, mode idLookup) (xdm.Sequence,
 				// does not.
 				// An xml:id whose value is not an NCName is still an ID:
 				// xml:id §4 assigns the type whatever the value, and XQuery
-				// 3.1 §3.9.3.2 sets is-id true for every xml:id. It is never
+				// 3.1's computed attribute constructor rule (its section
+				// 3.9.3.2) sets is-id true for every xml:id. It is never
 				// found because fn:id ignores a candidate that is not an
 				// NCName (above), which is what fn-id-25 expects.
 				isIDAttr := a.IsID() || isIDAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation()) ||
