@@ -398,7 +398,8 @@ type Result struct {
 	// Warnings holds the warnings the transform raised, in the order
 	// produced. They report conditions the spec asks a processor to notice —
 	// currently the two xsl:mode warning attributes — and never affect the
-	// result.
+	// result. At most 100 are kept, then one saying the rest were
+	// suppressed, so a large input cannot flood it.
 	Warnings []string
 	// Secondary holds the documents produced by xsl:result-document, in the
 	// order produced. It is empty for the great majority of stylesheets,
