@@ -242,6 +242,7 @@ ibm-not-wf-P32-ibm32n05.xml
 ibm-not-wf-P32-ibm32n06.xml
 ibm-not-wf-P32-ibm32n07.xml
 ibm-not-wf-P32-ibm32n08.xml
+ibm-not-wf-P32-ibm32n09.xml
 ibm-not-wf-P39-ibm39n01.xml
 ibm-not-wf-P39-ibm39n02.xml
 ibm-not-wf-P39-ibm39n03.xml
@@ -417,6 +418,7 @@ ibm-not-wf-P68-ibm68n02.xml
 ibm-not-wf-P68-ibm68n03.xml
 ibm-not-wf-P68-ibm68n04.xml
 ibm-not-wf-P68-ibm68n05.xml
+ibm-not-wf-P68-ibm68n06.xml
 ibm-not-wf-P68-ibm68n07.xml
 ibm-not-wf-P68-ibm68n08.xml
 ibm-not-wf-P68-ibm68n09.xml
@@ -1167,6 +1169,7 @@ not-wf-sa-183
 not-wf-sa-184
 not-wf-sa-185
 not-wf-sa-186
+not-wf-sa03
 notation01
 nwf-dtd00
 nwf-dtd01

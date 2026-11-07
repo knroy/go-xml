@@ -201,6 +201,13 @@ type entityTable struct {
 	// doing it here as well turns "&amp;lt;" into "<", manufacturing markup
 	// out of data the document escaped.
 	reparsed bool
+
+	// outside names the general entities declared only in the external
+	// subset (see mergeUnder), and standalone says the document declared
+	// standalone="yes". Together they are WFC: Entity Declared: resolve
+	// refuses a reference to an outside entity in a standalone document.
+	outside    map[string]bool
+	standalone bool
 }
 
 // parseInternalEntities reads the <!ENTITY ...> declarations out of a DOCTYPE
@@ -461,6 +468,13 @@ func isEntityName(s string) bool {
 // function, so the expansion is done once up front for every declared entity
 // and the result handed over as a plain map.
 func (t *entityTable) resolve(name string) (string, error) {
+	// XML 1.0 §4.1, WFC: Entity Declared: in a standalone document a
+	// reference must match a declaration "that does not occur within the
+	// external subset or a parameter entity".
+	if t.standalone && t.outside[name] {
+		return "", fmt.Errorf("entity %q is declared in the external subset, "+
+			"and the document says standalone=\"yes\" (WFC: Entity Declared)", name)
+	}
 	if s, ok := t.expanded[name]; ok {
 		return s, nil
 	}

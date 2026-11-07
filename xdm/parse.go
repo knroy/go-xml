@@ -807,6 +807,7 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 					if ents != nil && !ps.opts.entitiesExpanded {
 						ents.version11 = dec.IsVersion11()
 						ents.resolver = ps.opts.ExternalEntities
+						ents.standalone = ps.standalone
 						// An entity whose replacement text holds markup cannot go
 						// through dec.Entity at all: encoding/xml substitutes that
 						// map's values as character data and never re-scans them,

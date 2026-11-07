@@ -376,6 +376,34 @@ func TestExternalSubsetSuppliesEntities(t *testing.T) {
 	}
 }
 
+// WFC: Entity Declared (XML 1.0 §4.1): under standalone="yes" a reference in
+// the document must match a declaration outside the external subset, so one
+// the external subset alone declares is refused, in content and in an
+// attribute value, while the internal declaration of the same name binds.
+// W3C xmlconf not-wf-sa03, ibm32n09, ibm68n06.
+func TestStandaloneRefusesExternallyDeclaredEntity(t *testing.T) {
+	const sa = `<?xml version="1.0" standalone="yes"?>`
+	dir := writeFiles(t, map[string]string{
+		"d.dtd":    `<!ENTITY greeting "from-external"><!ENTITY other "external-only"><!ENTITY frag "<b/>">`,
+		"text.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
+		"attr.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r a="&other;"/>`,
+		"frag.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&frag;</r>`,
+		"ok.xml":   sa + `<!DOCTYPE r SYSTEM "d.dtd" [<!ENTITY greeting "from-internal">]><r>&greeting;</r>`,
+		"nosa.xml": `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
+	})
+	for _, name := range []string{"text.xml", "attr.xml", "frag.xml"} {
+		if err := parseExternalErr(t, dir, name); err == nil {
+			t.Errorf("%s: parsed, want WFC: Entity Declared refused", name)
+		}
+	}
+	if got := mustParseExternal(t, dir, "ok.xml").Root.StringValue(); got != "from-internal" {
+		t.Errorf("ok.xml: got %q, want from-internal", got)
+	}
+	if got := mustParseExternal(t, dir, "nosa.xml").Root.StringValue(); got != "external-only" {
+		t.Errorf("nosa.xml: got %q, want external-only", got)
+	}
+}
+
 // The ATTLIST types an external subset declares govern the document even when
 // that subset declares no entities: XML 1.0 §3.3.1 (from memory) makes an
 // attribute declared ID an ID wherever the declaration lives, and the XDM

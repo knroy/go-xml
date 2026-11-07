@@ -469,14 +469,19 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 //
 // That is XML section 4.2's first-declaration-wins rule applied across the two
 // subsets, and the direction matters — the internal subset is read first and
-// therefore wins over the external one.
+// therefore wins over the external one. Each name sub adds is marked outside,
+// for WFC: Entity Declared under standalone="yes".
 func (t *entityTable) mergeUnder(sub *entityTable) {
+	if t.outside == nil {
+		t.outside = map[string]bool{}
+	}
 	for name, raw := range sub.raw {
 		if t.external[name] {
 			continue
 		}
 		if _, dup := t.raw[name]; !dup {
 			t.raw[name] = raw
+			t.outside[name] = true
 		}
 	}
 	for name := range sub.external {
@@ -485,6 +490,7 @@ func (t *entityTable) mergeUnder(sub *entityTable) {
 		}
 		if !t.external[name] {
 			t.external[name] = true
+			t.outside[name] = true
 		}
 	}
 	for name, d := range sub.externalDecl {
