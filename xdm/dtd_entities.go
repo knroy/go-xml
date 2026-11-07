@@ -208,6 +208,11 @@ type entityTable struct {
 	// refuses a reference to an outside entity in a standalone document.
 	outside    map[string]bool
 	standalone bool
+
+	// contentErr memoises contentOK per entity, and stubs is the entity map
+	// its tokeniser reads nested references through.
+	contentErr map[string]error
+	stubs      map[string]string
 }
 
 // parseInternalEntities reads the <!ENTITY ...> declarations out of a DOCTYPE
@@ -492,6 +497,9 @@ func (t *entityTable) resolve(name string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if err := t.contentOK(name, text); err != nil {
+			return "", err
+		}
 		t.expanded[name] = ""
 		out, err := t.expand(text, 0, map[string]bool{name: true}, false)
 		if err != nil {
@@ -507,6 +515,9 @@ func (t *entityTable) resolve(name string) (string, error) {
 	}
 	// A placeholder guards against a cycle: an entity that refers to itself,
 	// directly or through others, would otherwise recurse forever.
+	if err := t.contentOK(name, replacementText(raw)); err != nil {
+		return "", err
+	}
 	t.expanded[name] = ""
 	out, err := t.expand(replacementText(raw), 0, map[string]bool{name: true}, false)
 	if err != nil {
@@ -623,6 +634,11 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 			if err != nil {
 				return "", err
 			}
+			if !attr {
+				if err := t.contentOK(name, text); err != nil {
+					return "", err
+				}
+			}
 			seen[name] = true
 			sub, err := t.expand(text, depth+1, seen, attr)
 			delete(seen, name)
@@ -642,6 +658,11 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 		if !ok {
 			return "", fmt.Errorf("entity %q is not declared", name)
 		}
+		if !attr {
+			if err := t.contentOK(name, replacementText(raw)); err != nil {
+				return "", err
+			}
+		}
 		seen[name] = true
 		sub, err := t.expand(replacementText(raw), depth+1, seen, attr)
 		delete(seen, name)
@@ -657,6 +678,72 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 		i += j + 1
 	}
 	return sb.String(), nil
+}
+
+// contentOK is WFC: Parsed Entity (XML 1.0 §4.3.2): the replacement text of
+// an entity referenced in content matches content ON ITS OWN, so markup it
+// opens is closed in it and a CDATA section or comment it begins ends in it.
+// Pasting the text into the document and parsing the result cannot tell:
+// "<foo>" balances a "</foo>" written after the reference. Each entity is
+// checked once, alone; a nested reference reads as empty here, since expand
+// checks that entity in its turn. Text with no "<" is trivially content.
+func (t *entityTable) contentOK(name, text string) error {
+	if strings.IndexByte(text, '<') < 0 {
+		return nil
+	}
+	if err, ok := t.contentErr[name]; ok {
+		return err
+	}
+	if t.stubs == nil {
+		t.stubs = make(map[string]string, len(t.raw)+len(t.external))
+		for n := range t.raw {
+			t.stubs[n] = ""
+		}
+		for n := range t.external {
+			t.stubs[n] = ""
+		}
+	}
+	err := checkContent(text, t.stubs)
+	if err != nil {
+		err = fmt.Errorf("replacement text of entity %q is not content (WFC: Parsed Entity): %w", name, err)
+	}
+	if t.contentErr == nil {
+		t.contentErr = map[string]error{}
+	}
+	t.contentErr[name] = err
+	return err
+}
+
+// checkContent reports whether text matches [43] content: balanced elements
+// and no markup declaration. ents is the decoder's entity map.
+func checkContent(text string, ents map[string]string) error {
+	d := xml.NewDecoder(strings.NewReader(text))
+	d.Entity = ents
+	var open []xml.Name
+	for {
+		tok, err := d.RawToken()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		switch tok := tok.(type) {
+		case *xml.StartElement:
+			open = append(open, tok.Name)
+		case *xml.EndElement:
+			if len(open) == 0 || open[len(open)-1] != tok.Name {
+				return fmt.Errorf("end tag </%s> closes no element the text opened", tok.Name.Local)
+			}
+			open = open[:len(open)-1]
+		case *xml.Directive:
+			return fmt.Errorf("a markup declaration is not content")
+		}
+	}
+	if len(open) > 0 {
+		return fmt.Errorf("element <%s> is not closed", open[len(open)-1].Local)
+	}
+	return nil
 }
 
 // replacementText is XML 1.0 §4.5: an entity's replacement text is its
@@ -1131,6 +1218,12 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 	// below.
 	var inTag bool
 	var attrQuote byte
+	// depth counts the document's own open elements, so that a reference
+	// outside the document element is refused: [1] document admits only
+	// Misc around it, and content is where a reference may occur (§3.1).
+	// endTag says the tag being read is one.
+	var depth int
+	var endTag bool
 	semis := semiFinder{s: src, at: -1}
 	for i := start; i < len(src); {
 		// CDATA sections, comments and processing instructions are regions
@@ -1165,6 +1258,9 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 					attrQuote = c
 				case '>':
 					inTag = false
+					if !endTag && src[i-1] == '/' {
+						depth--
+					}
 				}
 			case c == '<':
 				// A "<" that opens a comment, CDATA section or PI never
@@ -1172,6 +1268,12 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 				// tag has no attributes, but tracking it as a tag costs
 				// nothing and keeps the state machine total.
 				inTag = true
+				endTag = i+1 < len(src) && src[i+1] == '/'
+				if endTag {
+					depth--
+				} else {
+					depth++
+				}
 			}
 			sb.WriteByte(c)
 			i++
@@ -1200,6 +1302,9 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 			i += j + 1
 			written += j + 1
 			continue
+		}
+		if depth <= 0 {
+			return "", fmt.Errorf("entity reference &%s; outside the document element", name)
 		}
 		rep, err := t.resolve(name)
 		if err != nil {

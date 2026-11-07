@@ -616,3 +616,32 @@ func TestAttributeEntityReplacementTextIsChecked(t *testing.T) {
 		t.Errorf("a = %q, want %q", got, "<")
 	}
 }
+
+// WFC: Parsed Entity (XML 1.0 §4.3.2): the replacement text of a referenced
+// internal entity matches content on its own, so markup it leaves open is not
+// balanced by markup outside it, and a reference occurs only inside the
+// document element. W3C xmlconf not-wf-sa-074, 104, 109, 181, 182.
+func TestMarkupEntityIsContentAlone(t *testing.T) {
+	for _, src := range []string{
+		`<!DOCTYPE d [<!ENTITY e "</foo><foo>">]><d><foo>&e;</foo></d>`,
+		`<!DOCTYPE d [<!ENTITY e "<foo>">]><d>&e;</foo></d>`,
+		`<!DOCTYPE d [<!ENTITY e "<d></d>">]>&e;`,
+		`<!DOCTYPE d [<!ENTITY e "<d/>">]><d/>&e;`,
+		`<!DOCTYPE d [<!ENTITY e "&#60;![CDATA[">]><d>&e;]]></d>`,
+		`<!DOCTYPE d [<!ENTITY e "&#60;!--">]><d>&e;--></d>`,
+		`<!DOCTYPE d [<!ENTITY e "<a>"><!ENTITY f "&e;</a>">]><d>&f;</d>`,
+	} {
+		if _, err := ParseString(src, ParseOptions{AllowDOCTYPE: true}); err == nil {
+			t.Errorf("%s: parsed, want WFC: Parsed Entity refused", src)
+		}
+	}
+	// Balanced replacement text is content, nested or not, used twice or not.
+	src := `<!DOCTYPE d [<!ENTITY a "<a/>"><!ENTITY e "<b x='1'>&a;<!--c--><![CDATA[<]]></b>t">]><d>&e;<i/>&e;</d>`
+	tree, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatalf("%s: %v", src, err)
+	}
+	if got := len(tree.Root.ChildElements()[0].ChildElements()); got != 3 {
+		t.Errorf("got %d children, want 3", got)
+	}
+}
