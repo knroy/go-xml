@@ -97,8 +97,10 @@ type ParseOptions struct {
 	// failing. Nil, the default, reports nothing and changes nothing.
 	//
 	// Today these are the xml:id errors (xml:id §4, §6): a value that is
-	// not an NCName once normalised, and a value another xml:id in the
-	// document already holds. The Recommendation says such errors "are not
+	// not an NCName once normalised, and a value another ID in the
+	// document already holds, an xml:id or a DTD-declared ID attribute
+	// (two DTD IDs alike are a validity error and are not reported). The
+	// Recommendation says such errors "are not
 	// fatal, but should be reported", so the parse goes on and the
 	// attribute is still an ID. Each is an *Error with Code "XQDY0091",
 	// the code XQuery gives an xml:id error, and a message naming the
@@ -976,9 +978,10 @@ type parseState struct {
 	heldT      xml.StartElement
 	prologHeld bool
 	ended      bool
-	// xmlIDs and idWarnings are checkXMLID's: the xml:id values seen and
-	// the warnings delivered. Used only when opts.Warn is set.
-	xmlIDs     map[string]struct{}
+	// ids and idWarnings are checkXMLID's: the ID values seen, each mapped
+	// to whether an xml:id held it, and the warnings delivered. Used only
+	// when opts.Warn is set.
+	ids        map[string]bool
 	idWarnings int
 }
 
@@ -990,31 +993,40 @@ const maxIDWarnings = 100
 // value that is not an NCName, or one already used in this document. The
 // value is already normalised (buildElement), and stays an ID either way.
 //
-// ponytail: the seen-set holds every xml:id value of the document, also
-// under ParseBursts; it costs nothing unless Warn is set.
+// The values are unique across every attribute of type ID, xml:id or
+// DTD-declared alike (xml:id §4, XML 1.0 VC: ID; both from memory), so the
+// DTD-typed IDs, already marked by applyAttTypes, share the seen-set. A
+// duplicate is reported only when an xml:id is one of the two: two DTD IDs
+// alike are XML 1.0's validity error, which a non-validating parse does not
+// report, not an xml:id error.
+//
+// ponytail: the seen-set holds every ID value of the document, also under
+// ParseBursts; it costs nothing unless Warn is set.
 func (ps *parseState) checkXMLID(el *Node) {
-	a := el.Attr(NSXML, "id")
-	if a == nil {
-		return
-	}
-	v := a.Value()
-	var err error
-	if !IsNCName(v) {
-		err = Errorf("XQDY0091", "xml:id value %.64q is not an NCName", v)
-	} else if _, dup := ps.xmlIDs[v]; dup {
-		err = Errorf("XQDY0091", "duplicate xml:id value %.64q", v)
-	} else {
-		if ps.xmlIDs == nil {
-			ps.xmlIDs = map[string]struct{}{}
+	for a := range el.Attrs() {
+		xmlID := a.Name().URI == NSXML && a.Name().Local == "id"
+		if !xmlID && !a.IsID() {
+			continue
 		}
-		ps.xmlIDs[strings.Clone(v)] = struct{}{}
-		return
-	}
-	switch ps.idWarnings++; {
-	case ps.idWarnings <= maxIDWarnings:
-		ps.opts.Warn(err)
-	case ps.idWarnings == maxIDWarnings+1:
-		ps.opts.Warn(Errorf("XQDY0091", "further xml:id errors suppressed after %d", maxIDWarnings))
+		v := a.Value()
+		var err error
+		if prev, dup := ps.ids[v]; xmlID && !IsNCName(v) {
+			err = Errorf("XQDY0091", "xml:id value %.64q is not an NCName", v)
+		} else if dup && (xmlID || prev) {
+			err = Errorf("XQDY0091", "duplicate ID value %.64q", v)
+		} else {
+			if ps.ids == nil {
+				ps.ids = map[string]bool{}
+			}
+			ps.ids[strings.Clone(v)] = prev || xmlID
+			continue
+		}
+		switch ps.idWarnings++; {
+		case ps.idWarnings <= maxIDWarnings:
+			ps.opts.Warn(err)
+		case ps.idWarnings == maxIDWarnings+1:
+			ps.opts.Warn(Errorf("XQDY0091", "further xml:id errors suppressed after %d", maxIDWarnings))
+		}
 	}
 }
 

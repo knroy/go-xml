@@ -1494,6 +1494,9 @@ the output looks fine and is wrong.
 schema types as `ID`/`IDREF`/`IDREFS`, plus a valid `xml:id` (F&O §14.5.1-
 §14.5.3). An attribute merely named `id`, `idref` or `idrefs` is not matched:
 a document without declarations needs `xml:id`, or `xsl:key` on `@id`.
+When several elements hold the same ID value, `fn:id` and
+`fn:element-with-id` return only the first in document order; `fn:idref`
+returns every node that refers to a value.
 
 ## How this was tested
 

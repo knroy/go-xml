@@ -38,10 +38,10 @@ func registerMiscFuncs(l *Library) {
 	})
 
 	l.registerFn("id", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		return lookupByID(ctx, args, true)
+		return lookupByID(ctx, args, lookupID)
 	})
 	l.registerFn("idref", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		return lookupByID(ctx, args, false)
+		return lookupByID(ctx, args, lookupIDREF)
 	})
 
 	l.registerFn("dateTime", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -371,13 +371,28 @@ func unparsedTextArgs(args []xdm.Sequence) (href, encoding string, err error) {
 	return href, encoding, nil
 }
 
-// lookupByID implements fn:id and fn:idref.
+// idLookup selects which of the three ID functions lookupByID answers.
+type idLookup int
+
+const (
+	lookupID            idLookup = iota // fn:id
+	lookupElementWithID                 // fn:element-with-id
+	lookupIDREF                         // fn:idref
+)
+
+// lookupByID implements fn:id, fn:element-with-id and fn:idref.
 //
 // Both are defined over the is-id and is-idrefs properties (F&O §14.5.1-
 // §14.5.3): a node counts only if a DTD or schema typed it as ID or
 // IDREF(S), or it is a valid xml:id. An attribute merely named "id",
 // "idref" or "idrefs" is not one, declared nothing.
-func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, error) {
+//
+// fn:id and fn:element-with-id return one element per ID value: "If several
+// elements have the same ID value, then E is the one that is first in
+// document order" (F&O §14.5.1, §14.5.2). fn:idref has no such rule and
+// returns every node that refers to a value (§14.5.3).
+func lookupByID(ctx *Context, args []xdm.Sequence, mode idLookup) (xdm.Sequence, error) {
+	wantID := mode != lookupIDREF
 	var root *xdm.Node
 	if len(args) > 1 {
 		n, err := singleNodeArg(args, 1)
@@ -432,6 +447,19 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 	}
 
 	var out xdm.Sequence
+	// first holds, per ID value, the earliest element in document order that
+	// carries it. The walk is in document order, but for element-with-id an
+	// ID element names its parent, which precedes it, so the earliest is
+	// kept by comparison rather than by arrival.
+	first := map[string]*xdm.Node{}
+	claim := func(v string, e *xdm.Node) {
+		if e == nil || !want[v] {
+			return
+		}
+		if cur, ok := first[v]; !ok || e.Compare(cur) < 0 {
+			first[v] = e
+		}
+	}
 	var walk func(*xdm.Node)
 	walk = func(n *xdm.Node) {
 		if n.Kind() == xdm.KindElement {
@@ -450,9 +478,17 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 			// the annotation. Testing only the annotation made both
 			// functions find nothing in a stripped document.
 			if wantID && (n.IsID() || isIDAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation())) {
-				if want[trimXMLSpace(n.StringValue())] {
-					out = append(out, n)
+				// fn:element-with-id returns the element the identifier
+				// names, which is the ID element's parent; a parentless ID
+				// element identifies nothing containing it.
+				e := n
+				if mode == lookupElementWithID {
+					e = nil
+					if p := n.Parent(); p != nil && p.Kind() == xdm.KindElement {
+						e = p
+					}
 				}
+				claim(trimXMLSpace(n.StringValue()), e)
 			}
 			if !wantID && (n.IsIDREFS() || isIDREFAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation())) {
 				for _, v := range splitXMLSpace(n.StringValue()) {
@@ -483,8 +519,8 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 				// compared: key241.xml writes xml:id="id3 " and the
 				// stylesheet asks for id(' id3'). The search terms were
 				// already split on whitespace above; this is the other half.
-				if wantID && isIDAttr && want[trimXMLSpace(a.Value())] {
-					out = append(out, n)
+				if wantID && isIDAttr {
+					claim(trimXMLSpace(a.Value()), n)
 				}
 				if !wantID && isRefAttr {
 					for _, v := range splitXMLSpace(a.Value()) {
@@ -508,6 +544,9 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 		}
 	}
 	walk(root)
+	for _, e := range first {
+		out = append(out, e)
+	}
 	return xdm.SortDocumentOrder(out), nil
 }
 

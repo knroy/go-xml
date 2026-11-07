@@ -1340,38 +1340,6 @@ func quoteExternalID(v string) string {
 	return `"` + v + `"`
 }
 
-// voidElements are the HTML elements that take no end tag, in every HTML
-// version this serialiser writes. Three more are void only in HTML 4 and four
-// only in HTML 5, which is what the two maps below are for.
-//
-// This is the same table xslt/serialize.go carries, and the two must move
-// together: an element written "<br/>" by one serialiser and "<br>" by the
-// other is the same request answered two ways, decided by which spelling the
-// caller used. A single shared definition would be better and is not blocked
-// by the import graph -- xslt already imports xpath -- but moving it needs an
-// edit to xslt/serialize.go's call sites, which this change does not own. If
-// you touch either copy, touch both.
-var voidElements = map[string]bool{
-	"area": true, "base": true, "br": true, "col": true, "embed": true,
-	"hr": true, "img": true, "input": true, "link": true, "meta": true,
-	"param": true,
-}
-
-// html4VoidElements are void in HTML 4 and gone from HTML 5, which has no
-// frameset and no isindex at all. Writing "<frame>" unclosed under HTML 5
-// leaves an element an HTML 5 parser reads as open, swallowing what follows.
-// Kept identical to xslt/serialize.go's map of the same name.
-var html4VoidElements = map[string]bool{
-	"basefont": true, "frame": true, "isindex": true,
-}
-
-// html5VoidElements are void in HTML 5 and unknown to HTML 4, where an
-// unclosed one would be an unrecognised start tag rather than an empty
-// element. Kept identical to xslt/serialize.go's map of the same name.
-var html5VoidElements = map[string]bool{
-	"keygen": true, "source": true, "track": true, "wbr": true,
-}
-
 // isVoidElement reports whether an element takes no end tag under the html
 // method.
 //
@@ -1387,14 +1355,7 @@ var html5VoidElements = map[string]bool{
 // version of XML, which never starts with "5", so the fallback is harmless
 // for the xhtml method too.
 func (o *serializeOptions) isVoidElement(local string) bool {
-	local = strings.ToLower(local)
-	if voidElements[local] {
-		return true
-	}
-	if o.html5() {
-		return html5VoidElements[local]
-	}
-	return html4VoidElements[local]
+	return htmlser.Void(local, o.html5())
 }
 
 // html5 reports whether the HTML version asked for is 5 or later, which is

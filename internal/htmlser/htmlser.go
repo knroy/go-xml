@@ -148,3 +148,43 @@ func MetaEnd(head *xdm.Node, xhtml, html5 bool) string {
 func Island(n *xdm.Node, html5 bool) bool {
 	return n.Name().URI != "" && !(html5 && n.Name().URI == NSXHTML)
 }
+
+// Void reports whether an HTML element named local, matched without regard
+// to case, takes no end tag: the names void in every HTML version, plus
+// HTML5's own under html5 and HTML 4's otherwise. The version decides for
+// seven names (Serialization-html-1 writes the HTML 4 list, -2 the HTML5
+// one), so a single merged list answers both versions wrongly.
+func Void(local string, html5 bool) bool {
+	local = strings.ToLower(local)
+	if voidElements[local] {
+		return true
+	}
+	if html5 {
+		return html5VoidElements[local]
+	}
+	return html4VoidElements[local]
+}
+
+// voidElements are the HTML elements that take no end tag in every HTML
+// version the serialisers write. Writing one with a closing tag, or
+// self-closing a non-void element, both produce a tree that an HTML parser
+// reads differently from the one built.
+var voidElements = map[string]bool{
+	"area": true, "base": true, "br": true, "col": true, "embed": true,
+	"hr": true, "img": true, "input": true, "link": true, "meta": true,
+	"param": true,
+}
+
+// html4VoidElements are void in HTML 4 and gone from HTML 5, which has no
+// frameset and no isindex at all. Writing "<frame>" unclosed under HTML 5
+// leaves an element an HTML 5 parser reads as open, swallowing what follows.
+var html4VoidElements = map[string]bool{
+	"basefont": true, "frame": true, "isindex": true,
+}
+
+// html5VoidElements are void in HTML 5 and unknown to HTML 4, where an
+// unclosed one would be an unrecognised start tag rather than an empty
+// element.
+var html5VoidElements = map[string]bool{
+	"keygen": true, "source": true, "track": true, "wbr": true,
+}
