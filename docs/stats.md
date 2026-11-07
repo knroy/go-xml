@@ -23,7 +23,7 @@ claim is only as good as the command behind it.
 
 | figure | count | counted by |
 |---|---:|---|
-| Unit tests | 3,377 | `grep -rn '^func Test' --include='*_test.go' . \| grep -v '/\.claude/worktrees/' \| grep -vc '^\./bench/'` |
+| Unit tests | 3,378 | `grep -rn '^func Test' --include='*_test.go' . \| grep -v '/\.claude/worktrees/' \| grep -vc '^\./bench/'` |
 | Fuzz targets | 12 | `grep -rn '^func Fuzz' --include='*_test.go' . \| grep -v '/\.claude/worktrees/' \| grep -vc '^\./bench/'` |
 | Limit boundary tests | 14 | `grep -hc '^func Test' ./*/limits_boundary*_test.go \| awk '{n += $1} END {print n + 0}'` |
 
@@ -42,17 +42,17 @@ and `tests/docfigures.sh` cross-checks the same numbers against
 | QT3 — XQuery 3.1 | XQuery 3.1 | 30,517 | 30,516 | 100.00% | **1** |  | 2026-10-01 | `tests/check.sh (TestQT3XQuery)` |
 | W3C XSLT 2.0 | XSLT 2.0 (Second Edition) | 6,201 | 6,193 | 99.87% | **8** | 8,332 / 68 | 2026-09-11 | `tests/check.sh (TestXSLTSuite)` |
 | W3C XSLT 3.0 | XSLT 3.0 | 11,518 | 11,501 | 99.85% | **17** | 2,949 / 134 | 2026-11-04 | `tests/check.sh (TestXSLT30Suite)` |
-| W3C xsdtests 1.0 | XML Schema 1.0 (Second Edition) | 39,388 | 39,358 | 99.92% | **30** |  | 2026-09-11 | `tests/check.sh (XSD10)` |
-| W3C xsdtests 1.1 | XML Schema 1.1 | 41,598 | 41,567 | 99.93% | **31** |  | 2026-09-11 | `tests/check.sh (XSD11)` |
+| W3C xsdtests 1.0 | XML Schema 1.0 (Second Edition) | 39,388 | 39,359 | 99.93% | **29** |  | 2026-11-06 | `tests/check.sh (XSD10)` |
+| W3C xsdtests 1.1 | XML Schema 1.1 | 41,598 | 41,568 | 99.93% | **30** |  | 2026-11-06 | `tests/check.sh (XSD11)` |
 | Clark spectest | RELAX NG 1.0 | 965 | 965 | 100.00% | **0** |  | 2026-09-11 | `tests/check.sh (RelaxNGSpectest)` |
-| **Total** | | | | | **87** | | | |
+| **Total** | | | | | **85** | | | |
 
 The skipped column is the XSLT lanes' exclusions split by class: cases the
 suite says a conforming processor may leave out, and cases excluded because a
 feature is not implemented or a dependency is not modelled. Neither is in the
 denominator; docs/testing.md explains the line between them.
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 17 + 30 + 31 + 0 = 87.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 17 + 29 + 30 + 0 = 85.
 
 ## Real-world corpora
 

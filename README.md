@@ -135,8 +135,8 @@ and maintains it as a project of his own.
 | **XQuery 3.1** | 100.00% of the W3C QT3 suite (30,516 of 30,517 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 318 more passes; the 1 remaining failure, `contextDecl-052`, is a W3C fixture defect catalogued in [conformance-gaps.md](docs/conformance-gaps.md) |
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,193 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSLT 3.0** | 99.85% of the W3C XSLT suite filtered to 3.0 (11,501 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases; every one of the 151 cases that wants the XTSE3430 refusal gets it — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
-| **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
-| **XSD 1.1** | 99.90% instance (26,217 of 26,244); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
+| **XSD 1.0** | 99.90% of the W3C xsdtests *instance* tests (24,974 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
+| **XSD 1.1** | 99.90% instance (26,218 of 26,244); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
 | **Tests** | 3,377 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
@@ -146,11 +146,11 @@ and maintains it as a project of his own.
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
 
-1. **Both halves of the XSD numbers carry a residue of disagreements** — 30 on
-   1.0 and 31 on 1.1 — and where they are schema-validity failures, a schema
+1. **Both halves of the XSD numbers carry a residue of disagreements** — 29 on
+   1.0 and 30 on 1.1 — and where they are schema-validity failures, a schema
    invalid in one of those ways is accepted rather than reported. They are
    listed in *Where it fails*, along with what the suite skips and why; **most
-   of them — 56 of 61 — are cases the W3C itself has queried or filed a bug
+   of them — 54 of 59 — are cases the W3C itself has queried or filed a bug
    against**, including every one of the 44 `MS-Regex` disagreements, which
    are a single open bug. A further 16 cases on 1.0 and 14 on 1.1 are excluded
    from both sides of the ratio because the suite marks them
@@ -1239,8 +1239,8 @@ Two figures, and the second is the one that matters.
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,244 (99.90%) |
+| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,974 / 25,000 (99.90%) |
+| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,218 / 26,244 (99.90%) |
 
 **Earlier revisions of this file reported a single "99.56%" for XSD 1.0 and
 "XSD 1.1: 100%". Both were measured wrongly, and the correction is large enough
@@ -1869,8 +1869,8 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,244 (99.90%) |
+| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,974 / 25,000 (99.90%) |
+| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,218 / 26,244 (99.90%) |
 
 Every failure is catalogued in
 [docs/conformance-gaps.md](docs/conformance-gaps.md), with a verdict on whether

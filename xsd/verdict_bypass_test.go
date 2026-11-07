@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -74,14 +75,44 @@ func TestXSITypeDerivedFromSelectedAlternative(t *testing.T) {
 }
 
 // A nested scope of a key below a child a wildcard assessed without a
-// declaration still reaches the outer scope's node table.
+// declaration still reaches the outer scope's node table. The field's @id has
+// a global declaration: one the lax wildcard leaves undeclared has no type and
+// fails the field itself (TestFieldOnUnassessedWildcardAttribute).
 func TestWildcardChildKeepsIdentityTables(t *testing.T) {
 	for _, kind := range []string{"unique", "key"} {
-		s := vbLoad(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="R"><xs:complexType><xs:sequence><xs:any processContents="lax" minOccurs="0" maxOccurs="unbounded"/></xs:sequence></xs:complexType><xs:`+kind+` name="u"><xs:selector xpath=".//x"/><xs:field xpath="@id"/></xs:`+kind+`></xs:element></xs:schema>`, Version11)
+		s := vbLoad(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:attribute name="id" type="xs:string"/><xs:element name="R"><xs:complexType><xs:sequence><xs:any processContents="lax" minOccurs="0" maxOccurs="unbounded"/></xs:sequence></xs:complexType><xs:`+kind+` name="u"><xs:selector xpath=".//x"/><xs:field xpath="@id"/></xs:`+kind+`></xs:element></xs:schema>`, Version11)
 		code := map[string]string{"unique": "cvc-identity-constraint.4.1", "key": "cvc-identity-constraint.4.2.2"}[kind]
 		vbCheck(t, kind+" via undeclared wrapper", s, `<R><x id="1"/><W><R><x id="1"/></R></W></R>`, false, code)
 		vbCheck(t, kind+" via xsi:type wrapper", s, `<R`+vbXSI+` xmlns:xs="http://www.w3.org/2001/XMLSchema"><x id="1"/><W xsi:type="xs:anyType"><R><x id="1"/></R></W></R>`, false, code)
 		vbCheck(t, kind+" distinct via wrapper", s, `<R><x id="1"/><W><R><x id="2"/></R></W></R>`, true, "")
+	}
+}
+
+// TestFieldOnUnassessedWildcardAttribute pins idZ015 (W3C bug 4063, settled
+// "invalid" for 1.0): a field selecting an attribute an attribute wildcard did
+// not assess. It has no type, so XSD 1.0 §3.11.4 clause 3 ("must have a simple
+// type") fails, for lax and skip alike. XSD 1.1 clause 3 admits ·skipped·
+// nodes and drops them, so there a skip match leaves the field empty: a key
+// fails 4.2.1 and a unique holds. A lax match with no declaration is not
+// skipped and still fails clause 3.
+func TestFieldOnUnassessedWildcardAttribute(t *testing.T) {
+	for _, c := range []struct {
+		ver      Version
+		pc, kind string
+		valid    bool
+		code     string
+	}{
+		{Version10, "skip", "key", false, "cvc-identity-constraint.3"},
+		{Version10, "skip", "unique", false, "cvc-identity-constraint.3"},
+		{Version10, "lax", "key", false, "cvc-identity-constraint.3"},
+		{Version10, "lax", "unique", false, "cvc-identity-constraint.3"},
+		{Version11, "skip", "key", false, "cvc-identity-constraint.4.2.1"},
+		{Version11, "skip", "unique", true, ""},
+		{Version11, "lax", "key", false, "cvc-identity-constraint.3"},
+		{Version11, "lax", "unique", false, "cvc-identity-constraint.3"},
+	} {
+		s := vbLoad(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="foo"><xs:complexType><xs:anyAttribute processContents="`+c.pc+`"/></xs:complexType><xs:`+c.kind+` name="k"><xs:selector xpath="."/><xs:field xpath="@bar"/></xs:`+c.kind+`></xs:element></xs:schema>`, c.ver)
+		vbCheck(t, fmt.Sprintf("%v %s %s", c.ver, c.pc, c.kind), s, `<foo bar="abc"/>`, c.valid, c.code)
 	}
 }
 

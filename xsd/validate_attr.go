@@ -401,10 +401,13 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 func (v *validator) validateWildcardAttribute(a *xdm.Node, w *Wildcard, name xdm.QName) {
 	switch w.ProcessContents {
 	case ProcessSkip:
+		v.markUntypedAttr(a, v.schema.Version >= Version11)
 		return
 	case ProcessLax:
 		if d, ok := v.schema.Attributes[name]; ok {
 			v.validateAttribute(a, d, nil)
+		} else {
+			v.markUntypedAttr(a, false)
 		}
 	case ProcessStrict:
 		d, ok := v.schema.Attributes[name]
@@ -416,6 +419,18 @@ func (v *validator) validateWildcardAttribute(a *xdm.Node, w *Wildcard, name xdm
 		}
 		v.validateAttribute(a, d, nil)
 	}
+}
+
+// markUntypedAttr records an attribute a wildcard left unassessed, and whether
+// it is ·skipped·; see untypedAttrs.
+func (v *validator) markUntypedAttr(a *xdm.Node, skipped bool) {
+	if v.icScopes == 0 {
+		return
+	}
+	if v.untypedAttrs == nil {
+		v.untypedAttrs = map[*xdm.Node]bool{}
+	}
+	v.untypedAttrs[a] = skipped
 }
 
 // checkNoForeignAttributes reports attributes on an element whose type permits

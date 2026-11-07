@@ -85,27 +85,39 @@ and schemas imported into XQuery, which are read as 1.0, use them. This is a
 deliberate leniency; `vc:typeAvailable` still reports all five unavailable
 under 1.0.
 
-The 1.1 constructs are always *parsed*, whichever version is selected — a
-schema that uses one is not rejected for it. Whether it is *honoured* is what
-the version selects, and the distinction matters:
+Under `Version10` the 1.1 constructs are schema errors, because the XSD 1.0
+schema for schemas does not declare them: the elements `xs:assert`,
+`xs:assertion`, `xs:alternative`, `xs:openContent`, `xs:defaultOpenContent`,
+`xs:override` and `xs:explicitTimezone`, and the attributes `defaultAttributes`
+and `xpathDefaultNamespace` on `xs:schema`, `targetNamespace` on a local
+`xs:element` or `xs:attribute`, `inheritable`, `defaultAttributesApply`,
+`xpathDefaultNamespace` on `xs:selector` and `xs:field`, `ref` on an identity
+constraint, and the wildcard forms `notNamespace` and `notQName`. Each error
+says "requires XSD 1.1".
+
+A schema document written for both versions marks its 1.1 parts with
+`vc:minVersion="1.1"`. Conditional inclusion (XSD 1.1 §4.2.1) runs under both
+versions, so a 1.0 load drops a marked element before checking it, and a 1.1
+load reads it:
 
 ```go
-// <xs:assert test="xs:int(a) gt 100"/> on the type of <r>
-schema10.Validate(doc.Root, xsd.ValidateOptions{})   // nil — the assertion is not run
+// <xs:assert test="xs:int(a) gt 100" vc:minVersion="1.1"/> on the type of <r>
+schema10.Validate(doc.Root, xsd.ValidateOptions{})   // nil — excluded under 1.0
 schema11.Validate(doc.Root, xsd.ValidateOptions{})   // cvc-assertion.3
 ```
 
-The same holds for the `xs:assertion` and `xs:explicitTimezone` facets, for
-`xs:alternative`, and for `defaultAttributes` (a dangling group name is still
-reported). So loading a 1.1 schema under the default version gives you a
-working 1.0 validator for it, silently missing the 1.1 constraints. **If a
-schema uses 1.1 features, select `Version11`.** Nothing warns you.
+Without the marker, loading a 1.1 schema under the default version fails.
+**If a schema uses 1.1 features, select `Version11`.**
 
-The exceptions are the wildcard forms `notNamespace` and `notQName`, which are
-errors under 1.0 rather than ignored: the attribute is the wildcard's whole
-namespace constraint, so dropping it would leave a wildcard that admits what
-the schema means to exclude, where ignoring an assertion only fails to add a
-check on top of a declaration that still stands.
+The version also decides one identity-constraint case: a `xs:field` that
+selects an attribute an `xs:anyAttribute` matched without assessing it.
+Such an attribute is matched by `skip`, or by `lax` with no global declaration.
+It has no type, so under 1.0 the field fails §3.11.4 clause 3 ("must have a
+simple type"). The W3C test group ruled this way when it closed bug 4063
+(`idZ015`). XSD 1.1's clause 3 accepts ·skipped· nodes in a field's result
+and gives them no value. So under 1.1 a `skip` match leaves the field
+empty: an `xs:key` fails (4.2.1) and an `xs:unique` holds. A `lax` match is
+not skipped and fails clause 3 under both versions.
 
 ## Checking the schema itself
 
@@ -691,8 +703,8 @@ Measured against the W3C xsdtests suite:
 
 | | schema-validity | instance |
 |---|---|---|
-| **XSD 1.0** | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| **XSD 1.1** | 15,350 / 15,354 (99.97%) | 26,217 / 26,244 (99.90%) |
+| **XSD 1.0** | 14,385 / 14,388 (99.98%) | 24,974 / 25,000 (99.90%) |
+| **XSD 1.1** | 15,350 / 15,354 (99.97%) | 26,218 / 26,244 (99.90%) |
 
 **Earlier revisions reported 99.56% and "1.1: 100%". Both were measured
 wrongly.** Two bugs in the test driver, both of which flattered the result:

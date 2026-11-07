@@ -56,9 +56,9 @@ of them.
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
 failures of 6,201; XQuery 3.1 has 1 of 30,517; XSLT 3.0 has 17 of 11,518;
-XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,598. Everything below
-is an account of those 87 cases, or of a decision that produced some of them.
-The 87 is the sum of the nine figures above, computed from
+XSD 1.0 disagrees on 29 of 39,388 and XSD 1.1 on 30 of 41,598. Everything below
+is an account of those 85 cases, or of a decision that produced some of them.
+The 85 is the sum of the nine figures above, computed from
 [tests/conformance/results.json](../tests/conformance/results.json) rather than
 written: `tests/docfigures.sh` re-derives it from `tests/ratchet.txt` and fails
 if this file and the generated table disagree.
@@ -1272,21 +1272,20 @@ shapes production schemas favour and no substitute for them, but far from
 nothing. Pairing each new rule with a valid schema that must still load, in
 `xsd/falseaccept_test.go`, is the third.
 
-### XSD instance validation: three remaining, none addressable
+### XSD instance validation: two remaining, none addressable
 
-Three instance cases remain, and "open" overstates all three — each is argued
-and none is tractable work:
+Two instance cases remain, and "open" overstates both. Each is argued, and
+neither is tractable work. `MS-IdentityConstraint/idZ015` was the third. Bug
+4063 was settled "invalid" (`stable`, 2008-06-24), and it passes on both
+versions now. See [xsd.md](xsd.md#choosing-the-version).
 
-- `MS-IdentityConstraint/idZ015` — a field selecting an attribute matched by a
-  `lax`/`skip` `anyAttribute`. Open under W3C bug 4063, and left alone until
-  the W3C settles it.
 - `MS-Attribute/attP031` — a false *reject*, declined on purpose. The reasoning
   is under *A prohibited attribute use creates no attribute use* below.
 - `saxonData/Id/id017.n01.xml` (1.1 only) — a defaulted `xs:ENTITY` in a
   document carrying no DTD. Declined on purpose: the unparsed-entity check bails
   when the instance declares no unparsed entity at all, which is what keeps
   `as-34` and the XSLT suite's `as-3401`, `match-208` and `match-209` passing.
-  Read in full under *All 61 are adjudicated case by case* in
+  Read in full under *All 59 are adjudicated case by case* in
   [conformance-gaps.md](conformance-gaps.md).
 
 ### XSD particle restriction: the two-job wrapper in `recurseAsIfGroup`
@@ -1661,7 +1660,7 @@ assert that `\p{Lu}` rejects characters that *are* uppercase letters in current
 Unicode. The suite was written against Unicode 3.1; the codepoints in question
 — U+1D7A8 among them — were categorised differently then.
 
-These are **22 of the 30 disagreements on 1.0 and 22 of the 31 on 1.1** — two
+These are **22 of the 29 disagreements on 1.0 and 22 of the 30 on 1.1** — two
 thirds of everything the suite reports against this engine, and the single
 largest reason XSD cannot reach 100% and should not try. The three
 `regex-syntax-xslt20` failures in the XSLT 2.0 lane are the same rule seen from
