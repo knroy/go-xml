@@ -94,9 +94,10 @@ func TestSerializeHTMLVoidElementsAreVersioned(t *testing.T) {
 // TestSerializeXMLKeepsSelfClosing pins that the fix is scoped to the html
 // method: the xml method's empty-element syntax is "<br/>", and a
 // void-element table applied to it would have rewritten every XML document
-// that happens to use an HTML name.
+// that happens to use an HTML name. The xhtml method has its own rule; see
+// TestSerializeXHTMLEmptyElements.
 func TestSerializeXMLKeepsSelfClosing(t *testing.T) {
-	for _, method := range []string{"xml", "xhtml"} {
+	for _, method := range []string{"xml"} {
 		got, err := evalSerialize(t,
 			`serialize(parse-xml('<br/>'), map{'method':'`+method+`'})`)
 		if err != nil {
@@ -105,5 +106,36 @@ func TestSerializeXMLKeepsSelfClosing(t *testing.T) {
 		if got != "<br/>" {
 			t.Errorf("serialize %s = %q, want %q", method, got, "<br/>")
 		}
+	}
+}
+
+// TestSerializeXHTMLEmptyElements pins Serialization 3.1 §6 for the xhtml
+// method: a void element is written "<br />", any other empty element with
+// a full end tag, never "<p/>". Void names count only for the XHTML
+// namespace, or no namespace under HTML5 -- xslt/serialize.go's rule.
+func TestSerializeXHTMLEmptyElements(t *testing.T) {
+	const doc = `parse-xml('<html xmlns="http://www.w3.org/1999/xhtml"><br/><p/></html>')`
+	const elemParams = `parse-xml('<output:serialization-parameters ` +
+		`xmlns:output="http://www.w3.org/2010/xslt-xquery-serialization">` +
+		`<output:method value="xhtml"/><output:omit-xml-declaration value="yes"/>` +
+		`</output:serialization-parameters>')/*`
+	const xhtmlOut = `<html xmlns="http://www.w3.org/1999/xhtml"><br /><p></p></html>`
+	for _, tc := range []struct{ name, expr, want string }{
+		{"map form", `serialize(` + doc + `, map{'method':'xhtml'})`, xhtmlOut},
+		{"element form", `serialize(` + doc + `, ` + elemParams + `)`, xhtmlOut},
+		{"no namespace html5", `serialize(parse-xml('<r><br/><p/></r>'), ` +
+			`map{'method':'xhtml','html-version':5})`, `<r><br /><p></p></r>`},
+		{"no namespace html4", `serialize(parse-xml('<r><br/></r>'), ` +
+			`map{'method':'xhtml'})`, `<r><br></br></r>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := evalSerialize(t, tc.expr)
+			if err != nil {
+				t.Fatalf("serialize: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("serialize xhtml = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

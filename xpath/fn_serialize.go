@@ -949,16 +949,21 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 			// document went through xsl:result-document as "<br>" and through
 			// fn:serialize as "<br/>".
 			//
-			// The xhtml method is deliberately not handled here. It has a
-			// third rule again -- void elements self-closed with a space,
-			// non-void ones with a full end tag, and recognition gated on the
-			// XHTML namespace under version 4 -- and this serialiser has
-			// never implemented it. Changing xhtml's output is a separate
-			// change with its own cases to answer to.
-			if opts.method == "html" {
-				if opts.isVoidElement(n.Name().Local) {
+			// The xhtml method has a third rule (Serialization 3.1 §6): a
+			// void element is written "<br />", any other empty element
+			// with a full end tag, since an HTML parser reads "<p/>" as an
+			// unclosed "<p>". A name counts as void only for an element the
+			// method recognises as HTML's: the XHTML namespace, or no
+			// namespace under HTML5. xslt/serialize.go's xhtmlVoidElement
+			// is the same rule.
+			if opts.method == "html" || opts.method == "xhtml" {
+				switch {
+				case opts.method == "html" && opts.isVoidElement(n.Name().Local):
 					sb.WriteString(">")
-				} else {
+				case opts.method == "xhtml" && opts.isVoidElement(n.Name().Local) &&
+					(n.Name().URI == htmlser.NSXHTML || n.Name().URI == "" && opts.html5()):
+					sb.WriteString(" />")
+				default:
 					sb.WriteString("></")
 					writeName(sb, n)
 					sb.WriteString(">")
@@ -1379,8 +1384,8 @@ var html5VoidElements = map[string]bool{
 //
 // html-version decides, falling back to version. That fallback is the html
 // method's alone in xslt/serialize.go, because for xhtml @version is the
-// version of XML; this function is only reached from the html method, so the
-// fallback is unconditional here.
+// version of XML, which never starts with "5", so the fallback is harmless
+// for the xhtml method too.
 func (o *serializeOptions) isVoidElement(local string) bool {
 	local = strings.ToLower(local)
 	if voidElements[local] {

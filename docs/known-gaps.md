@@ -1519,16 +1519,6 @@ the twelve functions that never cast. It does carry `XPTY0117` cases —
 them depends on the `schemaValidation` feature and is therefore skipped, so the
 four wrong-code rows were unscored too; fixing them moved no lane.
 
-One inconsistency is left standing deliberately. `dateAccessorArg`, the
-component accessors' own copy of the rule, rewraps a failed cast as
-`XPTY0004`, so `year-from-dateTime(@bad)` reports a type error where
-`days-from-duration(@bad)` now reports `FORG0001` for the same bad value. The
-`FORG0001` reading is the right one — the cast was attempted, so the value is
-what was wrong — but changing the accessors is a separate behaviour change to
-a path that has been stable across releases, and no suite case scores either
-code. It is recorded here rather than folded into a bug fix aimed at four
-other functions.
-
 ### `xsl:function` determinism: what the result cache does not yet key
 
 A `new-each-time="no"` function is deterministic (§10.3.7), so calls with

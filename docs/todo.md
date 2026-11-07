@@ -166,10 +166,10 @@ two serialisers, one of them ignoring it. `isHTMLContentTypeHead`
 Serialization 3.1, which is why the field is a `*bool` rather than a `bool`.
 
 **Nothing is now parsed and unread.** What is left is the deliberate list
-below, and the `xhtml` method's own empty-element rule — void elements
-self-closed *with a space*, recognition namespace-gated under version 4 —
-which this serialiser has never implemented. `TestSerializeXMLKeepsSelfClosing`
-pins the current behaviour so that changing it is a deliberate act.
+below. The `xhtml` method's own empty-element rule (Serialization 3.1 §6:
+`<br />` for a void element, `<p></p>` otherwise, recognition namespace-gated
+under version 4) is now implemented, as `xsl:output` already had it;
+`TestSerializeXHTMLEmptyElements` pins it.
 
 **`byte-order-mark` and `media-type` are deliberately not implemented** for
 `fn:serialize`, which is a different thing from unread. F&O 3.0

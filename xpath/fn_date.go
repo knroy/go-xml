@@ -41,14 +41,11 @@ func dateAccessorType(name string) xdm.TypeCode {
 // The cast is confined to xs:untypedAtomic. The same clause promotes only
 // numerics and anyURI; an xs:string is neither cast nor promoted to xs:date,
 // so month-from-date("2008-06-01") stays the XPTY0004 the suite expects.
+// A cast that fails is FORG0001, as in untypedArg: the value was bad.
 func dateAccessorArg(a *xdm.Atomic, want xdm.TypeCode, name string) (*xdm.Atomic, error) {
-	if a.Type == xdm.TypeUntypedAtomic {
-		conv, err := CastAtomic(a, want)
-		if err != nil {
-			return nil, xdm.ErrType(
-				"%s(): %q is not a valid %s", name, a.String(), want.String())
-		}
-		a = conv
+	a, err := untypedArg(a, want)
+	if err != nil {
+		return nil, err
 	}
 	if a.DateTimeVal() == nil {
 		return nil, xdm.ErrType(
