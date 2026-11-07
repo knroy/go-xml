@@ -380,14 +380,10 @@ func (s *serializer) beginMarkup(seq xdm.Sequence) xdm.Sequence {
 	xhtml := strings.EqualFold(opts.Method, "xhtml")
 	s.html = html || xhtml
 	s.xhtml = xhtml
-	s.html5 = strings.HasPrefix(effectiveHTMLVersion(opts, xhtml), "5")
-
-	// Prefix normalisation is an HTML5 rule and applies to both methods that
-	// write HTML: output-0602a and -0602b are the html method and -0211 and
-	// -0225 the xhtml one, and all four want the same tree.
-	if s.html5 {
-		seq = normalizePrefixes(seq)
-	}
+	// Only the two methods that write HTML have an HTML version: under xml,
+	// effectiveHTMLVersion's html default of 5.0 would otherwise apply
+	// prefix normalisation to XML output.
+	s.html5 = s.html && strings.HasPrefix(effectiveHTMLVersion(opts, xhtml), "5")
 
 	// A byte order mark, when asked for. It precedes everything, including
 	// the XML declaration, since it is what tells a reader how to decode
@@ -1004,10 +1000,10 @@ func (s *serializer) openTag(n *xdm.Node, depth, base int, nonEmpty bool) (elemS
 
 	// An element whose namespace has no declaration in scope needs one, which
 	// happens for elements built by xsl:element with a computed namespace.
-	if n.Name().URI != "" && s.inScope(base, n.Name().Prefix) != n.Name().URI &&
-		s.declaredURI(base, n.Name().Prefix) != n.Name().URI {
-		s.writeNamespaceDecl(n.Name().Prefix, n.Name().URI)
-		s.ns = append(s.ns, nsPair{n.Name().Prefix, n.Name().URI})
+	if p := s.elemPrefix(n); n.Name().URI != "" && s.inScope(base, p) != n.Name().URI &&
+		s.declaredURI(base, p) != n.Name().URI {
+		s.writeNamespaceDecl(p, n.Name().URI)
+		s.ns = append(s.ns, nsPair{p, n.Name().URI})
 	}
 	// An element in no namespace under an ancestor with a default namespace
 	// has to undeclare it. Without xmlns="" the element is read back as
@@ -1230,6 +1226,16 @@ func (s *serializer) ownNamespaceDecl(n *xdm.Node, base int, prefix, uri string)
 	if s.inScope(base, prefix) == uri {
 		return
 	}
+	// Prefix normalisation (Serialization 3.1 §7.1, and §6 for xhtml): "Any
+	// namespace node for any of those three namespaces that was previously
+	// present on any element node ... is also removed, unless the prefix
+	// that that namespace node declared is used as the prefix on the name of
+	// an attribute on that element or an ancestor of that element." Such an
+	// attribute gets its declaration from openTag's attribute loop, so the
+	// binding is left out here whatever its use. The default binding is kept.
+	if s.html5 && prefix != "" && htmlNativeNamespaces[uri] {
+		return
+	}
 	// An element binds each prefix at most once, and the binding its own
 	// name needs is the one that has to survive: without it the name is
 	// unresolvable. A namespace node carrying the element's prefix bound
@@ -1237,7 +1243,7 @@ func (s *serializer) ownNamespaceDecl(n *xdm.Node, base int, prefix, uri string)
 	// namespace-alias-2620 shows -- is dropped here rather than written
 	// beside the one added below, which produced two xmlns:y attributes
 	// on one element and output that is not well-formed XML.
-	if prefix != "" && prefix == n.Name().Prefix &&
+	if prefix != "" && prefix == s.elemPrefix(n) &&
 		n.Name().URI != "" && uri != n.Name().URI {
 		return
 	}
@@ -1345,8 +1351,8 @@ func (s *serializer) declaredURI(base int, prefix string) string {
 // writeElementName writes an element's lexical name in pieces, which
 // spares the string elementName allocates for a prefixed name.
 func (s *serializer) writeElementName(n *xdm.Node) {
-	if n.Name().Prefix != "" {
-		s.writeString(n.Name().Prefix)
+	if p := s.elemPrefix(n); p != "" {
+		s.writeString(p)
 		s.writeString(":")
 	}
 	s.writeString(n.Name().Local)
@@ -1354,10 +1360,41 @@ func (s *serializer) writeElementName(n *xdm.Node) {
 
 // elementName returns the lexical name to serialise.
 func (s *serializer) elementName(n *xdm.Node) string {
-	if n.Name().Prefix != "" {
-		return n.Name().Prefix + ":" + n.Name().Local
+	if p := s.elemPrefix(n); p != "" {
+		return p + ":" + n.Name().Local
 	}
 	return n.Name().Local
+}
+
+// htmlNativeNamespaces are the three vocabularies an HTML5 parser understands
+// without a prefix: HTML itself, SVG and MathML. Everything else is foreign
+// and keeps whatever prefix the tree gave it.
+var htmlNativeNamespaces = map[string]bool{
+	nsXHTML:                              true,
+	"http://www.w3.org/2000/svg":         true,
+	"http://www.w3.org/1998/Math/MathML": true,
+}
+
+// elemPrefix returns the prefix element n is written with: its own, except
+// that HTML5 prefix normalisation writes an element of the three native
+// namespaces unprefixed. Serialization 3.1 §7.1: "any element node ... that
+// is in one of the XHTML namespace, the SVG namespace or the MathML namespace
+// has its name replaced by the local part of its name. Such an element node
+// is given a default namespace node whose value is the element's namespace
+// URI." openTag declares that default when it is not in scope.
+//
+// It is decided element by element, from the element's own name, as it is
+// written, so that a streamed result (streamout.go) normalises as the tree's
+// serialization does without a pass over the whole tree. An HTML5 parser
+// recognises such an element only without a prefix: <svg:svg> would be read
+// back as an unknown element. Attributes keep their prefixes -- an
+// unprefixed attribute is in no namespace -- and get their declarations
+// from openTag (output-0603a).
+func (s *serializer) elemPrefix(n *xdm.Node) string {
+	if s.html5 && htmlNativeNamespaces[n.Name().URI] {
+		return ""
+	}
+	return n.Name().Prefix
 }
 
 // writeAttrName writes an attribute's lexical name in pieces, which spares

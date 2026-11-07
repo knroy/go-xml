@@ -173,7 +173,12 @@ func TestSecondaryOutputMatchesTree(t *testing.T) {
 		{"group", secMain, `<xsl:template match="/"><xsl:for-each-group select="doc/rec" group-adjacent="@v = 'x'"><xsl:result-document href="g{position()}.xml"><g><xsl:copy-of select="current-group()"/></g></xsl:result-document></xsl:for-each-group></xsl:template>`, true},
 		{"indent", `<xsl:output indent="yes"/>`, `<xsl:template match="/"><xsl:result-document href="i.xml"><a><b><c/></b>t<d/></a></xsl:result-document><xsl:result-document href="j.xml"><a><b><c/></b><d/></a></xsl:result-document></xsl:template>`, true},
 		{"text", ``, `<xsl:template match="/"><xsl:result-document href="t.txt" method="text"><xsl:for-each select="//rec"><xsl:value-of select="@k"/>;</xsl:for-each></xsl:result-document></xsl:template>`, false},
-		{"html", ``, `<xsl:template match="/"><xsl:result-document href="h.html" method="html" version="4.0"><html><head><title>t</title></head><body><p>x<br/></p></body></html></xsl:result-document></xsl:template>`, true},
+		{"html", ``, `<xsl:template match="/"><xsl:result-document href="h.html" method="html"><html><head><title>t</title></head><body><p>x<br/></p></body></html></xsl:result-document></xsl:template>`, true},
+		// HTML5 prefix normalisation, per element as it is written: the
+		// prefixed XHTML and SVG elements unprefixed, svg:a keeping its
+		// prefix and declaration, the foreign x:e untouched; the doctype
+		// waits past the comment for the html element.
+		{"html5-prefixes", ``, `<xsl:template match="/"><xsl:result-document href="p.html" method="html"><xsl:comment>c</xsl:comment><h:html xmlns:h="http://www.w3.org/1999/xhtml"><h:body><svg:svg xmlns:svg="http://www.w3.org/2000/svg" svg:a="1"><svg:g/></svg:svg><x:e xmlns:x="urn:x"/></h:body></h:html></xsl:result-document></xsl:template>`, true},
 		{"format", `<xsl:output name="f" omit-xml-declaration="yes" encoding="ISO-8859-1"/><xsl:character-map name="m"><xsl:output-character character="a" string="A"/></xsl:character-map>`, `<xsl:template match="/"><xsl:result-document href="f.xml" format="f" use-character-maps="m"><a>a&#xe9;&#x4e00;</a></xsl:result-document></xsl:template>`, true},
 		{"atomics", ``, `<xsl:template match="/"><xsl:result-document href="a.xml"><xsl:sequence select="1, 2"/><e/><xsl:sequence select="3"/></xsl:result-document></xsl:template>`, false},
 		{"separator", ``, `<xsl:template match="/"><xsl:result-document href="s.xml" item-separator="|"><xsl:sequence select="1, 2"/><e/></xsl:result-document></xsl:template>`, false},

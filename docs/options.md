@@ -664,9 +664,12 @@ and so to XQuery results serialised through it (XQuery 3.1 Appendix D leaves
 doctype, `<frame />`), as Saxon-HE 12.7 does; set `html-version="5"` for
 XHTML5.
 
-An HTML5 result is held whole rather than streamed through
-`TransformOptions.Output` or `SecondaryOutput` (prefix normalisation reads the
-whole tree), so a large html result that should stream needs `version="4.0"`.
+An HTML5 result streams through `TransformOptions.Output` and
+`SecondaryOutput` as an HTML 4 one does: prefix normalisation (an element in
+the XHTML, SVG or MathML namespace written unprefixed) is decided per element
+as its start tag is written, and the bare doctype waits only for the first
+element. What html's default `indent="yes"` holds is unchanged (see
+known-gaps.md).
 
 ---
 
