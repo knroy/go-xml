@@ -22,7 +22,10 @@ package xslt
 // (givesUp) and the main plan refuses it, as before, unless it can match
 // one node only (streammain_onematch.go).
 
-import "github.com/knroy/go-xml/v2/xdm"
+import (
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+)
 
 // splitHold is what a holding split has collected so far.
 type splitHold struct {
@@ -123,10 +126,33 @@ func records(n *xdm.Node, deep bool) int64 {
 
 // holdAt admits s, a split at the document node that collects nodes,
 // under the cap: a match that may be the document element gives up at once
-// (that copy is the tree).
+// (that copy is the tree). A split whose tail is a copy the stylesheet asks
+// for (copiesAsked) is not capped.
 func (s *streamSplit) holdAt() {
 	if s.countAt() {
 		return // counted, not held (streamfold.go)
 	}
-	s.noRoot, s.hold = s.minDepth() < 2 && !s.itemsOnlyCopied(), true // streamfn_copies.go
+	s.noRoot, s.hold = s.minDepth() < 2 && !s.itemsOnlyCopied(), !s.copiesAsked() // streamfn_copies.go
+}
+
+// copiesAsked reports whether s's tail starts with fn:copy-of or
+// fn:snapshot: P/copy-of(), P/snapshot(), P/copy-of()/Q
+// ([$x, //ITEM/copy-of()]?*!PRICE, sx-square-array-040). The stylesheet asks
+// for every match grounded and held at once, and the tree-mode run holds
+// those copies beside its document, so holding them streamed is never more
+// than the tree. It is the one whole-document memory case of a hold: with P
+// the whole document, the copies are the document. The copies are fresh
+// trees, outside the cursor's ordinals, which the cap cannot weigh against a
+// tree-mode parse (holdOn's tree stayed 0 and it gave up at the first take);
+// each copy charges the node budget instead (TransformOptions.MaxNodes), the
+// backstop that still refuses an unbounded hold.
+func (s *streamSplit) copiesAsked() bool {
+	if s.tail == nil {
+		return false
+	}
+	e := s.tail.Expr()
+	if p, ok := e.(*xpath.PathExpr); ok && !p.Root && len(p.Steps) > 0 {
+		e = p.Steps[0]
+	}
+	return freshItems(e) // streamcopy_l3apply.go
 }
