@@ -245,3 +245,70 @@ func TestSerializeIncludeContentType(t *testing.T) {
 		})
 	}
 }
+
+// TestSerializeProlog pins the order of what fn:serialize writes ahead of the
+// document element, and the html and xhtml methods' doctype conditions.
+//
+// Serialization 3.1 §5.1.7: "the XML output method MUST output a document
+// type declaration immediately before the first element", so the XML
+// declaration, which XML 1.0's prolog puts first, and any comment preceding
+// the element both come ahead of it. §6.1.6 gives the xhtml method §5.1.6's
+// XML declaration rules. §6.1.7 and §7.4.6 write the bare HTML5 doctype only
+// when "any text node preceding that element in document order contains only
+// whitespace characters".
+func TestSerializeProlog(t *testing.T) {
+	for _, tc := range []struct {
+		name, expr, want string
+	}{
+		{
+			"declaration before doctype",
+			`serialize(parse-xml('<a/>'), map{'method':'xml','doctype-system':'a.dtd','omit-xml-declaration':false()})`,
+			`<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<!DOCTYPE a SYSTEM "a.dtd">` + "\n" + `<a/>`,
+		},
+		{
+			"xhtml writes the declaration",
+			`serialize(parse-xml('<p/>'), map{'method':'xhtml','html-version':1.0,'omit-xml-declaration':false()})`,
+			`<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<p></p>`,
+		},
+		{
+			"xml comment stays before doctype",
+			`serialize(parse-xml('<!--c--><a/>'), map{'method':'xml','doctype-system':'a.dtd'})`,
+			`<!--c--><!DOCTYPE a SYSTEM "a.dtd">` + "\n" + `<a/>`,
+		},
+		{
+			"xhtml5 comment stays before doctype",
+			`serialize(parse-xml('<!--c--><html/>'), map{'method':'xhtml'})`,
+			`<!--c--><!DOCTYPE html>` + "\n" + `<html></html>`,
+		},
+		{
+			"html comment stays before doctype",
+			`serialize(parse-xml('<!--c--><html/>'), map{'method':'html'})`,
+			`<!--c--><!DOCTYPE html>` + "\n" + `<html></html>`,
+		},
+		{
+			"html text before element withholds doctype",
+			`serialize(('x', parse-xml('<html/>')), map{'method':'html'})`,
+			`x<html></html>`,
+		},
+		{
+			"xhtml text before element withholds doctype",
+			`serialize(parse-xml-fragment('x<html/>'), map{'method':'xhtml'})`,
+			`x<html></html>`,
+		},
+		{
+			"whitespace before element keeps doctype",
+			`serialize(parse-xml-fragment(' <html/>'), map{'method':'html'})`,
+			` <!DOCTYPE html>` + "\n" + `<html></html>`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := evalSerialize(t, tc.expr)
+			if err != nil {
+				t.Fatalf("serialize: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

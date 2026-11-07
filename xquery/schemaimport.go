@@ -257,7 +257,9 @@ func (l *schemaLoader) load(imp schemaImport, base string) error {
 	if len(locations) == 0 {
 		locations = []string{""}
 	}
-	var lastErr error
+	// invalid is a schema a hint found that failed schema validity: if no
+	// other hint answers, that is the error, XQST0012 rather than XQST0059.
+	var lastErr, invalid error
 	for _, loc := range locations {
 		rc, resolved, err := l.opts.SchemaResolver.Resolve(imp.ns, loc, base)
 		if err != nil {
@@ -277,11 +279,17 @@ func (l *schemaLoader) load(imp schemaImport, base string) error {
 			if errors.Is(err, xdm.ErrResourceLimit) {
 				return err
 			}
+			if xdm.ErrorCode(err) == "XQST0012" {
+				invalid = err
+			}
 			lastErr = err
 			continue
 		}
 		mergeXSDSchema(l.merged, loaded)
 		return nil
+	}
+	if invalid != nil {
+		return invalid
 	}
 
 	// §4.11 gives XQST0059 for a schema import that cannot be satisfied:
@@ -399,9 +407,16 @@ func (l *schemaLoader) parse(r io.Reader, baseURI, ns string) (*xsd.Schema, erro
 	if l.over != nil {
 		return nil, l.over
 	}
+	// A document that parsed but does not assemble is a schema that was
+	// found and is not valid. XQuery 3.1 §4.11: "It is a static error
+	// [err:XQST0012] if the set of definitions contained in all schemas
+	// imported by a Prolog do not satisfy the conditions for schema validity
+	// specified in Sections 3 and 5 of [XML Schema 1.0] or [XML Schema 1.1]
+	// Part 1". It was reported as XQST0059, which is for an import the
+	// processor cannot satisfy by finding a schema at all.
 	if err != nil {
 		return nil, fmt.Errorf(
-			"XQST0059: the schema for namespace %q could not be loaded: %w",
+			"XQST0012: the schema for namespace %q is not a valid schema: %w",
 			ns, err)
 	}
 	return loaded, nil

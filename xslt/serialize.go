@@ -499,6 +499,9 @@ type serializer struct {
 	// pendingDoctype records that a document type declaration is owed, to be
 	// written immediately before the document element.
 	pendingDoctype bool
+	// proseBefore records that text other than whitespace was written while
+	// the doctype was pending, so ahead of the document element.
+	proseBefore bool
 	// atTop suppresses the leading newline before the first top-level node.
 	atTop bool
 	// html selects the HTML output method, which differs from XML in three
@@ -682,6 +685,12 @@ func (s *serializer) writeDoctypeFor(n *xdm.Node) {
 		return
 	}
 	if s.html5 && s.opts.DocTypeSystem == "" {
+		// Both bare forms are written only if "any text node preceding that
+		// element in document order contains only whitespace characters"
+		// (§6.1.7, and §7.4.6 for html); escapeText records it.
+		if s.proseBefore {
+			return
+		}
 		if s.xhtml {
 			// The declaration is written only for a document element that
 			// really is html in the XHTML namespace, and it names the
@@ -1595,6 +1604,9 @@ func mayIndentType(n *xdm.Node) bool {
 // because doing it unconditionally is cheaper than scanning for that sequence
 // and produces output every parser accepts.
 func (s *serializer) escapeText(text string) {
+	if s.pendingDoctype && !xdm.IsXMLWhitespace(text) {
+		s.proseBefore = true
+	}
 	// The text is split at the characters the map claims, so that
 	// normalisation applies to the runs between them and not to the map's
 	// inputs or its outputs. See mapSegments.
