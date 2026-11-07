@@ -99,3 +99,22 @@ func TestAddedMetaReplacesOnlyHeadChildren(t *testing.T) {
 		t.Errorf("want %s in:\n%s", want, out)
 	}
 }
+
+// TestHTML4XHTMLHeadMetaIsClosed: below HTML5 an XHTML-namespace element is
+// an XML island to the html method (Serialization 3.1 §7.1), so the meta it
+// adds to such a head is closed; it was written as a bare HTML start tag,
+// which no XML reader of the island accepts (result-document-1402).
+func TestHTML4XHTMLHeadMetaIsClosed(t *testing.T) {
+	for _, c := range []struct{ version, want string }{
+		{"", `<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"></meta><title>`},
+		{` html-version="5"`, `<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><title>`},
+	} {
+		sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" ` +
+			`xmlns="http://www.w3.org/1999/xhtml">` +
+			`<xsl:output method="html" encoding="UTF-8" indent="no"` + c.version + `/>` +
+			`<xsl:template match="/"><html><head><title>t</title></head></html></xsl:template></xsl:stylesheet>`
+		if out := run(t, sheet, `<r/>`); !strings.Contains(out, c.want) {
+			t.Errorf("html-version%q: want %s in\n%s", c.version, c.want, out)
+		}
+	}
+}

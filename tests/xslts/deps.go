@@ -42,10 +42,12 @@ var supportedFeatures = map[string]bool{
 	// listed unsupported long after it stopped being so, which excluded two
 	// hundred cases that pass.
 	"higher_order_functions": true,
-	// Streaming is accepted: the engine builds the tree and evaluates the
-	// streamable construct against it. That answers every streaming case
-	// whose result does not depend on bounded memory, which is what the
-	// suite's assertions test.
+	// Streaming is implemented: a guaranteed-streamable xsl:source-document,
+	// xsl:merge source or TransformReader principal input is read through a
+	// cursor and not built (xslt/streamexec.go, streammain.go,
+	// streammerge.go). The cases where it still builds the tree are listed
+	// in docs/known-gaps.md; the suite's assertions test results, which are
+	// the same either way, and tests/streamdiff compares the two.
 	"streaming": true,
 	// streaming-fallback is NOT claimed. It asserts the opposite of the
 	// §19.8 analysis: that a construct which is not guaranteed-streamable is
@@ -56,6 +58,14 @@ var supportedFeatures = map[string]bool{
 	// would score a refusal we make on purpose as a failure.
 	// XML 1.1 documents are parsed; the version declaration is accepted.
 	"XML_1.1": true,
+	// The html method serialises both HTML 4 and HTML5 (Serialization 3.1
+	// §7): the requested HTML version (html-version, else version) chooses
+	// the rules in xslt/serialize.go, SERE0014 for the C1 range below 5.0,
+	// void elements, prefix normalisation and <!DOCTYPE html> at 5.0. With
+	// neither parameter the HTML 4 rules apply, which is what
+	// default_html_version 4 asks for (see inScope).
+	"HTML4": true,
+	"HTML5": true,
 	// XPath_3.1 is not listed here: like XSD_1.1 it is answered by supports,
 	// because whether the processor has it is a question about the XSLT
 	// version being measured. See the commentary there.
@@ -68,8 +78,6 @@ var unsupportedFeatures = map[string]string{
 	// XSD_1.1 is not listed: it is answered by supports, because whether the
 	// processor has it is a question about the XSLT version being measured
 	// rather than about the engine. See the commentary there.
-	"HTML4":                                 "the HTML output method targets HTML5",
-	"HTML5":                                 "not implemented",
 	"xsl-stylesheet-processing-instruction": "not implemented",
 }
 
@@ -231,8 +239,9 @@ func inScope(set *TestSet, tc *TestCase, target Target) (bool, string) {
 	}
 
 	// A streamability test is XSLT 3.0 by construction, whatever it declares.
-	// Streaming is not implemented at either target, so the exclusion does not
-	// depend on one.
+	// It asserts the §19.8 posture and sweep the analysis assigns, which this
+	// processor computes but does not report, so it is excluded at either
+	// target.
 	if tc.Test.PostureAndSweep != nil {
 		return false, "streamability (XSLT 3.0)"
 	}
@@ -347,6 +356,12 @@ func inScope(set *TestSet, tc *TestCase, target Target) (bool, string) {
 		switch o.XMLName.Local {
 		case "spec", "feature":
 			// Modelled above; encoding/xml also collects them here.
+		case "default_html_version":
+			// The default HTML version is implementation-defined (XSLT 3.0
+			// §26, xsl:output); this processor's is 4 (see "HTML4" above).
+			if o.Value != "4" {
+				return false, "depends on default_html_version " + o.Value
+			}
 		case "unicode-version", "unicode-normalization-form",
 			"default-language", "language", "languages_for_numbering",
 			"combinations_for_numbering", "year_component_values",

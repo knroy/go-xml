@@ -1184,6 +1184,14 @@ func (s *serializer) openTag(n *xdm.Node, depth, base int, nonEmpty bool) (elemS
 					// same bytes does not take the slash as part of the last
 					// attribute value.
 					s.writeString(`" />`)
+				} else if s.htmlIsland(n) {
+					// A head in an XML island (an XHTML-namespace head
+					// below HTML5) gets a meta that is closed: "the HTML
+					// output method will not output an element differently
+					// from the XML output method unless the element is to
+					// be serialized as an HTML element" (Serialization 3.1
+					// §7.1). result-document-1402 asks for this spelling.
+					s.writeString(`"></meta>`)
 				} else {
 					s.writeString(`">`)
 				}
@@ -1737,12 +1745,21 @@ func (s *serializer) escapeTextRune(r rune) {
 	//
 	// A C0 control other than TAB and LF reaches here only under XML 1.1,
 	// where it is written as a reference; textErr refused it under 1.0.
+	//
+	// The C1 range reaches here under the html method only at HTML5, where
+	// it is not SERE0014 (Serialization 3.1 \u00a77.1: "if such characters
+	// appear ... and the value of the requested HTML version is less than
+	// 5.0"). It is written as a reference, as writeAttrRune writes it in
+	// an attribute value: output-0195a and -0195b accept only that.
 	if !s.html || s.xhtml {
 		if r == '\r' || r == '\u2028' || (r >= 0x7F && r <= 0x9F) ||
 			r < 0x20 && r != '\t' && r != '\n' {
 			s.writeCharRef(r)
 			return
 		}
+	} else if r >= 0x7F && r <= 0x9F {
+		s.writeCharRef(r)
+		return
 	}
 	switch r {
 	case '&':

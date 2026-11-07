@@ -1025,6 +1025,10 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 	case *xpath.CastExpr:
 		return w.slot(x.Operand, func(y xpath.Expr) { x.Operand = y }, useAtomize)
 	case *xpath.InstanceOfExpr:
+		if y := instanceAllOf(x, w.focus, w.key); y != nil { // streamsplit_instance.go
+			put(y)
+			return w.walk(y, put, use)
+		}
 		return w.slot(x.Operand, func(y xpath.Expr) { x.Operand = y }, useKeep)
 	case *xpath.TreatExpr:
 		// The treat tests the items as they are: nodes, not their values.

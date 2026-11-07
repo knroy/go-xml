@@ -76,3 +76,17 @@ func TestSerializeTextErrorWritesNothing(t *testing.T) {
 		}
 	}
 }
+
+// Under HTML5 the C1 range is not SERE0014 (Serialization 3.1 §7.1), and it
+// is written as a character reference in text, as it already was in an
+// attribute value: output-0195a and -0195b accept nothing else.
+func TestSerializeHTML5C1TextIsReferenced(t *testing.T) {
+	var out bytes.Buffer
+	err := Serialize(&out, xdm.Sequence{xdm.NewString("a\u009fb")}, OutputSettings{Method: "html", HTMLVersion: "5.0"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "a&#159;b" {
+		t.Errorf("got %q, want %q", got, "a&#159;b")
+	}
+}
