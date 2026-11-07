@@ -482,7 +482,13 @@ required between attributes (§3.1 [40]/[44]) and after a PI target (§2.6
 [16]); a version `1.x` other than `1.1` is read as 1.0 (§2.8, Fifth Edition);
 and `Decoder.Literal` lets `xdm` refuse character data outside the document
 element that came from a reference or a CDATA section (§2.1 [1], [27] `Misc`),
-which `&#32;` or `<![CDATA[]]>` did not reveal by its text. None of them
+which `&#32;` or `<![CDATA[]]>` did not reveal by its text. The XML
+declaration is now read only at the very start of the stream and its
+pseudo-attributes are parsed by [23]-[26] rather than found by substring
+search (§2.8; §2.6 [17] reserves every other spelling of `xml`), which `xdm`
+already enforced itself; the one observable change is that `version = "1.1"`,
+with the white space [25] `Eq` allows, now declares 1.1 rather than being read
+as 1.0. None of them
 changed a result in the corpora above. The kept leniencies are listed in
 [known-gaps.md](known-gaps.md#the-tokeniser-keeps-six-leniencies).
 

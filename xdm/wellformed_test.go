@@ -202,3 +202,17 @@ func TestParseXMLDeclMatchesGrammar(t *testing.T) {
 		t.Errorf("only %d declarations accepted; the cases do not reach the grammar", n)
 	}
 }
+
+// TestXMLDeclSpacedVersionIsRead: [25] Eq is S? '=' S?, so `version = "1.1"`
+// declares XML 1.1. The tokeniser found the version by substring search for
+// `version="`, read this one as absent and parsed the document as 1.0, so a
+// character reference legal only in 1.1 was refused (X4).
+func TestXMLDeclSpacedVersionIsRead(t *testing.T) {
+	tr, err := ParseString(`<?xml version = "1.1"?><a>&#x1;</a>`, ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.XMLVersion != "1.1" || tr.Root.StringValue() != "\x01" {
+		t.Errorf("version %q, value %q", tr.XMLVersion, tr.Root.StringValue())
+	}
+}
