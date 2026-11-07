@@ -23,7 +23,7 @@ Current position:
 | XSLT 3.0 | 99.85% — 11,505 of 11,522 in scope (17 failing) |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 3,425 `func Test` declarations, clean under `-race` |
+| Tests | 3,426 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -124,7 +124,14 @@ void-element table is version-dependent (`basefont`/`frame`/`isindex` are void
 in HTML 4 only; `keygen`/`source`/`track`/`wbr` in HTML 5 only), which is why
 nothing could be fixed until `html-version` was actually read. It is now read
 in both the map and element forms — previously the map form accepted it and
-the element form returned `SEPM0017` for the same parameter.
+the element form returned `SEPM0017` for the same parameter. When it is
+absent, the map form uses 5, the default in F&O 3.1's `fn:serialize` table.
+The element form and the one-argument call leave the default
+implementation-defined, and use 4, the same as `xsl:output`. In the map form an
+entry holding `()` takes that parameter's default, as if it were absent. Under
+html-version 5, the xhtml method of `fn:serialize` now writes the bare
+`<!DOCTYPE html>` (Serialization 3.1 §6.1.7). It uses the element test that
+`xsl:output` already used, now shared in `internal/htmlser`.
 
 The table is duplicated from `xslt/serialize.go` rather than shared, and both
 copies now name the other. No import cycle forbids sharing it (`xslt` imports

@@ -1,6 +1,9 @@
 package xpath
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestSerializeHTMLVoidElements pins that the html output method writes
 // HTML's empty-element syntax rather than XML's.
@@ -60,11 +63,14 @@ func TestSerializeHTMLVoidElementsAreVersioned(t *testing.T) {
 	for _, tc := range []struct {
 		element, version, want string
 	}{
-		// HTML 4 only. Void with no version given, which defaults to 4.
-		{"frame", "", "<frame>"},
+		// HTML 4 only. With no version given the map form's default is 5
+		// (F&O 3.1 fn:serialize, the parameter table: "html-version
+		// xs:decimal? 5"), so frame is not void there.
+		{"frame", "", "<frame></frame>"},
 		{"frame", "4.0", "<frame>"},
 		{"frame", "5.0", "<frame></frame>"},
 		// HTML 5 only.
+		{"wbr", "", "<wbr>"},
 		{"wbr", "4.0", "<wbr></wbr>"},
 		{"wbr", "5.0", "<wbr>"},
 		// Void in both, so the version must not move it.
@@ -121,12 +127,18 @@ func TestSerializeXHTMLEmptyElements(t *testing.T) {
 		`</output:serialization-parameters>')/*`
 	const xhtmlOut = `<html xmlns="http://www.w3.org/1999/xhtml"><br /><p></p></html>`
 	for _, tc := range []struct{ name, expr, want string }{
-		{"map form", `serialize(` + doc + `, map{'method':'xhtml'})`, xhtmlOut},
+		// The map form defaults html-version to 5, which also asks for the
+		// bare XHTML5 doctype (§6.1.7); the element form defaults to 4.
+		{"map form", `serialize(` + doc + `, map{'method':'xhtml'})`, "<!DOCTYPE html>\n" + xhtmlOut},
 		{"element form", `serialize(` + doc + `, ` + elemParams + `)`, xhtmlOut},
 		{"no namespace html5", `serialize(parse-xml('<r><br/><p/></r>'), ` +
 			`map{'method':'xhtml','html-version':5})`, `<r><br /><p></p></r>`},
 		{"no namespace html4", `serialize(parse-xml('<r><br/></r>'), ` +
-			`map{'method':'xhtml'})`, `<r><br></br></r>`},
+			`map{'method':'xhtml','html-version':4})`, `<r><br></br></r>`},
+		// The map form defaults html-version to 5, so a no-namespace void
+		// name is recognised as HTML there too.
+		{"no namespace map default", `serialize(parse-xml('<r><br/></r>'), ` +
+			`map{'method':'xhtml'})`, `<r><br /></r>`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := evalSerialize(t, tc.expr)
@@ -135,6 +147,76 @@ func TestSerializeXHTMLEmptyElements(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("serialize xhtml = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSerializeHTMLVersionDefault pins where the html-version default comes
+// from. For the map form F&O 3.1 fn:serialize fixes it: "The default value is
+// used when the map contains no entry for the parameter in question, and also
+// when an entry is present, with the empty sequence as its value", and the
+// table gives "html-version xs:decimal? 5". For the element form and the
+// one-argument call the values of absent parameters are implementation-defined,
+// and there this serialiser keeps HTML 4, the same default xsl:output has.
+func TestSerializeHTMLVersionDefault(t *testing.T) {
+	const elemParams = `parse-xml('<output:serialization-parameters ` +
+		`xmlns:output="http://www.w3.org/2010/xslt-xquery-serialization">` +
+		`<output:method value="html"/></output:serialization-parameters>')/*`
+	for _, tc := range []struct{ name, params, want string }{
+		{"map absent", `map{'method':'html'}`, "<frame></frame>"},
+		{"map empty", `map{'method':'html','html-version':()}`, "<frame></frame>"},
+		{"map 4", `map{'method':'html','html-version':4}`, "<frame>"},
+		{"element form", elemParams, "<frame>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := evalSerialize(t,
+				`serialize(parse-xml('<frame/>'), `+tc.params+`)`)
+			if err != nil {
+				t.Fatalf("serialize: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("serialize %s = %q, want %q", tc.params, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSerializeXHTML5Doctype pins Serialization 3.1 §6.1.7: under
+// html-version 5 with no doctype-system, the xhtml method writes
+// "<!DOCTYPE " + the local name + ">" before a document element that is an
+// HTML element named html without regard to case -- the XHTML namespace or
+// no namespace -- and nothing before any other element.
+func TestSerializeXHTML5Doctype(t *testing.T) {
+	const ns = `xmlns="http://www.w3.org/1999/xhtml"`
+	for _, tc := range []struct{ name, doc, params, want string }{
+		{"xhtml namespace", `<html ` + ns + `/>`, `'html-version':5`,
+			`<!DOCTYPE html>` + "\n" + `<html ` + ns + `></html>`},
+		{"map default is 5", `<html ` + ns + `/>`, ``,
+			`<!DOCTYPE html>` + "\n" + `<html ` + ns + `></html>`},
+		{"case kept", `<HtMl/>`, `'html-version':5`,
+			`<!DOCTYPE HtMl>` + "\n" + `<HtMl></HtMl>`},
+		{"prefix dropped", `<h:html xmlns:h="http://www.w3.org/1999/xhtml"/>`,
+			`'html-version':5`, "<!DOCTYPE html>\n"},
+		{"html 4", `<html ` + ns + `/>`, `'html-version':4`, `<html ` + ns + `></html>`},
+		{"not html", `<body ` + ns + `/>`, `'html-version':5`, `<body ` + ns + `></body>`},
+		{"foreign namespace", `<html xmlns="urn:x"/>`, `'html-version':5`,
+			`<html xmlns="urn:x"></html>`},
+		{"doctype-system wins", `<html/>`, `'html-version':5,'doctype-system':'s.dtd'`,
+			`<!DOCTYPE html SYSTEM "s.dtd">` + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := `map{'method':'xhtml'`
+			if tc.params != "" {
+				params += `,` + tc.params
+			}
+			got, err := evalSerialize(t,
+				`serialize(parse-xml('`+tc.doc+`'), `+params+`})`)
+			if err != nil {
+				t.Fatalf("serialize: %v", err)
+			}
+			if !strings.HasPrefix(got, tc.want) {
+				t.Errorf("serialize %s = %q, want prefix %q", params, got, tc.want)
 			}
 		})
 	}

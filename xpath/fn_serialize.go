@@ -83,7 +83,23 @@ func registerSerialize(l *Library) {
 		// It is written only for the XML-family methods. The html method has
 		// its own bare HTML5 declaration above, and writing a second one
 		// would produce two.
-		if (opts.method == "xml" || opts.method == "xhtml") &&
+		//
+		// XHTML5 has a bare declaration of its own. Serialization 3.1
+		// §6.1.7: "If the value of the html-version serialization parameter
+		// is 5.0, the doctype-system serialization parameter is absent, the
+		// first element node child of the document node that is to be
+		// serialized is recognized as an HTML element, the local part of the
+		// QName of which is equal to the string HTML, without regard to case
+		// ... then the XHTML output method MUST output a document type
+		// declaration immediately before the first element, with no public
+		// or system identifier. The name following <!DOCTYPE MUST be the same
+		// as the local part of the name of the element." htmlser holds the
+		// element test, shared with xslt/serialize.go.
+		if opts.method == "xhtml" && opts.html5() && opts.doctypeSystem == "" {
+			if n := documentElement(seqArg(args, 0)); n != nil && htmlser.XHTML5Doctype(n) {
+				sb.WriteString("<!DOCTYPE " + n.Name().Local + ">\n")
+			}
+		} else if (opts.method == "xml" || opts.method == "xhtml") &&
 			(opts.doctypeSystem != "" || opts.doctypePublic != "") {
 			if name := documentElementName(seqArg(args, 0)); name != "" {
 				writeDoctype(sb, name, opts)
@@ -1289,6 +1305,14 @@ func (o serializeOptions) escapesURIAttrs() bool {
 // sequence with no element to be the document element gets no declaration at
 // all rather than one naming nothing.
 func documentElementName(seq xdm.Sequence) string {
+	if n := documentElement(seq); n != nil {
+		return elementName(n)
+	}
+	return ""
+}
+
+// documentElement returns the element documentElementName names, or nil.
+func documentElement(seq xdm.Sequence) *xdm.Node {
 	for _, it := range seq {
 		n, ok := it.(*xdm.Node)
 		if !ok {
@@ -1296,16 +1320,16 @@ func documentElementName(seq xdm.Sequence) string {
 		}
 		switch n.Kind() {
 		case xdm.KindElement:
-			return elementName(n)
+			return n
 		case xdm.KindDocument:
 			for c := range n.Children() {
 				if c.Kind() == xdm.KindElement {
-					return elementName(c)
+					return c
 				}
 			}
 		}
 	}
-	return ""
+	return nil
 }
 
 // writeDoctype writes the document type declaration.
@@ -1361,7 +1385,8 @@ func (o *serializeOptions) isVoidElement(local string) bool {
 // html5 reports whether the HTML version asked for is 5 or later, which is
 // what selects between the two version-specific void-element lists. The
 // spelling test is xslt/serialize.go's: a prefix match on "5", so that "5.0"
-// and "5" both say HTML 5 and an absent parameter says HTML 4.
+// and "5" both say HTML 5 and an absent parameter says HTML 4. The map form
+// is never absent: mapSerializationParams defaults it to 5.
 func (o *serializeOptions) html5() bool {
 	v := o.htmlVersion
 	if v == "" {
@@ -1513,6 +1538,14 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 		return a.String(), nil
 	}
 
+	// The map form, unlike the element form, has a fixed default for
+	// html-version. F&O 3.1 fn:serialize: "The default value is used when the
+	// map contains no entry for the parameter in question, and also when an
+	// entry is present, with the empty sequence as its value", and its table
+	// gives "html-version xs:decimal? 5". The element form and the
+	// one-argument call leave absent parameters implementation-defined, and
+	// keep HTML 4, as xsl:output does.
+	opts.htmlVersion = "5"
 	err := m.Entries(func(key *xdm.Atomic, val xdm.Sequence) error {
 		// Serialization 3.1 §3: the key naming a parameter defined by these
 		// specifications is an xs:string. An xs:QName key is reserved for an
@@ -1533,6 +1566,15 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 		// is ignored too, and both cases assert on the output rather than on
 		// an error.
 		if key.Type == xdm.TypeQName {
+			return nil
+		}
+		// An entry holding the empty sequence is the same as no entry: F&O
+		// 3.1 fn:serialize, "The default value is used when the map contains
+		// no entry for the parameter in question, and also when an entry is
+		// present, with the empty sequence as its value". Every parameter's
+		// default is what opts already holds, so the entry is skipped here,
+		// once, rather than each reader raising XPTY0004 for ().
+		if len(val) == 0 {
 			return nil
 		}
 		name := key.String()
@@ -1593,11 +1635,8 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 			// The string " omit " stays a type error: "omit" is a spelling
 			// the *element* form needs because an attribute can carry
 			// nothing but a string, and the map form, being typed, says the
-			// same thing with () instead (serialize-xml-131a).
-			if len(val) == 0 {
-				opts.standalone = ""
-				break
-			}
+			// same thing with () instead (serialize-xml-131a), which the
+			// empty-entry skip above handles.
 			v, err := boolParam(name, val)
 			if err != nil {
 				return err
@@ -1717,7 +1756,7 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 			// html method minimises against. Serialization 3.1 types it as a
 			// decimal, but only its leading "5" is ever tested, so it is read
 			// through the same string reader the element form uses and kept
-			// as written.
+			// as written. The empty sequence keeps the default, 5.
 			v, err := strParam(name, val)
 			if err != nil {
 				return err
