@@ -921,6 +921,10 @@ Every remote-reference mechanism is off unless you turn it on.
   `cmd/go-xml`, which the other three joined on 2026-09-10. Each read is
   bounded by `FileResolver.MaxBytes`, 64 MB by default, and a larger file is
   refused rather than truncated.
+  `FileResolver.OpenDocument`, its `xslt.StreamingDocumentResolver` method,
+  opens through the same `os.Root`; a host resolver that implements that
+  interface has a streamable `xsl:source-document` stream its documents (see
+  [docs/options.md](docs/options.md#xsltstreamingdocumentresolver)).
   `fn:transform`'s `stylesheet-location` and `source-location` read through
   the same resolver, so a nested transformation reaches nothing `fn:doc`
   could not — from a stylesheet, and from an XQuery query or `xpath.Eval`

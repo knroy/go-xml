@@ -552,7 +552,7 @@ res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{
 | Field | Type | Zero value | What it does |
 |---|---|---|---|
 | `Params` | `map[string]xdm.Sequence` | none | Values for top-level `xsl:param`, keyed by Clark name (`{uri}local`, or plain `local` for no namespace). |
-| `Documents` | `xpath.DocumentResolver` | disabled | Resolves `fn:doc` and `fn:document`, and `fn:transform`'s `stylesheet-location` and `source-location`. **Nil disables them**, which is the default: a stylesheet that can open arbitrary URIs is an SSRF and file-disclosure vector. |
+| `Documents` | `xpath.DocumentResolver` | disabled | Resolves `fn:doc` and `fn:document`, and `fn:transform`'s `stylesheet-location` and `source-location`. **Nil disables them**, which is the default: a stylesheet that can open arbitrary URIs is an SSRF and file-disclosure vector. A resolver that also implements `xslt.StreamingDocumentResolver` has a streamable `xsl:source-document` or `xsl:merge-source` stream its documents; see [below](#xsltstreamingdocumentresolver). |
 | `Collections` | `xpath.CollectionResolver` | disabled | Resolves `fn:collection`. **Nil disables it**, and setting `Documents` does not set this — the two are separate switches on purpose. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Template recursion limit, and the bound on `fn:transform` nesting. Catches a stylesheet with no base case. |
 | `MaxItems` | `int` | `xpath.MaxItems` = 5,000,000 | Items one transformation may materialise, `XPDY0130` past it. Negative removes the bound; nested `fn:transform` and `xsl:evaluate` keep the caller's. |
@@ -908,6 +908,53 @@ r, err := xslt.NewFileResolver("/srv/xsl")
 if err != nil { return err }
 r.UnparsedText = true
 r.MaxBytes = 4 << 20   // this deployment's files are small
+```
+
+### xslt.StreamingDocumentResolver
+
+```go
+type StreamingDocumentResolver interface {
+    OpenDocument(uri, base string) (rc io.ReadCloser, docURI string, err error)
+}
+```
+
+An optional interface for the `TransformOptions.Documents` resolver. When the
+resolver implements it, a streamable `xsl:source-document` or a streamed
+`xsl:merge-source` reads the document from `OpenDocument`'s reader as it parses
+it, instead of building the tree `ResolveDocument` returns. A resolver that
+does not implement it keeps the tree. `uri` and `base` are `ResolveDocument`'s.
+
+- **`docURI`** is the document's absolute URI: its base URI and document URI,
+  and the URI XTDE1500 records as read, as `fn:doc`'s tree's document URI is.
+  A document opened with an empty `docURI`, or one that fails to open, is read
+  as a tree, so `ResolveDocument` reports the error.
+- **Closing.** The reader is closed once read, on an error and on
+  cancellation, and when the stream is declined after it was opened.
+- **Limits.** The reader is parsed with the zero `xdm.ParseOptions`' limits
+  (64 MB, 10M nodes, depth 1,000, no DOCTYPE) and the transform's entity
+  allowance, whatever the resolver's own parse allows. A document the stream
+  refuses (a DOCTYPE, a limit, a malformed tail) re-runs the instruction on
+  the tree, which calls `ResolveDocument`; a cancelled context does not.
+- **Stability.** A streamed document is not cached: a later `fn:doc` of the
+  same URI asks `ResolveDocument`, and gets other nodes. XSLT 3.0 §18.1.2
+  allows it: `xsl:source-document` "offers no guarantee that the resulting
+  document will be stable".
+
+`xslt.FileResolver` implements it: `OpenDocument` opens the file confined to
+`Roots` by `os.Root`, as `ResolveDocument` does, and reads nothing. Its own
+streaming reads with its `MaxBytes`, `MaxNodes` and `AllowDOCTYPE`, and
+declines a document its cache already holds, so `fn:doc` stays stable.
+
+```go
+type memDocs map[string]string
+
+func (m memDocs) ResolveDocument(uri, base string) (*xdm.Tree, error) {
+    return xdm.ParseString(m[uri], xdm.ParseOptions{DocumentURI: "mem:/" + uri})
+}
+
+func (m memDocs) OpenDocument(uri, base string) (io.ReadCloser, string, error) {
+    return io.NopCloser(strings.NewReader(m[uri])), "mem:/" + uri, nil
+}
 ```
 
 ### XInclude

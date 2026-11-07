@@ -1622,6 +1622,10 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 			strip, d = v.sheet.whitespaceStripper(pkg), v.inner
 		case burstResolver:
 			br = v
+		case StreamingDocumentResolver:
+			o := &openedResolver{r: v}
+			defer o.release()
+			br = o
 		default:
 			return false, nil
 		}
@@ -1837,30 +1841,45 @@ func (r *FileResolver) streamDocAs(ctx *xpath.Context, uri, base string, docURI 
 	if err != nil {
 		return err
 	}
-	opts := r.parseOptions(path, false).WithEntityBudget(ctx.EntityBudget())
+	f, err := r.openConfinedFile(path, uri)
+	if err != nil {
+		return err
+	}
+	opts := r.parseOptions(path, false)
 	if !docURI {
 		opts.DocumentURI = ""
 	}
-	return r.openConfined(path, uri, func(f *os.File) error {
-		max, lim := r.byteLimit()
-		tooBig := fmt.Errorf("%q exceeds the %d byte limit", uri, max)
-		var src io.Reader = f
-		if max >= 0 {
+	max, lim := r.byteLimit()
+	return streamOpened(ctx, f, uri, opts, max, lim, fn)
+}
+
+// streamOpened reads rc, the document uri names, on a cursor fn reads, with
+// opts and the context's entity allowance, and closes it. max, unless
+// negative, is a byte limit over the whole of rc, read to lim (byteLimit),
+// refused as readLimited refuses one; a file over it is refused unread.
+func streamOpened(ctx *xpath.Context, rc io.ReadCloser, uri string, opts xdm.ParseOptions, max, lim int64,
+	fn func(*xdmstream.Cursor) error) error {
+
+	defer rc.Close()
+	tooBig := fmt.Errorf("%q exceeds the %d byte limit", uri, max)
+	var src io.Reader = rc
+	if max >= 0 {
+		if f, ok := rc.(*os.File); ok {
 			if fi, err := f.Stat(); err == nil && fi.Size() > max {
 				return tooBig
 			}
-			src = io.LimitReader(f, lim)
 		}
-		cr := &countedReader{r: src}
-		c := xdmstream.Open(cr, opts)
-		defer c.Close()
-		c.Cancel(ctx.Err)
-		if err := fn(c); err != nil {
-			return err
-		}
-		if max >= 0 && cr.n > max {
-			return tooBig
-		}
-		return nil
-	})
+		src = io.LimitReader(rc, lim)
+	}
+	cr := &countedReader{r: src}
+	c := xdmstream.Open(cr, opts.WithEntityBudget(ctx.EntityBudget()))
+	defer c.Close()
+	c.Cancel(ctx.Err)
+	if err := fn(c); err != nil {
+		return err
+	}
+	if max >= 0 && cr.n > max {
+		return tooBig
+	}
+	return nil
 }

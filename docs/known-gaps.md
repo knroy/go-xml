@@ -864,7 +864,9 @@ plan:
   construct, a proof that the stream's first error is the tree's, which the
   differential checks and no construct has yet.
 - *A `DocumentResolver` that is not a `FileResolver`* (0 W3C cases: the
-  harness uses `FileResolver`): see the bullet below. It needs new API.
+  harness uses `FileResolver`): closed at round SG. A resolver that implements
+  `xslt.StreamingDocumentResolver` streams (the bullet below); one that does
+  not keeps the tree, by its own choice.
 - *An unverified or unknown §19.8 verdict* (static, the analysis's figure:
   56 unverified and 100 unknown containers in the W3C streaming stylesheets,
   §19.8 below). A case counts as streamed when any of its containers streams,
@@ -937,19 +939,14 @@ Also:
   implementation-dependent and differs between any two parses.
 - **`xsl:break` still reads the rest of the file**, so that a malformed tail is
   an error as in tree mode.
-- **Only `FileResolver` streams**; another `DocumentResolver` builds the tree.
-  The streamed document is not cached, so a later `fn:doc` of it reads it again.
-  `xpath.DocumentResolver` returns a built `*xdm.Tree`, so there is nothing to
-  stream through it, and the one exported interface with a reader,
-  `xdm.EntityResolver`, resolves external entities, which a document is not.
-  The design, which needs new exported API and the owner's approval: an
-  optional `xslt.StreamingDocumentResolver` with
-  `OpenDocument(uri, base string) (io.ReadCloser, docURI string, err error)`,
-  tried by `executeStream` where it now asks for `burstResolver`, the stream
-  parsed with `xdm.ParseOptions` the resolver supplies (or the defaults) and
-  `TransformOptions`' byte and node limits; `readDocResolver` and
-  `stripSpaceResolver` already wrap any resolver, so XTDE1500 and stripping
-  carry over.
+- **A `DocumentResolver` streams only through `xslt.StreamingDocumentResolver`**;
+  one without `OpenDocument` builds the tree. A streamed document is not
+  cached, so a later `fn:doc` of it reads it again (XSLT 3.0 §18.1.2: no
+  stability guarantee). A resolver other than `FileResolver` streams with the
+  zero `xdm.ParseOptions`' limits (64 MB, 10M nodes, depth 1,000, no DOCTYPE),
+  as the interface carries no options: a document over them is read once to
+  the refusal and then through `ResolveDocument` on the tree. Validation other
+  than `strip` reads such a resolver's document on the tree.
 - **The `FileResolver` limits apply to the whole file**: raise `MaxBytes` and
   `MaxNodes` to stream a document past 64 MB or 10M nodes.
 
