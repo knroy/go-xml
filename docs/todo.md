@@ -7,8 +7,8 @@ Current position:
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,244 (99.90%) |
+| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,974 / 25,000 (99.90%) |
+| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,218 / 26,244 (99.90%) |
 
 <!-- BEGIN GENERATED STATUS TABLE -->
 <!-- Generated from tests/conformance/results.json and the source tree by
@@ -23,7 +23,7 @@ Current position:
 | XSLT 3.0 | 99.85% — 11,501 of 11,518 in scope (17 failing) |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 3,377 `func Test` declarations, clean under `-race` |
+| Tests | 3,378 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what

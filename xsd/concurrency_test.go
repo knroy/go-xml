@@ -305,18 +305,18 @@ func TestConcurrentSchemaLoading(t *testing.T) {
 	}
 }
 
-// A 1.1 construct is parsed under either version but only *honoured* under
-// 1.1, so loading a 1.1 schema with the default options gives a working 1.0
-// validator for it that silently misses the 1.1 constraints. That is a sharp
-// edge worth pinning: it is documented in docs/xsd.md, and a change that made
-// either half of it false would need to change the documentation too.
+// A 1.1 construct marked vc:minVersion="1.1" is left out under 1.0 and
+// honoured under 1.1, so one schema document serves both versions. Unmarked,
+// 1.0 refuses it (TestXSD11ConstructsUnderVersion10). docs/xsd.md describes
+// both halves.
 func TestVersionSelectsWhetherAssertionsAreHonoured(t *testing.T) {
 	const src = `
-	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           xmlns:vc="http://www.w3.org/2007/XMLSchema-versioning">
 	  <xs:element name="r">
 	    <xs:complexType>
 	      <xs:sequence><xs:element name="a" type="xs:int"/></xs:sequence>
-	      <xs:assert test="xs:int(a) gt 100"/>
+	      <xs:assert test="xs:int(a) gt 100" vc:minVersion="1.1"/>
 	    </xs:complexType>
 	  </xs:element>
 	</xs:schema>`
@@ -326,7 +326,7 @@ func TestVersionSelectsWhetherAssertionsAreHonoured(t *testing.T) {
 		version Version
 		fails   bool
 	}{
-		{Version10, false}, // parsed, not run
+		{Version10, false}, // excluded, not run
 		{Version11, true},  // run
 	} {
 		tree, err := xdm.ParseString(src, xdm.ParseOptions{})

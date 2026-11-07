@@ -658,6 +658,18 @@ func (v *validator) keySequence(target *xdm.Node, ic *IdentityConstraint) (seq [
 		// naming an element-only complex type) are the pair; both are
 		// expected invalid and both were accepted, because the key
 		// string quietly fell back to the node's string value.
+		// The same clause fails an attribute a wildcard matched but did
+		// not assess (untypedAttrs): it has no type, so no simple type.
+		// The TSTF settled W3C bug 4063 this way (idZ015, "for 1.0 this
+		// is indeed invalid"). XSD 1.1 keeps it for a lax match; a skip
+		// match never gets here (selectAttrs).
+		if _, ok := v.untypedAttrs[n]; ok {
+			v.fail(target, "cvc-identity-constraint.3",
+				"%s %q: a field selects attribute %s, which a wildcard "+
+					"matched without assessing, so it has no simple type",
+				ic.Kind, ic.Name.Local, n.Name().Local)
+			return nil, false, false
+		}
 		if v.complexTyped[n] {
 			v.fail(target, "cvc-identity-constraint.3",
 				"%s %q: a field selects an element with a complex type, "+
@@ -860,6 +872,11 @@ func (v *validator) selectAttrs(current []*xdm.Node, alt ICPathAlternative) []*x
 			}
 		}
 		for a := range v.attrs(n) {
+			// XSD 1.1 §3.11.4 clause 3: a field's result "contains
+			// zero or more ·skipped· nodes", and they give no value.
+			if v.untypedAttrs[a] {
+				continue
+			}
 			if alt.AttributeWildcard {
 				// "@*" selects every attribute, which is
 				// grammatical even though a field using it can

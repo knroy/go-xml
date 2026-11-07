@@ -392,6 +392,16 @@ type validator struct {
 	// is laxly assessed and must not be failed on this ground.
 	complexTyped map[*xdm.Node]bool
 
+	// untypedAttrs holds every attribute an attribute wildcard matched
+	// without assessing it: processContents="skip", or "lax" with no global
+	// declaration. It has no type, so a field selecting it fails §3.11.4
+	// clause 3, "must have a simple type" (W3C bug 4063, idZ015). The value
+	// is true for an attribute XSD 1.1 calls ·skipped·, which its clause 3
+	// admits in a field's result and its clause 4 leaves out of the key, so
+	// selectAttrs drops it instead. Filled, as complexTyped is, only inside
+	// a scope.
+	untypedAttrs map[*xdm.Node]bool
+
 	// defaultedAttrs holds the value of each attribute a type supplied by
 	// default rather than the document writing it, so an identity
 	// constraint's field can select it even where no attribute is recorded

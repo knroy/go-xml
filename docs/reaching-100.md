@@ -16,9 +16,9 @@ case by case; this file is about what buying them would cost.
 | XQuery 3.1 | 1 | 0 | 0 | 1 |
 | XSLT 2.0 | 8 | 0 | 0 | 8 |
 | XSLT 3.0 | 17 | 0 | 0 | 17 |
-| XSD 1.0 | 30 | 0 | 0 | 30 |
-| XSD 1.1 | 31 | 0 | 0 | 31 |
-| **Total** | **87** | **0** | **0** | **87** |
+| XSD 1.0 | 29 | 0 | 0 | 29 |
+| XSD 1.1 | 30 | 0 | 0 | 30 |
+| **Total** | **85** | **0** | **0** | **85** |
 
 XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 
@@ -31,7 +31,7 @@ refusal now get it.
 For XSD the fixable/cannot-fix split is not a judgement call: it is the suite's
 own `status` field. A case marked `accepted` is a settled expectation and so is
 real work; one marked `queried` or `stable bugNNNN` is one the W3C has itself
-challenged, and 56 of the 61 XSD disagreements are of that kind — 44 of them
+challenged, and 54 of the 59 XSD disagreements are of that kind — 44 of them
 (22 per version) are the single open bug 4113. The other five are `accepted`,
 and each is adjudicated individually in
 [conformance-gaps.md](conformance-gaps.md): two suite defects, one
@@ -53,7 +53,7 @@ cases in Part 2, not a defect. The two the suite itself declared out of scope
 left the denominator, and the harness scoring defects — chiefly the eight XSD
 `indeterminate` expectations per version that were silently scored as "must be
 invalid" — were fixed in the harness. What stands between here and 100% is
-the 87 in Part 2.
+the 85 in Part 2.
 
 The last four to fall are worth recording, because they are the shape of what
 "fixable" meant:
@@ -100,13 +100,13 @@ A ceiling bounds what the suite asks, not what the code does.
 
 ---
 
-## Part 2 — the 87 that are not work
+## Part 2 — the 85 that are not work
 
 Grouped by what would actually have to change.
 
-### 56 — the W3C disputes its own expected result
+### 54 — the W3C disputes its own expected result
 
-XSD 1.0 (28 of its 30 disagreements) and 1.1 (28 of its 31). Counted from the
+XSD 1.0 (27 of its 29 disagreements) and 1.1 (27 of its 30). Counted from the
 suite's own metadata rather than estimated: every disagreement whose `<current>`
 status is not `accepted`. The remaining 2 and 3 are `accepted` and are the only
 settled XSD expectations this validator disagrees with; they are filed below by
@@ -391,7 +391,7 @@ lands after all, by a route that had to be walked to be believed. See
 
 ## Part 3 — the honest bottom line
 
-**Reaching 100% is not a goal that survives contact with the suites.** All 87
+**Reaching 100% is not a goal that survives contact with the suites.** All 85
 remaining disagreements would require agreeing with a disputed result,
 contradicting §18.2.2, implementing vendor extensions, freezing a stale Unicode
 table, accepting invalid input, weakening a security default, returning a

@@ -68,7 +68,8 @@ type svTarget struct {
 type svField struct {
 	n       int
 	key     string
-	complex bool // the node is an element with no simple value
+	complex bool   // the node is an element with no simple value
+	untyped string // the node is this attribute, unassessed (untypedAttrs)
 }
 
 type svFieldRef struct {
@@ -211,6 +212,7 @@ func (s *streamV) icStart(f *svFrame, x int) {
 	}
 	clear(v.keyValues)
 	clear(v.defaultedAttrs)
+	clear(v.untypedAttrs)
 }
 
 // fieldNodes counts the nodes field, of the target t at frame ti, selects
@@ -255,6 +257,9 @@ func (s *streamV) fieldNodes(f *svFrame, x, ti int, t *svTarget, i int, field *I
 	for _, a := range attrs {
 		if fd.n++; fd.n == 1 {
 			fd.key = v.keyString(a)
+			if _, ok := v.untypedAttrs[a]; ok {
+				fd.untyped = a.Name().Local
+			}
 		}
 		if a.Parent() == nil {
 			delete(v.attrOwner, a) // selectAttrs' stand-in for a defaulted value
@@ -390,6 +395,12 @@ func (s *streamV) keySequence(f *svFrame, t *svTarget) svKeyed {
 			v.fail(k.tok, "cvc-identity-constraint.3",
 				"%s %q: a field selects an element with a complex type, which has no simple value",
 				ic.Kind, ic.Name.Local)
+			return svKeyed{tok: k.tok}
+		case fd.untyped != "":
+			v.fail(k.tok, "cvc-identity-constraint.3",
+				"%s %q: a field selects attribute %s, which a wildcard "+
+					"matched without assessing, so it has no simple type",
+				ic.Kind, ic.Name.Local, fd.untyped)
 			return svKeyed{tok: k.tok}
 		}
 		k.seq = append(k.seq, fd.key)

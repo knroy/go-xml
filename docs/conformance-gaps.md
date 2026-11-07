@@ -36,20 +36,20 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xquery** | QT3 — XQuery 3.1 | 30,517 | 30,516 | 100.00% | **1** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
 | **xslt** | W3C XSLT 3.0 | 11,518 | 11,501 | 99.85% | **17** |
-| **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
-| **xsd** | W3C xsdtests 1.1 | 41,598 | 41,567 | 99.93% | **31** |
+| **xsd** | W3C xsdtests 1.0 | 39,388 | 39,359 | 99.93% | **29** |
+| **xsd** | W3C xsdtests 1.1 | 41,598 | 41,568 | 99.93% | **30** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
 | **xslt** | DocBook xslTNG *(real-world)* | 578 | 578 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **87** |
+| | **Total** | | | | **85** |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 17 + 30 + 31 + 0 = 87. Measured 2026-09-11, 2026-09-29, 2026-10-01, 2026-11-04.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 17 + 29 + 30 + 0 = 85. Measured 2026-09-11, 2026-09-29, 2026-10-01, 2026-11-04, 2026-11-06.
 <!-- END GENERATED CONFORMANCE SUMMARY -->
 
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 3,377 tests.
+The unit-test suite is 3,378 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -469,9 +469,9 @@ take is evaluated on the tree. With the analysis refusing every W3C case that
 wants `XTSE3430`, `system-property('xsl:supports-streaming')` reports `yes`
 since 2026-11-03; `streaming-fallback` is not claimed.
 
-## xsd — 61 disagreements
+## xsd — 59 disagreements
 
-**XSD 1.0 — 39,358 / 39,388 = 99.92%. XSD 1.1 — 41,567 / 41,598 = 99.93%.**
+**XSD 1.0 — 39,359 / 39,388 = 99.93%. XSD 1.1 — 41,568 / 41,598 = 99.93%.**
 
 The XSD suite measures **agreement with the expected verdict** on each schema
 and instance, which is a different shape from a pass/fail case count. A
@@ -490,15 +490,15 @@ is the opposite of challenged.
 
 | | Total | `accepted` | `queried` | `stable` | no status |
 |---|---:|---:|---:|---:|---:|
-| XSD 1.0 | 30 | **2** | 26 | 2 | 0 |
-| XSD 1.1 | 31 | **3** | 27 | 1 | 0 |
+| XSD 1.0 | 29 | **2** | 26 | 1 | 0 |
+| XSD 1.1 | 30 | **3** | 27 | 0 | 0 |
 
 Those totals are counted from the `<current>` status of each disagreeing case.
 
 | Set | Cases | Status | Why |
 |---|---:|---|---|
 | `MS-Regex2006-07-15` | 22 per version, 44 in all | `queried bug4113` | Every single MS-Regex disagreement is the *same* open W3C bug. The expected results are challenged upstream; agreeing with them would mean agreeing with something the working group does not stand behind. |
-| `MS-Element`, `MS-DataTypes`, `MS-IdentityConstraint`, `MS-Particles`, `Simple`, `Id`, others | 8 (1.0), 10 (1.1) | `queried`/`stable` + bug, 2 and 3 `accepted` | Assorted challenged expectations, mostly across the Microsoft-contributed sets. Every one is named in the table below and in `tests/conformance/results.json`. |
+| `MS-Element`, `MS-DataTypes`, `MS-Particles`, `Simple`, `Id`, others | 7 (1.0), 8 (1.1) | `queried`/`stable` + bug, 2 and 3 `accepted` | Assorted challenged expectations, mostly across the Microsoft-contributed sets. Every one is named in the table below and in `tests/conformance/results.json`. |
 
 The `queried` defence was spot-checked on four cases and **held** in each —
 `ste110` (bug 4957, circular unions), `gMonth002`/`004` (bug 6901, withdrawn
@@ -526,23 +526,23 @@ longer disagree at all, and the sentence that once counted four of them here
 outlived its own fix. The 1.0 `SFALSEREJECT` column is `particlesZ001` and
 `ste110`, and nothing else.
 
-### All 61 are adjudicated case by case
+### All 59 are adjudicated case by case
 
-`tests/conformance/results.json` enumerates every one of the 30 and the 31, the
+`tests/conformance/results.json` enumerates every one of the 29 and the 30, the
 way it already enumerated XSLT 3.0, so the sum check covers XSD rather than
 stopping at a set-level summary. Each case is classified as exactly one of
-three things, and **none of the 61 is a genuine implementation gap**:
+three things, and **none of the 59 is a genuine implementation gap**:
 
 | Bucket | 1.0 | 1.1 | Cases |
 |---|---:|---:|---|
 | **(a) fixture defect** — the suite contradicts itself or a sibling | 2 | 2 | `attP031.i`, `particlesZ001` (1.0); `elemZ026`, `simple093.xsd` (1.1) |
 | **(b) conforming-default divergence** — a documented decision, option named | 0 | 1 | `id017.n01.xml` |
-| **(c) challenged expectation** — `queried`/`stable` against an open W3C bug | 28 | 28 | 22 `MS-Regex` under bug 4113, plus `anyURI_a004`, `gMonth002`, `gMonth004`, `idZ015`, `ste110`, and `anyURI_b006` (1.0 only); `particlesZ033_g` is 1.1's sixth |
+| **(c) challenged expectation** — `queried`/`stable` against an open W3C bug | 27 | 27 | 22 `MS-Regex` under bug 4113, plus `anyURI_a004`, `gMonth002`, `gMonth004`, `ste110`, and `anyURI_b006` (1.0 only); `particlesZ033_g` is 1.1's fifth |
 
 Buckets (b) and (c) are both recorded as `deliberate-divergence` in
 `tests/conformance/results.json`, whose vocabulary is closed and has no separate
-token for the two; the JSON therefore tallies 2 `fixture` / 28
-`deliberate-divergence` on 1.0 and 2 / 29 on 1.1. The split between (b) and (c)
+token for the two; the JSON therefore tallies 2 `fixture` / 27
+`deliberate-divergence` on 1.0 and 2 / 28 on 1.1. The split between (b) and (c)
 is the prose distinction above: (b) is our own documented decision with the
 option named, (c) is an expectation the W3C has itself challenged.
 
@@ -552,7 +552,7 @@ adjudication and not a defect. `tests/xsdsuite/main.go` sets `Version`,
 `Resolver` and `ParseOptions{AllowDOCTYPE:true}`; it leaves `LaxUPA` off, which
 is the conforming strict reading of erratum E1-29, and leaves `XPathVersion` at
 XPath 2.0, which is what XSD 1.1 requires for assertions. **Neither option
-gates a single one of these 61 cases**: no case fails on a Unique Particle
+gates a single one of these 59 cases**: no case fails on a Unique Particle
 Attribution complaint, and no assertion or conditional-type-alternative case
 disagrees at all. That bucket is empty, and it is recorded as empty rather than
 filled with a citation the evidence does not support.
