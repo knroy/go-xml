@@ -95,11 +95,12 @@ const DefaultMaxErrors = 100
 // Also reported are the faults xdm.Parse saw and the tree cannot show, which
 // it records as it reads: a CDATA section or character reference where
 // element content admits only white space, an entity reference in an EMPTY
-// element (§3, VC: Element Valid), and under standalone="yes" an external
-// markup declaration that defaulted or normalized an attribute or declared
-// element content holding white space (§2.9, VC: Standalone Document
-// Declaration). The external ones are seen only when the parse read the
-// external subset (ParseOptions.ExternalEntities).
+// element (§3, VC: Element Valid), a reference to an entity declared nowhere
+// (§4.1, VC: Entity Declared), and under standalone="yes" an external markup
+// declaration that defaulted or normalized an attribute or declared element
+// content holding white space (§2.9, VC: Standalone Document Declaration).
+// The external ones are seen only when the parse read the external subset
+// (ParseOptions.ExternalEntities).
 //
 // An attribute whose declared type or default declaration is outside the sets
 // XML 1.0 §3.3 closes is reported here rather than skipped. Such a declaration

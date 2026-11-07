@@ -158,11 +158,13 @@ type Decoder struct {
 	EscapedEntity map[string]bool
 
 	// Undeclared, when set, is asked about a reference to an entity that is
-	// neither predefined nor in Entity, and what it returns is added to the
-	// error the reference is. xdm uses it to say why: where XML 1.0 §4.1's
-	// WFC does not govern, the declaration may be in a part of the DTD that
-	// was not read.
-	Undeclared func(name string) string
+	// neither predefined nor in Entity. If it reports skip the reference is
+	// accepted and stands for no text; otherwise the note it returns is added
+	// to the error the reference is. xdm uses it to say why: where XML 1.0
+	// §4.1's WFC does not govern, the declaration may be in a part of the DTD
+	// that was not read, or, all of it read, the reference is a validity
+	// error only.
+	Undeclared func(name string) (note string, skip bool)
 
 	// CharsetReader converts a stream whose XML declaration names an
 	// encoding other than UTF-8. It receives the bytes after the declaration
@@ -1328,10 +1330,12 @@ func (d *Decoder) reference(out []byte, spans []refSpan, attr bool) ([]byte, []r
 					}
 				}
 				if !found && d.Undeclared != nil {
-					if note := d.Undeclared(string(name)); note != "" {
+					note, skip := d.Undeclared(string(name))
+					if note != "" && !skip {
 						d.syntaxError("invalid character entity &" + string(name) + "; (" + note + ")")
 						return out, spans, false
 					}
+					found = skip
 				}
 			}
 		}

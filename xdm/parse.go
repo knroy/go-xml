@@ -843,11 +843,28 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 					}
 					if !wfc {
 						declared, read := ents, ps.opts.ExternalEntities != nil
-						dec.Undeclared = func(name string) string {
+						// With every external entity read, an undeclared name
+						// is declared nowhere: the document is well formed and
+						// invalid (VC: Entity Declared; erratum E13 makes an
+						// internal parameter-entity reference enough for that).
+						// The reference, which the XDM has no node for, is
+						// dropped and the fault recorded for dtd.Validate.
+						//
+						// ponytail: the second parse of a rewritten source
+						// (parseExpandedSteps) knows only the internal subset's
+						// declarations, so it still refuses; handing it the
+						// first parse's table would lift that.
+						drop := read && !ps.opts.entitiesExpanded
+						dec.Undeclared = func(name string) (string, bool) {
 							if declared.declares(name) {
-								return ""
+								return "", false
 							}
-							return undeclaredNote(name, read)
+							if drop {
+								ps.note(tree, ps.cur, "entity %s is referenced but declared in neither subset, "+
+									"and the reference was dropped (XML 1.0 §4.1, VC: Entity Declared)", name)
+								return "", true
+							}
+							return undeclaredNote(name, read), false
 						}
 					}
 					if ents != nil && !ps.opts.entitiesExpanded {

@@ -770,7 +770,8 @@ func (r xdmEntities) ResolveEntity(sys, pub, base string) (io.ReadCloser, string
 // an external declaration defaulted or normalized, and whether white space was
 // written as a reference or a CDATA section — is recorded by xdm as it parses
 // and reported here. XML 1.0 §2.9 VC: Standalone Document Declaration, and §3
-// VC: Element Valid as erratum E15 reads it.
+// VC: Element Valid as erratum E15 reads it, and §4.1 VC: Entity Declared
+// for a reference xdm dropped (erratum E13).
 func TestFaultsOnlyTheParseSees(t *testing.T) {
 	const sa = `<?xml version="1.0" standalone="yes"?>`
 	const ext = `<!ELEMENT r (c*)><!ELEMENT c EMPTY>` +
@@ -798,6 +799,8 @@ func TestFaultsOnlyTheParseSees(t *testing.T) {
 		{"EMPTY with an empty entity", in + `]><r><e>&z;</e></r>`, "declared EMPTY"},
 		{"EMPTY with an empty CDATA section", in + `]><r><e><![CDATA[]]></e></r>`, "declared EMPTY"},
 		{"EMPTY", in + `]><r><e/><e></e></r>`, ""},
+		{"undeclared entity", `<!DOCTYPE r SYSTEM "r.dtd"><r>&u;</r>`, "VC: Entity Declared"},
+		{"undeclared entity after a parameter entity", `<!DOCTYPE r [<!ENTITY % p "<!ELEMENT r ANY>">%p;]><r>&u;</r>`, "VC: Entity Declared"},
 	}
 	res := xdmEntities{&MapResolver{Docs: map[string]string{"r.dtd": ext}}}
 	for _, c := range cases {

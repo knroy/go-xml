@@ -1651,6 +1651,7 @@ rmt-e3e-06g
 rmt-e3e-06h
 rmt-e3e-06i
 rmt-e3e-12
+rmt-e3e-13
 rmt-ns-e1.0-13a
 rmt-ns-e1.0-13b
 rmt-ns-e1.0-13c
