@@ -57,6 +57,10 @@ type sheetCall struct {
 	// values only (streamsplit_copies.go); instrBurst that it may be given
 	// a grounded copy too (streamfn_instrburst_mm7.go).
 	copies, instrBurst bool
+	// fnValues says the declared result is a function, map or array type
+	// whose every parameter is atomic: a dynamic call on what the call
+	// returns atomizes its arguments (streamsplit_dyncall.go).
+	fnValues bool
 }
 
 var sheetCalls sync.Map // weak.Pointer[xpath.FuncCall] -> sheetCall
@@ -115,6 +119,7 @@ func judgeSheetCall(x *xpath.FuncCall, fns map[funcKey]*streamFunc) (sheetCall, 
 		return sheetCall{}, false
 	}
 	sc := sheetCall{values: atomicParams(f.body), atomic: atomicAs(f.body, f.asType), atomicArg: paramAtomics(f.body)}
+	sc.fnValues = atomicSignature(f.asType, f.body)
 	if !sc.values {
 		sc.burst = true
 		for g, body := range bodies {
@@ -363,4 +368,17 @@ func plainSplitPath(pp splitPathParts) bool {
 		}
 	}
 	return len(pp.steps) > 0
+}
+
+// atomicSignature reports whether as, the declared result of the function
+// fn, is a function, map or array type every parameter of which is atomic
+// (signatureUsages, streamexprs.go: function(*) has none).
+func atomicSignature(as string, fn *xdm.Node) bool {
+	us := signatureUsages(as, newNSResolver(fn, ""))
+	for _, u := range us {
+		if u != usageAbsorption {
+			return false
+		}
+	}
+	return us != nil
 }

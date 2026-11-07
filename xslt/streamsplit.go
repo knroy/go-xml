@@ -215,6 +215,9 @@ type streamSplit struct {
 	// typedFold says a min or max below the document node folds values of
 	// one type, by the schema (streamsplit_schema.go).
 	typedFold bool
+	// each is ". treat as T*", evaluated on each match as it comes, before
+	// it gives anything (treatEach, streamsplit_instance.go).
+	each *xpath.Compiled
 }
 
 // splitStream splits e, an expression whose context item is the document
@@ -274,6 +277,14 @@ func splitStreamAt(e xpath.Expr, base *xpath.Compiled, doc, group, key, views bo
 		if w.json != nil {
 			if why := s.jsonAfter(w); why != "" { // streamfn_json.go
 				return nil, why
+			}
+		}
+		if w.treat != nil {
+			// The tree tests every item: no match may be left unread.
+			s.each = part(&xpath.TreatExpr{Operand: &xpath.ContextItem{}, Type: *w.treat})
+			s.tailFail = true
+			for _, c := range w.treatChecks {
+				s.checks = append(s.checks, part(c))
 			}
 		}
 	}
@@ -639,8 +650,10 @@ var (
 // attributes or names with a literal.
 func splitCannotFail(e xpath.Expr) bool {
 	switch x := e.(type) {
-	case *xpath.Literal, *xpath.VarRef:
+	case *xpath.Literal, *xpath.VarRef, *xpath.ContextItem:
 		return true
+	case *xpath.InstanceOfExpr: // raises nothing of its own (instanceAllOf)
+		return splitCannotFail(x.Operand)
 	case *xpath.Step:
 		return x.Axis != xpath.AxisNamespace && len(x.Predicates) == 0
 	case *xpath.PathExpr:
@@ -882,6 +895,10 @@ type splitter struct {
 	json *jsonSplit
 	// dynCopies: a dynamic call given copies holds the path (streamdyncall_mm7.go).
 	dynCopies bool
+	// treat is the type each match of the path is treated as, and
+	// treatChecks the motionless items' treats (treatEach).
+	treat       *xpath.SequenceType
+	treatChecks []xpath.Expr
 }
 
 // isCurrentGroup reports whether e is a call on fn:current-group().
@@ -1031,6 +1048,9 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 		}
 		return w.slot(x.Operand, func(y xpath.Expr) { x.Operand = y }, useKeep)
 	case *xpath.TreatExpr:
+		if done, ok := w.treatEach(x, put, use); done { // streamsplit_instance.go
+			return ok
+		}
 		// The treat tests the items as they are: nodes, not their values.
 		return w.slot(x.Operand, func(y xpath.Expr) { x.Operand = y }, useKeep)
 	case *xpath.IfExpr:
@@ -1452,6 +1472,9 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		// as it parsed (parseAt, mapCalls); in an accumulator rule,
 		// $value(k) where its type says it is a map or an array.
 		if accumValueCallOK(vc, x, f) { // streamaccum_mm5.go
+			return true
+		}
+		if vc.dynCallSafe(x, f) { // streamsplit_dyncall.go
 			return true
 		}
 		if !(vc.accum && vc.lookup && isVarRef(x.Target, xdm.QName{Local: "value"})) {
@@ -2276,6 +2299,9 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 		quiet := r.silent > 0 || r.done && !s.tailFail
 		if cand.leaf {
 			if match && !quiet {
+				if err := r.check(ev.Node); err != nil {
+					return err
+				}
 				r.seen++ // a leaf match makes its ancestors not innermost
 				if !s.noLeaves {
 					if err := r.leaf(ev.Node, ev.Depth); err != nil {
@@ -2291,6 +2317,9 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 		open := splitOpen{f: f}
 		decided, descend := false, f.live()
 		if match && !quiet {
+			if err := r.check(ev.Node); err != nil {
+				return err
+			}
 			r.seen++
 			if s.outermost {
 				// Nothing inside it is a result; it is read only for the
@@ -2604,6 +2633,9 @@ func (r *splitRun) walkTree(n *xdm.Node, pf *splitFrame) (found bool, err error)
 		quiet := r.silent > 0 || r.done && !s.tailFail
 		if at.leaf {
 			if match && !quiet {
+				if err := r.check(ch); err != nil {
+					return found, err
+				}
 				found = true
 				if !s.noLeaves {
 					if err := r.leaf(ch, 0); err != nil {
@@ -2614,6 +2646,9 @@ func (r *splitRun) walkTree(n *xdm.Node, pf *splitFrame) (found bool, err error)
 			continue
 		}
 		if match && !quiet {
+			if err := r.check(ch); err != nil {
+				return found, err
+			}
 			found = true
 			if s.innermost {
 				in, err := r.walkTree(ch, &f)
@@ -2652,6 +2687,15 @@ func (r *splitRun) walkTree(n *xdm.Node, pf *splitFrame) (found bool, err error)
 		}
 	}
 	return found, nil
+}
+
+// check raises the treat's error for a match n not of its type (s.each).
+func (r *splitRun) check(n *xdm.Node) error {
+	if r.s.each == nil {
+		return nil
+	}
+	_, err := r.s.each.Eval(r.ctx.WithFocus(n, 1, 1))
+	return err
 }
 
 // yield takes what an element match n of a grounded copy gives.

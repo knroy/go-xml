@@ -555,6 +555,8 @@ func burstSafe(e xpath.Expr, noPos bool) bool {
 		return x.Base != nil && burstSafe(x.Base, noPos) && (x.Expr == nil || burstSafe(x.Expr, noPos))
 	case *xpath.NamedFunctionRef:
 		return namedRefSafe(x) // streamfn_refs.go
+	case *xpath.DynamicCall:
+		return dynCallBurstSafe(x, noPos) // streamsplit_dyncall.go
 	}
 	return false
 }
