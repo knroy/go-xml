@@ -192,7 +192,7 @@ func TestIDLookup(t *testing.T) {
 		t.Errorf("id of a missing name = %q, want 0", got)
 	}
 
-	// is-id and is-idrefs come from a DTD, a schema or xml:id (F&O §14.5.2,
+	// is-id and is-idrefs come from a DTD, a schema or xml:id (F&O §14.5.1-
 	// §14.5.3), never from the attribute's name alone.
 	undeclared := `<r><b id="two"/><c idref="two"/><d idrefs="two"/></r>`
 	for _, expr := range []string{

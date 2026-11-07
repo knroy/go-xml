@@ -1487,7 +1487,7 @@ the output looks fine and is wrong.
   pattern) is not subtraction and is unaffected.
 
 `fn:id`, `fn:element-with-id` and `fn:idref` find only the nodes a DTD or
-schema types as `ID`/`IDREF`/`IDREFS`, plus a valid `xml:id` (F&O §14.5.2,
+schema types as `ID`/`IDREF`/`IDREFS`, plus a valid `xml:id` (F&O §14.5.1-
 §14.5.3). An attribute merely named `id`, `idref` or `idrefs` is not matched:
 a document without declarations needs `xml:id`, or `xsl:key` on `@id`.
 

@@ -373,7 +373,7 @@ func unparsedTextArgs(args []xdm.Sequence) (href, encoding string, err error) {
 
 // lookupByID implements fn:id and fn:idref.
 //
-// Both are defined over the is-id and is-idrefs properties (F&O §14.5.2,
+// Both are defined over the is-id and is-idrefs properties (F&O §14.5.1-
 // §14.5.3): a node counts only if a DTD or schema typed it as ID or
 // IDREF(S), or it is a valid xml:id. An attribute merely named "id",
 // "idref" or "idrefs" is not one, declared nothing.
