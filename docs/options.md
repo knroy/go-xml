@@ -949,8 +949,11 @@ it still uses its `xi:fallback` or is a fatal error.
 
 Implemented: `parse="xml"` and `parse="text"` (honouring `encoding`), an
 absent or empty `href` meaning the including document, `xi:fallback` on any
-failure, the `xml:base` fixup of §4.5.5, recursive inclusion, and loop
-detection. For `xpointer`, the two forms XInclude requires — a **shorthand**
+failure, the `xml:base` fixup of §4.5.5, the `xml:lang` fixup of §4.5.6 (a
+top-level included element whose language differs from its include parent's,
+case-insensitively, gets `xml:lang`, or `xml:lang=""` when it has none),
+recursive inclusion, and loop detection. Neither fixup can be suppressed:
+§4.5 makes that a user option a processor *may* offer. For `xpointer`, the two forms XInclude requires — a **shorthand**
 pointer (an ID) and the **element()** scheme (a child sequence) — are
 supported. `xpointer()`/`xpath()` are not: they are not required by XInclude,
 and they would invert this package's dependency on the XPath evaluator.

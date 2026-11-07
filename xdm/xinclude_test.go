@@ -648,3 +648,59 @@ func TestXIncludeFallbackDoesNotRescueTheFetchBound(t *testing.T) {
 		t.Fatal("a fallback must not carry the document past the fetch bound")
 	}
 }
+
+// TestXIncludeLanguageFixup is XInclude §4.5.6 (I3): a top-level included
+// element whose language differs from its include parent's, case-insensitively,
+// gets an xml:lang saying so, xml:lang="" when it has none; one that agrees,
+// or that states its own, is left alone. Without it the language of an
+// included paragraph was the including document's.
+func TestXIncludeLanguageFixup(t *testing.T) {
+	const xi = `xmlns:xi="http://www.w3.org/2001/XInclude"`
+	files := map[string]string{
+		"mem:/fr.xml":   `<p xml:lang="fr"><q>bonjour</q></p>`,
+		"mem:/none.xml": `<p>hi</p>`,
+		"mem:/deep.xml": `<d xml:lang="de"><s>x</s><s xml:lang="EN">y</s></d>`,
+	}
+	for _, c := range []struct{ name, doc, want string }{
+		{"inherits a different language", `<r xml:lang="en" ` + xi + `><xi:include href="mem:/deep.xml" xpointer="element(/1/1)"/></r>`, "de"},
+		{"no language under one", `<r xml:lang="en" ` + xi + `><xi:include href="none.xml"/></r>`, ""},
+		{"same language, other case", `<r xml:lang="DE" ` + xi + `><xi:include href="mem:/deep.xml" xpointer="element(/1/1)"/></r>`, "-"},
+		{"neither has one", `<r ` + xi + `><xi:include href="none.xml"/></r>`, "-"},
+		{"own attribute kept", `<r xml:lang="en" ` + xi + `><xi:include href="fr.xml"/></r>`, "fr"},
+		{"include parent nested", `<r xml:lang="en" ` + xi + `><m><xi:include href="mem:/deep.xml" xpointer="element(/1/2)"/></m></r>`, "EN"},
+		{"local selection", `<r ` + xi + `><a xml:lang="it"><b>x</b></a><xi:include xpointer="element(/1/1/1)"/></r>`, "it"},
+	} {
+		tree, _, err := run(t, "mem:/doc.xml", c.doc, files)
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		var got *Node
+		for el := range tree.Root.Descendants() {
+			if el.Kind() == KindElement && el.Parent().Kind() == KindElement && el.Name().Local != "m" &&
+				(el.Parent().Name().Local == "r" || el.Parent().Name().Local == "m") && el.Name().Local != "a" {
+				got = el
+			}
+		}
+		if got == nil {
+			t.Errorf("%s: nothing included", c.name)
+			continue
+		}
+		v := "-"
+		if a := got.Attr(NSXML, "lang"); a != nil {
+			v = a.Value()
+		}
+		if v != c.want {
+			t.Errorf("%s: xml:lang %q, want %q", c.name, v, c.want)
+		}
+	}
+	// An include as the document element: the parent is the document node,
+	// so an element with a language gets it stated.
+	tree, _, err := run(t, "mem:/doc.xml", `<xi:include `+xi+` href="mem:/deep.xml" xpointer="element(/1/1)"/>`, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := tree.Root.FirstChild().Attr(NSXML, "lang"); a == nil || a.Value() != "de" {
+		t.Errorf("under the document node: xml:lang %v, want de", a)
+	}
+}
