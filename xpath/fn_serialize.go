@@ -983,16 +983,12 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// attribute in its place. The full serializer already writes this
 		// form -- see the meta branch of writeElement in xslt/serialize.go --
 		// so the two spellings were also disagreeing with each other.
-		// The xhtml method writes the same element as XML, closed with the
-		// space the HTML compatibility guidelines ask for (§6.1.14).
+		// The xhtml method, and an XML island under html, write the same
+		// element as XML: htmlser.MetaEnd, shared with xslt/serialize.go.
 		if htmlHead {
-			meta := `<meta http-equiv="Content-Type" content="` +
-				escapeAttr(htmlser.MetaContent(opts.mediaType, opts.encoding)) + `"`
-			if opts.method == "xhtml" {
-				sb.WriteString(meta + ` />`)
-			} else {
-				sb.WriteString(meta + `>`)
-			}
+			sb.WriteString(`<meta http-equiv="Content-Type" content="` +
+				escapeAttr(htmlser.MetaContent(opts.mediaType, opts.encoding)) +
+				htmlser.MetaEnd(n, opts.method == "xhtml", opts.html5()))
 		}
 		// An element named by cdata-section-elements has its text written as
 		// a CDATA section instead of with escaping, which is what the

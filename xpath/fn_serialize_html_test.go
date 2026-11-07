@@ -110,3 +110,24 @@ func TestSerializeKeepsNestedMeta(t *testing.T) {
 		t.Errorf("want %s in %s", want, got)
 	}
 }
+
+// TestSerializeHTML4XHTMLHeadMetaIsClosed: below HTML5 an XHTML-namespace head
+// is an XML island to the html method (Serialization 3.1 §7.1), so the meta
+// added to it is closed, as xsl:result-document writes it
+// (TestHTML4XHTMLHeadMetaIsClosed in xslt). fn:serialize wrote a bare start
+// tag; result-document-1402 reaches it through nested JSON output.
+func TestSerializeHTML4XHTMLHeadMetaIsClosed(t *testing.T) {
+	const doc = `parse-xml('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head></html>')`
+	for _, c := range []struct{ version, want string }{
+		{"4.0", `<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"></meta><title>`},
+		{"5.0", `<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><title>`},
+	} {
+		got, err := evalSerialize(t, `serialize(`+doc+`, map{'method':'html','html-version':`+c.version+`})`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(got, c.want) {
+			t.Errorf("html-version %s: want %s in %s", c.version, c.want, got)
+		}
+	}
+}
