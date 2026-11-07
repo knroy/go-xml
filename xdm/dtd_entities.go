@@ -201,6 +201,18 @@ type entityTable struct {
 	// doing it here as well turns "&amp;lt;" into "<", manufacturing markup
 	// out of data the document escaped.
 	reparsed bool
+
+	// outside names the general entities declared only in the external
+	// subset (see mergeUnder), and standalone says the document declared
+	// standalone="yes". Together they are WFC: Entity Declared: resolve
+	// refuses a reference to an outside entity in a standalone document.
+	outside    map[string]bool
+	standalone bool
+
+	// contentErr memoises contentOK per entity, and stubs is the entity map
+	// its tokeniser reads nested references through.
+	contentErr map[string]error
+	stubs      map[string]string
 }
 
 // parseInternalEntities reads the <!ENTITY ...> declarations out of a DOCTYPE
@@ -461,6 +473,13 @@ func isEntityName(s string) bool {
 // function, so the expansion is done once up front for every declared entity
 // and the result handed over as a plain map.
 func (t *entityTable) resolve(name string) (string, error) {
+	// XML 1.0 §4.1, WFC: Entity Declared: in a standalone document a
+	// reference must match a declaration "that does not occur within the
+	// external subset or a parameter entity".
+	if t.standalone && t.outside[name] {
+		return "", fmt.Errorf("entity %q is declared in the external subset, "+
+			"and the document says standalone=\"yes\" (WFC: Entity Declared)", name)
+	}
 	if s, ok := t.expanded[name]; ok {
 		return s, nil
 	}
@@ -478,6 +497,9 @@ func (t *entityTable) resolve(name string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if err := t.contentOK(name, text); err != nil {
+			return "", err
+		}
 		t.expanded[name] = ""
 		out, err := t.expand(text, 0, map[string]bool{name: true}, false)
 		if err != nil {
@@ -493,6 +515,9 @@ func (t *entityTable) resolve(name string) (string, error) {
 	}
 	// A placeholder guards against a cycle: an entity that refers to itself,
 	// directly or through others, would otherwise recurse forever.
+	if err := t.contentOK(name, replacementText(raw)); err != nil {
+		return "", err
+	}
 	t.expanded[name] = ""
 	out, err := t.expand(replacementText(raw), 0, map[string]bool{name: true}, false)
 	if err != nil {
@@ -542,11 +567,12 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 			i++
 			continue
 		}
+		// Replacement text is parsed (XML 1.0 §4.5), so a "&" in it begins a
+		// reference: one decoded from "&#38;" with nothing after it to name
+		// is not well formed wherever the entity is referenced.
 		j := semis.from(i)
 		if j < 0 {
-			sb.WriteByte(c)
-			i++
-			continue
+			return "", fmt.Errorf("entity replacement text has an & that begins no reference")
 		}
 		name := s[i+1 : i+j]
 		// s is replacement text: the character references written in the
@@ -608,6 +634,11 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 			if err != nil {
 				return "", err
 			}
+			if !attr {
+				if err := t.contentOK(name, text); err != nil {
+					return "", err
+				}
+			}
 			seen[name] = true
 			sub, err := t.expand(text, depth+1, seen, attr)
 			delete(seen, name)
@@ -627,6 +658,11 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 		if !ok {
 			return "", fmt.Errorf("entity %q is not declared", name)
 		}
+		if !attr {
+			if err := t.contentOK(name, replacementText(raw)); err != nil {
+				return "", err
+			}
+		}
 		seen[name] = true
 		sub, err := t.expand(replacementText(raw), depth+1, seen, attr)
 		delete(seen, name)
@@ -642,6 +678,72 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 		i += j + 1
 	}
 	return sb.String(), nil
+}
+
+// contentOK is WFC: Parsed Entity (XML 1.0 §4.3.2): the replacement text of
+// an entity referenced in content matches content ON ITS OWN, so markup it
+// opens is closed in it and a CDATA section or comment it begins ends in it.
+// Pasting the text into the document and parsing the result cannot tell:
+// "<foo>" balances a "</foo>" written after the reference. Each entity is
+// checked once, alone; a nested reference reads as empty here, since expand
+// checks that entity in its turn. Text with no "<" is trivially content.
+func (t *entityTable) contentOK(name, text string) error {
+	if strings.IndexByte(text, '<') < 0 {
+		return nil
+	}
+	if err, ok := t.contentErr[name]; ok {
+		return err
+	}
+	if t.stubs == nil {
+		t.stubs = make(map[string]string, len(t.raw)+len(t.external))
+		for n := range t.raw {
+			t.stubs[n] = ""
+		}
+		for n := range t.external {
+			t.stubs[n] = ""
+		}
+	}
+	err := checkContent(text, t.stubs)
+	if err != nil {
+		err = fmt.Errorf("replacement text of entity %q is not content (WFC: Parsed Entity): %w", name, err)
+	}
+	if t.contentErr == nil {
+		t.contentErr = map[string]error{}
+	}
+	t.contentErr[name] = err
+	return err
+}
+
+// checkContent reports whether text matches [43] content: balanced elements
+// and no markup declaration. ents is the decoder's entity map.
+func checkContent(text string, ents map[string]string) error {
+	d := xml.NewDecoder(strings.NewReader(text))
+	d.Entity = ents
+	var open []xml.Name
+	for {
+		tok, err := d.RawToken()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		switch tok := tok.(type) {
+		case *xml.StartElement:
+			open = append(open, tok.Name)
+		case *xml.EndElement:
+			if len(open) == 0 || open[len(open)-1] != tok.Name {
+				return fmt.Errorf("end tag </%s> closes no element the text opened", tok.Name.Local)
+			}
+			open = open[:len(open)-1]
+		case *xml.Directive:
+			return fmt.Errorf("a markup declaration is not content")
+		}
+	}
+	if len(open) > 0 {
+		return fmt.Errorf("element <%s> is not closed", open[len(open)-1].Local)
+	}
+	return nil
 }
 
 // replacementText is XML 1.0 §4.5: an entity's replacement text is its
@@ -1116,6 +1218,12 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 	// below.
 	var inTag bool
 	var attrQuote byte
+	// depth counts the document's own open elements, so that a reference
+	// outside the document element is refused: [1] document admits only
+	// Misc around it, and content is where a reference may occur (§3.1).
+	// endTag says the tag being read is one.
+	var depth int
+	var endTag bool
 	semis := semiFinder{s: src, at: -1}
 	for i := start; i < len(src); {
 		// CDATA sections, comments and processing instructions are regions
@@ -1150,6 +1258,9 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 					attrQuote = c
 				case '>':
 					inTag = false
+					if !endTag && src[i-1] == '/' {
+						depth--
+					}
 				}
 			case c == '<':
 				// A "<" that opens a comment, CDATA section or PI never
@@ -1157,6 +1268,12 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 				// tag has no attributes, but tracking it as a tag costs
 				// nothing and keeps the state machine total.
 				inTag = true
+				endTag = i+1 < len(src) && src[i+1] == '/'
+				if endTag {
+					depth--
+				} else {
+					depth++
+				}
 			}
 			sb.WriteByte(c)
 			i++
@@ -1185,6 +1302,9 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 			i += j + 1
 			written += j + 1
 			continue
+		}
+		if depth <= 0 {
+			return "", fmt.Errorf("entity reference &%s; outside the document element", name)
 		}
 		rep, err := t.resolve(name)
 		if err != nil {
@@ -1226,11 +1346,14 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 		// <!ENTITY primary 'normalize-space(concat(primary/@sortas, " ",
 		// primary))'> and every stylesheet that uses it inside a double-
 		// quoted attribute would otherwise become malformed. Escaping the
-		// three characters that are markup in an attribute value restores the
-		// literal reading; the decoder turns them back on the second parse.
-		// "<" is escaped too rather than left to corrupt the tag, matching
-		// the well-formedness constraint that forbids it there.
+		// two quote characters restores the literal reading; the decoder turns
+		// them back on the second parse. A "<" is refused: WFC No < in
+		// Attribute Values (§3.1) forbids it in the replacement text of any
+		// entity referenced, directly or not, in an attribute value.
 		if attrQuote != 0 {
+			if strings.IndexByte(rep, '<') >= 0 {
+				return "", fmt.Errorf("replacement text of entity %q in an attribute value contains <", name)
+			}
 			rep = escapeAttrLiteral(rep)
 		}
 		count++
@@ -1494,7 +1617,8 @@ func (t *Tree) HasUnparsedEntities() bool {
 // attribute value, so that replacement text spliced there is read as literal
 // characters — XML section 4.4.5, "Included in Literal".
 //
-// Only three are escaped. "&" is deliberately not: on the rewrite path expand
+// Only the two quotes are escaped; "<" never arrives (substituteMarkupEntities
+// refuses it). "&" is deliberately not: on the rewrite path expand
 // leaves "&amp;" as written for the second parse to decode (see the
 // t.reparsed branch there), so escaping "&" here would turn it into "&amp;amp;"
 // and change what the document says. A "&" that replacementText decoded from
@@ -1507,7 +1631,7 @@ func (t *Tree) HasUnparsedEntities() bool {
 // into one character. A character the text holds as a reference is still
 // written as one, and so is kept.
 func escapeAttrLiteral(s string) string {
-	if !strings.ContainsAny(s, "\"'<\t\n\r") {
+	if !strings.ContainsAny(s, "\"'\t\n\r") {
 		return s
 	}
 	var sb strings.Builder
@@ -1520,8 +1644,6 @@ func escapeAttrLiteral(s string) string {
 			sb.WriteString("&#34;")
 		case '\'':
 			sb.WriteString("&#39;")
-		case '<':
-			sb.WriteString("&#60;")
 		default:
 			sb.WriteByte(s[i])
 		}

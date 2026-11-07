@@ -664,6 +664,9 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 				}
 				// §5.1: every processor checks the whole internal subset
 				// for well-formedness, whatever it goes on to read of it.
+				if err := checkDoctypeChars(string(t), dec.IsVersion11()); err != nil {
+					return nil, fmt.Errorf("parse XML: %w", err)
+				}
 				if err := checkDoctypeGrammar(string(t), false); err != nil {
 					return nil, fmt.Errorf("parse XML: %w", err)
 				}
@@ -804,6 +807,7 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 					if ents != nil && !ps.opts.entitiesExpanded {
 						ents.version11 = dec.IsVersion11()
 						ents.resolver = ps.opts.ExternalEntities
+						ents.standalone = ps.standalone
 						// An entity whose replacement text holds markup cannot go
 						// through dec.Entity at all: encoding/xml substitutes that
 						// map's values as character data and never re-scans them,

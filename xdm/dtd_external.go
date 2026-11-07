@@ -469,14 +469,19 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 //
 // That is XML section 4.2's first-declaration-wins rule applied across the two
 // subsets, and the direction matters — the internal subset is read first and
-// therefore wins over the external one.
+// therefore wins over the external one. Each name sub adds is marked outside,
+// for WFC: Entity Declared under standalone="yes".
 func (t *entityTable) mergeUnder(sub *entityTable) {
+	if t.outside == nil {
+		t.outside = map[string]bool{}
+	}
 	for name, raw := range sub.raw {
 		if t.external[name] {
 			continue
 		}
 		if _, dup := t.raw[name]; !dup {
 			t.raw[name] = raw
+			t.outside[name] = true
 		}
 	}
 	for name := range sub.external {
@@ -485,6 +490,7 @@ func (t *entityTable) mergeUnder(sub *entityTable) {
 		}
 		if !t.external[name] {
 			t.external[name] = true
+			t.outside[name] = true
 		}
 	}
 	for name, d := range sub.externalDecl {
@@ -597,6 +603,22 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 		text, err = t.expandParameterEntities(text, refBase, depth+1)
 		if err != nil {
 			return "", err
+		}
+		// Declarations are copied whole above, so a reference reaching here
+		// is between declarations — [28a] DeclSep — unless it is the keyword
+		// of a conditional section. WFC: PE Between Declarations (XML 1.0
+		// §2.8): "The replacement text of a parameter entity reference in a
+		// DeclSep MUST match the production extSubsetDecl." A reference
+		// inside a declaration is only a validity matter, and is never here.
+		//
+		// ponytail: a reference inside an IGNORE section is checked too,
+		// though §3.4 does not recognise it there; tracking IGNORE nesting
+		// here would lift that.
+		if !strings.HasSuffix(strings.TrimRight(sb.String(), " \t\r\n"), "<![") {
+			if err := checkExtSubsetGrammar(text); err != nil {
+				return "", fmt.Errorf("parameter entity %%%s between declarations "+
+					"(WFC: PE Between Declarations): %w", name, err)
+			}
 		}
 		sb.WriteString(text)
 		if sb.Len() > maxTotalEntityBytes {

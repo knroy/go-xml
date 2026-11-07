@@ -376,6 +376,66 @@ func TestExternalSubsetSuppliesEntities(t *testing.T) {
 	}
 }
 
+// WFC: Entity Declared (XML 1.0 §4.1): under standalone="yes" a reference in
+// the document must match a declaration outside the external subset, so one
+// the external subset alone declares is refused, in content and in an
+// attribute value, while the internal declaration of the same name binds.
+// W3C xmlconf not-wf-sa03, ibm32n09, ibm68n06.
+func TestStandaloneRefusesExternallyDeclaredEntity(t *testing.T) {
+	const sa = `<?xml version="1.0" standalone="yes"?>`
+	dir := writeFiles(t, map[string]string{
+		"d.dtd":    `<!ENTITY greeting "from-external"><!ENTITY other "external-only"><!ENTITY frag "<b/>">`,
+		"text.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
+		"attr.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r a="&other;"/>`,
+		"frag.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&frag;</r>`,
+		"ok.xml":   sa + `<!DOCTYPE r SYSTEM "d.dtd" [<!ENTITY greeting "from-internal">]><r>&greeting;</r>`,
+		"nosa.xml": `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
+	})
+	for _, name := range []string{"text.xml", "attr.xml", "frag.xml"} {
+		if err := parseExternalErr(t, dir, name); err == nil {
+			t.Errorf("%s: parsed, want WFC: Entity Declared refused", name)
+		}
+	}
+	if got := mustParseExternal(t, dir, "ok.xml").Root.StringValue(); got != "from-internal" {
+		t.Errorf("ok.xml: got %q, want from-internal", got)
+	}
+	if got := mustParseExternal(t, dir, "nosa.xml").Root.StringValue(); got != "external-only" {
+		t.Errorf("nosa.xml: got %q, want external-only", got)
+	}
+}
+
+// WFC: PE Between Declarations (XML 1.0 §2.8 [28a]): a parameter entity
+// referenced between declarations has replacement text matching extSubsetDecl,
+// so it cannot open a comment or a declaration that the text after the
+// reference closes (xmlconf not-wf-not-sa-009, ibm28an01). A reference INSIDE
+// a declaration is only VC: Proper Declaration/PE Nesting, so a document that
+// splits a declaration that way still parses (invalid--005, invalid--006), and
+// so does one whose conditional-section keyword is a reference.
+func TestParameterEntityBetweenDeclarationsIsWhole(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"comment.dtd": `<!ELEMENT r EMPTY><!ENTITY % e "<!--">%e; -->`,
+		"decl.dtd":    `<!ENTITY % e "<!ELEMENT r ">%e;EMPTY>`,
+		"inner1.dtd":  `<!ENTITY % e ">"><!ELEMENT r EMPTY %e;`,
+		"inner2.dtd":  `<!ENTITY % e "EMPTY>"><!ELEMENT r %e;`,
+		"cond.dtd":    `<!ENTITY % on "INCLUDE"><![%on;[<!ELEMENT r EMPTY>]]>`,
+		"whole.dtd":   `<!ENTITY % m "<!ELEMENT r EMPTY><!-- c -->">%m;`,
+	})
+	for name, wantErr := range map[string]bool{
+		"comment.dtd": true, "decl.dtd": true,
+		"inner1.dtd": false, "inner2.dtd": false, "cond.dtd": false, "whole.dtd": false,
+	} {
+		src := `<!DOCTYPE r SYSTEM "` + name + `"><r/>`
+		_, err := ParseString(src, ParseOptions{
+			AllowDOCTYPE:     true,
+			ExternalEntities: &dirResolver{root: dir},
+			BaseURI:          fileuri.Of(filepath.Join(dir, "doc.xml")),
+		})
+		if gotErr := err != nil; gotErr != wantErr {
+			t.Errorf("%s: err = %v, want error %v", name, err, wantErr)
+		}
+	}
+}
+
 // The ATTLIST types an external subset declares govern the document even when
 // that subset declares no entities: XML 1.0 §3.3.1 (from memory) makes an
 // attribute declared ID an ID wherever the declaration lives, and the XDM
