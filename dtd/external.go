@@ -1,11 +1,14 @@
 package dtd
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xmldecode"
 	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -471,11 +474,22 @@ func (l *loader) fetch(systemID, publicID, base string) (text, resolved string, 
 			"external subset %q exceeds the remaining %d byte budget: %w",
 			systemID, limit, xdm.ErrResourceLimit)
 	}
+	l.bytes += int64(len(data))
+	// An external entity carries its own encoding (XML 1.0 §4.3.3), and a
+	// UTF-16 one begins with a byte order mark. It is decoded the way xdm
+	// decodes a document, by the same code, and the mark is dropped.
+	dec, err := xmldecode.Reader(bufio.NewReader(bytes.NewReader(data)))
+	if err == nil {
+		data, err = io.ReadAll(dec)
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("decoding external resource %q: %w", systemID, err)
+	}
 	// Charged before expansion, per the note above. Both counters move: the
 	// bytes were read, and they are also about to be substituted into the
 	// subset, so a bomb cannot launder its size by moving a level into a
-	// file.
-	l.bytes += int64(len(data))
+	// file. The expansion charge is the DECODED size, since UTF-16 text can
+	// grow by half as UTF-8 and the budget bounds what the expander is handed.
 	if err := l.chargeExpansion(len(data)); err != nil {
 		return "", "", err
 	}

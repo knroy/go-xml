@@ -93,7 +93,9 @@ That reads both halves and applies them together: parameter entities span the
 two subsets with XML 1.0 §2.8's precedence (the internal subset is read first
 and its declarations bind), a `%pe;` in the external subset may expand to whole
 declarations, and conditional sections — `<![INCLUDE[` and `<![IGNORE[`, §3.4 —
-are resolved, including nested ones.
+are resolved, including nested ones. Each fetched resource is decoded by its
+own byte order mark (UTF-8 or UTF-16, §4.3.3), as `xdm.Parse` decodes a
+document.
 
 Five things to know before relying on it:
 

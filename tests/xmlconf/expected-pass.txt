@@ -1797,6 +1797,8 @@ valid-sa-116
 valid-sa-117
 valid-sa-118
 valid-sa-119
+weekly-little
+weekly-utf-16
 weekly-utf-8
 x-ibm-1-0.5-not-wf-P04-ibm04n02.xml
 x-ibm-1-0.5-not-wf-P04-ibm04n03.xml

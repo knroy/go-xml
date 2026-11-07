@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -985,5 +986,33 @@ func TestParameterEntityDeclaredInAConditionalSection(t *testing.T) {
 	}
 	if err := loadCheck(t, doc+`<r><a>x</a></r>`, opts); err == nil {
 		t.Error("a is EMPTY: the declaration inside IGNORE must not win")
+	}
+}
+
+// An external subset carries its own encoding (XML 1.0 §4.3.3), and every
+// processor must read UTF-16, which begins with a byte order mark. The
+// loader read the bytes as UTF-8, so a UTF-16 subset declared nothing.
+func TestUTF16ExternalSubsetIsDecoded(t *testing.T) {
+	const subset = `<?xml version="1.0" encoding="UTF-16"?><!ELEMENT r (a)><!ELEMENT a EMPTY>`
+	for _, bigEndian := range []bool{true, false} {
+		b := []byte{0xFF, 0xFE}
+		if bigEndian {
+			b = []byte{0xFE, 0xFF}
+		}
+		for _, u := range utf16.Encode([]rune(subset)) {
+			if bigEndian {
+				b = append(b, byte(u>>8), byte(u))
+			} else {
+				b = append(b, byte(u), byte(u>>8))
+			}
+		}
+		opts := mapOpts(map[string]string{"r.dtd": string(b)})
+		const doc = `<!DOCTYPE r SYSTEM "r.dtd">`
+		if err := loadCheck(t, doc+`<r><a/></r>`, opts); err != nil {
+			t.Errorf("bigEndian=%v: a UTF-16 subset should be read: %v", bigEndian, err)
+		}
+		if err := loadCheck(t, doc+`<r/>`, opts); err == nil {
+			t.Errorf("bigEndian=%v: the UTF-16 subset's model should be enforced", bigEndian)
+		}
 	}
 }
