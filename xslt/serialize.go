@@ -2454,32 +2454,6 @@ func attrNeedsEscape(r rune) bool {
 // ordinary XML that happens to be serialised by this method.
 const nsXHTML = "http://www.w3.org/1999/xhtml"
 
-// voidElements are the HTML elements that take no end tag. Writing one with a
-// closing tag, or self-closing a non-void element, both produce a tree that
-// an HTML parser reads differently from the one the stylesheet built.
-// voidElements are the names with an empty content model in every HTML
-// version this serialiser writes. Three more are version-specific and live in
-// the two maps below.
-var voidElements = map[string]bool{
-	"area": true, "base": true, "br": true, "col": true, "embed": true,
-	"hr": true, "img": true, "input": true, "link": true, "meta": true,
-	"param": true,
-}
-
-// html4VoidElements are void in HTML 4 and gone from HTML 5, which has no
-// frameset and no isindex at all. Writing "<frame>" unclosed under HTML 5
-// leaves an element an HTML 5 parser reads as open, swallowing what follows.
-var html4VoidElements = map[string]bool{
-	"basefont": true, "frame": true, "isindex": true,
-}
-
-// html5VoidElements are void in HTML 5 and unknown to HTML 4, where an
-// unclosed one would be an unrecognised start tag rather than an empty
-// element.
-var html5VoidElements = map[string]bool{
-	"keygen": true, "source": true, "track": true, "wbr": true,
-}
-
 // xhtmlVoidElement reports whether the xhtml method recognises n as one of
 // HTML's empty elements, which are written with the self-closing spelling.
 //
@@ -2512,14 +2486,7 @@ func (s *serializer) xhtmlVoidElement(n *xdm.Node) bool {
 // passes both only by accident and fails the moment a case names an element
 // from the other version.
 func (s *serializer) isVoidElement(local string) bool {
-	local = strings.ToLower(local)
-	if voidElements[local] {
-		return true
-	}
-	if s.html5 {
-		return html5VoidElements[local]
-	}
-	return html4VoidElements[local]
+	return htmlser.Void(local, s.html5)
 }
 
 // isRawTextElement reports whether an HTML element's content is CDATA, and so
