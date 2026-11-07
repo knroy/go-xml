@@ -659,6 +659,32 @@ input to its end); the list's comment gives each family's argument.
 on the tree, requires the same text with no re-run, then drops the family
 from the list and requires the re-run.
 
+An input document's invalidity is final too where the stream's first
+failure tells the tree's code (`inputFinalCodes`, `xslt/streamvalidin.go`):
+`XTTE1540` for `type=`, and `XTTE1510` for `validation="strict"` when the
+schema can assess the document element and the first failure is not an
+ID/IDREF one. This holds also when the harness's own validation of a
+preloaded source fails first, which it never reports
+(`TestStreamInputInvalidMarkedFinal`, streamable-149). The tree validates
+before its body runs, so this is its error
+whether the streamed body succeeded or failed first. Its text is the first
+failure, marked `the first failure detected`, where the tree's lists every
+failure (XSLT 3.0 §2.14: "an implementation is not required to signal any
+errors other than the first one that it detects"). So the harnesses compare
+this one family by code and every other error in full
+(`streamtrace.SameError`): `TestStreamFuzz`, `coreCheck`, the output leg,
+and streamdiff's base/branch and branch/off comparisons, which add a rule
+per such case to `<outdir>/<a>-vs-<b>.allow` and print the count.
+`validation="lax"` (XTTE1515 or XTTE1510 depending on every failure) and an
+ID-first failure still re-run (`TestStreamInputInvalidReruns`).
+
+An error from a `GroundLater` callback (`internal/xdmstream`) does not stop
+the parse. The cursor call during which the copy was handed over returns
+it, and the cursor reads on, so `settle` can read the rest of the document:
+a final family raised in a late copy (si-map-007, sx-MapExpr-007,
+stream-106's validated `xsl:copy-of`) needs no re-run
+(`TestStreamGroundLaterErrorFinal`, `TestCursorGroundLaterError`).
+
 A principal input the catalog declares `streaming="true"`, a file or inline
 `<content>` (no `@select` or XInclude, no initial-mode selection), is handed
 to `TransformReader` unparsed; a validated one through

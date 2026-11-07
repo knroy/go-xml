@@ -42,6 +42,18 @@
 // one (it fails). The matrix is
 // written to <outdir>/errors.tsv and summarised; it fails only when a case
 // with no re-run moved between the two legs, which the switch must not do.
+//
+// One family of errors is compared by code, not text, in the base/branch and
+// branch/off comparisons and in the output leg: an input document's
+// invalidity found by validating it (XTTE1510 for validation="strict",
+// XTTE1540 for type=), whose streamed text is the first failure the stream
+// met, marked as such, where the tree's lists every failure
+// (streamtrace.SameError). XSLT 3.0 §2.14: "If more than one error arises,
+// an implementation is not required to signal any errors other than the
+// first one that it detects." For each case whose two recordings are that
+// error with the same code, a rule accepting the case is added to the allow
+// rules (<outdir>/<a>-vs-<b>.allow) and counted in the summary; every other
+// error is compared in full.
 package main
 
 import (
@@ -134,7 +146,13 @@ func main() {
 	bad := false
 	for _, p := range [][2]string{{"base", "branch"}, {"branch", "off"}} {
 		fmt.Printf("== %s vs %s\n", p[0], p[1])
-		cmd := exec.Command(rd, "compare", "-allow", allowFile,
+		rules, n := firstFailureRules(allowFile, filepath.Join(out, p[0]), filepath.Join(out, p[1]))
+		fmt.Printf("   %d cases: an input's invalidity, the same code (the first failure detected)\n", n)
+		pairAllow := filepath.Join(out, p[0]+"-vs-"+p[1]+".allow")
+		if err := os.WriteFile(pairAllow, []byte(rules), 0o644); err != nil {
+			die(err)
+		}
+		cmd := exec.Command(rd, "compare", "-allow", pairAllow,
 			filepath.Join(out, p[0]), filepath.Join(out, p[1]))
 		f, err := os.Create(filepath.Join(out, p[0]+"-vs-"+p[1]+".txt"))
 		if err != nil {
@@ -395,6 +413,64 @@ func tsv(file string, n int) (rows [][]string) {
 		rows = append(rows, fs)
 	}
 	return rows
+}
+
+// firstFailureRules is the allow file's text with a rule for each case whose
+// recordings in a and b differ only as streamtrace.SameError allows: an
+// input's invalidity, the first failure on one side, every failure on the
+// other, under the same code. It returns the text and the number of cases.
+func firstFailureRules(allowFile, a, b string) (string, int) {
+	base, err := os.ReadFile(allowFile)
+	if err != nil {
+		die(err)
+	}
+	var rules strings.Builder
+	rules.Write(base)
+	rules.WriteString("\n# streamdiff: an input's invalidity, compared by code (streamtrace.SameError)\n")
+	ra, rb := manifest(a), manifest(b)
+	var keys []string
+	for k, ha := range ra {
+		if hb, ok := rb[k]; ok && ha != hb {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	n := 0
+	for _, k := range keys {
+		ta, tb := object(a, ra[k]), object(b, rb[k])
+		if !strings.HasPrefix(ta, "error: ") || !strings.HasPrefix(tb, "error: ") ||
+			!streamtrace.SameError(ta, tb) && !streamtrace.SameError(tb, ta) {
+			continue
+		}
+		fmt.Fprintf(&rules, "xslt30 %s (?s).+\n", k)
+		n++
+	}
+	return rules.String(), n
+}
+
+// manifest reads <dir>/xslt30.tsv: each case's object hash (a case recorded
+// twice is left out: recdiff compares it as it is).
+func manifest(dir string) map[string]string {
+	m, twice := map[string]string{}, map[string]bool{}
+	for _, fs := range tsv(filepath.Join(dir, "xslt30.tsv"), 3) {
+		if _, ok := m[fs[0]]; ok {
+			twice[fs[0]] = true
+		}
+		m[fs[0]] = fs[1]
+	}
+	for k := range twice {
+		delete(m, k)
+	}
+	return m
+}
+
+// object is the recorded text of hash h in dir.
+func object(dir, h string) string {
+	b, err := os.ReadFile(filepath.Join(dir, "obj", h[:2], h))
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // errorMatrix classifies each case of the norerun leg that had a container

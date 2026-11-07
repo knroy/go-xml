@@ -264,7 +264,7 @@ func coreCheck(t *testing.T, sheet, dir, where string, stream bool, opts Transfo
 	t.Helper()
 	so, se, st := coreRun(sheet, dir, true, opts)
 	to, te, tt := coreRun(sheet, dir, false, opts)
-	if so != to || se != te {
+	if so != to || !streamtrace.SameError(se, te) { // an input's invalidity by code: SameError
 		t.Errorf("%s:\ncore %q %q\ntree %q %q", where, so, se, to, te)
 	}
 	if st.Guards+tt.Guards != 0 {

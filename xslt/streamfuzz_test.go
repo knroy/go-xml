@@ -798,7 +798,9 @@ func fuzzCode(r fuzzRes) string {
 }
 
 // fuzzDiff says how co, the streamed run, differs from tr, the tree's, or
-// "": exactly, error text and all.
+// "": exactly, error text and all, but for an input document's invalidity,
+// which is compared by code (streamtrace.SameError, XSLT 3.0 §2.14: the
+// stream reports its first failure, the tree every one).
 func fuzzDiff(c fuzzCase, co, tr fuzzRes) string {
 	switch {
 	case co.panic != "" || tr.panic != "":
@@ -809,7 +811,7 @@ func fuzzDiff(c fuzzCase, co, tr fuzzRes) string {
 		return "STREAMED WHILE OFF"
 	case co.out != tr.out:
 		return "OUTPUT"
-	case co.err != tr.err:
+	case !streamtrace.SameError(co.err, tr.err):
 		return "ERROR " + fuzzCode(co) + " vs " + fuzzCode(tr)
 	case co.msgs != tr.msgs:
 		return "MESSAGES"
@@ -893,6 +895,9 @@ func TestStreamFuzz(t *testing.T) {
 			}
 			if co.err != "" && co.trace.Reruns > 0 {
 				tally["validated shapes: invalid, the tree's error"]++
+			}
+			if strings.Contains(co.err, streamtrace.FirstFailure) && co.trace.Reruns == 0 {
+				tally["validated shapes: invalid, the first failure, final"]++
 			}
 		}
 		if c.kind == "hold" {

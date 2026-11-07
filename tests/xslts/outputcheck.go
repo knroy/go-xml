@@ -20,6 +20,10 @@ package xslts
 // serialization error of a secondary result is the transform's error under
 // SecondaryOutput, and so is compared as one. The line's fourth field is the
 // number of secondary results the case wrote.
+//
+// The errors are compared in full but for an input document's invalidity,
+// compared by code: one run may have streamed it and reported its first
+// failure, the other every failure (streamtrace.SameError, XSLT 3.0 §2.14).
 
 import (
 	"bytes"
@@ -30,6 +34,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/xslt"
 )
@@ -61,7 +66,7 @@ func (r *Runner) checkOutput(set *TestSet, tc *TestCase, res *xslt.Result, terr 
 	gotText := sec.render(got.String())
 	status := "same"
 	switch {
-	case (werr == nil) != (gerr == nil) || werr != nil && werr.Error() != gerr.Error():
+	case (werr == nil) != (gerr == nil) || werr != nil && !sameError(werr.Error(), gerr.Error()):
 		status = "errdiff"
 	case werr == nil && want != gotText:
 		status = "diff"
@@ -160,4 +165,10 @@ func (s secondaryWriters) render(principal string) string {
 		fmt.Fprintf(&b, "\n--- %s\n%s", k, s[k].String())
 	}
 	return b.String()
+}
+
+// sameError says whether two runs' errors are the same: SameError either
+// way, since either run may be the streamed one.
+func sameError(a, b string) bool {
+	return streamtrace.SameError(a, b) || streamtrace.SameError(b, a)
 }

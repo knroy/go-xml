@@ -10,14 +10,17 @@ package xslt
 // grounded copy and leaf copy of them carries the typing the tree's typed
 // copy has, and it adds the attributes the schema supplies by default to
 // the start tags. A document is known to be valid only at its end; until
-// then the run goes on, and a failure is the run's error: the container
-// re-runs on the tree (executeStream, the merge's re-run), which raises the
-// tree's error with its code, its message and in its order -- including
-// when the body failed first, since the tree validates before it runs the
-// body. So the stream must be exact on a valid document and exact about
-// whether a document is valid; the error text is the tree's. (Invalidity of
-// what the body constructs is another matter: its error is the tree's as
-// the stream meets it, and is returned with no re-run; settle, below.)
+// then the run goes on, and a failure is the run's error, the tree's
+// whether or not the body failed first, since the tree validates before it
+// runs the body. Where the stream knows the tree's code from the first
+// failure (type=, and validation="strict" as attach says), the error is
+// final, with that code and the first failure (inputInvalid: XSLT 3.0
+// §2.14); otherwise the container re-runs on the tree (executeStream, the
+// merge's re-run), which raises the tree's error with its code and message.
+// So the stream must be exact on a valid document and exact about whether
+// a document is valid. (Invalidity of what the body constructs is another
+// matter: its error is the tree's as the stream meets it, and is returned
+// with no re-run; settle, below.)
 //
 // What the tree's copy is besides typed is the stream's too: no document
 // URI (streamDocAs), no DTD (dropped at the document element's start tag,
@@ -35,6 +38,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/internal/xsdstream"
@@ -191,12 +195,18 @@ func (sv *streamValidation) attach(c *xdmstream.Cursor, strip func(*xdm.Node) bo
 		ids = &docIDs{owners: map[string]uint64{}}
 	}
 	stripped, docElem := error(nil), ""
+	// assessable says validation="strict" can assess the document element
+	// (the tree's XTTE1512 otherwise: assess).
+	assessable := false
 	c.Observe(func(n *xdm.Node, d int, end bool, ord uint64) {
 		if d == 1 && !end && n != nil && n.Kind() == xdm.KindElement {
 			if sv.dropDTD {
 				xdmburst.DropDTD(n)
 			}
 			docElem = describeNode(n)
+			if s, ok := sv.schema.(*xsd.Schema); ok && sv.mode.Root == xsdstream.Strict {
+				assessable = s.CanAssessStrictly(n)
+			}
 		}
 		for _, v := range vs {
 			v.Observe(n, d, end)
@@ -215,19 +225,38 @@ func (sv *streamValidation) attach(c *xdmstream.Cursor, strip func(*xdm.Node) bo
 				if sv.main != 0 {
 					return sourceError(sv.main, err)
 				}
-				if k == len(vs)-1 && sv.schema != nil && sv.mode.Root == xsdstream.Type {
-					// type= is the tree's XTTE1540 whatever the failure
-					// (assess: ValidateAgainstTypeCopy). ERR XTTE1540: "if
-					// an [xsl:]type attribute is defined ... and the outcome
-					// of schema validity assessment against that type is
-					// that the validity property ... is other than valid".
-					// Not final: the tree's text lists every failure, Err
-					// the first; the re-run raises it.
-					return fmt.Errorf("XTTE1540: %s is not valid against %s: %w", docElem, sv.mode.Type.Lexical(), err)
+				if k == 0 && sv.pre != nil && sv.schema != nil && len(vs) == 2 && vs[1].Err() != nil {
+					// The harness's validation failed, which it does not
+					// report (its typed copy keeps the annotations up to the
+					// failure), and so did the stylesheet's: the tree's error
+					// is the stylesheet's validation's (streamable-149).
+					k, err = 1, vs[1].Err()
 				}
-				// validation= strict or lax: the tree's code (XTTE1510,
-				// 1512, 1515, 1555) turns on every failure, the stream's
-				// Err on the first; the re-run raises it.
+				if k == len(vs)-1 && sv.schema != nil {
+					switch {
+					case sv.mode.Root == xsdstream.Type:
+						// type= is the tree's XTTE1540 whatever the failure
+						// (assess: ValidateAgainstTypeCopy). ERR XTTE1540:
+						// "if an [xsl:]type attribute is defined ... and the
+						// outcome of schema validity assessment against that
+						// type is that the validity property ... is other
+						// than valid".
+						return &inputInvalid{fmt.Errorf("XTTE1540: %s is not valid against %s%s%w",
+							docElem, sv.mode.Type.Lexical(), streamtrace.FirstFailure, err)}
+					case sv.mode.Root == xsdstream.Strict && assessable && !uncertainCode(err):
+						// validation="strict" of a document element the
+						// schema can assess is the tree's XTTE1510 unless
+						// every failure is an ID/IDREF one (XTTE1555:
+						// idConstraintFailure), which a first failure of
+						// another kind rules out.
+						return &inputInvalid{fmt.Errorf("XTTE1510: %s is not valid%s%w",
+							docElem, streamtrace.FirstFailure, err)}
+					}
+				}
+				// Otherwise (lax, a harness validation first, a first
+				// failure that is an ID's) the tree's code (XTTE1510, 1512,
+				// 1515, 1555) turns on every failure, the stream's Err on
+				// the first; the re-run raises it.
 				return fmt.Errorf("XTTE1510: the streamed document is not valid: %w", err)
 			}
 		}
@@ -236,6 +265,33 @@ func (sv *streamValidation) attach(c *xdmstream.Cursor, strip func(*xdm.Node) bo
 		}
 		return stripped
 	}
+}
+
+// inputInvalid is the invalidity of a streamed input document, found by
+// attach's validation, whose code is the one the tree raises: XTTE1540 for
+// type=, XTTE1510 for validation="strict" (see attach). Its text is the
+// first failure the stream met, where the tree's lists every failure. The
+// tree validates the document before its body runs, so this is its error
+// whatever the streamed body did, once the document is known to be well
+// formed: final, with no re-run (runStream, settle). XSLT 3.0 §2.14: "If
+// more than one error arises, an implementation is not required to signal
+// any errors other than the first one that it detects." The differential
+// tests compare it by code (streamtrace.SameError).
+type inputInvalid struct{ err error }
+
+func (e *inputInvalid) Error() string { return e.err.Error() }
+func (e *inputInvalid) Unwrap() error { return e.err }
+
+// uncertainCode reports whether err, a validation's first failure, is not one
+// whose code the tree's error is known from: an ID/IDREF constraint
+// (cvc-id), or a failure with no code.
+func uncertainCode(err error) bool {
+	var errs *xsd.ValidationErrors
+	if !errors.As(err, &errs) || len(errs.Errors) == 0 {
+		return true
+	}
+	code := errs.Errors[0].Code
+	return code == "" || strings.HasPrefix(code, "cvc-id.")
 }
 
 // stripAnnotationsOf is stripAnnotationCopy for n, an element of the parse
@@ -630,13 +686,42 @@ func (e *treesError) Unwrap() error { return e.err }
 // is being computed, active, which the tree's container meets too: a
 // circularity, XTDE0640 once the global's evaluation sees it) and the rest
 // of the document reads, validates and accumulates without error, which the
-// tree had done before its body ran; otherwise err, for the re-run.
+// tree had done before its body ran; otherwise err, for the re-run. A
+// validated document (run.typed) is read on to its end whatever err is,
+// short of a posture fault or a resource limit: when it is invalid with the
+// tree's code (inputInvalid), that is the tree's error, raised before its
+// body ran.
 func (run *streamRun) settle(err error, valid func() error, acc *streamAccums, active map[string]bool) error {
-	if !streamFinal(err, nil) && circularGlobalInPattern(err, active) == nil { // streamexec.go, pattern.go
+	final := streamFinal(err, nil) || circularGlobalInPattern(err, active) != nil // streamexec.go, pattern.go
+	var pe *streamtrace.PostureError
+	if !final && (!run.typed || errors.As(err, &pe) || errors.Is(err, xdm.ErrResourceLimit)) {
 		return err
 	}
-	if run.c.At().Kind != xdmstream.EndDocument && run.drain() != nil || valid() != nil || acc.finish() != nil {
+	if run.c.At().Kind != xdmstream.EndDocument && run.drain() != nil {
+		return err
+	}
+	if verr := valid(); verr != nil {
+		if fe := inputFinal(verr); fe != verr {
+			return fe
+		}
+		return err
+	}
+	if !final || acc.finish() != nil {
 		return err
 	}
 	return &treesError{err}
 }
+
+// inputFinal is err, a streamed document's validation outcome, as the
+// tree's (treesError) when it is inputInvalid with a code of
+// inputFinalCodes; otherwise err, for the re-run.
+func inputFinal(err error) error {
+	if ie, ok := err.(*inputInvalid); ok && inputFinalCodes[xdm.ErrorCode(ie)] {
+		return &treesError{ie}
+	}
+	return err
+}
+
+// inputFinalCodes are the codes of inputInvalid, final: each has a case in
+// TestStreamFinalErrors that fails when it is dropped.
+var inputFinalCodes = map[string]bool{"XTTE1510": true, "XTTE1540": true}
