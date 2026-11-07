@@ -283,6 +283,10 @@ type mergeInput struct {
 	pos     int
 	head    *mergeEntry
 	prev    mergeEntry
+	// disordered is set once a pair of the input is out of order: the error
+	// is its first pair's, the tree's (checkMergeInputSorted over the whole
+	// input), and the later pairs are not checked.
+	disordered bool
 	// first holds the input's first key value of each kind per key
 	// position, for XTTE2230 across sources (checkMergeKeysComparable).
 	typed, untyped []*xdm.Atomic
@@ -534,7 +538,10 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 // its order checked, its document valid, its accumulators without error,
 // and the keys across sources comparable: what the tree's collect, its
 // XTTE2230 check and its XTDE2220 check do before its first action runs.
-// Otherwise err, for the re-run.
+// An input out of order reads on past its first bad pair, unchecked
+// (disordered): the tree computes the input's keys whole and then reports
+// its first pair out of order, which is the stream's. Otherwise err, for
+// the re-run.
 func (i *mergeInstr) settleMerge(rt *runtime, err error, inputs []*mergeInput, resolved [][]*sortKey,
 	colls [][]xpath.Collation, accs []*mergeAccums) error {
 
@@ -645,8 +652,9 @@ func (in *mergeInput) advance(rt *runtime, keys []*sortKey, colls []xpath.Collat
 		if e, err = mergeEntryOf(rt, snap, keys, colls, in.src, in.anchor, in.pos); err != nil {
 			return err
 		}
-		if in.pos > 0 {
+		if in.pos > 0 && !in.disordered {
 			if err := checkMergeInputSorted([]mergeEntry{in.prev, e}, keys); err != nil {
+				in.disordered = true
 				return err
 			}
 		}

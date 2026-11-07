@@ -1744,16 +1744,25 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 // Left out: XTTE15xx by code (invalidity of what the body constructs is
 // final through invalidError, marked where assess raises it; an unmarked one
 // is the input's, whose code the tree takes from every failure: attach),
-// XTDE0640 (a circularity, met where the accumulators are evaluated, which
-// the stream does in another order than the tree), FODC0002 (final only
-// when the document cannot be opened: runStream), XPTY0004 (the plans
-// evaluate rewritten expressions, whose own text it can carry: an except
-// split to "$v union ()" says "union", streamsplit_k2.go), and every error
-// with no code (a posture fault, a resource limit, a parse error).
+// XPST0008 by code (final only as a reference to a global variable whose
+// value is being computed, which the container's tree meets too and the
+// global's evaluation makes XTDE0640: settle, streamvalidin.go; §9.11
+// leaves "whether a particular circularity will actually be signaled"
+// implementation-dependent, and §18.2.5 signals an accumulator rule's
+// error at any accumulator call that depends on it), FODC0002 (final only
+// when the document cannot be opened: runStream), and every error with no
+// code (a posture fault, a resource limit, a parse error).
 var finalCodes = map[string]bool{
 	// XPath: a value the expression's own rules refuse, at the item it is
-	// evaluated on. XPDY0050, treat as; FOTY0013, atomizing a function.
-	"XPDY0050": true, "FOTY0013": true,
+	// evaluated on. XPDY0050, treat as; FOTY0013, atomizing a function;
+	// XPTY0004, an operand or argument of the wrong type. The plans evaluate
+	// some expressions rewritten, and a rewrite raises XPTY0004 with the
+	// tree's text at the same item: a set operator's variable operand is
+	// checked by the operator itself, $v except P as $v except ()
+	// (foreignSets, streamsplit_union.go), and (F union P)/T keeps the union
+	// (foreignPath, streamsplit_k2.go). Where the body has two such errors,
+	// which one comes first is §2.14's.
+	"XPDY0050": true, "FOTY0013": true, "XPTY0004": true,
 	// F&O: an argument the function refuses: FORG0001, a cast; FORG0003,
 	// FORG0004, FORG0005, zero-or-one, one-or-more, exactly-one; FORG0006,
 	// an effective boolean value, avg, sum, min, max; FOCH0001, a codepoint;
@@ -1899,7 +1908,7 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 			run.used = true
 		}
 		if err := execSequence(i.body, sub, out); err != nil {
-			return run.settle(err, valid, acc) // streamvalidin.go
+			return run.settle(err, valid, acc, rt.globalActive) // streamvalidin.go
 		}
 		if !run.used {
 			if err := run.drain(); err != nil {

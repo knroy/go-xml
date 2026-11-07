@@ -52,10 +52,10 @@ func TestStreamRerunMessages(t *testing.T) {
 		b     string
 		rerun bool
 	}{
-		// A message, then XPTY0004 (not final: finalCodes): the container
-		// fails and re-runs.
-		{`<xsl:message select="'m'"/><n><xsl:value-of select="log/e/@v eq 'a1'"/></n>`, true},
-		{`<xsl:for-each select="log/e"><xsl:message select="string(@v)"/><r v="{(@t, @v) eq '3'}"/></xsl:for-each>`, true},
+		// A message, then FORX0002 (a regex from the data, not final:
+		// finalCodes): the container fails and re-runs.
+		{`<xsl:message select="'m'"/><n><xsl:value-of select="log/e/@v ! matches('a', '(' || .)"/></n>`, true},
+		{`<xsl:for-each select="log/e"><xsl:message select="string(@v)"/><r v="{matches('a', '(' || @v)}"/></xsl:for-each>`, true},
 		// A message, then a value that is no integer (a1): FORG0001 is
 		// final, and the messages told before it are the tree's.
 		{`<xsl:message select="'m'"/><n><xsl:value-of select="sum(log/e/xs:integer(@v))"/></n>`, false},

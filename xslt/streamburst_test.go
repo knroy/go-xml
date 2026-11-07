@@ -262,9 +262,9 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"exists", `<xsl:value-of select="exists(doc/rec[@k = 'z'])"/>`, recs, true, false},
 		{"boolean, not", `<xsl:value-of select="not(boolean(doc/rec/x))"/>`, recs, true, false},
 		{"general comparison", `<xsl:value-of select="doc/rec/@v = 10"/>`, recs, true, false},
-		{"value comparison error", `<xsl:value-of select="doc/rec/@v eq 10"/>`, recs, true, true},
-		{"some", `<xsl:value-of select="some $r in doc/rec satisfies $r/@v > 5"/>`, recs, true, false},             // held at the document node (streamhold.go)
-		{"some, type error", `<xsl:value-of select="some $r in doc/rec satisfies $r/@v gt 5"/>`, recs, true, true}, // held at the document node (streamhold.go)
+		{"value comparison error", `<xsl:value-of select="doc/rec/@v eq 10"/>`, recs, true, false},                  // XPTY0004: finalCodes
+		{"some", `<xsl:value-of select="some $r in doc/rec satisfies $r/@v > 5"/>`, recs, true, false},              // held at the document node (streamhold.go)
+		{"some, type error", `<xsl:value-of select="some $r in doc/rec satisfies $r/@v gt 5"/>`, recs, true, false}, // held at the document node (streamhold.go); XPTY0004: finalCodes
 		{"literal position", `<xsl:value-of select="(doc/rec/@v)[2] + 1"/>`, recs, true, false},
 		{"head", `<xsl:copy-of select="head(doc/rec/@k/string())"/>`, recs, true, false},
 		{"exactly-one error", `<xsl:copy-of select="exactly-one(doc/rec)"/>`, recs, true, false}, // held at the document node (streamhold.go)

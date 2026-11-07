@@ -626,11 +626,13 @@ func (e *treesError) Unwrap() error { return e.err }
 
 // settle is the error of a streamed body that failed with err: err as the
 // tree's when it is final (invalidity, invalidError, or a family of
-// finalCodes: streamFinal) and the rest of the document reads, validates
-// and accumulates without error, which the tree had done before its body
-// ran; otherwise err, for the re-run.
-func (run *streamRun) settle(err error, valid func() error, acc *streamAccums) error {
-	if !streamFinal(err, nil) { // streamexec.go
+// finalCodes: streamFinal; or a reference to a global variable whose value
+// is being computed, active, which the tree's container meets too: a
+// circularity, XTDE0640 once the global's evaluation sees it) and the rest
+// of the document reads, validates and accumulates without error, which the
+// tree had done before its body ran; otherwise err, for the re-run.
+func (run *streamRun) settle(err error, valid func() error, acc *streamAccums, active map[string]bool) error {
+	if !streamFinal(err, nil) && circularGlobalInPattern(err, active) == nil { // streamexec.go, pattern.go
 		return err
 	}
 	if run.c.At().Kind != xdmstream.EndDocument && run.drain() != nil || valid() != nil || acc.finish() != nil {

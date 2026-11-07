@@ -38,6 +38,7 @@ func TestStreamFinalErrors(t *testing.T) {
 		merge       bool
 	}{
 		{"XPDY0050", coreSheet(`<xsl:value-of select="data(//rec/@v) treat as xs:integer*"/>`), false},
+		{"XPTY0004", coreSheetWith(`<xsl:variable name="three" select="3"/>`, `<xsl:value-of select="count(//rec except $three)"/>`), false},
 		{"FOTY0013", coreSheet(`<xsl:value-of select="data((//rec/@v, true#0))"/>`), false},
 		{"FORG0001", coreSheet(`<xsl:value-of select="sum(//rec/xs:decimal(@v))"/>`), false},
 		{"FORG0003", coreSheet(`<xsl:value-of select="string(zero-or-one(//rec/@n))"/>`), false},
@@ -111,5 +112,50 @@ func TestStreamOpenAndTypeCodes(t *testing.T) {
 	streamtrace.SetNoRerun(false)
 	if xdm.ErrorCode(errors.New(te)) != "XTTE1540" || xdm.ErrorCode(errors.New(se)) != "XTTE1540" || st.Reruns != 1 {
 		t.Errorf("type=: streamed %q (%d re-runs), tree %q; want XTTE1540", se, st.Reruns, te)
+	}
+}
+
+// TestStreamMergeDisorderedFinal: a streamed merge input with two pairs out
+// of order fails at the first (XTDE2220), and its settle reads on past the
+// second, unchecked: the tree's error is its first pair's, so the stream's
+// is final, with no re-run.
+func TestStreamMergeDisorderedFinal(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(`<doc><rec n="3"/><rec n="1"/><rec n="2"/><rec n="0"/></doc>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+ xmlns:xs="http://www.w3.org/2001/XMLSchema" exclude-result-prefixes="xs">
+<xsl:template name="main"><top><xsl:merge>
+<xsl:merge-source for-each-source="'doc.xml'" streamable="yes" select="doc/rec"><xsl:merge-key select="xs:integer(@n)"/></xsl:merge-source>
+<xsl:merge-action><g/></xsl:merge-action></xsl:merge></top></xsl:template>
+</xsl:stylesheet>`
+	_, te, _ := coreRun(sheet, dir, false, TransformOptions{})
+	_, se, st := coreRun(sheet, dir, true, TransformOptions{})
+	if xdm.ErrorCode(errors.New(te)) != "XTDE2220" || se != te || st.Streamed() == 0 || st.Reruns != 0 {
+		t.Errorf("streamed %q (trace %+v), tree %q; want the tree's XTDE2220, streamed, no re-run", se, st, te)
+	}
+}
+
+// TestStreamCircularGlobalFinal: a streamed container evaluated for a
+// global variable, whose accumulator rule refers to that variable, fails
+// with the reference (XPST0008, a global under evaluation) as the tree's
+// container does, and the global's evaluation makes it XTDE0640: final,
+// with no re-run (accumulator-031).
+func TestStreamCircularGlobalFinal(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(`<doc><rec/><rec/></doc>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+ xmlns:xs="http://www.w3.org/2001/XMLSchema" exclude-result-prefixes="xs">
+<xsl:accumulator name="a" as="xs:integer" initial-value="0" streamable="yes"><xsl:accumulator-rule match="*" select="$value + $count"/></xsl:accumulator>
+<xsl:variable name="count" as="xs:integer"><xsl:source-document streamable="yes" href="doc.xml" use-accumulators="#all"><xsl:for-each select="*"/><xsl:value-of select="accumulator-after('a')"/></xsl:source-document></xsl:variable>
+<xsl:template name="main"><o><xsl:value-of select="$count"/></o></xsl:template>
+</xsl:stylesheet>`
+	_, te, _ := coreRun(sheet, dir, false, TransformOptions{})
+	_, se, st := coreRun(sheet, dir, true, TransformOptions{})
+	if xdm.ErrorCode(errors.New(te)) != "XTDE0640" || se != te || st.Streamed() == 0 || st.Reruns != 0 {
+		t.Errorf("streamed %q (trace %+v), tree %q; want the tree's XTDE0640, streamed, no re-run", se, st, te)
 	}
 }
