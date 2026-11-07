@@ -495,3 +495,22 @@ func TestCurrentPostureIsOutermost(t *testing.T) {
 		}
 	}
 }
+
+// TestInlineFunctionBodyKinds checks that the §19.8.8.16 walk knows "?",
+// "||" and the argument placeholder: "an inline function declaration ... All
+// other inline function declarations are grounded and motionless", so with
+// no streaming parameter in scope each of these bodies is modelled, not
+// unknown.
+func TestInlineFunctionBodyKinds(t *testing.T) {
+	for _, src := range []string{
+		`function($m) { $m?k }`,
+		`function($m) { $m?($m?i) }`,
+		`function($a) { $a || 'x' }`,
+		`function() { concat(?, 'x') }`,
+	} {
+		got, known := analyze31(t, src)
+		if !known || got != groundedMotionless {
+			t.Errorf("%q: %v, known %v; want grounded and motionless", src, got, known)
+		}
+	}
+}

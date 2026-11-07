@@ -514,6 +514,15 @@ func (a *analyzer) bodyMentionsStreamingParam(e xpath.Expr) mention {
 	case *xpath.Literal, *xpath.ContextItem:
 		return mentionNo
 
+	// A partial application's "?" is not a reference either.
+	case *xpath.ArgumentPlaceholder:
+		return mentionNo
+	case *xpath.StringConcat:
+		return a.mentionAny([]xpath.Expr{x.Left, x.Right})
+	// A unary lookup's operand is the context item, as for ".".
+	case *xpath.LookupExpr:
+		return a.mentionAny([]xpath.Expr{x.Base, x.Expr})
+
 	// A name, not a reference to a variable -- except fn:current#0, which
 	// reaches the creating context's current item as a call does.
 	case *xpath.NamedFunctionRef:
