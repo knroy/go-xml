@@ -1688,6 +1688,9 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	} else {
 		// The re-run. What the failed run charged is dropped with it.
 		streamtrace.Rerun()
+		if streamtrace.NoRerun() {
+			return true, err // tests/streamdiff's norerun leg: the streamed error
+		}
 	}
 	if traceRerun != nil {
 		traceRerun(err)

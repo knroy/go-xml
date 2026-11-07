@@ -1,8 +1,9 @@
-// Command streamdiff is the three-way differential for streamed execution:
-// it records TestXSLT30Suite on a base commit, on this checkout, and on this
-// checkout with streaming switched off (GOXSLT_STREAM_OFF=1), compares the
-// recordings with tests/recdiff, and summarises which cases ran on the
-// streamed path.
+// Command streamdiff is the differential for streamed execution: it records
+// TestXSLT30Suite on a base commit, on this checkout, on this checkout with
+// streaming switched off (GOXSLT_STREAM_OFF=1), and on this checkout with
+// re-runs switched off (GOXSLT_STREAM_NORERUN=1), compares the first three
+// recordings with tests/recdiff, summarises which cases ran on the streamed
+// path, and reports the streamed error codes against the tree's.
 //
 //	go run ./tests/streamdiff [-floor n] [-allow file] [-output] <base-rev> <outdir>
 //
@@ -30,6 +31,17 @@
 // bytes and error compared with Result.Serialize's. It then fails when any
 // case differs, and reports the counts over all cases and over those the
 // branch leg streamed.
+//
+// The fourth leg, "norerun", has every container that fails while streaming
+// return its streamed error instead of running again on the tree
+// (streamtrace.SetNoRerun). For each case where one did (its re-runs in
+// <outdir>/norerun/streams/xslt30.tsv), the error code the judge read
+// (streams/xslt30-verdicts.tsv, tests/xslts/record.go) is compared with the
+// branch leg's, which is the tree's answer: the same code and verdict,
+// another code the catalog also accepts (the case still passes), or a wrong
+// one (it fails). The matrix is
+// written to <outdir>/errors.tsv and summarised; it fails only when a case
+// with no re-run moved between the two legs, which the switch must not do.
 package main
 
 import (
@@ -40,6 +52,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -111,6 +124,7 @@ func main() {
 	}, baseSrc, td)
 	leg(out, "branch", rev, nil, nil, root, td)
 	leg(out, "off", rev, []string{"GOXSLT_STREAM_OFF=1"}, nil, root, td)
+	leg(out, "norerun", rev, []string{"GOXSLT_STREAM_NORERUN=1"}, nil, root, td)
 	if *outLeg {
 		leg(out, "output", rev, []string{"GOXSLT_OUTPUT_CHECK=" + filepath.Join(out, "output.tsv")}, nil, root, td)
 	}
@@ -156,6 +170,9 @@ func main() {
 	}
 	if off.total.Streamed() > 0 {
 		fmt.Println("FAIL GOXSLT_STREAM_OFF=1 still streamed")
+		bad = true
+	}
+	if !errorMatrix(out) {
 		bad = true
 	}
 	if *outLeg && !outputSummary(filepath.Join(out, "output.tsv"), filepath.Join(out, "branch")) {
@@ -213,7 +230,7 @@ func cleanEnv() []string {
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
 		switch k {
-		case "GOXSLT_RECORD_DIR", "GOXSLT_XSLTS", "GOXSLT_STREAM_OFF", "GOXSLT_NO_SUITES":
+		case "GOXSLT_RECORD_DIR", "GOXSLT_XSLTS", "GOXSLT_STREAM_OFF", "GOXSLT_STREAM_NORERUN", "GOXSLT_NO_SUITES":
 			continue
 		}
 		env = append(env, kv)
@@ -341,6 +358,97 @@ func outputSummary(file, branch string) bool {
 	}
 	if all.diff+all.errdiff > 0 {
 		fmt.Printf("FAIL output: %d cases differ (%s.diff)\n", all.diff+all.errdiff, file)
+		return false
+	}
+	return true
+}
+
+// verdict is a case's line of streams/xslt30-verdicts.tsv.
+type verdict struct{ pass, code string }
+
+// verdicts reads <dir>/streams/xslt30-verdicts.tsv.
+func verdicts(dir string) map[string]verdict {
+	v := map[string]verdict{}
+	for _, fs := range tsv(filepath.Join(dir, "streams", "xslt30-verdicts.tsv"), 3) {
+		v[fs[0]] = verdict{fs[1], fs[2]}
+	}
+	return v
+}
+
+// tsv reads file's lines of n tab-separated fields; a missing file is empty.
+func tsv(file string, n int) (rows [][]string) {
+	b, err := os.ReadFile(file)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		die(err)
+	}
+	for _, l := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
+		if l == "" {
+			continue
+		}
+		fs := strings.Split(l, "\t")
+		if len(fs) < n {
+			die(fmt.Errorf("%s: bad line %q", file, l))
+		}
+		rows = append(rows, fs)
+	}
+	return rows
+}
+
+// errorMatrix classifies each case of the norerun leg that had a container
+// fail while streaming: its streamed code against the branch leg's (the
+// tree's), into <out>/errors.tsv. It reports false when a case with no
+// re-run has another verdict or code in the two legs.
+func errorMatrix(out string) bool {
+	nr := filepath.Join(out, "norerun")
+	reruns := map[string]string{}
+	ns := int(streamtrace.NumStrategies)
+	for _, fs := range tsv(filepath.Join(nr, "streams", "xslt30.tsv"), ns+4) {
+		if fs[ns+3] != "0" {
+			reruns[fs[0]] = fs[ns+3]
+		}
+	}
+	tree, str := verdicts(filepath.Join(out, "branch")), verdicts(nr)
+	var keys []string
+	moved := 0
+	for k, s := range str {
+		if _, ok := reruns[k]; ok {
+			keys = append(keys, k)
+		} else if t, ok := tree[k]; ok && t != s {
+			fmt.Printf("  moved without a re-run: %s: tree %s %s, norerun %s %s\n", k, t.pass, t.code, s.pass, s.code)
+			moved++
+		}
+	}
+	sort.Strings(keys)
+	f, err := os.Create(filepath.Join(out, "errors.tsv"))
+	if err != nil {
+		die(err)
+	}
+	defer f.Close()
+	fmt.Fprintln(f, "case\tre-runs\tclass\ttree code\ttree verdict\tstreamed code\tstreamed verdict")
+	count := map[string]int{}
+	containers := 0
+	for _, k := range keys {
+		t, s := tree[k], str[k]
+		class := "same"
+		switch {
+		case s == t:
+		case s.pass == "pass":
+			class = "accepted"
+		default:
+			class = "wrong"
+		}
+		count[class]++
+		n, _ := strconv.Atoi(reruns[k])
+		containers += n
+		fmt.Fprintf(f, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", k, reruns[k], class, t.code, t.pass, s.code, s.pass)
+	}
+	fmt.Printf("== streamed errors (norerun leg, %s)\n  %d cases, %d containers failed while streaming: same code %d, another accepted code %d, wrong code %d\n",
+		f.Name(), len(keys), containers, count["same"], count["accepted"], count["wrong"])
+	if moved > 0 {
+		fmt.Printf("FAIL norerun: %d cases with no re-run moved\n", moved)
 		return false
 	}
 	return true

@@ -272,6 +272,7 @@ func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
 	ok, why := r.judge(assert, res, terr, set,
 		envSchema(set, r.environment(set, tc)), tc.Test.Output.rawResultVar())
 	out.Pass, out.Why = ok, why
+	r.recordVerdict(set, tc, terr, ok)
 	return out
 }
 

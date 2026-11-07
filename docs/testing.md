@@ -582,11 +582,14 @@ has its own differential against tree evaluation of the same expression:
 suite's consuming expressions, and a fuzzer (`GOXSLT_SPLIT_FUZZ=N`,
 `GOXSLT_SPLIT_FUZZ_SEED=S`).
 
-`tests/streamdiff` records TestXSLT30Suite three times:
+`tests/streamdiff` records TestXSLT30Suite four times:
 1. on `<base-rev>`, extracted with `git archive`;
 2. on the checkout;
 3. on the checkout with `GOXSLT_STREAM_OFF=1`, which sends every container
-   to the tree.
+   to the tree;
+4. on the checkout with `GOXSLT_STREAM_NORERUN=1` (`streamtrace.SetNoRerun`),
+   where a container that fails while streaming returns its streamed error
+   instead of running again on the tree.
 
 It compares base with branch, and branch with off, using `tests/recdiff`
 and `tests/streamdiff/allow.txt`. That file holds 25 case-scoped rules:
@@ -605,8 +608,12 @@ the off leg differs by design, where `TransformReader` follows the spec and
 `Transform` of a parsed tree does not: an absent global context item in a
 streamable initial mode (§2.3.2, 6cc2247f: `streamable-116`) and an absent
 focus saved by an accumulator function item on a streamed input (§10.3.6,
-be09e991: `accumulator-061`). Each rule cites its commit; drop it once the
-base moves past that commit.
+be09e991: `accumulator-061`). Two came with round SI (lane ST1, against
+70e049a5): sx-square-array-041 and -043 stream now, and their `/` sorts the
+PRICEs of two trees, whose relative order is "stable but
+implementation-dependent" (XPath 3.1 §2.4.1); the catalog accepts either
+order. Each rule cites its commit; drop it once the base moves past that
+commit.
 
 With `GOXSLT_RECORD_DIR` set, tests/xslts writes
 `<dir>/streams/<suite>.tsv`, one line per case that streamed. The runner
@@ -615,7 +622,22 @@ fails when any of these is true:
 - fewer cases streamed than the floor (`-floor`, `GOXSLT_STREAM_FLOOR`,
   default 2661);
 - a guard fired;
-- the off leg streamed.
+- the off leg streamed;
+- a case with no re-run moved between the branch and norerun legs.
+
+The norerun leg is not compared with recdiff: it differs by design. Each
+judged case also gets a line in `<dir>/streams/<suite>-verdicts.tsv` (pass or
+fail, and the error code the judge reads), and for every case where a
+container failed while streaming the streamed code is set against the branch
+leg's, which is the tree's answer, into `<outdir>/errors.tsv`: the same code
+and verdict, another code the catalog also accepts (the case still passes),
+or a wrong code. That matrix says which constructs' streamed errors can be
+final (§19.8.8.5: an error during streamed processing invalidates the output
+written before it; §2.14: the first error detected may be the one raised).
+The error path's memory is pinned by `go test ./xslt -run
+TestStreamErrorPathMemory -v`: a sum over big transactions that fails at the
+last one holds 2.6 MB streamed against the tree's 48 MB (with the re-run,
+43.6 MB).
 
 A principal input the catalog declares `streaming="true"`, a file or inline
 `<content>` (no `@select` or XInclude, no initial-mode selection), is handed
@@ -636,7 +658,7 @@ imported schema at (`go test ./tests/qt3 -run TestCaseSchemasReadAsXSD11`).
 A case written for a 1.0 type system declares `<dependency type="xsd-version"
 value="1.0"/>` and is skipped.
 
-`-output` runs a fourth leg with `GOXSLT_OUTPUT_CHECK`
+`-output` runs a fifth leg with `GOXSLT_OUTPUT_CHECK`
 ([`tests/xslts/outputcheck.go`](../tests/xslts/outputcheck.go)): every case
 again with its principal result streamed to `TransformOptions.Output`,
 compared byte for byte, error for error, with `Result.Serialize`, and its
@@ -656,6 +678,16 @@ At 1d789fec (rounds L, F and M), with `-output` against 3fb9c066, it reads:
   unstable: the clock, generate-id); of the 2,661 streamed cases 2,658 are
   identical and 3 unstable, 664 of them writing output before the end; 561
   secondary results in 226 cases, 99 of them in 49 streamed cases.
+
+At round SI lane ST1, with `-output` against 70e049a5: 2,661 cases streamed,
+14 with a fallback (23 before: the nine square-array cases stream now), 137
+re-run, 0 guard hits, zero unexplained differences (27 rules); the branch leg
+11,505 in scope, the norerun leg 11,501. Of the 137 containers that failed
+while streaming, 133 give the tree's code and verdict, none another accepted
+code, and 4 a wrong one: `stream-002` and `non-stream-002` (a missing
+document: the streamed open error carries no `FODC0002`) and `stream-104` and
+`non-stream-104` (`XTTE1510` where the tree's `type=` validation raises
+`XTTE1540`).
 
 The TSV line holds the runs per strategy (core: containers; main: principal
 inputs `TransformReader` streamed; merge: streamed merge sources), fallbacks, guard hits, re-runs and

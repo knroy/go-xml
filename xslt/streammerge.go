@@ -330,6 +330,9 @@ func (i *mergeInstr) executeStream(rt *runtime, out *outputBuilder) (bool, error
 		return true, cerr // cancelled: no rerun on the tree
 	}
 	streamtrace.Rerun()
+	if streamtrace.NoRerun() {
+		return true, err // tests/streamdiff's norerun leg: the streamed error
+	}
 	if traceRerun != nil {
 		traceRerun(err)
 	}

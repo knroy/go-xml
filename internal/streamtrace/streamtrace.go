@@ -1,8 +1,10 @@
 // Package streamtrace counts what the streamed execution of
 // xsl:source-document did, so the differential tests can say how many
 // containers took the streamed path, by which strategy, how many fell back to
-// the tree, and whether a guard ever fired. It also holds the switch that
-// turns streaming off for a whole run (tests/streamdiff's third leg).
+// the tree, and whether a guard ever fired. It also holds the switches that
+// turn streaming off for a whole run (tests/streamdiff's third leg) and that
+// stop a container that fails while streaming from running again on the
+// tree (its fourth, the norerun leg).
 //
 // It is compiled into the engine but only tests read it; the counters are
 // process-wide atomics, so a reader takes a Snapshot before and after the
@@ -66,6 +68,7 @@ func (k Kind) String() string { return kindNames[k] }
 
 var (
 	off       atomic.Bool
+	noRerun   atomic.Bool
 	runs      [NumStrategies]atomic.Int64
 	kinds     [NumKinds]atomic.Int64
 	fallbacks atomic.Int64
@@ -80,6 +83,14 @@ func Off() bool { return off.Load() }
 // SetOff switches streaming off (true) or back on.
 func SetOff(b bool) { off.Store(b) }
 
+// NoRerun reports whether re-runs are switched off: a container that fails
+// while streaming returns its streamed error instead of running again on the
+// tree. Rerun still counts it.
+func NoRerun() bool { return noRerun.Load() }
+
+// SetNoRerun switches re-runs off (true) or back on.
+func SetNoRerun(b bool) { noRerun.Store(b) }
+
 // Run counts one container run on the streamed path.
 func Run(s Strategy) { runs[s].Add(1) }
 
@@ -87,7 +98,8 @@ func Run(s Strategy) { runs[s].Add(1) }
 // an error, the run going on.
 func Fallback() { fallbacks.Add(1) }
 
-// Rerun counts one container the streamed core ran again on the tree.
+// Rerun counts one container the streamed core ran again on the tree (or,
+// under NoRerun, would have).
 func Rerun() { reruns.Add(1) }
 
 // Node counts n sNodes of kind k in a container run by the core.
