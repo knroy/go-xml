@@ -457,9 +457,11 @@ func positionPred(e xpath.Expr) bool {
 //	count(P union F) -> count(P) + count(F | ())   (exists, empty, boolean, not by it)
 //
 // P is still read, for its errors: count(P)[false()] is appended to e as an
-// empty item. F is checked as the operator checks it (F | (), XPTY0004 for a
-// value): the checks are returned, for the split to evaluate before its walk
-// (streamSplit.checks). A union under any other holder is left: its order
+// empty item. F is checked as the operator checks it, by the operator
+// itself (F except () for except, which is F; F intersect () for
+// intersect): XPTY0004 for a value, its text naming the operator the tree
+// evaluates. The checks are returned, for the split to evaluate before its
+// walk (streamSplit.checks). A union under any other holder is left: its order
 // depends on where F's trees fall among the stream's, drawn at run time.
 func foreignSets(e xpath.Expr) (xpath.Expr, []xpath.Expr) {
 	var extra, checks []xpath.Expr
@@ -467,8 +469,8 @@ func foreignSets(e xpath.Expr) (xpath.Expr, []xpath.Expr) {
 	never := func(x xpath.Expr) xpath.Expr {
 		return &xpath.FilterExpr{Base: x, Predicates: []xpath.Expr{fnCall("false")}}
 	}
-	checked := func(f xpath.Expr) xpath.Expr {
-		u := &xpath.BinaryOp{Op: "union", Left: f, Right: &xpath.SequenceExpr{}}
+	checked := func(op string, f xpath.Expr) xpath.Expr {
+		u := &xpath.BinaryOp{Op: op, Left: f, Right: &xpath.SequenceExpr{}}
 		checks = append(checks, u)
 		return u
 	}
@@ -513,14 +515,14 @@ func foreignSets(e xpath.Expr) (xpath.Expr, []xpath.Expr) {
 					p = re(p)
 					switch {
 					case v.Op == "except" && left:
-						checked(f)
+						checked(v.Op, f)
 						return p
 					case v.Op == "except":
 						consumed(p)
-						return checked(f)
+						return checked(v.Op, f)
 					}
 					consumed(p)
-					checked(f)
+					checked(v.Op, f)
 					return &xpath.SequenceExpr{}
 				}
 			}
