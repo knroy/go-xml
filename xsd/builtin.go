@@ -69,9 +69,9 @@ func buildBuiltins() {
 	// then refused as a type that does not derive from its declaration
 	// (simple050).
 	//
-	// XSD 1.0 has no such type, but the XPath data model does, so a 1.0
-	// schema may name it (see lookupType), and the extra step in the base
-	// chain is transparent to every rule that walks it.
+	// XSD 1.0 has no such type, so a 1.0 schema may not name it (see
+	// lookupType); the extra step in the base chain is transparent to every
+	// rule that walks it.
 	anyAtomic := &SimpleType{
 		Name:    xsName("anyAtomicType"),
 		Base:    anySimple,
@@ -211,7 +211,7 @@ func buildBuiltins() {
 	// either in the schema namespace or it is not; whether a *schema* may
 	// use them is a version question, and refusing to define them here
 	// would only turn a version error into a confusing "no such type".
-	// lookupType answers that question for xs:dateTimeStamp and xs:error.
+	// lookupType answers that question for all five.
 	//
 	// xs:dateTimeStamp is xs:dateTime with explicitTimezone="required" —
 	// the type that says "an instant, not a wall-clock reading".

@@ -377,25 +377,36 @@ func TestFieldAttributeWildcardHonoursPrefix(t *testing.T) {
 // gap was invisible until an element declared xs:anyAtomicType met an
 // xsi:type: simple050 does exactly that, and xsi:type="xs:date" was refused as
 // a type not derived from the declaration.
+//
+// Only a 1.1 schema may name xs:anyAtomicType, so the schema is read as 1.1.
 func TestPrimitivesDeriveFromAnyAtomicType(t *testing.T) {
-	const schema = `
+	s := load11(t, `
 	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
 	  <xs:element name="e" type="xs:anyAtomicType"/>
-	</xs:schema>`
+	</xs:schema>`)
 	const ns = ` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"` +
 		` xmlns:xs="http://www.w3.org/2001/XMLSchema"`
 
 	// A primitive and a type restricted from one both substitute.
-	assertValid(t, schema, `<e`+ns+` xsi:type="xs:date">2010-11-10</e>`)
-	assertValid(t, schema, `<e`+ns+` xsi:type="xs:int">42</e>`)
+	for _, doc := range []string{
+		`<e` + ns + ` xsi:type="xs:date">2010-11-10</e>`,
+		`<e` + ns + ` xsi:type="xs:int">42</e>`,
+	} {
+		if err := check11(t, s, doc); err != nil {
+			t.Errorf("%s should be valid: %v", doc, err)
+		}
+	}
 
-	// The value still has to hold against the named type.
-	assertInvalid(t, schema, `<e`+ns+` xsi:type="xs:date">not-a-date</e>`,
-		"cvc-datatype-valid")
-
-	// A list type is not atomic, so it does not derive from anyAtomicType.
-	assertInvalid(t, schema, `<e`+ns+` xsi:type="xs:NMTOKENS">a b</e>`,
-		"cvc-elt.4.3")
+	// The value still has to hold against the named type, and a list type
+	// is not atomic, so it does not derive from anyAtomicType.
+	for doc, code := range map[string]string{
+		`<e` + ns + ` xsi:type="xs:date">not-a-date</e>`: "cvc-datatype-valid",
+		`<e` + ns + ` xsi:type="xs:NMTOKENS">a b</e>`:    "cvc-elt.4.3",
+	} {
+		if err := check11(t, s, doc); err == nil || !strings.Contains(err.Error(), code) {
+			t.Errorf("%s: want %s, got %v", doc, code, err)
+		}
+	}
 }
 
 // TestNestedScopeReportedOnceForLocalDeclaration pins that a constraint on a

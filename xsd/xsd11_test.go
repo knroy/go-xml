@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -499,30 +500,68 @@ func TestDurationSubtypes(t *testing.T) {
 	}
 }
 
-// TestOnly11BuiltinsUnderVersion10 covers which 1.1 built-in names a 1.0
-// schema may use: not xs:dateTimeStamp or xs:error, which only XSD 1.1
-// defines, but the three the XPath data model also defines.
+// TestOnly11BuiltinsUnderVersion10 covers which built-in names a 1.0 schema
+// may use. XSD 1.0 defines none of the five 1.1 additions, so under 1.0 a
+// reference to one -- in type=, base=, itemType=, memberTypes= or xsi:type --
+// is src-resolve; under 1.1 each resolves. xs:untypedAtomic is an XDM type,
+// not a schema one, and resolves under neither.
 func TestOnly11BuiltinsUnderVersion10(t *testing.T) {
-	load := func(typ string, v Version) error {
-		tree, err := xdm.ParseString(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
-		  <xs:element name="e" type="`+typ+`"/></xs:schema>`, xdm.ParseOptions{})
+	refs := []string{
+		`<xs:element name="e" type="%s"/>`,
+		`<xs:simpleType name="r"><xs:restriction base="%s"/></xs:simpleType>`,
+		`<xs:simpleType name="l"><xs:list itemType="%s"/></xs:simpleType>`,
+		`<xs:simpleType name="u"><xs:union memberTypes="xs:string %s"/></xs:simpleType>`,
+	}
+	load := func(ref, typ string, v Version) error {
+		tree, err := xdm.ParseString(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">`+
+			fmt.Sprintf(ref, typ)+`</xs:schema>`, xdm.ParseOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		_, err = Load(tree.Root, "s.xsd", Options{Version: v})
 		return err
 	}
-	for _, typ := range []string{"xs:dateTimeStamp", "xs:error"} {
-		if load(typ, Version10) == nil {
-			t.Errorf("%s should not resolve under 1.0", typ)
-		}
-		if err := load(typ, Version11); err != nil {
-			t.Errorf("%s under 1.1: %v", typ, err)
+	only11 := []string{"xs:anyAtomicType", "xs:yearMonthDuration",
+		"xs:dayTimeDuration", "xs:dateTimeStamp", "xs:error"}
+	for _, typ := range only11 {
+		for _, ref := range refs {
+			if strings.Contains(ref, "itemType") && typ == "xs:error" {
+				continue // a list of xs:error is refused under 1.1 too
+			}
+			if err := load(ref, typ, Version10); err == nil ||
+				!strings.Contains(err.Error(), "src-resolve") {
+				t.Errorf("%s in %s under 1.0: want src-resolve, got %v", typ, ref, err)
+			}
+			if err := load(ref, typ, Version11); err != nil &&
+				strings.Contains(err.Error(), "src-resolve") {
+				t.Errorf("%s in %s under 1.1: %v", typ, ref, err)
+			}
 		}
 	}
-	for _, typ := range []string{"xs:anyAtomicType", "xs:yearMonthDuration", "xs:dayTimeDuration"} {
-		if err := load(typ, Version10); err != nil {
-			t.Errorf("%s under 1.0: %v", typ, err)
+	for _, v := range []Version{Version10, Version11} {
+		if err := load(refs[0], "xs:untypedAtomic", v); err == nil {
+			t.Errorf("xs:untypedAtomic resolved under %v", v)
+		}
+	}
+
+	// xsi:type is the instance-side reference to the same names.
+	for _, typ := range only11 {
+		for _, v := range []Version{Version10, Version11} {
+			tree, err := xdm.ParseString(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+			  <xs:element name="e"/></xs:schema>`, xdm.ParseOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := Load(tree.Root, "s.xsd", Options{Version: v})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = check11(t, s, `<e xmlns:xs="http://www.w3.org/2001/XMLSchema"
+			  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="`+typ+`">x</e>`)
+			names := err != nil && strings.Contains(err.Error(), "names no type definition")
+			if names != (v == Version10) {
+				t.Errorf("xsi:type %s under %v: %v", typ, v, err)
+			}
 		}
 	}
 }
