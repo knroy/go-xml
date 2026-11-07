@@ -455,3 +455,44 @@ func TestQuerySchemaAccessor(t *testing.T) {
 		t.Errorf("the returned schema does not define {%s}hatsize", hatsNS)
 	}
 }
+
+// TestValidateTypeNotInScopeIsStaticXQST0104 is validate-as-91011. §3.21:
+// "This type name must be found in the in-scope schema definitions; if it is
+// not, a static error is raised [err:XQST0104]." Static means Compile reports
+// it, whether a schema was imported or not; a built-in type is in scope.
+func TestValidateTypeNotInScopeIsStaticXQST0104(t *testing.T) {
+	for _, c := range []struct {
+		src  string
+		opts xquery.Options
+	}{
+		{fmt.Sprintf(`import schema namespace h = %q;
+			validate type h:brimsize { <hat>8</hat> }`, hatsNS), withHats()},
+		{`declare namespace h = "urn:none"; validate type h:t { <a/> }`,
+			xquery.Options{}},
+		// Dead code still has to be judged: the error is not deferred to a
+		// branch that runs.
+		{fmt.Sprintf(`import schema namespace h = %q;
+			if (false()) then validate type h:nosuch { <a/> } else 1`, hatsNS),
+			withHats()},
+	} {
+		_, err := xquery.Compile(c.src, c.opts)
+		if err == nil || !strings.Contains(err.Error(), "XQST0104") {
+			t.Errorf("%s\nwant XQST0104 at compile, got %v", c.src, err)
+		}
+	}
+	src := fmt.Sprintf(`import schema namespace h = %q;
+		data(validate type h:hatsize { <hat>8</hat> })`, hatsNS)
+	if got, err := run(t, src, withHats()); err != nil || got != "8" {
+		t.Errorf("an in-scope type must validate: got %q, %v", got, err)
+	}
+	src = fmt.Sprintf(`import schema namespace h = %q;
+		data(validate type xs:integer { <hat>8</hat> })`, hatsNS)
+	if got, err := run(t, src, withHats()); err != nil || got != "8" {
+		t.Errorf("a built-in type is in scope: got %q, %v", got, err)
+	}
+	got, err := run(t, `data(validate type xs:integer { <a>8</a> })`,
+		xquery.Options{})
+	if err != nil || got != "8" {
+		t.Errorf("a built-in type needs no import: got %q, %v", got, err)
+	}
+}

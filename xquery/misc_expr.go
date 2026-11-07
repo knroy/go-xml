@@ -289,9 +289,9 @@ func (n *stringConstructor) sequence(ctx *evalContext) (xdm.Sequence, error) {
 // validate against succeeds and yields its operand.
 //
 // "validate type T" is parsed and its type name is kept, so that assessment
-// against a named type can be asked for; with no schema it is the same
-// XQDY0084 that strict is, since the name cannot be a type in an empty set of
-// definitions.
+// against a named type can be asked for. A name that is not in the in-scope
+// schema definitions is the static XQST0104, raised here rather than when the
+// expression runs.
 func (p *parser) parseValidate() (node, bool, error) {
 	save := p.pos
 	lax := false
@@ -317,6 +317,16 @@ func (p *parser) parseValidate() (node, bool, error) {
 		name, err := p.sc.resolveElementName(prefix, local)
 		if err != nil {
 			return nil, true, err
+		}
+		// §3.21: "This type name must be found in the in-scope schema
+		// definitions; if it is not, a static error is raised
+		// [err:XQST0104]." The prolog's imports are installed before the
+		// body is read, so the set is complete here. A built-in xs: type is
+		// in scope with or without an import.
+		if !typeNameInScope(p.sc.schema, name) {
+			return nil, true, p.errorAt(save,
+				"XQST0104: validate type %s: no such type in the in-scope "+
+					"schema definitions", name.Lexical())
 		}
 		typeName = &name
 		p.skipSpaceAndComments()
@@ -408,10 +418,14 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		}
 	}
 	schema := ctx.sc.schema
+	if schema == nil && n.typeName != nil {
+		// No "import schema", but the name passed XQST0104, so it is a
+		// built-in type: those are in scope with no import at all.
+		schema = xsd.NewSchema()
+	}
 	if schema == nil && !n.lax {
-		// No "import schema": the in-scope schema definitions are empty.
-		// Including "validate type T", whose named type cannot be in an
-		// empty set of definitions either.
+		// No "import schema": the in-scope schema definitions hold no
+		// element declarations.
 		return nil, xdm.Errorf("XQDY0084",
 			"validate has no in-scope schema definitions to validate "+
 				"against: the query imported no schema")
@@ -466,14 +480,8 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	switch {
 	case n.typeName != nil:
 		// "validate type T" assesses against the named type rather than
-		// against a declaration. §3.21: the type must be in the in-scope
-		// schema definitions, and XQDY0084 is what says it is not.
-		if _, ok := schema.Types[xdm.QName{URI: n.typeName.URI,
-			Local: n.typeName.Local}]; !ok {
-			return nil, xdm.Errorf("XQDY0084",
-				"validate type %s: no such type in the in-scope schema "+
-					"definitions", n.typeName.Lexical())
-		}
+		// against a declaration. parseValidate has already raised XQST0104
+		// for a name not in the in-scope schema definitions.
 		typed, verr = schema.ValidateAgainstTypeCopy(target, *n.typeName, vopts)
 	case n.lax:
 		typed, verr = schema.ValidateElementLaxCopy(target, vopts)
@@ -581,4 +589,18 @@ func annotateBuiltinXSIType(n *xdm.Node) {
 	for c := range n.Children() {
 		annotateBuiltinXSIType(c)
 	}
+}
+
+// typeNameInScope reports whether name is a type in the in-scope schema
+// definitions: one the imported schema defines, or a built-in xs: type, which
+// xsd.Schema.ValidateAgainstTypeCopy resolves the same way.
+func typeNameInScope(schema *xsd.Schema, name xdm.QName) bool {
+	if name.URI == xdm.NSXS && xsd.BuiltinType(name.Local) != nil {
+		return true
+	}
+	if schema == nil {
+		return false
+	}
+	_, ok := schema.Types[xdm.QName{URI: name.URI, Local: name.Local}]
+	return ok
 }

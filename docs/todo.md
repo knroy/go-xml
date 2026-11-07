@@ -767,10 +767,10 @@ The sibling escape at the same seam *was* closed: a nested `fn:transform`
 minted its own item and byte allowances, and now adopts the caller's. See
 `xpath.Context.AdoptBudget` and `TestNestedTransformInheritsTheByteBudget`.
 
-### 2.4 Three spec divergences the ninth audit found and left open
+### 2.4 Three spec divergences the ninth audit found (all closed)
 
-**One is still open** (XQST0104). The 2026-09-11 line-by-line audit against
-the five Recommendations confirmed all three; the other two are closed below. None has a W3C suite case, which is
+**All three are closed.** The 2026-09-11 line-by-line audit against
+the five Recommendations confirmed all three. None has a W3C suite case, which is
 why every conformance lane stayed green across the four fixes committed beside
 them — see
 [audits/2026-09-11-spec-divergence-full.md](audits/2026-09-11-spec-divergence-full.md).
@@ -781,11 +781,13 @@ them — see
   REC's summary gives it an `nmtoken` alternative, and a well-formed form this
   engine does not support is SESU0011 at serialisation.
 
-* **XQST0104 is raised as XQDY0084** — a dynamic error where XQuery 3.1 wants
-  a static one, for `validate type T` with `T` out of scope. This did *not*
-  reproduce as the audit stated it; the real QT3 case (`validate-as-91011`)
-  imports a schema first, so the defect is a different one than the row
-  describes. It needs re-diagnosis before it needs a fix.
+* ~~**XQST0104 is raised as XQDY0084**~~ **Closed.** Re-diagnosed: the real
+  QT3 case (`validate-as-91011`) imports a schema and names a type it does not
+  define, and the check ran only when the expression was evaluated. The type
+  name is now resolved against the in-scope schema definitions while the
+  parser reads it (`xquery/misc_expr.go`, `typeNameInScope`), so `Compile`
+  reports XQST0104 whether or not a schema was imported and whether or not
+  the expression would run. A built-in `xs:` type is in scope with no import.
 
 * **"is not an XSLT 2.0 element" was hardcoded** in two diagnostics —
   `xslt/staticcheck.go` and `xslt/compile_instr.go` — that a 3.0 stylesheet
