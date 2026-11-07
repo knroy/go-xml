@@ -369,6 +369,7 @@ reports no summary.
 | UBL 2.1 | `GOXSLT_UBL` | — | 65 modular production schemas |
 | UN/CEFACT CII | `GOXSLT_CII` | — | EN 16931 and CII schemas |
 | Vendored schemas | *(none)* | `testdata/` | 230 real `.xsd` already in the tree; no variable, it always runs |
+| W3C xmlconf | *(none)* | `testdata/xmlconf` | XML 1.0 well-formedness and DTD validity (`xdm.Parse`, `dtd.Load`, `dtd.Validate`); fetched by `tests/fetch-xmlconf.sh` |
 
 Fetching the four W3C suites:
 
@@ -379,6 +380,24 @@ git clone --depth 1 https://github.com/w3c/xslt30-test.git   testdata/xslt30-tes
 git clone --depth 1 https://github.com/relaxng/jing-trang.git /tmp/jing-trang
 mkdir -p testdata/relaxng
 cp /tmp/jing-trang/mod/rng-validate/test/spectest.xml testdata/relaxng/
+```
+
+The XML Conformance Test Suite is one archive (`xmlts20130923`), so it is
+fetched and pinned like the Canonical XML corpus rather than cloned:
+`tests/fetch-xmlconf.sh` downloads the tarball `tests/xmlconf-corpus.txt`
+lists, checks its SHA-256 and unpacks it into `testdata/xmlconf/`, and
+`check.sh` runs it before `TestXMLConf` (`tests/xmlconf`). The test skips when
+the suite is absent unless `GOXML_XMLCONF=1`, which `check.sh` sets. A not-wf
+case passes when `xdm.Parse` refuses it; a valid one when it parses and
+`dtd.Load` plus `dtd.Validate` report nothing; an invalid one when it parses
+and either reports an error. Both parsers read external entities through a
+resolver confined to the suite. `TYPE="error"`, XML 1.1, editions before the
+Fifth and `NAMESPACE="no"` cases are out of scope and counted as skipped. The
+passing count is the `TestXMLConf` ratchet mark.
+
+```sh
+tests/fetch-xmlconf.sh
+go test ./tests/xmlconf/ -count=1 -run TestXMLConf -v   # every failure, by type
 ```
 
 DocBook needs its localisation files generated before it will transform

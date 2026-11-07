@@ -1,0 +1,9 @@
+# The W3C XML Conformance Test Suite that tests/fetch-xmlconf.sh downloads and
+# unpacks into testdata/xmlconf/. One line per file: sha256, file name under
+# testdata/xmlconf/, URL.
+#
+# The suite is one tarball, last published on 2013-09-23 (xmlts20130923), so
+# it is pinned as one file rather than file by file the way the C14N corpus is:
+# the digest covers every case in it, and a changed archive fails the fetch
+# rather than silently moving the TestXMLConf figure.
+9b61db9f5dbffa545f4b8d78422167083a8568c59bd1129f94138f936cf6fc1f xmlts20130923.tar.gz https://www.w3.org/XML/Test/xmlts20130923.tar.gz
