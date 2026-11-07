@@ -27,9 +27,13 @@ type testCase struct {
 }
 
 // TestXMLConf runs every in-scope case and logs "in-scope: N passed", which
-// tests/check.sh reads for the TestXMLConf ratchet mark. Like the other suite
-// drivers it does not fail on a failing case: the ratchet is what may not go
-// down.
+// tests/check.sh reads for the TestXMLConf ratchet mark. The count alone
+// cannot see one case start failing while another starts passing, so
+// expected-pass.txt lists, by ID, every case that passes: a listed case that
+// does not pass fails the test by name, and a passing case not listed is
+// logged as newly passing. GOXML_XMLCONF_UPDATE=1 rewrites the list from the
+// run instead; review its diff before committing it. Unlisted failing cases
+// do not fail the test.
 //
 // The suite is fetched rather than committed (tests/fetch-xmlconf.sh, pinned
 // by tests/xmlconf-corpus.txt). Absent, the test skips, unless
@@ -75,6 +79,8 @@ func TestXMLConf(t *testing.T) {
 	skipped := map[string]int{}
 	failures := map[string][]string{} // by TYPE
 	passed, failed := 0, 0
+	passing := map[string]bool{}
+	reasons := map[string]string{} // why a case failed, by ID
 	for _, c := range cases {
 		if why := outOfScope(c); why != "" {
 			skipped[why]++
@@ -82,8 +88,10 @@ func TestXMLConf(t *testing.T) {
 		}
 		if msg := run(root, c); msg == "" {
 			passed++
+			passing[c.ID] = true
 		} else {
 			failed++
+			reasons[c.ID] = msg
 			failures[c.Type] = append(failures[c.Type], c.ID+" ["+c.Sections+"]: "+msg)
 		}
 	}
@@ -113,6 +121,46 @@ func TestXMLConf(t *testing.T) {
 			for _, f := range failures[k] {
 				t.Logf("  %s", f)
 			}
+		}
+	}
+	checkExpected(t, passing, reasons)
+}
+
+const expectedFile = "expected-pass.txt"
+
+// checkExpected compares the passing IDs with expected-pass.txt, or rewrites
+// it when GOXML_XMLCONF_UPDATE=1.
+func checkExpected(t *testing.T, passing map[string]bool, reasons map[string]string) {
+	ids := make([]string, 0, len(passing))
+	for id := range passing {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	if os.Getenv("GOXML_XMLCONF_UPDATE") == "1" {
+		if err := os.WriteFile(expectedFile, []byte(strings.Join(ids, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("wrote %d IDs to %s; review the diff before committing it", len(ids), expectedFile)
+		return
+	}
+	data, err := os.ReadFile(expectedFile)
+	if err != nil {
+		t.Fatalf("%v (run with GOXML_XMLCONF_UPDATE=1 to create it)", err)
+	}
+	want := map[string]bool{}
+	for _, id := range strings.Fields(string(data)) {
+		want[id] = true
+		if !passing[id] {
+			why := reasons[id]
+			if why == "" {
+				why = "not run (absent from the catalog or out of scope)"
+			}
+			t.Errorf("regressed: %s: %s", id, why)
+		}
+	}
+	for _, id := range ids {
+		if !want[id] {
+			t.Logf("newly passing: %s", id)
 		}
 	}
 }
