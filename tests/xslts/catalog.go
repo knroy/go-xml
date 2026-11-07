@@ -187,6 +187,9 @@ type Collection struct {
 type Schema struct {
 	URI  string `xml:"uri,attr"`
 	File string `xml:"file,attr"`
+	// XSDVersion is the XSD version the schema is written for, "1.1" or
+	// absent (1.0).
+	XSDVersion string `xml:"xsd-version,attr"`
 }
 
 // Dependencies is the set of conditions a test needs.

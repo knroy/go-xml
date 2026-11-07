@@ -1183,6 +1183,8 @@ func envSchema(set *TestSet, env *Environment) *xsd.Schema {
 			ParseOptions: xdm.ParseOptions{AllowDOCTYPE: true}}
 		if v, ok := xsd.DocumentRequiresVersion(tree.Root); ok {
 			opts.Version = v
+		} else if sc.XSDVersion == "1.1" {
+			opts.Version = xsd.Version11
 		}
 		loaded, err := xsd.Load(tree.Root, p, opts)
 		if err != nil || loaded == nil {
