@@ -358,7 +358,7 @@ sheet, err := xslt.Compile(sheetTree.Root, xslt.CompileOptions{})
 docTree, err := xdm.ParseString(documentSource, xdm.ParseOptions{})
 result, err := sheet.Transform(ctx, docTree.Root, xslt.TransformOptions{})
 
-fmt.Println(result.String())     // serialised per xsl:output
+fmt.Println(result.String())     // serialised per xsl:output (html defaults to HTML5)
 result.Tree()                    // or keep navigating it
 result.Messages                  // xsl:message output, collected not printed
 result.Secondary                 // documents from xsl:result-document

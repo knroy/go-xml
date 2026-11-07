@@ -20,7 +20,9 @@ func TestStreamOutIndent(t *testing.T) {
 			"<doc>\n <s><!--c--> </s>\n <s> <r/> <?p d?></s>\n</doc>"},
 		{"suppress-indentation", `<xsl:output indent="yes" suppress-indentation="s"/>` + ident, ``,
 			`<doc><s><r><a/></r></s><t><r><a/></r></t></doc>`},
-		{"html inline", `<xsl:output method="html" indent="yes"/>`,
+		// version="4.0": HTML5, the html default, is held (prefix
+		// normalisation reads the whole tree).
+		{"html inline", `<xsl:output method="html" version="4.0" indent="yes"/>`,
 			`<xsl:template match="/"><div><xsl:for-each select="doc/r"><p><b>x</b><i/></p><span/><div><ul><li>a</li><li><em/></li></ul></div></xsl:for-each></div></xsl:template>`,
 			`<doc><r/><r/><r/></doc>`},
 		{"xhtml", `<xsl:output method="xhtml" indent="yes"/>`,

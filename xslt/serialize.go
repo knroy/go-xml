@@ -380,14 +380,7 @@ func (s *serializer) beginMarkup(seq xdm.Sequence) xdm.Sequence {
 	xhtml := strings.EqualFold(opts.Method, "xhtml")
 	s.html = html || xhtml
 	s.xhtml = xhtml
-	// html-version decides, falling back to version for the html method
-	// only: for xhtml, @version is the version of XML, so reading it would
-	// make every XHTML document version="1.0" and never HTML5.
-	htmlVer := opts.HTMLVersion
-	if htmlVer == "" && !xhtml {
-		htmlVer = opts.Version
-	}
-	s.html5 = strings.HasPrefix(htmlVer, "5")
+	s.html5 = strings.HasPrefix(effectiveHTMLVersion(opts, xhtml), "5")
 
 	// Prefix normalisation is an HTML5 rule and applies to both methods that
 	// write HTML: output-0602a and -0602b are the html method and -0211 and
@@ -665,8 +658,8 @@ func (s *serializer) writeDoctypeFor(n *xdm.Node) {
 	// takes "<!DOCTYPE HtMl>" -- which is why the declaration is deferred to
 	// the element rather than written with the prolog. HTML5's doctype is
 	// instead a fixed string: it is "<!DOCTYPE HTML>" whatever the document
-	// element is called, so a fragment rooted at <input> still gets it, and
-	// naming the element there produced "<!DOCTYPE INPUT>".
+	// element's spelling, and naming the element there produced
+	// "<!DOCTYPE INPUT>" for a result rooted at <input>.
 	// A public identifier alone cannot be written -- the XML grammar puts the
 	// system literal after PUBLIC and makes it required -- but under HTML5 it
 	// does not suppress the declaration either: the ruling on bug 20264 is
@@ -720,7 +713,16 @@ func (s *serializer) writeDoctypeFor(n *xdm.Node) {
 			}
 			return
 		}
-		s.writeString("<!DOCTYPE HTML>\n")
+		// The html method writes it only before an html document element:
+		// §7.4.6 requires it when "the first element node child of the
+		// document node ... is to be serialized as an HTML element, the local
+		// part of the QName of which is equal to the string HTML, without
+		// regard to case", and for any other element (a fragment rooted at
+		// <p> or <input>) the conditions are not met. Saxon-HE 12.7 writes
+		// none there either.
+		if strings.EqualFold(n.Name().Local, "html") && s.htmlNativeElement(n) {
+			s.writeString("<!DOCTYPE HTML>\n")
+		}
 		return
 	}
 	s.writeString("<!DOCTYPE " + s.elementName(n))
@@ -2678,7 +2680,7 @@ func checkOutputSettings(opts OutputSettings, seq xdm.Sequence) error {
 		// applies when the other is absent, so html-version="7" -- the
 		// spelling a 3.0 stylesheet actually uses -- was accepted and
 		// quietly demoted to HTML 4 rules with no error.
-		if v := effectiveHTMLVersion(opts); v != "" && !supportedHTMLVersion(v) {
+		if v := effectiveHTMLVersion(opts, false); !supportedHTMLVersion(v) {
 			return fmt.Errorf(
 				"SESU0013: HTML version %q is not supported", v)
 		}
@@ -2821,22 +2823,41 @@ func supportedEncoding(enc string) bool {
 	return false
 }
 
-// effectiveHTMLVersion returns the version of HTML the html method will apply:
-// html-version, or version when html-version is absent.
+// effectiveHTMLVersion returns the version of HTML the html or xhtml method
+// will apply: html-version, else version for the html method (5.0 when that
+// is absent too), else, for xhtml, "" -- absent, which Serialization 3.1 §6
+// reads as below 5.0.
 //
 // XSLT 3.0 §27.1, Note: "This serialization parameter is new in version 3.0.
 // If it is absent, the html output method uses the value of the version
-// parameter in its place." The xhtml method is excluded by its callers, since
-// there @version is the version of XML rather than of XHTML.
+// parameter in its place." The xhtml method does not fall back to version,
+// since there @version is the version of XML rather than of XHTML: reading
+// it would make every XHTML document version="1.0" and never HTML5.
 //
-// It exists so that the check for a supported version and the choice of which
-// rules to write consult the same value. They were computed separately, and
-// diverged: the check read @version while the choice read @html-version.
-func effectiveHTMLVersion(opts OutputSettings) string {
+// With neither, the html method's default is HTML5, for XSLT 2.0 and 3.0
+// stylesheets alike. §26 leaves it to the processor -- of html-version, "The
+// set of permitted values, and the default value, are implementation-defined"
+// -- and 5.0 is what Saxon-HE 12.7 applies under the html method: <!DOCTYPE
+// HTML> and the HTML5 void elements for a version="2.0" stylesheet as for a
+// 3.0 one. Under xhtml Saxon-HE 12.7 keeps XHTML 1.0 (<frame />, no doctype),
+// and so does this. An explicit version="4.0" or html-version="4.01" still
+// asks for HTML 4.
+//
+// It exists so that the check for a supported version, the choice of which
+// rules to write and the streaming writer's decision consult the same value.
+// They were computed separately, and diverged: the check read @version while
+// the choice read @html-version.
+func effectiveHTMLVersion(opts OutputSettings, xhtml bool) string {
 	if opts.HTMLVersion != "" {
 		return opts.HTMLVersion
 	}
-	return opts.Version
+	if xhtml {
+		return ""
+	}
+	if opts.Version != "" {
+		return opts.Version
+	}
+	return "5.0"
 }
 
 // supportedHTMLVersion reports whether the html output method knows the rules

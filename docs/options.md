@@ -645,6 +645,29 @@ function; the indexes would then answer for the old tree. Trees built during the
 trees, results) and trees not produced by `xdm.Parse` are never indexed this
 way.
 
+### xsl:output: the default HTML version
+
+With `method="html"` (stated, or chosen because the result's document element
+is `html`) and neither `version` nor `html-version`, the requested HTML
+version is **5.0**, for XSLT 2.0 and 3.0 stylesheets alike. XSLT 3.0 §26
+leaves the default implementation-defined; 5.0 is what Saxon-HE 12.7 applies.
+So the result gets `<!DOCTYPE HTML>` before an `html` document element (and
+only then, Serialization 3.1 §7.4.6) and the HTML5 void elements: `<br>`,
+`<wbr>`, `<frame></frame>`. `version="4.0"` or `html-version="4.01"` still
+gives HTML 4 rules. The same default applies to `xsl:result-document`, to
+`fn:serialize`'s element form, to `xslt.Serialize` with zero `OutputSettings`
+and so to XQuery results serialised through it (XQuery 3.1 Appendix D leaves
+`html-version` implementation-defined). `fn:serialize`'s map form defaults to
+5 as F&O 3.1 requires.
+
+`method="xhtml"` keeps XHTML 1.0 rules when `html-version` is absent (no
+doctype, `<frame />`), as Saxon-HE 12.7 does; set `html-version="5"` for
+XHTML5.
+
+An HTML5 result is held whole rather than streamed through
+`TransformOptions.Output` or `SecondaryOutput` (prefix normalisation reads the
+whole tree), so a large html result that should stream needs `version="4.0"`.
+
 ---
 
 ## xpath.CompileOptions
