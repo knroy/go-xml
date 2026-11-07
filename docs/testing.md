@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,459 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,461 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,260 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -752,6 +752,16 @@ guard hits, 11,505 passing. Since ST4 made XPTY0004, XTDE2220 and XTDE0640
 final, the 9 are the input's own invalidity under `validation=` (5, XTTE1510)
 or `type=` (2, XTTE1540), and `si-map-007` and `sx-MapExpr-007` (XTDE3365);
 each gives the tree's code.
+
+At round SI lane ST6 (ac7af570), with `-output` against 7ee44d8b: 2,661
+cases streamed, 0 fallbacks, 0 re-runs, 0 guard hits, zero unexplained
+differences (5 input-invalidity cases explained by code, below); the norerun
+leg has no container failing while streaming; the output leg 0 bytes and 0
+errors differ in 11,522 cases (7 unstable). Of the 9: 5 are the input's own
+invalidity (`stream-102`, `-104`, `non-stream-102`, `-104`,
+`streamable-149`), final by code, and 4 a `GroundLater` error (`si-map-007`,
+`sx-MapExpr-007`, `stream-106`, `non-stream-106`), final once the cursor
+reads on past it.
 
 The TSV line holds the runs per strategy (core: containers; main: principal
 inputs `TransformReader` streamed; merge: streamed merge sources), fallbacks, guard hits, re-runs and

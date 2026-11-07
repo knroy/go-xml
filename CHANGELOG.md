@@ -346,6 +346,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `[$x, P/copy-of()]` hit the hold cap and fell back to the tree (9 `sx-square-array` cases) | A `copy-of()`/`snapshot()` tail is held uncapped, as the tree holds it; `MaxNodes` still bounds it. | [`d4b8353`][d4b8353] |
 | A validated `copy-of` of the document element re-read the document on the tree (6 `si-copy-of` cases) | It is built off the cursor and assessed as the tree's copy is. With the two rows above, fallbacks 23 → 0. | [`1bacfcc`][1bacfcc] |
 | A streamed container that failed re-ran on the tree, at the tree's memory | Its error is returned when the family is final and the rest reads cleanly (§2.14): re-runs 137 → 9, 3.1 MB vs 48.6 MB. | [`1bacfcc`][1bacfcc], [`fbcfc71`][fbcfc71], [`86cde00`][86cde00] |
+| A streamed input invalid against `type=` or `validation="strict"` re-ran on the tree | It is final with the tree's code and its first failure as the text (§2.14). | [`ac7af57`][ac7af57] |
+| An error in a `GroundLater` copy stopped the parse, forcing a re-run | The cursor returns it from the call that met it and reads on: re-runs 9 → 0. | [`ac7af57`][ac7af57] |
 | Under `Output` or `SecondaryOutput` an HTML5 result was held to its end | Prefix normalisation is decided per element and the bare doctype waits only for the first element, so HTML5 streams. | [`b888d21`][b888d21] |
 
 
@@ -2881,6 +2883,7 @@ here so every entry in this file sits under a release.
 [1bacfcc]: https://github.com/knroy/go-xml/commit/1bacfcc
 [fbcfc71]: https://github.com/knroy/go-xml/commit/fbcfc71
 [86cde00]: https://github.com/knroy/go-xml/commit/86cde00
+[ac7af57]: https://github.com/knroy/go-xml/commit/ac7af57
 [b888d21]: https://github.com/knroy/go-xml/commit/b888d21
 [5c39a0c]: https://github.com/knroy/go-xml/commit/5c39a0c
 [b42e77e]: https://github.com/knroy/go-xml/commit/b42e77e

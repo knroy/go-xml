@@ -602,8 +602,8 @@ merge source with validation, and a principal input with
 `TransformOptions.SourceValidation`. The schema validator runs on the cursor's
 events and types the records it reads as the tree's typed copy types its nodes
 (defaults appended, ignorable whitespace dropped where the typed copy drops
-it); an invalid document re-runs a container on the tree for the tree's error,
-and gives a principal input XTTE1510 (lax XTTE1515) with the same text on both
+it); an invalid document gives a container the tree's error (final under
+`type=` and `strict`, a re-run on the tree under `lax`), and gives a principal input XTTE1510 (lax XTTE1515) with the same text on both
 paths. An element with an assertion is held as the subtree the assertion reads.
 Identity constraints (`xs:key`, `xs:unique`, `xs:keyref`) are evaluated on the
 events, keeping only their key tables; element default and fixed values, XSD
@@ -830,8 +830,8 @@ modes, 606 before `TransformReader`, 629 before grouping, 707 before `xsl:try` a
 §19.8 analysis was completed, 1,009 before the gap lanes, 2,124 before
 validated inputs, 2,180 before the completion lanes J1–J4, 2,281 before rounds
 L, F and M): core 2,468 runs, main 175, merge 34; none falls back (23 before
-rounds SH and SI, 26 before `P instance of T*` was counted, round SG) and 9
-re-run on the tree (137 before round SI), with 0 guard hits. Where each of
+rounds SH and SI, 26 before `P instance of T*` was counted, round SG) and none
+re-runs on the tree (9 before lane ST6, 137 before round SI), with 0 guard hits. Where each of
 those builds the tree is the next paragraph.
 
 **Where a requested, guaranteed-streamable construct still builds the tree
@@ -847,8 +847,8 @@ plan:
   memory when P is the whole document, as on the tree); a validated copy of the
   document element is built off the cursor (1bacfccd: `si-copy-of-121`, `-122`,
   `-125`–`-128`).
-- *An error re-runs the container on the tree* (9 cases, from 137): in
-  progress (lane ST6). A container's error is final, with no re-run, when its
+- *An error re-runs the container on the tree*: closed at round SI, 137 → 0.
+  A container's error is final, with no re-run, when its
   family is one the stream raises at the item the tree raises it at
   (`finalCodes`, `xslt/streamexec.go`: XPDY0050, XPTY0004, FOTY0013, the
   FORG/FOCH/FOAR casts, the XTDE08xx construction errors, XTTE3180/0570/3375,
@@ -856,11 +856,18 @@ plan:
   then reads, validates and accumulates cleanly (fbcfc71f, 86cde00c); a
   schema-invalid construction is final the same way (1bacfccd), and so is a
   circular global reference, XTDE0640. XSLT 3.0 §2.14 lets the first error
-  detected be the one signalled. The 9 left: the input's own invalidity under
-  `validation=` (`streamable-149`, `stream-102`, `-106`, `non-stream-102`,
-  `-106`: XTTE1510) or `type=` (`stream-104`, `non-stream-104`: XTTE1540, whose
-  tree text lists every failure), and `si-map-007` and `sx-MapExpr-007`
-  (XTDE3365, which the settle cannot confirm is the tree's first error).
+  detected be the one signalled. The input's own invalidity is final too
+  (ac7af570, `inputFinalCodes`, `xslt/streamvalidin.go`): XTTE1540 under
+  `type=`, and XTTE1510 under `validation="strict"` when the schema assesses
+  the document element and the first failure is not an ID/IDREF one, with the
+  first failure detected as its text, whether or not the body failed first
+  (the tree validates before its body runs); `lax` and an ID-first failure
+  still re-run, since their code depends on every failure. The harness
+  compares those two codes by code, not text (`streamtrace.SameError`). An
+  error in a `GroundLater` copy (`si-map-007`, `sx-MapExpr-007`, and the
+  `copy-of validation="strict"` of `stream-106`, `non-stream-106`) no longer
+  stops the parse: the cursor returns it once, from the call that handed the
+  copy over, and reads on, so the settle can confirm it is the tree's first.
   `streamdiff`'s norerun leg (`GOXSLT_STREAM_NORERUN=1`) sets each streamed
   code against the tree's; none is wrong.
 - *A `DocumentResolver` that is not a `FileResolver`* (0 W3C cases: the
@@ -907,6 +914,7 @@ Also:
   passed through `distinct-values` each record (`MaxItems`) run quadratic time
   and are stopped by the context deadline, before and after v2.3.0.
 - **An error outside the final families re-runs the container on the tree**
+  (no W3C case at round SI)
   (a container: see the `TransformReader` bullet for a streamed principal
   input), so errors are the tree's, in the tree's order. A final family (the
   bucket above, `finalCodes`) is returned from the stream once the rest of the
