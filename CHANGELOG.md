@@ -29,6 +29,9 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `CompileOptions.MaxSchemaBytes`, `xslt.DefaultMaxSchemaBytes` | Total schema source `xsl:import-schema` may read per compile, closures included; zero means 16 MB. | [`4ad352d`][4ad352d] |
 | `xdm.FlattenContext`, `XIncludeOptions.Context` | A cancellable `Flatten` that returns its step refusal as an error, and a cancellable XInclude pass. | [`9399efd`][9399efd] |
 | `c14n.FromXPathFilterContext`, `FromXPathContext` | XML-DSig XPath transforms under a context; a filter's per-node evaluations share one item and byte budget. | [`2a41550`][2a41550] |
+| `c14n.FromXPathFilterHere`, `FromXPathHere` | XML-DSig filters can call `here()`: the node bearing the expression, a text node read as its parent; a node outside the document is refused. | [`e0d2c13`][e0d2c13] |
+| `xdm.ParseOptions.Warn` | Receives xml:id errors (duplicate ID, non-NCName value) as XQDY0091 `*xdm.Error`s, at most 100 then one summary; nil stays silent. | [`0caab03`][0caab03], [`c6508c3`][c6508c3] |
+| `xslt.StreamingDocumentResolver`, `FileResolver.OpenDocument` | A resolver with `OpenDocument` streams streamable `xsl:source-document` and merge sources; one without it still builds the tree. | [`0d9c103`][0d9c103] |
 
 ### Changed
 
@@ -448,6 +451,36 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A date year over 18 digits was reported invalid, and long fractional seconds parsed superlinearly | The leap rule reads the last four digits; any temporal field over 1000 digits is refused. | [`eb9ddf8`][eb9ddf8] |
 | Duration years and months were int64 months, so `P800000000000000000Y` compared shorter than `-P1Y` | Months are a `big.Int` and compare exactly. | [`177fbff`][177fbff] |
 | A deterministic DTD `(a1|…|a1100)*` was refused: each last position copied the group's first set | Follow sets share disjoint pieces, about 2n for a repeated choice of n. | [`b6a5d50`][b6a5d50] |
+| `fn:id`, `fn:idref` and `fn:element-with-id` took any unprefixed `id`/`idref`/`idrefs` attribute as typed | Only is-id/is-idrefs nodes count: DTD- or schema-typed, or `xml:id` (F&O §14.5). | [`b9171e8`][b9171e8], [`0caab03`][0caab03] |
+| `fn:id` and `fn:element-with-id` returned every element holding a duplicated ID value | Each returns the first in document order (F&O §14.5.1); `fn:idref` still returns all. | [`ca1607b`][ca1607b] |
+| An external subset declaring ATTLISTs but no entities never applied its attribute types | The expanded subset is re-read whenever it differs from the directive, so its `ID` types hold. | [`c5d5bce`][c5d5bce] |
+| Date and time component accessors reported a failed untyped cast as XPTY0004 | They propagate the cast's FORG0001, as the duration accessors do (XPath §3.1.5.2). | [`1505000`][1505000] |
+| `fn:serialize` with the xhtml method wrote `<br/>` and `<p/>` | A void element is `<br />`, any other empty one `<p></p>`, as `xsl:output` writes them (Serialization §6). | [`5ad849d`][5ad849d] |
+| `fn:serialize` html left the added meta bare in an XHTML head and did not self-close XML islands | Both serializers share `htmlser.MetaEnd` and `htmlser.Island` (Serialization §7.1). | [`b12ff0b`][b12ff0b], [`bee5b12`][bee5b12] |
+| The html method at version 5.0 wrote a C1 control in text raw | It is written as a character reference, as attribute values already were (Serialization §7.1). | [`9d7cf65`][9d7cf65] |
+| `cache="yes"` returned the same nodes from a node-building function where fresh ones were due | A proactive function reuses only all-atomic results; an elidable one is memoised (XSLT §10.3.8). | [`605d0be`][605d0be] |
+| `fn:transform` refused an atomic or function `global-context-item`, and ignored `package-*` beside `stylesheet-*` | Any item becomes the global context item; the mixed options raise FOXT0002. | [`57a0c9d`][57a0c9d] |
+| A declared function type was split at commas, so a valid streamed `$f(.)` got XTSE3430 | The type is read with `xpath.ParseSequenceType` (XSLT §19.8.8.11). | [`2f78c52`][2f78c52] |
+| §19.8 gave no verdict on text value templates, `fn:root`, `fold-right`, `function-lookup`, empty axes, `?` and `\|\|` | Each is modelled, so a required XTSE3430 is raised. | [`a5013a4`][a5013a4], [`b0428d0`][b0428d0], [`f41bb8c`][f41bb8c] |
+| A namespace node after content was admitted in a tree, and `xsl:sequence` dropped a late attribute | Both raise XTDE0410 (XSLT §5.7.1), tree and stream. | [`090a9a8`][090a9a8], [`2ef0012`][2ef0012] |
+| XQuery dropped a namespace node that followed content in a constructor | It raises XQTY0024 (XQuery §3.9.1.3). | [`2a1e3b9`][2a1e3b9] |
+| `validate type T` with T out of scope was XQDY0084 at run time, and `xs:anyType` was refused | XQST0104 at compile; every built-in type is in scope (XQuery §3.21). | [`ff9032d`][ff9032d], [`1889367`][1889367] |
+| `declare construction strip` left copied nodes typed | Copies get `xs:untyped` (attributes `xs:untypedAtomic`); the original keeps its type (XQuery §4.6). | [`fa87dcc`][fa87dcc] |
+| `(1, <w>{1}</w>)` in a clause expression was XPST0003: a `<` after a comma read as less-than | It opens a direct constructor. | [`c13aa92`][c13aa92] |
+| A library module importing its own namespace under its own prefix was XQST0033 | It is accepted (XQuery §4.12). | [`c114ef5`][c114ef5] |
+| XQuery 1.0 and 3.0 modules were held to 3.1's `ordered{}`, pragma-name and `namespace-node()` rules | Each version applies its own (XPST0003, XPST0081, XPST0017). | [`cc13393`][cc13393] |
+| An undeclared entity where XML §4.1 makes it a VC was dropped silently: `x&u;y` read as `xy` | It is an error naming the VC (§4.4.3: inform the application). | [`8650527`][8650527] |
+| Under `AllowDOCTYPE` malformed DTD declarations and text declarations were accepted: 417 xmlconf not-wf cases | The declaration grammar is checked; 23 remain. | [`252b65b`][252b65b] |
+| The tokeniser took any `<?xml` PI as the declaration and read its pseudo-attributes by substring | Only at offset 0, parsed by XML §2.8 [23]-[26]. | [`72599d9`][72599d9] |
+| `dtd.Validate` passed a 1.0 document whose DTD loads a 1.1 external entity | `Load` records the entity and `Validate` refuses it (XML 1.1 §4.3.4). | [`ee5018c`][ee5018c] |
+| XInclude did no language fixup, so an included element lost its inherited `xml:lang` | `xml:lang` is added where the languages differ (XInclude §4.5.6). | [`93b8855`][93b8855] |
+| XSD 1.0 parsed and silently ignored 1.1-only components such as `xs:assert` | They are refused, "requires XSD 1.1"; `vc:minVersion` exclusion is kept. | [`f9a904d`][f9a904d] |
+| A key field on an attribute a skip or lax wildcard left unassessed was accepted (`idZ015`) | The field fails (XSD §3.11.4 clause 3); under 1.1 a skipped one leaves the field. | [`7362b27`][7362b27] |
+| RELAX NG's overlap test ignored `anyName` exceptions, refusing `xspec.rnc` | It uses jing's representative-name test (§7.3, §7.4). | [`e960da2`][e960da2] |
+| `dtd.Validate` never saw `xmlns` attributes, so a `#REQUIRED xmlns:p` refused every document | Namespace declarations are checked as XML 1.0 attributes, as xmllint does. | [`c516340`][c516340] |
+| `xsl:stream`, the last-call draft's name, was accepted beside `xsl:source-document` | It is XTSE0010 under version 3.0 again (REC change log, Bug29747). | [`b6aef3e`][b6aef3e] |
+| `Result.Warnings` grew with the input under `warning-on-no-match` | It keeps the first 100 and one "further warnings suppressed" line. | [`94acc9f`][94acc9f] |
+| `P instance of T*` at the document node held every match and fell back to the tree | It streams as a count of matches failing T (§27.5); fallbacks 26 → 23. | [`50bba71`][50bba71] |
 
 ### Changed — behaviour
 
@@ -486,6 +519,20 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `WithInstanceLocations` declines rather than fails | An outside, unresolvable or mismatched location is skipped and the call succeeds; a reference needing it fails at the reference. | [`7e92b19`][7e92b19] |
 | XSD temporal fields over 1000 digits are refused | `ValidationError.Err` wraps `xdm.ErrResourceLimit`: "cannot decide", not invalid. | [`97fccf5`][97fccf5], [`eb9ddf8`][eb9ddf8] |
 | The CLI's `-timeout` covers `-xinclude` | A slow XInclude pass now counts against the same deadline as the transform. | [`9399efd`][9399efd] |
+| `fn:id`, `fn:idref`, `fn:element-with-id` ignore undeclared `id` attributes | Declare the attribute `ID` in a DTD or schema, or use `xml:id`; a non-NCName token is ignored. | [`b9171e8`][b9171e8], [`0caab03`][0caab03] |
+| An undeclared entity where XML §4.1 makes it a VC is refused | Such a document used to parse with the reference dropped; supply `ParseOptions.ExternalEntities` to read it. | [`8650527`][8650527] |
+| Malformed DTD declarations are refused under `AllowDOCTYPE` | DTDs accepted before are refused when they break the XML 1.0 declaration grammar. | [`252b65b`][252b65b] |
+| `dtd.Validate` refuses a 1.0 document using a 1.1 external entity | XML 1.1 §4.3.4; a tree with no declared version is 1.0. | [`ee5018c`][ee5018c] |
+| `dtd.Validate` checks `xmlns` and `xmlns:p` as attributes | An undeclared namespace declaration is now a validity error, as in xmllint `--valid`. | [`c516340`][c516340] |
+| XSD 1.0 refuses XSD 1.1 components | A 1.1 schema loaded as 1.0 fails with "requires XSD 1.1" instead of losing its constraints. | [`f9a904d`][f9a904d] |
+| A key field on an unassessed wildcard attribute is invalid | Tree and stream, XSD 1.0 and 1.1; declare the attribute globally to keep a lax match typed. | [`7362b27`][7362b27] |
+| `xsl:stream` is XTSE0010 | Write `xsl:source-document`; forwards-compatible mode takes the `xsl:fallback`. | [`b6aef3e`][b6aef3e] |
+| An attribute after content from a successful `xsl:try` raises XTDE0410 outside the try | The error arises building the parent (§5.7.1, §8.3); it was dropped. Saxon-HE 12.7 catches it inside. | [`2ef0012`][2ef0012] |
+| `cache="yes"` on a proactive function returns fresh nodes | Only atomic results are reused; mark the function `new-each-time="maybe"` to memoise nodes. | [`605d0be`][605d0be] |
+| `fn:transform` refuses `package-*` beside `stylesheet-*` | FOXT0002 where the `package-*` option was ignored. | [`57a0c9d`][57a0c9d] |
+| Date and time component accessors raise FORG0001 for a bad untyped value | `catch err:XPTY0004` no longer sees a failed cast there. | [`1505000`][1505000] |
+| XQuery `validate type` checks its type at compile | XQST0104 from `Compile`; a built-in type with no schema import validates instead of XQDY0084. | [`ff9032d`][ff9032d], [`1889367`][1889367] |
+| XQuery 1.0 and 3.0 modules apply their own version's rules | Empty `ordered{}`, an unprefixed pragma and a bare `namespace-node()` step are refused there; unversioned modules are 3.1. | [`cc13393`][cc13393] |
 
 ## v2.2.0 — 2026-11-01
 
@@ -2765,6 +2812,45 @@ here so every entry in this file sits under a release.
 [390b351]: https://github.com/knroy/go-xml/commit/390b351
 [c870472]: https://github.com/knroy/go-xml/commit/c870472
 [f077a70]: https://github.com/knroy/go-xml/commit/f077a70
+[e0d2c13]: https://github.com/knroy/go-xml/commit/e0d2c13
+[0caab03]: https://github.com/knroy/go-xml/commit/0caab03
+[c6508c3]: https://github.com/knroy/go-xml/commit/c6508c3
+[0d9c103]: https://github.com/knroy/go-xml/commit/0d9c103
+[b9171e8]: https://github.com/knroy/go-xml/commit/b9171e8
+[ca1607b]: https://github.com/knroy/go-xml/commit/ca1607b
+[c5d5bce]: https://github.com/knroy/go-xml/commit/c5d5bce
+[1505000]: https://github.com/knroy/go-xml/commit/1505000
+[5ad849d]: https://github.com/knroy/go-xml/commit/5ad849d
+[b12ff0b]: https://github.com/knroy/go-xml/commit/b12ff0b
+[bee5b12]: https://github.com/knroy/go-xml/commit/bee5b12
+[9d7cf65]: https://github.com/knroy/go-xml/commit/9d7cf65
+[605d0be]: https://github.com/knroy/go-xml/commit/605d0be
+[57a0c9d]: https://github.com/knroy/go-xml/commit/57a0c9d
+[2f78c52]: https://github.com/knroy/go-xml/commit/2f78c52
+[a5013a4]: https://github.com/knroy/go-xml/commit/a5013a4
+[b0428d0]: https://github.com/knroy/go-xml/commit/b0428d0
+[f41bb8c]: https://github.com/knroy/go-xml/commit/f41bb8c
+[090a9a8]: https://github.com/knroy/go-xml/commit/090a9a8
+[2ef0012]: https://github.com/knroy/go-xml/commit/2ef0012
+[2a1e3b9]: https://github.com/knroy/go-xml/commit/2a1e3b9
+[ff9032d]: https://github.com/knroy/go-xml/commit/ff9032d
+[1889367]: https://github.com/knroy/go-xml/commit/1889367
+[fa87dcc]: https://github.com/knroy/go-xml/commit/fa87dcc
+[c13aa92]: https://github.com/knroy/go-xml/commit/c13aa92
+[c114ef5]: https://github.com/knroy/go-xml/commit/c114ef5
+[cc13393]: https://github.com/knroy/go-xml/commit/cc13393
+[8650527]: https://github.com/knroy/go-xml/commit/8650527
+[252b65b]: https://github.com/knroy/go-xml/commit/252b65b
+[72599d9]: https://github.com/knroy/go-xml/commit/72599d9
+[ee5018c]: https://github.com/knroy/go-xml/commit/ee5018c
+[93b8855]: https://github.com/knroy/go-xml/commit/93b8855
+[f9a904d]: https://github.com/knroy/go-xml/commit/f9a904d
+[7362b27]: https://github.com/knroy/go-xml/commit/7362b27
+[e960da2]: https://github.com/knroy/go-xml/commit/e960da2
+[c516340]: https://github.com/knroy/go-xml/commit/c516340
+[b6aef3e]: https://github.com/knroy/go-xml/commit/b6aef3e
+[94acc9f]: https://github.com/knroy/go-xml/commit/94acc9f
+[50bba71]: https://github.com/knroy/go-xml/commit/50bba71
 [0c7f0eb]: https://github.com/knroy/go-xml/commit/0c7f0eb
 [0d82e86]: https://github.com/knroy/go-xml/commit/0d82e86
 [11da206]: https://github.com/knroy/go-xml/commit/11da206

@@ -55,7 +55,7 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 1 of 30,517; XSLT 3.0 has 17 of 11,518;
+failures of 6,203; XQuery 3.1 has 1 of 30,530; XSLT 3.0 has 17 of 11,522;
 XSD 1.0 disagrees on 29 of 39,388 and XSD 1.1 on 30 of 41,598. Everything below
 is an account of those 85 cases, or of a decision that produced some of them.
 The 85 is the sum of the nine figures above, computed from
@@ -891,10 +891,9 @@ Also:
   element is held whole, as its bytes (above); html `head` and `meta`;
   elements with `inherit-namespaces="no"` or validation; a try's output in
   the cases listed above; a variable's or function's content; secondary
-  results without `SecondaryOutput`. A namespace node added to an element
-  after its content raises XTDE0410 (§5.7.1) under `Output`, where the tree
-  builder admits it and `Result.Serialize` succeeds: the start tag is already
-  written. Temporary work per record is not
+  results without `SecondaryOutput`. A namespace or attribute node added to
+  an element after its content raises XTDE0410 (§5.7.1) with or without
+  `Output`. Temporary work per record is not
   charged cumulatively since v2.3.0: a loop item that writes nothing to the
   output hands back up to 4,096 nodes and 64 KiB it dropped
   (`TransformOptions.MaxNodesBuilt`/`MaxBytesBuilt` lift that cap). An item that
@@ -1025,12 +1024,6 @@ Errors and host detail:
   function call.** `runtimeFrom` grafts the call's context onto the runtime
   bound at transform start, so templates applied inside a deep function nest
   start from depth about 1. The XPath call depth still bounds it.
-- **R3: possibly a tree-mode bug, unverified against Saxon.** After
-  `<xsl:variable name="v"><xsl:copy-of select="." copy-accumulators="yes"/></xsl:variable>`,
-  `$v/rec/accumulator-before('n')` gives 1 for every `rec`, in both modes and
-  before R3; §18.2.10 suggests the original's values (1, 2, 3). The row
-  `copy-of-instr-variable` in `xslt/streamcopyaccum_test.go` pins only that the
-  stream equals the tree.
 
 Untested:
 
@@ -1112,17 +1105,18 @@ passes them all):
   (`si-group-052`);
 - the §19.8.8.4 union widening under grouping: `si-group-055`, below.
 
-Not implemented: `fn:root` (§19.8.9.18 rewrites `root(X)` to `X` only when X
-is statically a document node, a type this analysis does not infer; rewriting
-otherwise would refuse `root()//x` at a document node), `fn:fold-right`
-(§19.8.9.9), both modelled since L7 (ef9e55bf) only for a grounded
-operand (`root(X)` with X grounded, `fold-right(S, Z, F)` with S grounded
-and consuming), where every modelled answer is grounded and no `XTSE3430` can
-follow; `fn:function-lookup` (§19.8.9.12), and §19.8.8.9's empty-axis
-rule (an axis that can never select is grounded and motionless), which needs
-a U-type of the context item. That rule is most of the analysis's
-disagreements with the optional posture-and-sweep assessments
-(`tests/sandp`, 919 cases): 437 agree, 482 disagree.
+Modelled since round SG (b0428d0): `fn:fold-right` (§19.8.9.9, the first
+argument navigation), `fn:function-lookup` (§19.8.9.12, both arguments
+absorption), a leading `/` and `fn:root` (§19.8.9.18) from a crawling or
+climbing posture and of a crawling, climbing or never-document striding X,
+and §19.8.8.9's empty-axis rule, from the kinds each axis reaches against a
+kind test and from a context item that cannot have children. Still
+unmodelled: `root(X)` of a striding X that may be a document node, which
+needs the static type this analysis does not infer (rewriting it as X would
+refuse `root()//x` at a document node). Before round SG the empty-axis rule
+was most of the analysis's disagreements with the optional posture-and-sweep
+assessments (`tests/sandp`, 919 cases): 437 agreed, 482 disagreed; that lane
+was not re-measured in the round.
 
 An earlier revision of this entry argued that nine `su-*` cases were
 unreachable under the published text. Eight of them now pass, by the
@@ -1162,33 +1156,17 @@ behind it.
 
 ### §19.8: holes in the expression analysis (XSLT 3.0)
 
-Verified in `xslt/stream*.go`. All but the `functionParamTypes` item return
-unknown, so a required `XTSE3430` is missed; that one is a spurious refusal.
-None is a wrong verdict.
+Verified in `xslt/stream*.go`. Each returns unknown, so a required
+`XTSE3430` can be missed; none is a wrong verdict. (Text value templates,
+`?`/`||`/placeholders in the inline-function walk, the declared-function-type
+split and a leading `/` in a crawling predicate were closed at round SG.)
 
-- The analysis does not see text value templates (its instruction rules read
-  child elements only), so a consuming part of a text value template cannot
-  raise `XTSE3430`. The streamed plan judges the parts itself and refuses a
-  second consumer, so such a container runs on the tree.
-
-- `*xpath.LookupExpr` (`?`) is modelled in `expr()` (§19.8.8.18), but the
-  inline-function walker `bodyMentionsStreamingParam` still lacks it, along
-  with `*xpath.StringConcat` and `*xpath.ArgumentPlaceholder`. Since v2.2.0 the
-  walker runs on every inline function in a streamable construct (it looks for
-  `current()`), so such a body is unknown anywhere, not only in a stylesheet
-  function. `||` itself is modelled in `expr()` since 1f6576df; see
-  [*The `||` operator*](conformance-gaps.md#the--operator--2-cases-gained-18-lost).
-- `functionParamTypes` splits a declared function type by hand: the comma in
-  `function(Q{urn:a,b}t, xs:string)` makes three parameters, and
-  `dynamicCallUsages` does not recognise `function (xs:string)` with a space.
-  Either way a streamed argument gets navigation instead of absorption, and
-  `$f(.)` in a streamable template is refused with `XTSE3430`; spelled
-  `function(xs:string)` it compiles.
-- A leading `/` is modelled only from a striding or grounded context, so
-  inside the predicate of a crawling step it is unknown. That covers
-  `key(k, v)`, which §19.8.9 defines as `key(k, v, /)`:
-  `descendant::x[count(key('k', 'v'))]` gets no verdict, where outside a
-  predicate the same call is refused.
+- A dynamic call whose base is not a variable reference (`(f#1)(.)`,
+  `$m?f(.)`, a call on a call's result) takes the no-signature fallback,
+  navigation, because the static type would come from inference this analyzer
+  does not do (§19.8.8.11; [conformance-gaps.md](conformance-gaps.md)).
+- Static types are approximated syntactically, so `root(X)` of a striding X
+  that may be a document node stays unmodelled (above).
 
 ### XQuery schema awareness: a tail of features `import schema` made reachable (XQuery 3.1)
 
@@ -1238,7 +1216,7 @@ group the same way rather than as absent machinery.
 
 ### XSLT 2.0: eight failures, and no cause peculiar to the lane
 
-**8 of 6,201.** They are recorded here only because the lane has no entry
+**8 of 6,203.** They are recorded here only because the lane has no entry
 anywhere else and eight is small enough to name: `docbook-001`,
 `format-number-070`, `import-schema-137`, `regex-syntax-xslt20-0984`, `-0985`,
 `-0987`, `sequence-0132` and `validation-0201`.
@@ -1418,11 +1396,13 @@ ignored); an unmet one is `FOXT0001`. Every typed option is converted per F&O
 F&O-defined options are accepted and have no effect:
 
 - `vendor-options`; `enable-trace`, since `fn:trace` writes no diagnostics here.
-- `package-location`, `package-node`, `package-text`: alone they identify no
-  stylesheet (`FOXT0002`); beside a `stylesheet-*` option they are ignored.
+  Both are implementation-defined.
 
-Refusing them would be the post-process lesson applied, but it is a separate
-decision. The QT3 driver now claims `fn-transform-XSLT` and
+`package-location`, `package-node` and `package-text` alone identify no
+stylesheet (`FOXT0002`). Since round SG (57a0c9d) they are `FOXT0002` beside a
+`stylesheet-*` option too, where they used to be ignored: F&O asks for
+"exactly one of" each group and raises `FOXT0002` "if two mutually-exclusive
+parameters are supplied". The QT3 driver now claims `fn-transform-XSLT` and
 `fn-transform-XSLT30` (the `xslt` package registers a processor for XQuery
 and `xpath.Eval` callers), so `fn/transform.xml` is measured: 119 cases in
 scope at XPath 3.1 and 121 at XQuery, all passing. The four parameter options
@@ -1441,9 +1421,11 @@ processor exactly that for 2.0 ("no differences are defined for XSLT 2.0
 behavior"), and Saxon, which has only a 3.0 processor, reads it the same way.
 Choosing 2.0 instead would silently drop 3.0 options such as
 `global-context-item` for every `version="2.0"` stylesheet; a caller who wants
-2.0 rules asks with `xslt-version: 2.0`. No QT3 case exercises the default. One
-limit remains: `global-context-item` must be a node -- `Transform` takes the
-global item as its source -- so an atomic or function item is `FOXT0001`.
+2.0 rules asks with `xslt-version: 2.0`. No QT3 case exercises the default.
+`global-context-item` is typed `item()`, and since round SG (57a0c9d) an atomic
+or function item becomes the global context item and the initial template's
+focus, where it used to be `FOXT0001`; a `source-node` beside it stays the
+initial match selection.
 
 Option names F&O does **not** define are
 ignored, as F&O 3.1's option parameter conventions require: "It is not an
@@ -1521,32 +1503,11 @@ four wrong-code rows were unscored too; fixing them moved no lane.
 A `new-each-time="no"` function is deterministic (§10.3.7), so calls with
 F&O 1.7.4-*identical* arguments return identical results: the result is cached
 per argument list, atomics keyed by exact type and `eq`, nodes by identity,
-maps and arrays by content (issue #13). Two residuals, no suite case scoring
-either: a function item is keyed by the item, so two distinct but identical
-items (`concat#2` evaluated twice) recompute; and `cache="yes"` memoises
-without regard to §10.3.7's default, which is *proactive*, so a node-building
-function carrying only that hint returns the same nodes where fresh ones are
-due. `functionDeterminism` still reads the absent attribute as `"maybe"`.
-
-### The `dtd` package cannot enforce XML §4.3.4
-
-`xdm` checks an external entity's declared version against the including
-document's: a 1.0 document may not include a 1.1 entity, an unrecognised
-version is refused rather than assumed compatible, and a table whose version
-was never determined enforces the stricter 1.0 rule. `dtd` does none of this,
-and the reason is structural rather than an oversight.
-
-`dtd.Load` takes a DOCTYPE *directive string*, not a document. It therefore
-never sees an XML declaration and has nothing to compare an entity's version
-against — its own `stripTextDecl` discards the text declaration for exactly
-the reason `xdm`'s once did. Closing it means giving `dtd` a way to be told
-the including document's version, which is a new API surface, not a gap
-closure. **It should wait for a caller that needs it**: inventing the
-parameter now would fix the shape of something no test exercises.
-
-Nothing in the suites scores this. The `XmlVersions` cases reach the parser
-through `xdm`, which is checked; a caller reaching `dtd.Load` directly is the
-uncovered path.
+maps and arrays by content (issue #13). One residual, no suite case scoring
+it: a function item is keyed by the item, so two distinct but identical
+items (`concat#2` evaluated twice) recompute. (`cache="yes"` on a proactive
+function, the default under §10.3.7, reuses only an all-atomic result since
+605d0be, so it no longer shares the nodes it builds.)
 
 ### `xdm` parsing cannot be cancelled
 
@@ -1613,30 +1574,29 @@ wrong language's rules. The version now reaches the tokeniser, and [2] `Char`,
 is in the external-entity and DTD layers, and is described in
 [todo.md](todo.md#11-xml-11-documents--character-rules-done-dtd-side-rules-outstanding).
 
-### The tokeniser keeps two leniencies
+### The tokeniser keeps one leniency
 
-`internal/xmltok` still carries these `parity:` behaviours from the
+`internal/xmltok` still carries this `parity:` behaviour from the
 `encoding/xml` fork it replaced; the others were corrected against the W3C XML
 Conformance Test Suite (see [testing.md](testing.md#tokeniser-differential)) or
 by the parse work recorded in [CHANGELOG.md](../CHANGELOG.md).
 
-* A PI with target `xml` is taken as the XML declaration wherever it appears,
-  and the declaration's pseudo-attributes are found by substring search;
-  `xdm` validates the declaration's syntax and placement itself.
 * A character error is reported against the line where the run ended.
 
-### An undeclared entity is dropped where §4.1 makes it a validity error
+### The xmlconf lane: 111 failures left (XML 1.0)
 
-Where §4.1's WFC "Entity Declared" does not apply (an external subset that was
-not read, or a parameter-entity reference, without `standalone="yes"`), an
-undeclared general entity is a validity error, and a non-validating parse goes
-on. `xdm` then drops the reference from content, attribute values and defaults
-without reporting it, as libxml2 does for attribute values. libxml2 keeps an
-entity-reference node in content, which the XDM cannot represent. Nothing tells
-the caller a reference was dropped; a caller that must know can supply a
-resolver so that the external subset is read. For the same reason, entity and
-ATTLIST declarations that follow an unread parameter-entity reference are
-ignored (§5.1); libxml2 2.9.13 still processes them.
+`TestXMLConf` (`tests/xmlconf/xmlconf_test.go`, ratchet mark 1854) runs the W3C XML
+Conformance Test Suite: 1,965 cases in scope, **1,854 pass**. Round SG
+brought it from 1,460 by checking the DTD declaration grammar (252b65b), the
+text declaration (§4.3.1 [77]), the XML declaration (72599d9), undeclared
+entities (8650527) and §4.3.4 in `dtd` (ee5018c). The 111 still failing are
+not yet triaged one by one:
+
+- **not-wf, 23**: documents still accepted that XML 1.0 makes fatal.
+- **invalid, 77**: documents `dtd.Validate` accepts that the suite expects
+  invalid.
+- **valid, 11**: documents `dtd.Load` or `dtd.Validate` refuses that the suite
+  expects valid.
 
 ---
 
@@ -1665,6 +1625,23 @@ leaving external entities off. The default itself is unchanged.
 Honouring it lets the document choose the schema it is validated against, which
 defeats the purpose of validating. `WithInstanceLocations` opts in, with a
 policy that names which namespaces may be resolved.
+
+### An attribute after content from a successful `xsl:try` raises XTDE0410 outside the try
+
+When an `xsl:try` body succeeds and returns `(@a, x)` or `(x, @a)` into an
+element that already has content, the XTDE0410 is raised while the parent
+element is built, so the try's `xsl:catch` does not see it (2ef0012; the
+attribute used to be dropped silently). XSLT 3.0 §5.7.1: "If the result
+sequence contains an attribute or namespace node that is preceded by a node
+that is neither an attribute nor a namespace node, a dynamic error is raised
+[XTDE0410]", and that result sequence is the parent's content, not the try's.
+§8.3: `xsl:try` "returns the result of that evaluation if it succeeds without
+error", and here it did. Saxon-HE 12.7 catches the error inside the try.
+
+**Cost of changing it: none measured, because no W3C suite case covers it.**
+The divergence from Saxon is deliberate and grounded in the text: catching it
+would mean the try's result is judged by where it lands, which §8.3 does not
+say. `TestStreamTryOut` pins the behaviour.
 
 ### An initial mode without `use-accumulators` makes no accumulator applicable (`accumulator-073`)
 
@@ -1738,6 +1715,12 @@ share one path down to `isAnyURILexical`, with no seam between them, so
 tightening 1.0 `anyURI` would reject **every instance value containing a
 Windows path or an unescaped space**. UBL is a 1.0 schema set and its documents
 carry exactly those. The one suite case is not worth that.
+
+**It stays as it is, by owner decision (round SG).** W3C bug 4048 is `stable`
+against this reading (2008-11-01, TSTF: invalid under 1.0), so the keep rests
+on the `anyURI_a016` contradiction and the UBL cost above, not on an open
+bug. The question was put to the owner in the round SG deviation review, and
+the answer was to keep it.
 
 **`simple093`** names `xs:NOTATION` as a union member type. §3.2.19 does forbid
 using NOTATION directly, and this package enforces that for a restriction base,
@@ -2187,6 +2170,19 @@ Verdicts recorded in this file that were **wrong**. Not fixes — a fix leaves n
 trace here — but readings that were believed, quoted, and disproved. They are
 kept because a negative result that was believed for two revisions is more
 dangerous than an open bug, and deleting one invites the same probe again.
+
+### "Accumulator values on a `copy-of` held in a variable are wrong" — they are what the REC says
+
+This file listed, as possibly a tree-mode bug, that after
+`<xsl:variable name="v"><xsl:copy-of select="." copy-accumulators="yes"/></xsl:variable>`
+`$v/rec/accumulator-before('n')` gives 1 for every `rec`, where §18.2.10
+seemed to promise the original's values. It does not: the variable's
+temporary tree copies the `xsl:copy-of` result again, and §5.7.1 makes that
+copy follow "the rules of the xsl:copy-of instruction with attributes
+copy-namespaces="yes" copy-accumulators="no" validation="preserve"", so the
+new tree computes its own values. Saxon agrees. Closed at round SG as not a
+bug; the row `copy-of-instr-variable` in `xslt/streamcopyaccum_test.go` pins
+that the stream equals the tree.
 
 ### "An inline function declaration is grounded" — only if it mentions nothing streamed
 

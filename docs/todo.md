@@ -18,12 +18,12 @@ Current position:
 | XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
 | XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
 | XPath 3.1 | 100.00% — 22,054 of 22,054 in scope (0 failing) |
-| XQuery 3.1 | 100.00% — 30,516 of 30,517 in scope (1 failing) |
-| XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
-| XSLT 3.0 | 99.85% — 11,501 of 11,518 in scope (17 failing) |
+| XQuery 3.1 | 100.00% — 30,529 of 30,530 in scope (1 failing) |
+| XSLT 2.0 | 99.87% — 6,195 of 6,203 in scope (8 failing) |
+| XSLT 3.0 | 99.85% — 11,505 of 11,522 in scope (17 failing) |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 3,378 `func Test` declarations, clean under `-race` |
+| Tests | 3,422 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -33,7 +33,7 @@ to build next and what it would cost.
 
 ## 1. Features
 
-### 1.1 XML 1.1 documents — **implemented; one layer outstanding**
+### 1.1 XML 1.1 documents — **implemented**
 
 XML 1.1 documents are read as XML 1.1. The declaration's version is kept in
 `internal/xmltok.Decoder`, [2] `Char` and [2a] `RestrictedChar` are enforced
@@ -210,20 +210,19 @@ U+001F being unreachable in XML 1.0 character data.
 `TestIdentityKeySeparatorUnreachableInXML10` still pins the 1.0 premise; when it
 fails it is a signal to retire the test, not a key match to fix.
 
-**What is left is the `dtd` package, which has no version notion.** `dtd.Load`
-takes a DOCTYPE directive string rather than a document, so it never sees an XML
-declaration and has nothing to check §4.3.4 against — its own `stripTextDecl`
-discards the text declaration for the same reason `xdm`'s once did. Closing it
-means giving `dtd` a way to be told the including document's version, which is a
-new API surface rather than a gap closure, and it should not be invented before
-a caller needs it.
+**The `dtd` package enforces §4.3.4 too** (round SG, ee5018c), with no new
+API: `dtd.Load` records the first external resource whose text declaration
+says 1.1, and `dtd.Validate`, which is handed the document, refuses it when
+the document's `Tree.XMLVersion` is not 1.1 (a tree with none is 1.0, the
+stricter rule).
 
-The W3C `xmlconf` suite (xmlts20130923) was measured on 2026-10-02 with a
-scratch harness against `xmllint`; it is not yet vendored or run in CI, so the
-`XmlVersions` cases in the XSD suite (xv003, xv006, xv008, xv009 pass) remain
-the only 1.1 measurement the gate repeats.
+The W3C `xmlconf` suite (xmlts20130923) is a lane since round SG:
+`TestXMLConf` (`tests/xmlconf/xmlconf_test.go`, fetched by
+`tests/fetch-xmlconf.sh`) runs 1,965 cases, 1,854 passing. With the
+`XmlVersions` cases in the XSD suite (xv003, xv006, xv008, xv009 pass) it is
+what the gate repeats for 1.1.
 
-### 1.2 DTD validation — the `xmlconf` suite outstanding
+### 1.2 DTD validation — the `xmlconf` lane at 1,854 of 1,965
 
 The `dtd` package validates against `<!ELEMENT>`, `<!ATTLIST>` and
 `<!ENTITY>`: content models, attribute defaults, enumerations, `ID`/`IDREF`.
@@ -254,11 +253,18 @@ internal one does. See [security.md](security.md) and
   `<!NOTATION>`s, reported once per declaration, and an `ENTITY` or `ENTITIES`
   value must name entities declared with `NDATA` (`dtd/validate.go`; see
   [validation.md](validation.md)).
-* **The W3C `xmlconf` suite is not vendored.** It was measured once, on
-  2026-10-02, against `xmllint`: under default options the parser now refuses
-  every not-well-formed case that applies, and with DOCTYPEs enabled most of
-  what it still accepts is DTD declaration grammar it never checks. Vendoring
-  it with a CI test is what would keep that number from drifting.
+* **The `xmlconf` lane's 111 failures.** `TestXMLConf` runs not-wf cases
+  through `xdm.Parse` and valid/invalid ones through `dtd.Load` and
+  `dtd.Validate`. Round SG took it from 1,460 to 1,854 by checking the DTD
+  declaration grammar under `AllowDOCTYPE` (252b65b: not-wf 417 → 23), the
+  text declaration, the XML declaration (72599d9) and undeclared entities
+  (8650527). Open: **23 not-wf** documents still accepted, **77 invalid**
+  documents `dtd.Validate` accepts, and **11 valid** documents refused. None
+  is triaged yet; see [known-gaps.md](known-gaps.md).
+* **`xmlns` attributes are validated** (c516340). XML 1.0 sees `xmlns` and
+  `xmlns:p` as attributes, so VC Attribute Value Type applies to them; the
+  exemption is gone, and a declared `xmlns:p` now satisfies `#REQUIRED` and
+  `#FIXED`, as xmllint `--valid` has it.
 
 ### 1.3 RELAX NG — compact syntax implemented, unverified against a suite
 
@@ -665,6 +671,11 @@ point rather than a change in place. Until then the workarounds are real but
 indirect: pass the map through `TransformOptions.Params` to a top-level
 `xsl:param`, or call `parse-json()` inside the stylesheet and bind it to an
 `xsl:variable`, passing only the JSON string in.
+
+`fn:transform` is no longer limited this way (round SG, 57a0c9d): its
+`global-context-item` option is typed `item()`, and an atomic or function item
+reaches the runtime through an unexported `TransformOptions` field beside a nil
+source. The public `Transform` signature is the part still open.
 
 ## 2. Bugs
 

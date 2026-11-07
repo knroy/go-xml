@@ -444,7 +444,7 @@ would buy none of it. See
 [conformance-gaps.md](conformance-gaps.md) for the breakdown.
 
 **EXSLT is not on this list.** It is a separate product. XQuery was, and is
-now implemented in [`xquery`](../xquery/) at 30,516 of 30,517; what remains of
+now implemented in [`xquery`](../xquery/) at 30,529 of 30,530; what remains of
 it there is tracked in [xquery.md](xquery.md) rather than here, because this
 file is about the XPath and XSLT figures.
 

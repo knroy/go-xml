@@ -21,10 +21,10 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,377 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,422 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
-| **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
+| **W3C conformance suites** | 152,260 cases | systematic divergence from the specification | what the suites do not ask about — see below |
 | **Real-world stylesheets** | 803 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
 | **Production schema sets** | 65 + CII | what modular published schemas do | industries whose schemas are shaped differently |
 | **Vendored real-world schemas** | 185 of 230 | a schema-validity rule that has become stricter than the spec, on every checkout — no licensed corpus needed | the deep industry vocabularies only UBL and CII carry |
@@ -47,7 +47,7 @@ figures* section, which fails the gate when this table drifts from the tree:
   `grep -hc "^func Test" ./*/limits_boundary*_test.go | awk '{n += $1} END {print n + 0}'`
 * **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'`
 * **W3C conformance suites** — the sum of the in-scope totals in the status
-  table: XPath 3.1 22,054 + XQuery 3.1 30,517 + XSLT 2.0 6,201 + XSLT 3.0 11,518
+  table: XPath 3.1 22,054 + XQuery 3.1 30,530 + XSLT 2.0 6,203 + XSLT 3.0 11,522
   + XSD 1.0 39,388 + XSD 1.1 41,598 + RELAX NG 965. XPath 2.0 and 3.0 are not
   added again — the QT3 catalog is one corpus measured at three XPath versions,
   and the 3.1 lane is the widest of them. An earlier
@@ -982,11 +982,11 @@ different unit-test counts, and an XSD split was current in `README.md` while
 `tests/docfigures.sh`, run by `check.sh` in the *documented figures* section,
 reads `tests/ratchet.txt` and examines every documentation line that names a
 suite's **in-scope denominator** -- the one number in a figure that does not
-move between runs (11,518 for XSLT 3.0, 30,346 for XQuery, and so on). The
+move between runs (11,522 for XSLT 3.0, 30,530 for XQuery, and so on). The
 passing count, failure count and percentage written beside it must equal the
-ratchet's, in every form the documents use: `11,501 of 11,518`,
-`17 of 11,518`, `11,501 / 11,518 (99.85%)`, `= 99.84%`, `(17 failing)`, and
-the `| 11,518 | 11,501 | 99.85% | **17** |` summary-table row. A line stating
+ratchet's, in every form the documents use: `11,505 of 11,522`,
+`17 of 11,522`, `11,505 / 11,522 (99.85%)`, `= 99.84%`, `(17 failing)`, and
+the `| 11,522 | 11,505 | 99.85% | **17** |` summary-table row. A line stating
 two figures is read as two claims. Failures name the file, line and the value
 wanted.
 
@@ -1596,7 +1596,7 @@ git worktree, whose `testdata` is a symlink, was traced to
 **Skipped is not failed.** The suites skip cases by declared dependency — a
 specific Unicode version, a spec version not being measured. (Streaming used to
 head that list and no longer does: it was measured and found implemented.) The
-XSLT 3.0 suite has 14,601 cases and 11,518 in scope; counting the difference as
+XSLT 3.0 suite has 14,601 cases and 11,522 in scope; counting the difference as
 failures would understate the engine, and counting it as passes would overstate
 it. Both figures are reported separately for that reason.
 
@@ -1608,13 +1608,13 @@ processor may leave out — the wrong `<spec>` version, a construct that only
 exists in the version not being measured, a Unicode version, an optional
 numbering language or calendar, a document only the network can supply, a case
 that needs a feature this engine *has* to be absent. *Unimplemented* is the rest:
-a gap wearing a skip label. At the last run that is **2,949 out of scope and 134
-unimplemented** of the 3,083 XSLT 3.0 skips, and **8,332 / 68** of the 8,400 at
-the 2.0 target. The XSLT 3.0 unimplemented 134 are: `disabling_output_escaping`
+a gap wearing a skip label. At the last run that is **2,951 out of scope and 128
+unimplemented** of the 3,079 XSLT 3.0 skips, and **8,332 / 66** of the 8,398 at
+the 2.0 target. The XSLT 3.0 unimplemented 128 are: `disabling_output_escaping`
 (33), `xsl-stylesheet-processing-instruction` (18), `enable_assertions` (24),
 `package_version_resolution` (12), `additional_normalization_form` (12),
 `streaming-fallback` (7), `maximum_number_of_decimal_digits` (7),
-`supported_calendars_in_date_formatting_functions` (4), `HTML4`/`HTML5` (6),
+`supported_calendars_in_date_formatting_functions` (4),
 `unparsed_text_encoding` (3), and one or two each of `default_output_encoding`,
 `ignore_doc_failure`, `default_language_for_numbering`,
 `detect_accumulator_cycles`, `extension-function` and
