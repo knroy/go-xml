@@ -1412,3 +1412,27 @@ func TestContextItemAbsentIsSpeltAbsent(t *testing.T) {
 			`xsl:call-template on a template with use="`+use+`"`)
 	}
 }
+
+// TestTextValueTemplateOperands checks §19.8.3: "Any text value templates
+// appearing in text nodes within the sequence constructor, if text value
+// templates are enabled. The operand usage for these operands is
+// absorption", with §19.8.7's operands, the expressions in braces.
+func TestTextValueTemplateOperands(t *testing.T) {
+	for _, c := range []struct {
+		src  string
+		want props
+	}{
+		{`<out xsl:expand-text="yes">{@k}</out>`, groundedMotionless},
+		{`<out xsl:expand-text="yes">{a}</out>`, props{postureGrounded, sweepConsuming}},
+		{`<out xsl:expand-text="yes">{a} and {b}</out>`, roamingFreeRanging},
+		{`<out xsl:expand-text="yes"><xsl:value-of select="a"/>{b}</out>`, roamingFreeRanging},
+		{`<out xsl:expand-text="yes">{following-sibling::x}</out>`, roamingFreeRanging},
+		// Not enabled: literal text.
+		{`<out>{a} and {b}</out>`, groundedMotionless},
+	} {
+		p, known := analyzeInstrSource(t, c.src)
+		if !known || p != c.want {
+			t.Errorf("%s: %v/%v known %v, want %v/%v", c.src, p.posture, p.sweep, known, c.want.posture, c.want.sweep)
+		}
+	}
+}

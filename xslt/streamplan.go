@@ -30,7 +30,7 @@ import (
 //     the root for an attribute), except "." and "?" (unkeyable);
 //   - *xdm.Node: an instruction or literal result element of the stylesheet;
 //   - planBody: the sequence constructor formed by an element's children;
-//   - planAVT: one attribute value template, by element and source;
+//   - planAVT: one attribute or text value template, by element and source;
 //   - planSite: an XPath operand of an instruction (src only; resolve with
 //     root).
 type streamPlan struct {
@@ -88,7 +88,8 @@ type planOperand struct {
 // planBody keys the sequence constructor of el.
 type planBody struct{ el *xdm.Node }
 
-// planAVT keys an attribute value template written on el.
+// planAVT keys an attribute value template written on el, or a text value
+// template in one of its text children.
 type planAVT struct {
 	el  *xdm.Node
 	src string

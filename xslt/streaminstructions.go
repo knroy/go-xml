@@ -534,8 +534,24 @@ func (a *instrAnalyzer) bodyRule(el *xdm.Node) props {
 	saved := a.accumAfter
 	defer func() { a.accumAfter = saved }()
 	a.accumAfter.known = true
-	for _, c := range el.ChildElements() {
-		if isSequenceConstructorExcluded(c) {
+	tvt := expandTextAt(el)
+	for c := range el.Children() {
+		if c.Kind() == xdm.KindText {
+			// §19.8.3: "Any text value templates appearing in text nodes
+			// within the sequence constructor, if text value templates are
+			// enabled. The operand usage for these operands is absorption."
+			// §19.8.7 makes the template's own operands its expressions.
+			if !tvt || !strings.ContainsAny(c.Value(), "{}") {
+				continue
+			}
+			p := a.avtPropsOf(c.Value(), el)
+			if p.sweep == sweepConsuming || p.sweep == sweepFreeRanging {
+				a.accumAfter.precedingConsuming = true
+			}
+			ops = append(ops, operand{props: p, usage: usageAbsorption, src: planAVT{el, c.Value()}})
+			continue
+		}
+		if c.Kind() != xdm.KindElement || isSequenceConstructorExcluded(c) {
 			continue
 		}
 		p := a.instruction(c)
