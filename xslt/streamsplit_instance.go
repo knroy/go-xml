@@ -24,9 +24,7 @@ import (
 // is a sequence. It returns nil for any other x.
 func instanceAllOf(x *xpath.InstanceOfExpr, focus vfocus, key bool) xpath.Expr {
 	t := x.Type
-	kt, ok := t.ItemType.(*xpath.KindTest)
-	if t.Occurrence != "*" || t.Empty || !ok || t.HasAtomicType || t.IsFunctionTest ||
-		t.IsArrayTest || t.IsMapTest || kt.TypeName != "" || kt.Content != nil {
+	if !kindStar(t) {
 		return nil
 	}
 	one := t
@@ -59,13 +57,86 @@ func instanceAllOf(x *xpath.InstanceOfExpr, focus vfocus, key bool) xpath.Expr {
 	return consuming
 }
 
+// kindStar reports whether t is "K*", K a kind test a match's node decides
+// at its start tag: its kind and name, no type annotation or content.
+func kindStar(t xpath.SequenceType) bool {
+	kt, ok := t.ItemType.(*xpath.KindTest)
+	return t.Occurrence == "*" && !t.Empty && ok && !t.HasAtomicType && !t.IsFunctionTest &&
+		!t.IsArrayTest && !t.IsMapTest && kt.TypeName == "" && kt.Content == nil
+}
+
+// treatEach takes x, "O treat as T*" with T as kindStar says, item by item
+// (§19.8.8.6: the operand's posture and sweep are the expression's): O's one
+// consuming item P is walked as x's holder uses it, each match tested
+// against T as it comes (streamSplit.each), in document order, which is
+// P's; each motionless item V becomes "V treat as T*", in the outer and as
+// a check run before the walk (streamSplit.checks), so a failing V raises
+// without P being read or held first (sx-treat-102). A match not of T
+// raises the tree's XPDY0050, whose message names only T: whichever item
+// fails first, the error is the same. P must be a bare path, perhaps of
+// branches or under outermost(): its matches are its items. done is false
+// for any other x, which is then held whole.
+func (w *splitter) treatEach(x *xpath.TreatExpr, put func(xpath.Expr), use splitUse) (done, ok bool) {
+	t := x.Type
+	if !kindStar(t) {
+		return false, false
+	}
+	items := []xpath.Expr{x.Operand}
+	sq, isSeq := x.Operand.(*xpath.SequenceExpr)
+	if isSeq {
+		items = sq.Items
+	}
+	out := make([]xpath.Expr, len(items))
+	var p xpath.Expr
+	var checks []xpath.Expr
+	for i, it := range items {
+		if (viewCheck{kids: true, key: w.key}).safe(it, w.focus, false) {
+			out[i] = &xpath.TreatExpr{Operand: it, Type: t}
+			checks = append(checks, out[i])
+			continue
+		}
+		probe := *w
+		pp, isPath := probe.pathOf(it)
+		if p != nil || !isPath || len(pp.tail) > 0 || pp.ctxItem || pp.group || pp.oi == "innermost" ||
+			pp.mapR != nil || pp.skip > 0 || pp.br != nil && (pp.br.self != 0 || pp.br.climb != nil) {
+			return false, false
+		}
+		p, out[i] = it, it
+	}
+	if p == nil {
+		return false, false
+	}
+	y := out[0]
+	if isSeq {
+		y = &xpath.SequenceExpr{Items: out}
+	}
+	put(y)
+	if !w.walk(y, put, use) {
+		return true, false
+	}
+	if w.pe != p {
+		return true, w.refuse("treat as over a path walked as another")
+	}
+	w.treat, w.treatChecks = &t, checks
+	return true, true
+}
+
 // withLastPredicate is e, a step or a path ending in one, with pred appended
 // to the last step's predicates; or nil. e is not changed: what changes is
-// copied. A union is left out: the split takes no union whose branches end
-// in predicates at the document node (sx-instance-of-010 would stop
-// streaming), so it keeps giving up there.
+// copied. A union is the union of its operands so filtered: pred reads only
+// its own item, so (A | B)[pred] is A[pred] | B[pred]. Not intersect or
+// except, whose right operand's nodes pred may not see.
 func withLastPredicate(e, pred xpath.Expr) xpath.Expr {
 	switch x := e.(type) {
+	case *xpath.BinaryOp:
+		if x.Op != "union" {
+			return nil
+		}
+		l, r := withLastPredicate(x.Left, pred), withLastPredicate(x.Right, pred)
+		if l == nil || r == nil {
+			return nil
+		}
+		return &xpath.BinaryOp{Op: x.Op, Left: l, Right: r}
 	case *xpath.Step:
 		s := *x
 		s.Predicates = append(append([]xpath.Expr(nil), x.Predicates...), pred)
