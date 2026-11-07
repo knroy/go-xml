@@ -706,9 +706,7 @@ func (s *serializer) writeDoctypeFor(n *xdm.Node) {
 			// DOCTYPE. Requiring the XHTML namespace withheld it from a
 			// document whose element is called html and is in no namespace
 			// that contradicts it.
-			if n.Kind() == xdm.KindElement &&
-				(n.Name().URI == nsXHTML || n.Name().URI == "") &&
-				strings.EqualFold(n.Name().Local, "html") {
+			if htmlser.XHTML5Doctype(n) {
 				s.writeString("<!DOCTYPE " + n.Name().Local + ">\n")
 			}
 			return

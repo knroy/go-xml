@@ -1,6 +1,9 @@
 package xpath
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestSerializeHTMLVoidElements pins that the html output method writes
 // HTML's empty-element syntax rather than XML's.
@@ -124,7 +127,9 @@ func TestSerializeXHTMLEmptyElements(t *testing.T) {
 		`</output:serialization-parameters>')/*`
 	const xhtmlOut = `<html xmlns="http://www.w3.org/1999/xhtml"><br /><p></p></html>`
 	for _, tc := range []struct{ name, expr, want string }{
-		{"map form", `serialize(` + doc + `, map{'method':'xhtml'})`, xhtmlOut},
+		// The map form defaults html-version to 5, which also asks for the
+		// bare XHTML5 doctype (§6.1.7); the element form defaults to 4.
+		{"map form", `serialize(` + doc + `, map{'method':'xhtml'})`, "<!DOCTYPE html>\n" + xhtmlOut},
 		{"element form", `serialize(` + doc + `, ` + elemParams + `)`, xhtmlOut},
 		{"no namespace html5", `serialize(parse-xml('<r><br/><p/></r>'), ` +
 			`map{'method':'xhtml','html-version':5})`, `<r><br /><p></p></r>`},
@@ -172,6 +177,46 @@ func TestSerializeHTMLVersionDefault(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("serialize %s = %q, want %q", tc.params, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSerializeXHTML5Doctype pins Serialization 3.1 §6.1.7: under
+// html-version 5 with no doctype-system, the xhtml method writes
+// "<!DOCTYPE " + the local name + ">" before a document element that is an
+// HTML element named html without regard to case -- the XHTML namespace or
+// no namespace -- and nothing before any other element.
+func TestSerializeXHTML5Doctype(t *testing.T) {
+	const ns = `xmlns="http://www.w3.org/1999/xhtml"`
+	for _, tc := range []struct{ name, doc, params, want string }{
+		{"xhtml namespace", `<html ` + ns + `/>`, `'html-version':5`,
+			`<!DOCTYPE html>` + "\n" + `<html ` + ns + `></html>`},
+		{"map default is 5", `<html ` + ns + `/>`, ``,
+			`<!DOCTYPE html>` + "\n" + `<html ` + ns + `></html>`},
+		{"case kept", `<HtMl/>`, `'html-version':5`,
+			`<!DOCTYPE HtMl>` + "\n" + `<HtMl></HtMl>`},
+		{"prefix dropped", `<h:html xmlns:h="http://www.w3.org/1999/xhtml"/>`,
+			`'html-version':5`, "<!DOCTYPE html>\n"},
+		{"html 4", `<html ` + ns + `/>`, `'html-version':4`, `<html ` + ns + `></html>`},
+		{"not html", `<body ` + ns + `/>`, `'html-version':5`, `<body ` + ns + `></body>`},
+		{"foreign namespace", `<html xmlns="urn:x"/>`, `'html-version':5`,
+			`<html xmlns="urn:x"></html>`},
+		{"doctype-system wins", `<html/>`, `'html-version':5,'doctype-system':'s.dtd'`,
+			`<!DOCTYPE html SYSTEM "s.dtd">` + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := `map{'method':'xhtml'`
+			if tc.params != "" {
+				params += `,` + tc.params
+			}
+			got, err := evalSerialize(t,
+				`serialize(parse-xml('`+tc.doc+`'), `+params+`})`)
+			if err != nil {
+				t.Fatalf("serialize: %v", err)
+			}
+			if !strings.HasPrefix(got, tc.want) {
+				t.Errorf("serialize %s = %q, want prefix %q", params, got, tc.want)
 			}
 		})
 	}

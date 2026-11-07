@@ -149,6 +149,19 @@ func Island(n *xdm.Node, html5 bool) bool {
 	return n.Name().URI != "" && !(html5 && n.Name().URI == NSXHTML)
 }
 
+// XHTML5Doctype reports whether the xhtml method, under html-version 5 with
+// no doctype-system, writes a bare "<!DOCTYPE " + local name + ">" ahead of
+// document element n. Serialization 3.1 §6.1.7: the first element "is
+// recognized as an HTML element, the local part of the QName of which is
+// equal to the string HTML, without regard to case". Under HTML5 the xhtml
+// method recognises the XHTML namespace and no namespace (§6), so a foreign
+// namespace (output-0214) or another name (output-0213) gets none.
+func XHTML5Doctype(n *xdm.Node) bool {
+	return n.Kind() == xdm.KindElement &&
+		(n.Name().URI == NSXHTML || n.Name().URI == "") &&
+		strings.EqualFold(n.Name().Local, "html")
+}
+
 // Void reports whether an HTML element named local, matched without regard
 // to case, takes no end tag: the names void in every HTML version, plus
 // HTML5's own under html5 and HTML 4's otherwise. The version decides for

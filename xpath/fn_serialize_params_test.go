@@ -151,3 +151,33 @@ func TestSerializeMapDoctypeIsChecked(t *testing.T) {
 		t.Errorf("doctype-system a\"b = %q, %v; want a single-quoted literal", got, err)
 	}
 }
+
+// TestSerializeMapEmptyValueIsDefault pins F&O 3.1 fn:serialize for the map
+// form: "The default value is used when the map contains no entry for the
+// parameter in question, and also when an entry is present, with the empty
+// sequence as its value". Each reader raised XPTY0004 for (), because it
+// demanded exactly one item, so map{'indent':()} was a type error where the
+// spec asks for the indent default.
+func TestSerializeMapEmptyValueIsDefault(t *testing.T) {
+	const arg = `parse-xml('<a><b/></a>')`
+	for _, param := range []string{
+		"method", "indent", "omit-xml-declaration", "encoding",
+		"item-separator", "doctype-system", "cdata-section-elements",
+		"use-character-maps", "include-content-type", "version",
+		"json-node-output-method", "normalization-form",
+	} {
+		t.Run(param, func(t *testing.T) {
+			want, err := evalSerialize(t, `serialize(`+arg+`, map{})`)
+			if err != nil {
+				t.Fatalf("serialize without %s: %v", param, err)
+			}
+			got, err := evalSerialize(t, `serialize(`+arg+`, map{'`+param+`':()})`)
+			if err != nil {
+				t.Fatalf("serialize with %s=(): %v", param, err)
+			}
+			if got != want {
+				t.Errorf("%s=(): got %q, want the default's %q", param, got, want)
+			}
+		})
+	}
+}
