@@ -21,6 +21,23 @@ func check(t *testing.T, src string) error {
 	return Validate(tree.Root, d, Options{})
 }
 
+// checkDirective is check for a DOCTYPE xdm refuses as malformed (X3): the
+// directive goes to Parse directly, as a caller holding one would pass it,
+// and the document is parsed without it.
+func checkDirective(t *testing.T, src string) error {
+	t.Helper()
+	i := strings.Index(src, "]>")
+	tree, err := xdm.ParseString(src[i+2:], xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	d, err := Parse(src[2 : i+1])
+	if err != nil {
+		t.Fatalf("parse DTD: %v", err)
+	}
+	return Validate(tree.Root, d, Options{})
+}
+
 // The content model is the half AllowDOCTYPE never applied. A document that
 // violates its own DTD must now be rejected.
 func TestContentModel(t *testing.T) {
@@ -281,8 +298,9 @@ func TestAllowUndeclared(t *testing.T) {
 // attribute went unreported. A component may decline to answer; it must not
 // turn "I could not check this" into "this is valid".
 func TestUnrecognisedAttributeDefault(t *testing.T) {
+	// xdm now refuses this DOCTYPE as malformed; Parse is reached directly.
 	const bad = `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #REQUIRE>]><r/>`
-	err := check(t, bad)
+	err := checkDirective(t, bad)
 	if err == nil {
 		t.Fatal("a #-prefixed token that is not a keyword must be reported")
 	}
@@ -291,7 +309,7 @@ func TestUnrecognisedAttributeDefault(t *testing.T) {
 	}
 	// The report does not depend on the attribute being absent: the
 	// declaration itself is what could not be applied.
-	if err := check(t, `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #REQUIRE>]><r a="x"/>`); err == nil {
+	if err := checkDirective(t, `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #REQUIRE>]><r a="x"/>`); err == nil {
 		t.Error("the declaration is unenforceable whether or not the attribute is present")
 	}
 
@@ -330,15 +348,16 @@ func TestUnrecognisedAttributeDefault(t *testing.T) {
 // reference validate clean. An unrecognised type is a type this package cannot
 // enforce, and the caller has to be told which of the two it got.
 func TestUnrecognisedAttributeType(t *testing.T) {
+	// xdm now refuses this DOCTYPE as malformed; Parse is reached directly.
 	const bad = `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r ref IDREFF #IMPLIED>]><r ref="nowhere"/>`
-	err := check(t, bad)
+	err := checkDirective(t, bad)
 	if err == nil {
 		t.Fatal("a type outside XML 1.0 3.3.1 must be reported, not skipped")
 	}
 	if want := "unrecognised type IDREFF"; !strings.Contains(err.Error(), want) {
 		t.Errorf("error = %q, want it to contain %q", err, want)
 	}
-	if err := check(t, `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r n NMTOKENN #IMPLIED>]><r n="a b"/>`); err == nil {
+	if err := checkDirective(t, `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r n NMTOKENN #IMPLIED>]><r n="a b"/>`); err == nil {
 		t.Error("a misspelt NMTOKEN must be reported")
 	}
 
