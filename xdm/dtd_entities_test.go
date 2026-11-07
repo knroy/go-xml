@@ -588,3 +588,31 @@ func TestEntityValueCDATAIsNotExpanded(t *testing.T) {
 		}
 	}
 }
+
+// WFC: No < in Attribute Values (XML 1.0 §3.1): the replacement text of an
+// entity referenced, directly or not, in an attribute value holds no "<". And
+// replacement text is parsed (§4.5), so a "&" decoded from "&#38;" must begin a
+// reference there. W3C xmlconf ibm41n13, ibm41n14, ibm60n07, not-wf-sa-115.
+func TestAttributeEntityReplacementTextIsChecked(t *testing.T) {
+	for _, src := range []string{
+		`<!DOCTYPE r [<!ENTITY w "a <b> c">]><r a="&w;"/>`,
+		`<!DOCTYPE r [<!ENTITY w "a <b> c"><!ENTITY i "&w;">]><r a="&i;"/>`,
+		`<!DOCTYPE r [<!ENTITY w "<x">]><r><s a="&w;"/></r>`,
+		`<!DOCTYPE r [<!ENTITY e "&#38;">]><r a="&e;"/>`,
+		`<!DOCTYPE r [<!ENTITY e "&#38;">]><r>&e;</r>`,
+	} {
+		if _, err := ParseString(src, ParseOptions{AllowDOCTYPE: true}); err == nil {
+			t.Errorf("%s: parsed, want a well-formedness error", src)
+		}
+	}
+	// A "<" the replacement text holds as a reference is a character, and is
+	// allowed.
+	src := `<!DOCTYPE r [<!ENTITY w "&#38;#60;"><!ENTITY m "<b/>">]><r a="&w;">&m;</r>`
+	tree, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatalf("%s: %v", src, err)
+	}
+	if got := tree.Root.ChildElements()[0].AttrValue("a"); got != "<" {
+		t.Errorf("a = %q, want %q", got, "<")
+	}
+}

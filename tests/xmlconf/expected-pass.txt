@@ -265,6 +265,8 @@ ibm-not-wf-P41-ibm41n09.xml
 ibm-not-wf-P41-ibm41n10.xml
 ibm-not-wf-P41-ibm41n11.xml
 ibm-not-wf-P41-ibm41n12.xml
+ibm-not-wf-P41-ibm41n13.xml
+ibm-not-wf-P41-ibm41n14.xml
 ibm-not-wf-P42-ibm42n01.xml
 ibm-not-wf-P42-ibm42n02.xml
 ibm-not-wf-P42-ibm42n03.xml
@@ -372,6 +374,7 @@ ibm-not-wf-P60-ibm60n03.xml
 ibm-not-wf-P60-ibm60n04.xml
 ibm-not-wf-P60-ibm60n05.xml
 ibm-not-wf-P60-ibm60n06.xml
+ibm-not-wf-P60-ibm60n07.xml
 ibm-not-wf-P60-ibm60n08.xml
 ibm-not-wf-P61-ibm61n01.xml
 ibm-not-wf-P62-ibm62n01.xml
@@ -1096,7 +1099,12 @@ not-wf-sa-111
 not-wf-sa-112
 not-wf-sa-113
 not-wf-sa-114
+not-wf-sa-115
+not-wf-sa-116
+not-wf-sa-117
 not-wf-sa-118
+not-wf-sa-119
+not-wf-sa-120
 not-wf-sa-121
 not-wf-sa-122
 not-wf-sa-123

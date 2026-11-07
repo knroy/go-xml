@@ -542,11 +542,12 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 			i++
 			continue
 		}
+		// Replacement text is parsed (XML 1.0 §4.5), so a "&" in it begins a
+		// reference: one decoded from "&#38;" with nothing after it to name
+		// is not well formed wherever the entity is referenced.
 		j := semis.from(i)
 		if j < 0 {
-			sb.WriteByte(c)
-			i++
-			continue
+			return "", fmt.Errorf("entity replacement text has an & that begins no reference")
 		}
 		name := s[i+1 : i+j]
 		// s is replacement text: the character references written in the
@@ -1226,11 +1227,14 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 		// <!ENTITY primary 'normalize-space(concat(primary/@sortas, " ",
 		// primary))'> and every stylesheet that uses it inside a double-
 		// quoted attribute would otherwise become malformed. Escaping the
-		// three characters that are markup in an attribute value restores the
-		// literal reading; the decoder turns them back on the second parse.
-		// "<" is escaped too rather than left to corrupt the tag, matching
-		// the well-formedness constraint that forbids it there.
+		// two quote characters restores the literal reading; the decoder turns
+		// them back on the second parse. A "<" is refused: WFC No < in
+		// Attribute Values (§3.1) forbids it in the replacement text of any
+		// entity referenced, directly or not, in an attribute value.
 		if attrQuote != 0 {
+			if strings.IndexByte(rep, '<') >= 0 {
+				return "", fmt.Errorf("replacement text of entity %q in an attribute value contains <", name)
+			}
 			rep = escapeAttrLiteral(rep)
 		}
 		count++
@@ -1494,7 +1498,8 @@ func (t *Tree) HasUnparsedEntities() bool {
 // attribute value, so that replacement text spliced there is read as literal
 // characters — XML section 4.4.5, "Included in Literal".
 //
-// Only three are escaped. "&" is deliberately not: on the rewrite path expand
+// Only the two quotes are escaped; "<" never arrives (substituteMarkupEntities
+// refuses it). "&" is deliberately not: on the rewrite path expand
 // leaves "&amp;" as written for the second parse to decode (see the
 // t.reparsed branch there), so escaping "&" here would turn it into "&amp;amp;"
 // and change what the document says. A "&" that replacementText decoded from
@@ -1507,7 +1512,7 @@ func (t *Tree) HasUnparsedEntities() bool {
 // into one character. A character the text holds as a reference is still
 // written as one, and so is kept.
 func escapeAttrLiteral(s string) string {
-	if !strings.ContainsAny(s, "\"'<\t\n\r") {
+	if !strings.ContainsAny(s, "\"'\t\n\r") {
 		return s
 	}
 	var sb strings.Builder
@@ -1520,8 +1525,6 @@ func escapeAttrLiteral(s string) string {
 			sb.WriteString("&#34;")
 		case '\'':
 			sb.WriteString("&#39;")
-		case '<':
-			sb.WriteString("&#60;")
 		default:
 			sb.WriteByte(s[i])
 		}
