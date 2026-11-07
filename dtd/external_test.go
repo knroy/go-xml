@@ -66,7 +66,9 @@ func TestExternalSubsetIsLoadedAndEnforced(t *testing.T) {
 
 // XML 1.0 section 2.8: the internal subset is read FIRST, so where both
 // subsets declare a name the internal declaration binds and the external one
-// is ignored — not an error.
+// is ignored. For an attribute list that is not an error; for an element type
+// it is still §3.2's VC Unique Element Type Declaration, which §2.8 does not
+// lift, so the redeclared r is reported while its internal model binds.
 func TestInternalSubsetTakesPrecedence(t *testing.T) {
 	opts := mapOpts(map[string]string{
 		"r.dtd": `<!ELEMENT r (a)>
@@ -80,13 +82,14 @@ func TestInternalSubsetTakesPrecedence(t *testing.T) {
 <!ELEMENT r (a, b)>
 <!ATTLIST a n CDATA "internal">
 ]>`
-	if err := loadCheck(t, doc+`<r><a/><b/></r>`, opts); err != nil {
-		t.Errorf("the internal (a, b) model should bind: %v", err)
+	const unique = "/r: element type r is declared more than once (XML §3.2 Unique Element Type Declaration)"
+	if err := loadCheck(t, doc+`<r><a/><b/></r>`, opts); err == nil || err.Error() != unique {
+		t.Errorf("the internal (a, b) model should bind, with only the redeclaration reported: %v", err)
 	}
 	// Under the EXTERNAL model, (a), this document is valid; under the
 	// internal one it is not. That it is refused is the precedence.
-	if err := loadCheck(t, doc+`<r><a/></r>`, opts); err == nil {
-		t.Error("the external (a) model must not override the internal (a, b)")
+	if err := loadCheck(t, doc+`<r><a/></r>`, opts); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Errorf("the external (a) model must not override the internal (a, b): %v", err)
 	}
 
 	d, err := Load(doc, opts)

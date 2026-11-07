@@ -85,6 +85,13 @@ func TestEmptyAndAny(t *testing.T) {
 	if err := check(t, dt+`<r><e>text</e><x/></r>`); err == nil {
 		t.Error("an EMPTY element with content should be invalid")
 	}
+	// XML 1.0 §3 VC Element Valid: EMPTY means no content at all, so a
+	// comment, a PI or white space is content too (rmt-e2e-15b, c, d).
+	for _, e := range []string{`<e><!-- c --></e>`, `<e><?pi x?></e>`, `<e> </e>`} {
+		if err := check(t, dt+`<r>`+e+`<x/></r>`); err == nil {
+			t.Errorf("%s should be invalid for an EMPTY e", e)
+		}
+	}
 }
 
 // Mixed content constrains which elements may appear, but not their order or
@@ -652,5 +659,101 @@ func TestWideRepeatedChoiceValidates(t *testing.T) {
 	bad := strings.Replace(b.String(), "<a500/>", "<b/>", 1)
 	if err := check(t, bad); err == nil {
 		t.Fatal("an undeclared child of the same model must be rejected")
+	}
+}
+
+// XML 1.0 §3.3.1 VCs ID, IDREF, Entity Name and Name Token: a tokenized
+// attribute's value must match its production, and a list type is one or
+// more tokens separated by single spaces.
+func TestTokenizedValuesAreLexicallyChecked(t *testing.T) {
+	const dt = `<!DOCTYPE r [
+<!ELEMENT r ANY>
+<!NOTATION n SYSTEM "n">
+<!ENTITY u SYSTEM "u" NDATA n>
+<!ATTLIST r id ID #IMPLIED ref IDREF #IMPLIED refs IDREFS #IMPLIED
+  tok NMTOKEN #IMPLIED toks NMTOKENS #IMPLIED ent ENTITY #IMPLIED ents ENTITIES #IMPLIED>
+]>`
+	if err := check(t, dt+`<r id="a1" ref="a1" refs="a1 a1" tok="-1.x" toks=" 1  2 " ent="u" ents="u u"/>`); err != nil {
+		t.Errorf("lexically valid values should be valid: %v", err)
+	}
+	for _, attrs := range []string{
+		`id="42a"`,
+		`id="@c"`,
+		`id="x" ref="x" refs=""`,
+		`tok="dev@null"`,
+		`tok="x : image"`,
+		`toks=""`,
+		`toks="abc / def"`,
+		`toks="abc&#9;xyz"`,
+	} {
+		if err := check(t, dt+`<r `+attrs+`/>`); err == nil {
+			t.Errorf("<r %s/> should be invalid", attrs)
+		}
+	}
+}
+
+// Namespaces in XML 1.0 §7: in a namespace-valid document, every token XML
+// 1.0 requires to match Name must match NCName, so an ID or IDREF holds no
+// colon (rmt-ns10-045, 046).
+func TestNameTypedValuesHoldNoColon(t *testing.T) {
+	const dt = `<!DOCTYPE r [
+<!ELEMENT r ANY>
+<!ATTLIST r id ID #IMPLIED ref IDREF #IMPLIED tok NMTOKEN #IMPLIED>
+]>`
+	if err := check(t, dt+`<r id="a" ref="a" tok="a:b"/>`); err != nil {
+		t.Errorf("a colon in an NMTOKEN is legal: %v", err)
+	}
+	for _, attrs := range []string{`id="a:b"`, `id="a" ref="a:b"`} {
+		if err := check(t, dt+`<r `+attrs+`/>`); err == nil {
+			t.Errorf("<r %s/> should be invalid", attrs)
+		}
+	}
+}
+
+// The validity constraints on the declarations themselves are reported by
+// Validate whether or not the document uses what they declare: XML 1.0
+// §3.2 Unique Element Type Declaration, §3.2.2 No Duplicate Types, §3.3.1
+// ID Attribute Default, One ID per Element Type and No Duplicate Tokens,
+// §3.3.2 Attribute Default Value Syntactically Correct, and §4.2.2 Notation
+// Declared.
+func TestDeclarationValidityConstraints(t *testing.T) {
+	const head = `<!DOCTYPE r [<!ELEMENT r ANY><!NOTATION n SYSTEM "n">`
+	valid := []string{
+		// A repeated ATTLIST for the same attribute: the first binds.
+		`<!ATTLIST r a CDATA #IMPLIED><!ATTLIST r a ID #IMPLIED>`,
+		// Only the syntax of an ENTITY or IDREF default is checked.
+		`<!ATTLIST e a ENTITY "undef" b IDREF "undef">`,
+		`<!ATTLIST r a NMTOKENS " x  y " b NOTATION (n) "n" c (x|y) #FIXED "y">`,
+		`<!ENTITY u SYSTEM "u" NDATA n>`,
+	}
+	for _, decl := range valid {
+		if err := check(t, head+decl+`]><r/>`); err != nil {
+			t.Errorf("%s should be valid: %v", decl, err)
+		}
+	}
+	// Declared on e, which the document never uses: these are faults in the
+	// DTD, not in an attribute value.
+	invalid := []string{
+		`<!ATTLIST e a ENTITY "2x">`,
+		`<!ATTLIST e a ENTITIES "x 2x">`,
+		`<!ATTLIST e a IDREF "34">`,
+		`<!ATTLIST e a NMTOKEN "a/b">`,
+		`<!ATTLIST e a NMTOKENS "a $b">`,
+		`<!ATTLIST e a NMTOKEN #FIXED "a/b">`,
+		`<!ATTLIST e a NOTATION (n) "m">`,
+		`<!ATTLIST e a (x|y) "z">`,
+		`<!ATTLIST e a ID #FIXED "x">`,
+		`<!ATTLIST e a ID "x">`,
+		`<!ATTLIST e a ID #IMPLIED><!ATTLIST e b ID #IMPLIED>`,
+		`<!ELEMENT e EMPTY><!ELEMENT e ANY>`,
+		`<!ELEMENT e (#PCDATA|x|x)*>`,
+		`<!ATTLIST e a (x|x) #IMPLIED>`,
+		`<!ATTLIST e a NOTATION (n|n) #IMPLIED>`,
+		`<!ENTITY u SYSTEM "u" NDATA undeclared>`,
+	}
+	for _, decl := range invalid {
+		if err := check(t, head+decl+`]><r/>`); err == nil {
+			t.Errorf("%s should be invalid", decl)
+		}
 	}
 }
