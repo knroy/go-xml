@@ -127,7 +127,7 @@ in both the map and element forms — previously the map form accepted it and
 the element form returned `SEPM0017` for the same parameter. When it is
 absent, the map form uses 5, the default in F&O 3.1's `fn:serialize` table.
 The element form and the one-argument call leave the default
-implementation-defined, and use 4, the same as `xsl:output`. In the map form an
+implementation-defined, and use `xsl:output`'s: 5 for html, below 5 for xhtml. In the map form an
 entry holding `()` takes that parameter's default, as if it were absent. Under
 html-version 5, the xhtml method of `fn:serialize` now writes the bare
 `<!DOCTYPE html>` (Serialization 3.1 §6.1.7). It uses the element test that

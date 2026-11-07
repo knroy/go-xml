@@ -85,6 +85,11 @@ test harness serialize. A parameter document named by
 `xslt.ApplyParameterDocument`, with `SEPM0017` for a bad value and `SEPM0019`
 for a parameter given twice; `fn:serialize` uses the same check.
 
+`html-version`'s default, which XQuery 3.1 Appendix D leaves
+implementation-defined, is 5.0 for the html method, the same as `xsl:output`'s
+(see [options](options.md#xsloutput-the-default-html-version)); the xhtml
+method keeps XHTML 1.0 rules unless `html-version` is given.
+
 ## Querying a document
 
 Bind the document as the context item and paths work as they do in XPath:

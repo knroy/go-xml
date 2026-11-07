@@ -192,11 +192,7 @@ func (o *streamOut) Begin(seq xdm.Sequence) (ok, never bool) {
 		opts.Indent = true
 	}
 	if method == "html" || method == "xhtml" {
-		v := opts.HTMLVersion
-		if v == "" && method == "html" {
-			v = opts.Version
-		}
-		if strings.HasPrefix(v, "5") {
+		if strings.HasPrefix(effectiveHTMLVersion(opts, method == "xhtml"), "5") {
 			return false, true // prefix normalization reads the whole tree
 		}
 	}

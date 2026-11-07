@@ -885,7 +885,9 @@ Also:
   to the end and then written exactly as `Result.Serialize` writes them: the
   json and adaptive methods, `build-tree="no"`, `item-separator`,
   `normalization-form`, `standalone`, `doctype-system`/`-public`,
-  `parameter-document`, HTML5 under html or xhtml. Partly held: under
+  `parameter-document`, HTML5 under html or xhtml -- which since HTML5 became
+  the html method's default is every html result without `version="4.0"`.
+  Partly held: under
   `indent="yes"` (the html and xhtml default) an element at the top whose
   content is indented, so an indented document with no text in its document
   element is held whole, as its bytes (above); html `head` and `meta`;

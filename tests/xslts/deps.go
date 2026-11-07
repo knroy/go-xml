@@ -62,8 +62,8 @@ var supportedFeatures = map[string]bool{
 	// §7): the requested HTML version (html-version, else version) chooses
 	// the rules in xslt/serialize.go, SERE0014 for the C1 range below 5.0,
 	// void elements, prefix normalisation and <!DOCTYPE html> at 5.0. With
-	// neither parameter the HTML 4 rules apply, which is what
-	// default_html_version 4 asks for (see inScope).
+	// neither parameter the HTML5 rules apply, which is what
+	// default_html_version 5 asks for (see inScope).
 	"HTML4": true,
 	"HTML5": true,
 	// XPath_3.1 is not listed here: like XSD_1.1 it is answered by supports,
@@ -358,8 +358,9 @@ func inScope(set *TestSet, tc *TestCase, target Target) (bool, string) {
 			// Modelled above; encoding/xml also collects them here.
 		case "default_html_version":
 			// The default HTML version is implementation-defined (XSLT 3.0
-			// §26, xsl:output); this processor's is 4 (see "HTML4" above).
-			if o.Value != "4" {
+			// §26, xsl:output); this processor's is 5, as Saxon-HE 12.7's
+			// is (see "HTML4" above).
+			if o.Value != "5" {
 				return false, "depends on default_html_version " + o.Value
 			}
 		case "unicode-version", "unicode-normalization-form",

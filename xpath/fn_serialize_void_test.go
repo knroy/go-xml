@@ -128,7 +128,8 @@ func TestSerializeXHTMLEmptyElements(t *testing.T) {
 	const xhtmlOut = `<html xmlns="http://www.w3.org/1999/xhtml"><br /><p></p></html>`
 	for _, tc := range []struct{ name, expr, want string }{
 		// The map form defaults html-version to 5, which also asks for the
-		// bare XHTML5 doctype (§6.1.7); the element form defaults to 4.
+		// bare XHTML5 doctype (§6.1.7); the element form keeps xsl:output's
+		// xhtml default, below 5.
 		{"map form", `serialize(` + doc + `, map{'method':'xhtml'})`, "<!DOCTYPE html>\n" + xhtmlOut},
 		{"element form", `serialize(` + doc + `, ` + elemParams + `)`, xhtmlOut},
 		{"no namespace html5", `serialize(parse-xml('<r><br/><p/></r>'), ` +
@@ -158,7 +159,8 @@ func TestSerializeXHTMLEmptyElements(t *testing.T) {
 // when an entry is present, with the empty sequence as its value", and the
 // table gives "html-version xs:decimal? 5". For the element form and the
 // one-argument call the values of absent parameters are implementation-defined,
-// and there this serialiser keeps HTML 4, the same default xsl:output has.
+// and there the html method takes 5 as well, the same default xsl:output has.
+// An explicit html-version 4 still gives HTML 4's void list.
 func TestSerializeHTMLVersionDefault(t *testing.T) {
 	const elemParams = `parse-xml('<output:serialization-parameters ` +
 		`xmlns:output="http://www.w3.org/2010/xslt-xquery-serialization">` +
@@ -167,7 +169,7 @@ func TestSerializeHTMLVersionDefault(t *testing.T) {
 		{"map absent", `map{'method':'html'}`, "<frame></frame>"},
 		{"map empty", `map{'method':'html','html-version':()}`, "<frame></frame>"},
 		{"map 4", `map{'method':'html','html-version':4}`, "<frame>"},
-		{"element form", elemParams, "<frame>"},
+		{"element form", elemParams, "<frame></frame>"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := evalSerialize(t,
@@ -217,6 +219,36 @@ func TestSerializeXHTML5Doctype(t *testing.T) {
 			}
 			if !strings.HasPrefix(got, tc.want) {
 				t.Errorf("serialize %s = %q, want prefix %q", params, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSerializeHTMLDoctypeNeedsHTML5 pins two conditions on the html method's
+// bare "<!DOCTYPE html>" (Serialization 3.1 §7.4.6): the requested HTML
+// version is 5, so html-version 4 writes none; and "any text node preceding
+// that element in document order contains only whitespace characters", which
+// an item-separator ahead of the element is, once normalisation makes it text.
+func TestSerializeHTMLDoctypeNeedsHTML5(t *testing.T) {
+	for _, tc := range []struct{ name, expr, want string }{
+		{"html 5", `serialize(parse-xml('<html/>'), map{'method':'html'})`,
+			"<!DOCTYPE html>\n<html></html>"},
+		{"html 4", `serialize(parse-xml('<html/>'), map{'method':'html','html-version':4})`,
+			"<html></html>"},
+		{"separator text before", `serialize((parse-xml('<!--c--><x/>')/comment(), ` +
+			`parse-xml('<html/>')/*), map{'method':'html','item-separator':'-'})`,
+			"<!--c-->-<html></html>"},
+		{"blank separator before", `serialize((parse-xml('<!--c--><x/>')/comment(), ` +
+			`parse-xml('<html/>')/*), map{'method':'html','item-separator':' '})`,
+			"<!--c--> <!DOCTYPE html>\n<html></html>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := evalSerialize(t, tc.expr)
+			if err != nil {
+				t.Fatalf("serialize: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("%s = %q, want %q", tc.expr, got, tc.want)
 			}
 		})
 	}

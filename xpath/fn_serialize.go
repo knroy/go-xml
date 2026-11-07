@@ -95,7 +95,7 @@ func registerSerialize(l *Library) {
 		if el := documentElement(seq); el != nil {
 			switch {
 			case opts.method == "html":
-				if strings.EqualFold(el.Name().Local, "html") {
+				if opts.html5() && strings.EqualFold(el.Name().Local, "html") {
 					sb.doctype, sb.bareDoctype = "<!DOCTYPE html>\n", true
 				}
 			case opts.method == "xhtml" && opts.html5() && opts.doctypeSystem == "":
@@ -118,6 +118,9 @@ func registerSerialize(l *Library) {
 			_, atomic := it.(*xdm.Atomic)
 			switch {
 			case opts.hasItemSep && i > 0:
+				// Separator text ahead of the document element is text
+				// preceding it, which withholds the bare doctype (§7.4.6).
+				sb.noteText(opts.itemSeparator)
 				sb.WriteString(opts.itemSeparator)
 			case !opts.hasItemSep && atomic && prevAtomic:
 				sb.WriteString(" ")
@@ -1342,12 +1345,18 @@ func (o *serializeOptions) isVoidElement(local string) bool {
 
 // html5 reports whether the HTML version asked for is 5 or later, which is
 // what selects between the two version-specific void-element lists. The
-// spelling test is xslt/serialize.go's: a prefix match on "5", so that "5.0"
-// and "5" both say HTML 5 and an absent parameter says HTML 4. The map form
-// is never absent: mapSerializationParams defaults it to 5.
+// rule is xslt/serialize.go's effectiveHTMLVersion: html-version, else for
+// the html method version, else 5; for xhtml an absent html-version is below
+// 5 (version is the version of XML there). A prefix match on "5" makes "5.0"
+// and "5" both say HTML 5. The map form defaults html-version to 5 by F&O's
+// table; the element form leaves the default implementation-defined, and
+// takes xsl:output's.
 func (o *serializeOptions) html5() bool {
 	v := o.htmlVersion
-	if v == "" {
+	if v == "" && o.method == "html" {
+		if o.version == "" {
+			return true
+		}
 		v = o.version
 	}
 	return strings.HasPrefix(v, "5")
@@ -1502,7 +1511,7 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 	// entry is present, with the empty sequence as its value", and its table
 	// gives "html-version xs:decimal? 5". The element form and the
 	// one-argument call leave absent parameters implementation-defined, and
-	// keep HTML 4, as xsl:output does.
+	// html5 gives them xsl:output's default: 5 for html, below 5 for xhtml.
 	opts.htmlVersion = "5"
 	err := m.Entries(func(key *xdm.Atomic, val xdm.Sequence) error {
 		// Serialization 3.1 §3: the key naming a parameter defined by these

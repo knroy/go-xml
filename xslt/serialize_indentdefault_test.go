@@ -54,7 +54,7 @@ func TestIndentDefaultIsXSLTOnly(t *testing.T) {
 		if err := Serialize(&sb, xdm.One(doc), opts, nil); err != nil {
 			t.Fatalf("Serialize: %v", err)
 		}
-		if strings.Contains(sb.String(), "\n") {
+		if strings.Contains(sb.String(), "\n ") {
 			t.Errorf("method %q indented outside a stylesheet:\n%s", opts.Method, sb.String())
 		}
 	}
