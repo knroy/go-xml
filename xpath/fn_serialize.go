@@ -53,65 +53,59 @@ func registerSerialize(l *Library) {
 		// for it back produces the declaration the XML output method defines.
 		// A standalone value can only be written in a declaration, so asking
 		// for one is also a request for the declaration itself.
-		// The HTML method writes a doctype declaration ahead of the document.
-		// html-version 5 is the only one this serialiser is asked for, and
-		// its doctype carries no public or system identifier.
-		//
-		// A declaration belongs to a *document*, though, and fn:serialize is
-		// as often handed a fragment: serialize($doc//body, ...) asks for the
-		// markup of that element, not for a standalone HTML page wrapped
-		// around it. A doctype there is a character the caller did not ask
-		// for, which is what serialize-html-003 -- "html method - HTML5
-		// fragment - no DOCTYPE" -- asserts with an exact string value.
-		//
-		// What separates the two is the document element. serialize-html-001
-		// and -002 serialise a whole <html> element and want the declaration;
-		// -003 serialises the <body> inside it and wants none. So the
-		// declaration is written when the thing being serialised really is an
-		// HTML document -- an <html> element, or a document node containing
-		// one -- and withheld otherwise. The name is matched case-blind
-		// because HTML element names are, and it is the local name that is
-		// matched, since a prefix is not part of the element's identity.
-		if opts.method == "html" && serializesHTMLDocument(seqArg(args, 0)) {
-			sb.WriteString("<!DOCTYPE html>\n")
-		}
-		// A document type declaration, when either external identifier was
-		// given. XSLT 2.0 (xslt-rec20.xml:26420-26431) gives doctype-system
-		// and doctype-public their effect; both were accepted and ignored, so
-		// the caller's DTD reference vanished from the output.
-		//
-		// It is written only for the XML-family methods. The html method has
-		// its own bare HTML5 declaration above, and writing a second one
-		// would produce two.
-		//
-		// XHTML5 has a bare declaration of its own. Serialization 3.1
-		// §6.1.7: "If the value of the html-version serialization parameter
-		// is 5.0, the doctype-system serialization parameter is absent, the
-		// first element node child of the document node that is to be
-		// serialized is recognized as an HTML element, the local part of the
-		// QName of which is equal to the string HTML, without regard to case
-		// ... then the XHTML output method MUST output a document type
-		// declaration immediately before the first element, with no public
-		// or system identifier. The name following <!DOCTYPE MUST be the same
-		// as the local part of the name of the element." htmlser holds the
-		// element test, shared with xslt/serialize.go.
-		if opts.method == "xhtml" && opts.html5() && opts.doctypeSystem == "" {
-			if n := documentElement(seqArg(args, 0)); n != nil && htmlser.XHTML5Doctype(n) {
-				sb.WriteString("<!DOCTYPE " + n.Name().Local + ">\n")
-			}
-		} else if (opts.method == "xml" || opts.method == "xhtml") &&
-			(opts.doctypeSystem != "" || opts.doctypePublic != "") {
-			if name := documentElementName(seqArg(args, 0)); name != "" {
-				writeDoctype(sb, name, opts)
-			}
-		}
-		if opts.method == "xml" && (!opts.omitXMLDecl || opts.standalone != "") {
+		// The XML declaration comes first: XML 1.0's prolog puts it ahead
+		// of everything else. Serialization 3.1 §6.1.6 gives the xhtml
+		// method the xml method's rules for it (§5.1.6): "The XML output
+		// method MUST output an XML declaration if the omit-xml-declaration
+		// parameter has the value no". It was written for xml alone, and
+		// after the doctype.
+		if (opts.method == "xml" || opts.method == "xhtml") &&
+			(!opts.omitXMLDecl || opts.standalone != "") {
 			sb.WriteString(`<?xml version="` + xmlDeclVersion(opts.version) +
 				`" encoding="UTF-8"`)
 			if opts.standalone != "" {
 				sb.WriteString(` standalone="` + opts.standalone + `"`)
 			}
 			sb.WriteString("?>\n")
+		}
+		// The document type declaration goes "immediately before the first
+		// element" (§5.1.7, §6.1.7, §7.4.6), so serializeNode writes it when
+		// it reaches that element, after any comment or processing
+		// instruction ahead of it.
+		//
+		// The html method writes the bare HTML5 declaration. A declaration
+		// belongs to a *document*, though, and fn:serialize is as often
+		// handed a fragment: serialize($doc//body, ...) asks for the markup
+		// of that element, not for a page wrapped around it, which is what
+		// serialize-html-003 -- "html method - HTML5 fragment - no DOCTYPE"
+		// -- asserts. So it is written when the document element is <html>,
+		// matched case-blind on the local name, and withheld otherwise.
+		//
+		// The xhtml method's bare XHTML5 declaration names the element
+		// (§6.1.7); htmlser holds the element test, shared with
+		// xslt/serialize.go. Otherwise doctype-system asks for the XML form,
+		// under the XML-family methods only (doctypeDecl).
+		//
+		// Both bare forms are also conditional on "any text node preceding
+		// that element in document order" being whitespace only (§6.1.7,
+		// §7.4.6). Normalisation makes text of the atomic and text items
+		// ahead of it as well as of its preceding siblings, so the test is
+		// made on what is written: see serializeSink.noteText.
+		seq := seqArg(args, 0)
+		if el := documentElement(seq); el != nil {
+			switch {
+			case opts.method == "html":
+				if strings.EqualFold(el.Name().Local, "html") {
+					sb.doctype, sb.bareDoctype = "<!DOCTYPE html>\n", true
+				}
+			case opts.method == "xhtml" && opts.html5() && opts.doctypeSystem == "":
+				if htmlser.XHTML5Doctype(el) {
+					sb.doctype, sb.bareDoctype = "<!DOCTYPE "+el.Name().Local+">\n", true
+				}
+			case opts.method == "xml" || opts.method == "xhtml":
+				sb.doctype = doctypeDecl(elementName(el), opts)
+			}
+			sb.doctypeAt = el
 		}
 		// An explicit item-separator goes between every pair of items and
 		// replaces the default. Without one, sequence normalization (step 4
@@ -120,7 +114,7 @@ func registerSerialize(l *Library) {
 		// We used to write the items back to back, so serialize((1, true()))
 		// came out as "1true" rather than "1 true".
 		prevAtomic := false
-		for i, it := range seqArg(args, 0) {
+		for i, it := range seq {
 			_, atomic := it.(*xdm.Atomic)
 			switch {
 			case opts.hasItemSep && i > 0:
@@ -160,37 +154,6 @@ func registerSerialize(l *Library) {
 		}
 		return strSeq(out), nil
 	})
-}
-
-// serializesHTMLDocument reports whether a sequence being serialised with the
-// html method is an HTML document rather than a fragment of one, which is what
-// decides whether a document type declaration is written ahead of it.
-//
-// The test is the document element: an <html> element, or a document node
-// whose element child is one. A fragment rooted anywhere else -- a <body>, a
-// <p> -- is markup to be embedded, and prefixing it with a doctype produces a
-// string the caller cannot use where it meant to use it.
-func serializesHTMLDocument(seq xdm.Sequence) bool {
-	for _, it := range seq {
-		n, ok := it.(*xdm.Node)
-		if !ok {
-			continue
-		}
-		switch n.Kind() {
-		case xdm.KindElement:
-			// Case-blind on the local name: HTML element names are, and the
-			// prefix is not part of the element's identity.
-			return strings.EqualFold(n.Name().Local, "html")
-		case xdm.KindDocument:
-			for c := range n.Children() {
-				if c.Kind() == xdm.KindElement {
-					return strings.EqualFold(c.Name().Local, "html")
-				}
-			}
-			return false
-		}
-	}
-	return false
 }
 
 // serializeOptions are the serialization parameters this implementation reads.
@@ -826,6 +789,7 @@ func serializeItem(sb *serializeSink, it xdm.Item, opts serializeOptions) error 
 		// item that cannot be written.
 		return fmt.Errorf("SENR0001: a function item cannot be serialized")
 	case *xdm.Atomic:
+		sb.noteText(v.String())
 		sb.WriteString(v.String())
 		return nil
 	}
@@ -925,6 +889,10 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 			serializeNode(sb, c, opts, depth)
 		}
 	case xdm.KindElement:
+		if n == sb.doctypeAt {
+			sb.WriteString(sb.doctype)
+			sb.doctypeAt = nil
+		}
 		sb.WriteString("<")
 		writeName(sb, n)
 		writeNamespaceDecls(sb, n, opts)
@@ -1078,6 +1046,7 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		writeName(sb, n)
 		sb.WriteString(">")
 	case xdm.KindText:
+		sb.noteText(n.Value())
 		writeEscaped(sb, opts.normalized(n.Value()), false)
 	case xdm.KindComment:
 		sb.WriteString("<!--")
@@ -1298,20 +1267,10 @@ func (o serializeOptions) escapesURIAttrs() bool {
 	return o.escapeURIAttrs == nil || *o.escapeURIAttrs
 }
 
-// documentElementName returns the name the document type declaration must
-// name, which is the element the declaration precedes.
-//
-// XML's grammar makes the DOCTYPE name match the document element, so a
-// sequence with no element to be the document element gets no declaration at
-// all rather than one naming nothing.
-func documentElementName(seq xdm.Sequence) string {
-	if n := documentElement(seq); n != nil {
-		return elementName(n)
-	}
-	return ""
-}
-
-// documentElement returns the element documentElementName names, or nil.
+// documentElement returns the element a document type declaration precedes:
+// the first element item, or the first document item's element child. XML's grammar makes the DOCTYPE name match
+// it, so a sequence with none gets no declaration rather than one naming
+// nothing.
 func documentElement(seq xdm.Sequence) *xdm.Node {
 	for _, it := range seq {
 		n, ok := it.(*xdm.Node)
@@ -1332,26 +1291,25 @@ func documentElement(seq xdm.Sequence) *xdm.Node {
 	return nil
 }
 
-// writeDoctype writes the document type declaration.
+// doctypeDecl is the document type declaration naming name, or "".
 //
 // The shape is XML's: PUBLIC takes both identifiers and SYSTEM only the
 // system one. A public identifier alone cannot be written under an XML-family
 // method -- the grammar puts the system literal after PUBLIC and makes it
-// required -- so it degrades to the SYSTEM form's absence rather than
-// producing markup no parser would accept. This mirrors
-// xslt/serialize.go's writeDoctypeFor, so both serialisers write the same
-// declaration for the same parameters.
-func writeDoctype(sb *serializeSink, name string, opts serializeOptions) {
+// required -- so it gets no declaration rather than markup no parser would
+// accept. This mirrors xslt/serialize.go's writeDoctypeFor, so both
+// serialisers write the same declaration for the same parameters.
+func doctypeDecl(name string, opts serializeOptions) string {
 	if opts.doctypeSystem == "" {
-		return
+		return ""
 	}
-	sb.WriteString("<!DOCTYPE " + name)
+	d := "<!DOCTYPE " + name
 	if opts.doctypePublic != "" {
-		sb.WriteString(" PUBLIC " + quoteExternalID(opts.doctypePublic))
+		d += " PUBLIC " + quoteExternalID(opts.doctypePublic)
 	} else {
-		sb.WriteString(" SYSTEM")
+		d += " SYSTEM"
 	}
-	sb.WriteString(" " + quoteExternalID(opts.doctypeSystem) + ">\n")
+	return d + " " + quoteExternalID(opts.doctypeSystem) + ">\n"
 }
 
 // quoteExternalID wraps an external identifier in quotes it does not itself
@@ -2781,6 +2739,23 @@ type serializeSink struct {
 	reserve int
 	// depth counts the maps and arrays open at this point; see enter.
 	depth int
+	// doctype is the document type declaration serializeNode writes
+	// immediately before element doctypeAt, once. bareDoctype marks the
+	// HTML5 form, which text ahead of the element withholds (noteText).
+	doctype     string
+	doctypeAt   *xdm.Node
+	bareDoctype bool
+}
+
+// noteText records text written ahead of the document element. Serialization
+// 3.1 §6.1.7 writes the bare XHTML5 doctype only if "any text node preceding
+// that element in document order contains only whitespace characters", and
+// §7.4.6 the html method's likewise; anything written while the doctype is
+// still owed precedes the element.
+func (s *serializeSink) noteText(v string) {
+	if s.bareDoctype && s.doctypeAt != nil && !xdm.IsXMLWhitespace(v) {
+		s.doctype = ""
+	}
 }
 
 // enter opens one level of map or array nesting, refusing past maxJSONDepth.
