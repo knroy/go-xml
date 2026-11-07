@@ -142,8 +142,8 @@ report above still applies.
 `ID`/`IDREF` are checked as a *validity* constraint, and the parser also feeds
 `ID`, `IDREF` and `IDREFS` declarations back into the data model as the is-id
 and is-idrefs properties (`xdm/dtd_defaults.go`), so `fn:id` and `fn:idref`
-find DTD-declared IDs. They also treat `xml:id` and an unprefixed `id`
-attribute as IDs whether or not anything declares them.
+find DTD-declared IDs. Undeclared, only a valid `xml:id` counts; an attribute
+merely named `id` is not an ID.
 
 `NOTATION` and `ENTITY`/`ENTITIES` are checked against the rest of the DTD
 rather than against a value space, so both are skipped when only half the DTD

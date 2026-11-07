@@ -373,11 +373,10 @@ func unparsedTextArgs(args []xdm.Sequence) (href, encoding string, err error) {
 
 // lookupByID implements fn:id and fn:idref.
 //
-// Without a DTD or schema this engine cannot know which attributes are of type
-// ID, so it uses the conventional xml:id and an unprefixed "id" attribute.
-// That is a documented approximation rather than a silent one: a stylesheet
-// relying on DTD-declared ID attributes gets nothing back, which shows up as
-// an empty result rather than a wrong one.
+// Both are defined over the is-id and is-idrefs properties (F&O §14.5.2,
+// §14.5.3): a node counts only if a DTD or schema typed it as ID or
+// IDREF(S), or it is a valid xml:id. An attribute merely named "id",
+// "idref" or "idrefs" is not one, declared nothing.
 func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, error) {
 	var root *xdm.Node
 	if len(args) > 1 {
@@ -460,10 +459,10 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 			for a := range n.Attrs() {
 				// A validated document says which attributes are of type
 				// xs:ID, and that is what the specification asks for. The
-				// name-based test below is the fallback for a document that
-				// was never validated, not a substitute: an attribute
-				// annotated ID counts however it is spelled, and one merely
-				// called "id" in a validated document does not.
+				// name-based test below covers xml:id only, which is an ID
+				// with no declaration (xml:id §4): an attribute annotated ID
+				// counts however it is spelled, and one merely called "id"
+				// does not.
 				// An xml:id whose value is not an NCName is not an ID.
 				//
 				// xml:id §4 normalises the value and §5 makes a value that is
@@ -482,11 +481,8 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 					continue
 				}
 				isIDAttr := a.IsID() || isIDAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation()) ||
-					(a.Name().URI == xdm.NSXML && a.Name().Local == "id") ||
-					(a.Name().URI == "" && a.Name().Local == "id")
-				isRefAttr := a.IsIDREFS() || isIDREFAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation()) ||
-					(a.Name().URI == "" &&
-						(a.Name().Local == "idref" || a.Name().Local == "idrefs"))
+					(a.Name().URI == xdm.NSXML && a.Name().Local == "id")
+				isRefAttr := a.IsIDREFS() || isIDREFAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation())
 
 				// The value of an ID attribute is of a type derived from
 				// xs:NCName, so its whitespace is collapsed before it is

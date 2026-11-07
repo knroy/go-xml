@@ -13,6 +13,12 @@ import "testing"
 func TestIDUsesXMLWhitespaceOnly(t *testing.T) {
 	const nbsp = "\u00a0"
 	doc := `<?xml version="1.0"?>
+<!DOCTYPE r [
+  <!ATTLIST u id ID #IMPLIED>
+  <!ATTLIST w id ID #IMPLIED>
+  <!ATTLIST s idrefs IDREFS #IMPLIED>
+  <!ATTLIST v idrefs IDREFS #IMPLIED>
+]>
 <r>
   <x xml:id="a"/>
   <y xml:id="b"/>
