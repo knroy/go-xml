@@ -4,7 +4,7 @@ TestQT3XPath20 15217
 TestQT3XPath30 19362
 TestQT3XPath31 22054
 TestQT3XQuery 30529
-TestXMLConf 1946
+TestXMLConf 1965
 TestXSLT30Suite 11505
 TestXSLTSuite 6194
 VendoredSchemas 185
