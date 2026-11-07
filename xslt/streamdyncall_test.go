@@ -299,7 +299,9 @@ func TestDynamicCallBaseSignature(t *testing.T) {
 }
 
 // The calls TestDynamicCallBaseSignature accepts, run streamed and on the
-// tree: the output and error must agree over every document.
+// tree: the output and error must agree over every document, and each body
+// must run streamed (streamsplit_dyncall.go), where the split refused every
+// dynamic call and the container ran on the tree.
 func TestDynamicCallBaseMatchesTree(t *testing.T) {
 	const decls = `<xsl:function name="p:s" as="xs:string"><xsl:param name="v" as="xs:string"/><xsl:sequence select="concat('[', $v, ']')"/></xsl:function>
 	  <xsl:function name="p:mk" as="function(xs:string) as xs:string"><xsl:sequence select="upper-case#1"/></xsl:function>`
@@ -310,14 +312,17 @@ func TestDynamicCallBaseMatchesTree(t *testing.T) {
 		`<o><xsl:value-of select="/doc/rec ! (function($s as xs:string?) { string-length($s) })(sub[1])"/></o>`,
 		`<o><xsl:value-of select="/doc/rec ! map{'a': 'A'}(@k)"/></o>`,
 		`<o><xsl:value-of select="/doc/rec ! p:mk()(@k)"/></o>`,
+		`<o><xsl:value-of select="/doc/rec ! map{string(@k): count(sub)}(@k)"/></o>`,
+		`<o><xsl:value-of select="/doc/rec ! (xs:integer#1)(@v)"/></o>`,
 	}
 	dir := t.TempDir()
 	streamed := 0
+	byBody := make([]int64, len(bodies))
 	for name, doc := range coreDocs {
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		for _, b := range bodies {
+		for i, b := range bodies {
 			sheet := coreSheetWith(decls, b)
 			so, se, st := coreRun(sheet, dir, true, TransformOptions{})
 			to, te, _ := coreRun(sheet, dir, false, TransformOptions{})
@@ -328,6 +333,12 @@ func TestDynamicCallBaseMatchesTree(t *testing.T) {
 				t.Errorf("doc %s, %s: %d guard hits", name, b, st.Guards)
 			}
 			streamed += int(st.Streamed())
+			byBody[i] += st.Streamed()
+		}
+	}
+	for i, n := range byBody {
+		if n == 0 {
+			t.Errorf("%s: never streamed", bodies[i])
 		}
 	}
 	t.Logf("%d runs streamed", streamed)

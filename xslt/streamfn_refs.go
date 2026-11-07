@@ -25,7 +25,7 @@ import (
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
-var sheetRefs sync.Map // weak.Pointer[xpath.NamedFunctionRef] -> struct{}
+var sheetRefs sync.Map // weak.Pointer[xpath.NamedFunctionRef] -> sheetCall
 
 // markSheetRefs marks the references in e to stylesheet functions of fns a
 // call on which judgeSheetCall marks values, or burst without climbing.
@@ -38,7 +38,7 @@ func markSheetRefs(e xpath.Expr, fns map[funcKey]*streamFunc) {
 		probe := &xpath.FuncCall{Name: x.Name, Args: make([]xpath.Expr, x.Arity)}
 		if sc, ok := judgeSheetCall(probe, fns); ok && (sc.values || sc.burst && !sc.climb && !sc.up) {
 			k := weak.Make(x)
-			if _, loaded := sheetRefs.Swap(k, struct{}{}); !loaded {
+			if _, loaded := sheetRefs.Swap(k, sc); !loaded {
 				goruntime.AddCleanup(x, func(k weak.Pointer[xpath.NamedFunctionRef]) { sheetRefs.Delete(k) }, k)
 			}
 		}
@@ -60,6 +60,16 @@ func namedRefSafe(x *xpath.NamedFunctionRef) bool {
 	}
 	_, ok := sheetRefs.Load(weak.Make(x))
 	return ok
+}
+
+// sheetRefOf is the mark of x, a reference to a stylesheet function, when
+// it has one: what a call on the function would be marked.
+func sheetRefOf(x *xpath.NamedFunctionRef) (sheetCall, bool) {
+	v, ok := sheetRefs.Load(weak.Make(x))
+	if !ok {
+		return sheetCall{}, false
+	}
+	return v.(sheetCall), true
 }
 
 // copiedOuterInner is outermost(copy-of(P)) or innermost(copy-of(P)), P a

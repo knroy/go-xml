@@ -1474,6 +1474,9 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		if accumValueCallOK(vc, x, f) { // streamaccum_mm5.go
 			return true
 		}
+		if vc.dynCallSafe(x, f) { // streamsplit_dyncall.go
+			return true
+		}
 		if !(vc.accum && vc.lookup && isVarRef(x.Target, xdm.QName{Local: "value"})) {
 			return false
 		}
