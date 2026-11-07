@@ -731,3 +731,61 @@ func TestCursorNextTag(t *testing.T) {
 		}
 	}
 }
+
+// TestCursorGroundLaterError: an error a GroundLater function returns does
+// not stop the parse. It is returned once, by the call during which the copy
+// was handed over (a step's, or Flush's), and the cursor reads on from
+// there to the document's end; the functions after the failed one are not
+// called, and an observer is still told of the document's end.
+func TestCursorGroundLaterError(t *testing.T) {
+	boom := errors.New("boom")
+	src := `<a><b><r i="1"/><r i="2"/><r i="3"/></b><c><d/></c></a>`
+	for _, flush := range []bool{false, true} {
+		c := Open(strings.NewReader(src), opts)
+		ended := false
+		c.Observe(func(n *xdm.Node, d int, end bool, _ uint64) { ended = ended || n == nil && end })
+		var called []string
+		errs, events := 0, 0
+		for range 100 { // a sticky error would repeat
+			e, err := c.Next()
+			if err == boom {
+				errs++ // at the document element's end, with EndDocument
+			} else if err != nil {
+				t.Fatalf("flush %v: %v", flush, err)
+			}
+			if e.Kind == EndDocument {
+				break
+			}
+			if err != nil {
+				continue
+			}
+			events++
+			switch {
+			case e.Kind == StartElement && e.Node.Name().Local == "r":
+				i := e.Node.AttrValue("i")
+				if err := c.GroundLater(func(*xdm.Node) error {
+					called = append(called, i)
+					if i == "2" {
+						return boom
+					}
+					return nil
+				}); err != nil && err != boom {
+					t.Fatal(err)
+				} else if err == boom {
+					errs++
+				}
+			case flush && e.Kind == EndElement && e.Node.Name().Local == "b":
+				if err := c.Flush(); err == boom {
+					errs++
+				} else if err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		c.Close()
+		if errs != 1 || strings.Join(called, " ") != "1 2" || !ended || events != 11 {
+			t.Errorf("flush %v: the error met %d times, functions called %q, document end told %v, %d events; want once, \"1 2\", true, 11",
+				flush, errs, called, ended, events)
+		}
+	}
+}

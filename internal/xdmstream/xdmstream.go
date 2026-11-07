@@ -84,9 +84,14 @@ type Cursor struct {
 	peekErr  error
 	grounded *xdm.Node
 	// later are GroundLater's functions waiting for their copies, in order.
-	later []func(*xdm.Node) error
-	err   error
-	obs   []Observer
+	// lateErr is the first error one returned, held for the call that met
+	// it (takeLate); lateFailed says one failed: those after it are not
+	// called.
+	later      []func(*xdm.Node) error
+	lateErr    error
+	lateFailed bool
+	err        error
+	obs        []Observer
 	// watchOn turns the parse's watch on, which the first observer needs
 	// (xdmburst.Watching); nil before the parse is started.
 	watchOn func()
@@ -310,7 +315,9 @@ func (c *Cursor) settle() {
 	if c.endTold {
 		c.settling = true
 		ev := c.ev
-		c.resume(xdmburst.Keep) // an error is the next call's
+		if _, err := c.resume(xdmburst.Keep); err != nil && c.err == nil {
+			c.lateErr = err // a GroundLater function's: the next call's
+		}
 		c.ev = ev
 	}
 }
@@ -368,6 +375,11 @@ func (c *Cursor) Peek() (Event, error) {
 		}
 		c.endAhead = false // told by the parse, as usual
 		ev, err := c.resume(xdmburst.Keep)
+		if err != nil && c.err == nil {
+			// A GroundLater function's: this call's, and ev is still next.
+			c.peeked = &ev
+			return Event{}, err
+		}
 		c.peeked, c.peekErr = &ev, err
 	}
 	if c.peekErr != nil {
@@ -471,9 +483,15 @@ func (c *Cursor) Ground() (*xdm.Node, error) {
 // tree is handed over complete, with no later growth. Such a tree holds those
 // elements under their common ancestors' copies, so the ancestors' content
 // is not one element's alone. fn is called in document order, before any
-// later Ground returns, and at the latest when the document element closes;
-// its error stops the parse and is returned by the call that met it. A copy
-// is not handed over when the parse fails first.
+// later Ground returns, and at the latest when the document element closes.
+// A copy is not handed over when the parse fails first.
+//
+// fn's error does not stop the parse: it is returned by the call that met it
+// (the one during which the copy was handed over, or Flush), and the cursor
+// reads on from where that call left it, so the rest of the document can
+// still be read and checked (a consumer that failed settles: is the rest
+// well-formed, valid?). Once a function has failed, those after it are not
+// called: their consumer has failed.
 func (c *Cursor) GroundLater(fn func(*xdm.Node) error) error {
 	if c.ev.Kind != StartElement || c.peeked != nil || c.peekErr != nil {
 		return errNotAtStart
@@ -496,7 +514,18 @@ func (c *Cursor) Flush() error {
 	}
 	// At an end tag reported ahead (endTold) nothing is held: the parse
 	// reports ends ahead only while no GroundLater copy waits.
-	return c.flush()
+	if err := c.flush(); err != nil {
+		return err
+	}
+	return c.takeLate()
+}
+
+// takeLate returns the error a GroundLater function returned since the last
+// call, once.
+func (c *Cursor) takeLate() error {
+	err := c.lateErr
+	c.lateErr = nil
+	return err
 }
 
 // Text moves past the current element, as Skip, and returns its string
@@ -558,13 +587,13 @@ func (c *Cursor) resume(act xdmburst.Action) (Event, error) {
 	switch err := step(act); err {
 	case nil:
 		c.step = step
-		return c.out, nil
+		return c.out, c.takeLate()
 	case io.EOF:
 		c.done()
 		for _, o := range c.obs {
 			o(nil, 0, true, 0)
 		}
-		return Event{Kind: EndDocument, Closed: c.closed}, nil
+		return Event{Kind: EndDocument, Closed: c.closed}, c.takeLate()
 	default:
 		if c.cancel != nil {
 			if cerr := c.cancel(); cerr != nil {
@@ -573,6 +602,9 @@ func (c *Cursor) resume(act xdmburst.Action) (Event, error) {
 		}
 		c.done()
 		c.err = err
+		if late := c.takeLate(); late != nil {
+			return Event{}, late // met first, before the parse failed
+		}
 		return Event{}, err
 	}
 }
@@ -659,10 +691,19 @@ func (k *client) LeafEnd(n any, d int) error {
 	return err
 }
 
+// Later hands g to the first GroundLater function waiting. Its error is
+// held (lateErr), not the parse's: the parse goes on.
 func (k *client) Later(g any) error {
-	fn := k.c.later[0]
-	k.c.later = k.c.later[1:]
-	return fn(g.(*xdm.Node))
+	c := k.c
+	fn := c.later[0]
+	c.later = c.later[1:]
+	if c.lateFailed {
+		return nil
+	}
+	if err := fn(g.(*xdm.Node)); err != nil {
+		c.lateErr, c.lateFailed = err, true
+	}
+	return nil
 }
 
 func (k *client) Viewer(view func() any) { k.c.view = view }

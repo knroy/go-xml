@@ -1743,7 +1743,8 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 //
 // Left out: XTTE15xx by code (invalidity of what the body constructs is
 // final through invalidError, marked where assess raises it; an unmarked one
-// is the input's, whose code the tree takes from every failure: attach),
+// is the input's, final through inputInvalid where the first failure tells
+// the tree's code, inputFinalCodes, and otherwise not: attach),
 // XPST0008 by code (final only as a reference to a global variable whose
 // value is being computed, which the container's tree meets too and the
 // global's evaluation makes XTDE0640: settle, streamvalidin.go; §9.11
@@ -1919,7 +1920,7 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		// context to its end; run.drain reads what nothing did): whether it
 		// is valid is known.
 		if err := valid(); err != nil {
-			return err
+			return inputFinal(err) // streamvalidin.go
 		}
 		return acc.finish()
 	})

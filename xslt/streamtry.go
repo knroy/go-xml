@@ -29,9 +29,10 @@ package xslt
 //     the same error, at the same match. A loop is exact when its select
 //     cannot fail (the tree evaluates it whole before any body) and its
 //     body's consumers are. apply-templates and grouping are refused.
-//   - GroundLater's copies arrive late and an error in what they feed stops
-//     the parse, which no skip can resume: the consumers of a try ground
-//     each match at once instead (Ground).
+//   - GroundLater's copies arrive late, and an error in what they feed is
+//     returned by the cursor call that hands the copy over, perhaps outside
+//     the try: the consumers of a try ground each match at once instead
+//     (Ground).
 //
 // A consuming catch (the design grounds the context first) is refused: no
 // W3C case has one (every xsl:catch of the streamable stylesheets writes a
