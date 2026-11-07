@@ -1486,11 +1486,10 @@ the output looks fine and is wrong.
   categories included (`[\i-[:]]`, `[\p{L}-[x]]`). A hyphen between two classes (`[a-z]-[a-z]`, as in a UUID
   pattern) is not subtraction and is unaffected.
 
-One approximation is documented rather than hidden: `fn:id`/`fn:idref` find
-the attributes a DTD or schema declares as `ID`/`IDREF`/`IDREFS`, and also
-treat `xml:id` and any unprefixed `id` (`idref`, `idrefs`) attribute as such,
-declared or not. A document that uses `id` for something other than an ID can
-therefore get a false match.
+`fn:id`, `fn:element-with-id` and `fn:idref` find only the nodes a DTD or
+schema types as `ID`/`IDREF`/`IDREFS`, plus a valid `xml:id` (F&O §14.5.1-
+§14.5.3). An attribute merely named `id`, `idref` or `idrefs` is not matched:
+a document without declarations needs `xml:id`, or `xsl:key` on `@id`.
 
 ## How this was tested
 

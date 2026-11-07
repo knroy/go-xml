@@ -739,6 +739,7 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 						if ents.subsetText != "" {
 							ps.elementOnly = parseElementOnlyDecls(ents.subsetText)
 						}
+						full := ents.subsetText
 						if len(ents.raw) == 0 && len(ents.external) == 0 {
 							ents = nil
 						}
@@ -746,11 +747,8 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 						// defaults and declared types that were not in the
 						// directive as written, so those are re-read from the
 						// expanded text rather than the original.
-						if subset != d || ents != nil {
-							text := subset
-							if ents != nil {
-								text = ents.subsetText
-							}
+						if subset != d || full != subset {
+							text := full
 							defs, types := parseAttList(text)
 							ps.attDefaults = defs
 							ps.attTypes = types

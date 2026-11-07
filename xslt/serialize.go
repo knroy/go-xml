@@ -1177,24 +1177,9 @@ func (s *serializer) openTag(n *xdm.Node, depth, base int, nonEmpty bool) (elemS
 			if !s.attrErr(content) {
 				s.writeString(`<meta http-equiv="Content-Type" content="`)
 				s.writeAttrRuns(content, false)
-				if s.xhtml {
-					// XHTML is XML: an empty element must be closed. The
-					// space before the slash is what the HTML compatibility
-					// guidelines ask for, so that an HTML parser reading the
-					// same bytes does not take the slash as part of the last
-					// attribute value.
-					s.writeString(`" />`)
-				} else if s.htmlIsland(n) {
-					// A head in an XML island (an XHTML-namespace head
-					// below HTML5) gets a meta that is closed: "the HTML
-					// output method will not output an element differently
-					// from the XML output method unless the element is to
-					// be serialized as an HTML element" (Serialization 3.1
-					// §7.1). result-document-1402 asks for this spelling.
-					s.writeString(`"></meta>`)
-				} else {
-					s.writeString(`">`)
-				}
+				// Closed as XML under xhtml and in an XML island; shared
+				// with fn:serialize so the two cannot disagree.
+				s.writeString(htmlser.MetaEnd(n, s.xhtml, s.html5))
 			}
 		}
 	}

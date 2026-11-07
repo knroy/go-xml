@@ -173,7 +173,8 @@ func TestFormatDateTimeRejectsUnknownComponent(t *testing.T) {
 }
 
 func TestIDLookup(t *testing.T) {
-	doc := `<r><a xml:id="one"/><b id="two"/><c idref="one"/></r>`
+	doc := `<!DOCTYPE r [<!ATTLIST b id ID #IMPLIED><!ATTLIST c idref IDREF #IMPLIED>]>` +
+		`<r><a xml:id="one"/><b id="two"/><c idref="one"/></r>`
 	if got := evalStr(t, doc, `local-name(id('one', /r))`); got != "a" {
 		t.Errorf("id('one') = %q, want a", got)
 	}
@@ -189,6 +190,17 @@ func TestIDLookup(t *testing.T) {
 	}
 	if got := evalStr(t, doc, `count(id('missing', /r))`); got != "0" {
 		t.Errorf("id of a missing name = %q, want 0", got)
+	}
+
+	// is-id and is-idrefs come from a DTD, a schema or xml:id (F&O §14.5.1-
+	// §14.5.3), never from the attribute's name alone.
+	undeclared := `<r><b id="two"/><c idref="two"/><d idrefs="two"/></r>`
+	for _, expr := range []string{
+		`count(id('two', /r))`, `count(element-with-id('two', /r))`, `count(idref('two', /r))`,
+	} {
+		if got := evalStr(t, undeclared, expr); got != "0" {
+			t.Errorf("%s on undeclared attributes = %q, want 0", expr, got)
+		}
 	}
 }
 

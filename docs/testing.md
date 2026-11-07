@@ -624,6 +624,12 @@ to `TransformReader` unparsed; a validated one through
 schema types it as the environment's does; under `GOXSLT_STREAM_OFF=1` it is parsed and given
 to `Transform`, so the off leg compares Parse + Transform.
 
+An environment's `<schema>` is loaded as XSD 1.1 when it says
+`xsd-version="1.1"` or the document carries `vc:minVersion="1.1"`, and as
+1.0 otherwise; read as 1.0, a 1.1 schema such as `strip-space-009.xsd`
+(an `xs:assert`) is refused and the case runs with no schema
+(`go test ./tests/xslts -run TestEnvSchemaHonoursXSDVersion`).
+
 `-output` runs a fourth leg with `GOXSLT_OUTPUT_CHECK`
 ([`tests/xslts/outputcheck.go`](../tests/xslts/outputcheck.go)): every case
 again with its principal result streamed to `TransformOptions.Output`,

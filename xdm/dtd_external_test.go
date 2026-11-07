@@ -376,6 +376,22 @@ func TestExternalSubsetSuppliesEntities(t *testing.T) {
 	}
 }
 
+// The ATTLIST types an external subset declares govern the document even when
+// that subset declares no entities: XML 1.0 §3.3.1 (from memory) makes an
+// attribute declared ID an ID wherever the declaration lives, and the XDM
+// is-id property follows it. A subset with no entities used to be dropped
+// before its ATTLIST was read.
+func TestExternalSubsetAttlistWithoutEntities(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"d.dtd":   `<!ATTLIST e id ID #IMPLIED>`,
+		"doc.xml": `<!DOCTYPE r SYSTEM "d.dtd"><r><e id="x"/></r>`,
+	})
+	tree := mustParseExternal(t, dir, "doc.xml")
+	if a := kids(kids(tree.Root)[0])[0].AttrAt(0); !a.IsID() {
+		t.Fatal("id declared ID in the external subset is not is-id")
+	}
+}
+
 // A relative system identifier inside an external subset resolves against the
 // SUBSET's URI, not the document's — XML section 4.4.3. Getting this wrong
 // makes a modular DTD resolve against the wrong directory, and it is only

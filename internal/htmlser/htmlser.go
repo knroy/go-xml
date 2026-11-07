@@ -118,3 +118,21 @@ func MetaContent(mediaType, encoding string) string {
 	}
 	return mediaType + "; charset=" + encoding
 }
+
+// MetaEnd is what closes the content-type meta the html and xhtml methods add
+// to head, after its content value. xhtml is XML, so the element is closed,
+// with the space the compatibility guidelines ask for (§6.1.14). Under html a
+// head in an XML island -- a namespace other than none, or XHTML's below
+// HTML5 -- is written as XML too (§7.1: the html method writes an element
+// differently from the xml method only "if the element is to be serialized
+// as an HTML element"), so its meta takes an end tag; result-document-1402
+// asks for that spelling. Anywhere else it is a bare HTML start tag.
+func MetaEnd(head *xdm.Node, xhtml, html5 bool) string {
+	switch {
+	case xhtml:
+		return `" />`
+	case head.Name().URI != "" && !(html5 && head.Name().URI == NSXHTML):
+		return `"></meta>`
+	}
+	return `">`
+}
