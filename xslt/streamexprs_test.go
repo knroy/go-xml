@@ -495,3 +495,99 @@ func TestCurrentPostureIsOutermost(t *testing.T) {
 		}
 	}
 }
+
+// TestInlineFunctionBodyKinds checks that the §19.8.8.16 walk knows "?",
+// "||" and the argument placeholder: "an inline function declaration ... All
+// other inline function declarations are grounded and motionless", so with
+// no streaming parameter in scope each of these bodies is modelled, not
+// unknown.
+func TestInlineFunctionBodyKinds(t *testing.T) {
+	for _, src := range []string{
+		`function($m) { $m?k }`,
+		`function($m) { $m?($m?i) }`,
+		`function($a) { $a || 'x' }`,
+		`function() { concat(?, 'x') }`,
+	} {
+		got, known := analyze31(t, src)
+		if !known || got != groundedMotionless {
+			t.Errorf("%q: %v, known %v; want grounded and motionless", src, got, known)
+		}
+	}
+}
+
+// TestAnalyzeEmptyAxis checks §19.8.8.9's third rule: a step that "can never
+// select nodes on the chosen axis (for example, selecting attribute nodes on
+// the child axis)", or whose axis is always empty for the context item ("the
+// child axis to a text node"), is grounded and motionless.
+func TestAnalyzeEmptyAxis(t *testing.T) {
+	for _, src := range []string{
+		`child::attribute()`,
+		`descendant::document-node()`,
+		`following-sibling::attribute()`,
+		`attribute::text()`,
+		`parent::comment()`,
+		`@a/child::x`,
+		`self::text()/descendant::node()`,
+	} {
+		got, known := analyze(t, src)
+		if !known || got != groundedMotionless {
+			t.Errorf("%q: %v, known %v; want grounded and motionless", src, got, known)
+		}
+	}
+	// The rule needs the axis to be empty: these still read the stream.
+	for _, src := range []string{`child::text()`, `descendant::node()`, `parent::node()`, `self::attribute()`} {
+		if got, known := analyze(t, src); !known || got == groundedMotionless {
+			t.Errorf("%q: %v, known %v; want a streamed posture", src, got, known)
+		}
+	}
+}
+
+// TestAnalyzeRootFromCrawling checks a leading "/" where the context posture
+// is crawling: §19.8.9.18 rewrites root(X) as X only "if its posture is
+// striding", so it is head((X)/ancestor-or-self::node()), climbing and
+// motionless. A downward step from it roams (§19.8.8.9), and so does key#2,
+// whose third argument "/" has usage navigation (§19.8.9).
+func TestAnalyzeRootFromCrawling(t *testing.T) {
+	parse := func(src string) xpath.Expr {
+		e, err := xpath.ParseVersion(src, nil, xpath.XPath31)
+		if err != nil {
+			t.Fatalf("parsing %q: %v", src, err)
+		}
+		return e
+	}
+	if got, known := analyzeExpr(parse(`/`), postureCrawling); !known || got != (props{postureClimbing, sweepMotionless}) {
+		t.Errorf(`"/" from crawling: %v, known %v; want climbing and motionless`, got, known)
+	}
+	for _, src := range []string{`descendant::x[/doc]`, `descendant::x[count(key('k', 'v'))]`} {
+		if got, known := analyzeExpr(parse(src), postureStriding); !known || got != roamingFreeRanging {
+			t.Errorf("%q: %v, known %v; want roaming and free-ranging", src, got, known)
+		}
+	}
+}
+
+// TestAnalyzeRootFunction checks §19.8.9.18 where the rewrite does not need
+// the static type of X: root(X) is "rewritten as
+// head((X)/ancestor-or-self::node())" unless X is a striding document node,
+// so a crawling or climbing X, or a striding one that is never a document
+// node, gives climbing and X's sweep.
+func TestAnalyzeRootFunction(t *testing.T) {
+	for _, c := range []struct {
+		src  string
+		want props
+	}{
+		{`root(child::a)`, props{postureClimbing, sweepConsuming}},
+		{`root(@a)`, props{postureClimbing, sweepMotionless}},
+		{`root(descendant::a)`, props{postureClimbing, sweepConsuming}},
+		{`root(..)`, props{postureClimbing, sweepMotionless}},
+		{`root(a)/b`, roamingFreeRanging},
+		{`function-lookup(xs:QName('fn:true'), 0)`, groundedMotionless},
+	} {
+		if got, known := analyze31(t, c.src); !known || got != c.want {
+			t.Errorf("%q: %v, known %v; want %v", c.src, got, known, c.want)
+		}
+	}
+	// "." may be the document node: no static type, no rewrite.
+	if _, known := analyze(t, `root(.)`); known {
+		t.Error(`root(.) from a striding posture was modelled without a static type`)
+	}
+}

@@ -29,13 +29,17 @@ func streamableContainers(root *xdm.Node) []*xdm.Node {
 // construct alone cannot reproduce them.
 func planMentions(el *xdm.Node) bool {
 	found := false
+	mentions := func(v string) bool {
+		return strings.Contains(v, "current-group") || strings.Contains(v, "accumulator-after") ||
+			strings.Contains(v, "current-merge-group")
+	}
 	walkElements(el, func(n *xdm.Node) bool {
 		for a := range n.Attrs() {
-			v := a.Value()
-			if strings.Contains(v, "current-group") || strings.Contains(v, "accumulator-after") ||
-				strings.Contains(v, "current-merge-group") {
-				found = true
-			}
+			found = found || mentions(a.Value())
+		}
+		// A text value template is an operand too (§19.8.3).
+		for c := range n.Children() {
+			found = found || c.Kind() == xdm.KindText && mentions(c.Value())
 		}
 		return !found
 	})
@@ -383,7 +387,7 @@ func TestStreamPlanRules(t *testing.T) {
 		}
 	})
 	t.Run("unknown is recorded where it arises", func(t *testing.T) {
-		pl, sd := planOfSheet(t, sheet("", `<out><xsl:value-of select="@k"/><xsl:copy-of select="fold-right((), 'd', concat#2)"/></out>`))
+		pl, sd := planOfSheet(t, sheet("", `<out><xsl:value-of select="@k"/><xsl:copy-of select="Q{urn:x}f('d')"/></out>`))
 		if r := site(t, pl, firstXSL(sd, "value-of"), "select"); !r.known {
 			t.Errorf("value-of before the gap: %+v", r)
 		}

@@ -191,6 +191,17 @@ func (i *sequenceInstr) appendItem(rt *runtime, out *outputBuilder, it xdm.Item)
 			inheritNamespacesAt(rt, out.AppendCopyOf(v), v, dest)
 			return nil
 		}
+		// An attribute or namespace node under an open element is added by the
+		// builder call AppendNode would make, so that one after content raises
+		// XTDE0410 (§5.7.1); AppendNode has no error to return.
+		if out.Open() != nil {
+			switch v.Kind() {
+			case xdm.KindAttribute:
+				return out.AddAttribute(v.Name(), v.Value())
+			case xdm.KindNamespace:
+				return out.AddNamespace(v.Name().Local, v.Value())
+			}
+		}
 		out.AppendNode(v)
 	case *xdm.Atomic:
 		out.AppendValue(v)

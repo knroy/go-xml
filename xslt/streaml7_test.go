@@ -96,11 +96,11 @@ var l7Analysis = []struct {
 	{`<xsl:value-of select="count(root(copy-of(a))//b)"/>`, props{postureGrounded, sweepConsuming}, true},
 	// root() of a streamed node stays unmodelled.
 	{`<xsl:for-each select="a"><xsl:value-of select="count(root()//b)"/></xsl:for-each>`, props{}, false},
-	// fold-right over a grounded, consuming first argument (§19.8.9.9).
+	// fold-right: the general rules, the first argument navigation
+	// (§19.8.9.9), so a streamed first argument roams (§19.8.1).
 	{`<xsl:value-of select="fold-right(a/b/string(), '', concat#2)"/>`, props{postureGrounded, sweepConsuming}, true},
-	// Any other first argument stays unmodelled.
-	{`<xsl:value-of select="fold-right((), 'd', concat#2)"/>`, props{}, false},
-	{`<xsl:value-of select="fold-right(a/b, '', concat#2)"/>`, props{}, false},
+	{`<xsl:value-of select="fold-right((), 'd', concat#2)"/>`, props{postureGrounded, sweepMotionless}, true},
+	{`<xsl:value-of select="fold-right(a/b, '', concat#2)"/>`, roamingFreeRanging, true},
 }
 
 // TestStreamL7MatchesTree runs l7Rows on every core document and

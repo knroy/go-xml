@@ -110,10 +110,10 @@ var outSheets = []struct{ name, decls, body, outErr string }{
 	{"terminate", ``, `<xsl:template match="/"><out><xsl:for-each select="//rec"><r/><xsl:if test="@k = 3"><xsl:message terminate="yes">stop</xsl:message></xsl:if></xsl:for-each></out></xsl:template>`, ""},
 	{"map-top", ``, `<xsl:template match="/"><out/><xsl:sequence select="map{1:2}"/></xsl:template>`, ""},
 	{"nested-transform", ``, `<xsl:template match="/"><out><xsl:sequence select="transform(map{'stylesheet-text': '&lt;xsl:stylesheet version=&quot;3.0&quot; xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot;&gt;&lt;xsl:template match=&quot;/&quot;&gt;&lt;in&gt;&lt;xsl:value-of select=&quot;count(//rec)&quot;/&gt;&lt;/in&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;', 'source-node': .})?output"/></out></xsl:template>`, ""},
-	// The tree admits a namespace node after content, which §5.7.1 makes
-	// XTDE0410; the stream has written the start tag, and raises it.
-	{"ns-after-child", ``, `<xsl:template match="/"><out><a/><b/><xsl:namespace name="q" select="'urn:q'"/><c/></out></xsl:template>`, "XTDE0410"},
-	{"ns-node-after-child", ``, `<xsl:template match="/"><out><a/><b/><xsl:copy-of select="//*:name[1]/namespace::*"/><c/></out></xsl:template>`, "XTDE0410"},
+	// A namespace node after content is XTDE0410 (§5.7.1), the same error in
+	// the tree and the stream.
+	{"ns-after-child", ``, `<xsl:template match="/"><out><a/><b/><xsl:namespace name="q" select="'urn:q'"/><c/></out></xsl:template>`, ""},
+	{"ns-node-after-child", ``, `<xsl:template match="/"><out><a/><b/><xsl:copy-of select="//*:name[1]/namespace::*"/><c/></out></xsl:template>`, ""},
 	{"try", `<xsl:mode on-no-match="shallow-copy"/>`, `<xsl:template match="rec[@k = '2']"><xsl:try><bad><xsl:sequence select="error()"/></bad><xsl:catch><caught/></xsl:catch></xsl:try></xsl:template>`, ""},
 }
 

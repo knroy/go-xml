@@ -650,11 +650,12 @@ func TestAVTExpressionExtraction(t *testing.T) {
 func TestUnmodelledInstructionIsReportedUnknown(t *testing.T) {
 	// The guard the whole check rests on: a construct whose rule is not
 	// written must be reported unmodelled, so that streamcheck.go stays
-	// silent rather than rejecting a valid stylesheet. fn:fold-right has a
-	// section of its own (§19.8.9.9) that is not implemented.
-	_, known := analyzeInstrSource(t, `<xsl:copy-of select="fold-right((), 'd', concat#2)"/>`)
+	// silent rather than rejecting a valid stylesheet. An extension
+	// function's posture and sweep are implementation-defined (§19.8.8.14),
+	// and this analysis gives none.
+	_, known := analyzeInstrSource(t, `<xsl:copy-of select="Q{urn:x}f('d')"/>`)
 	if known {
-		t.Error("xsl:copy-of over fold-right() was reported as modelled")
+		t.Error("xsl:copy-of over an extension function was reported as modelled")
 	}
 	// §19.8.4.42, §19.8.4.31, §19.8.4.32: xsl:where-populated is its
 	// content's posture and sweep; xsl:on-empty and xsl:on-non-empty are
@@ -684,12 +685,12 @@ func TestUnmodelledPredicateInAScanningPathIsReportedUnknown(t *testing.T) {
 	// implementation, not about the path, and the roaming verdict that
 	// follows must not be reported as an XTSE3430.
 	//
-	// fn:fold-right (§19.8.9.9) is not implemented, so a path
-	// filtered on it must come back unmodelled.
+	// An extension function is not modelled, so a path filtered on it
+	// must come back unmodelled.
 	_, known := analyzeInstrSource(t,
-		`<xsl:value-of select="//transaction[@date = fold-right((), 'd', concat#2)]"/>`)
+		`<xsl:value-of select="//transaction[@date = Q{urn:x}f('d')]"/>`)
 	if known {
-		t.Error("a path whose predicate calls the unmodelled fold-right() was reported " +
+		t.Error("a path whose predicate calls an unmodelled extension function was reported " +
 			"as modelled; the roaming verdict would then be raised as a spurious XTSE3430")
 	}
 
@@ -705,7 +706,7 @@ func TestUnmodelledInstructionInABodyPropagates(t *testing.T) {
 	// known must propagate out of a nested sequence constructor, not just
 	// out of the instruction itself.
 	_, known := analyzeInstrSource(t, `<xsl:for-each select="a">
-	 <xsl:copy-of select="fold-right((), 'd', concat#2)"/>
+	 <xsl:copy-of select="Q{urn:x}f('d')"/>
 	</xsl:for-each>`)
 	if known {
 		t.Error("an unmodelled instruction inside xsl:for-each did not clear known")
@@ -1409,5 +1410,29 @@ func TestContextItemAbsentIsSpeltAbsent(t *testing.T) {
 		p, known := analyzeFirstInSourceDoc(t, src)
 		wantProps(t, p, known, postureGrounded, sweepMotionless,
 			`xsl:call-template on a template with use="`+use+`"`)
+	}
+}
+
+// TestTextValueTemplateOperands checks §19.8.3: "Any text value templates
+// appearing in text nodes within the sequence constructor, if text value
+// templates are enabled. The operand usage for these operands is
+// absorption", with §19.8.7's operands, the expressions in braces.
+func TestTextValueTemplateOperands(t *testing.T) {
+	for _, c := range []struct {
+		src  string
+		want props
+	}{
+		{`<out xsl:expand-text="yes">{@k}</out>`, groundedMotionless},
+		{`<out xsl:expand-text="yes">{a}</out>`, props{postureGrounded, sweepConsuming}},
+		{`<out xsl:expand-text="yes">{a} and {b}</out>`, roamingFreeRanging},
+		{`<out xsl:expand-text="yes"><xsl:value-of select="a"/>{b}</out>`, roamingFreeRanging},
+		{`<out xsl:expand-text="yes">{following-sibling::x}</out>`, roamingFreeRanging},
+		// Not enabled: literal text.
+		{`<out>{a} and {b}</out>`, groundedMotionless},
+	} {
+		p, known := analyzeInstrSource(t, c.src)
+		if !known || p != c.want {
+			t.Errorf("%s: %v/%v known %v, want %v/%v", c.src, p.posture, p.sweep, known, c.want.posture, c.want.sweep)
+		}
 	}
 }
