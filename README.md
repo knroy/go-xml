@@ -1084,12 +1084,15 @@ extension expression; and the string constructor.
 The version declaration is recorded rather than discarded. A module may open
 with `xquery version "1.0"`, `"3.0"` or `"3.1"`; anything else is `XQST0031`,
 and a module that declares nothing is compiled as 3.1. The engine implements
-3.1 throughout, but the three rules the versions are known to disagree on now
-ask which version applies: an unprefixed `declare option` name is `XPST0081`
+3.1 throughout, but the rules the versions are known to disagree on now ask
+which version applies: an unprefixed `declare option` name is `XPST0081`
 in 1.0 and legal from 3.0; a cast target naming a type not in scope is
 `XPST0051` in 1.0 and `XQST0052` from 3.0; and a variable circularity running
 through a function body is the static `XQST0054` in 1.0 and the dynamic
-`XQDY0054` from 3.0. See [docs/xquery.md](docs/xquery.md) for what stays at
+`XQDY0054` from 3.0. Three more follow the version the QT3 suite pairs them
+on: an empty `ordered {}` is `XPST0003` before 3.1, an unprefixed pragma name
+is `XPST0081` before 3.1, and a bare `namespace-node()` step is `XPST0017` in
+1.0 and `XQST0134` from 3.0. See [docs/xquery.md](docs/xquery.md) for what stays at
 3.1's reading whatever the module declares.
 
 Both halves of `import` are implemented, through a store the caller fills:

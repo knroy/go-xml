@@ -198,24 +198,29 @@ xquery version "3.0"; declare option myopt "v"; true()
 
 The engine still *implements* 3.1 almost everywhere. What the recorded version
 buys is that the places where the versions are known to disagree can ask, and
-three do:
+these do:
 
-| Rule | 1.0 | 3.0 and later |
-| --- | --- | --- |
-| Unprefixed `declare option` name (§4.16 / §4.19) | `XPST0081` | legal, ignored |
-| Cast target naming a type not in scope (§3.13.2) | `XPST0051` | `XQST0052` |
-| Variable circularity through a function body (§4.14 / §4.16) | `XQST0054` (static) | `XQDY0054` (dynamic) |
+| Rule | 1.0 | 3.0 | 3.1 |
+| --- | --- | --- | --- |
+| Unprefixed `declare option` name (§4.16 / §4.19) | `XPST0081` | legal, ignored | legal, ignored |
+| Cast target naming a type not in scope (§3.13.2) | `XPST0051` | `XQST0052` | `XQST0052` |
+| Variable circularity through a function body (§4.14 / §4.16) | `XQST0054` (static) | `XQDY0054` (dynamic) | `XQDY0054` (dynamic) |
+| Empty `ordered {}` / `unordered {}` (§3.15) | `XPST0003` | `XPST0003` | the empty sequence |
+| Unprefixed pragma name, `(#name#)` (§3.22) | `XPST0081` | `XPST0081` | a pragma in no namespace, ignored |
+| Bare `namespace-node()` step (§3.3.2.1) | `XPST0017` | `XQST0134` | `XQST0134` |
 
 The declared version also selects the expression language each expression is
 compiled at, since XQuery 1.0 is defined over XPath 2.0, 3.0 over XPath 3.0 and
 3.1 over XPath 3.1.
 
-Everything else remains judged by 3.1's rules whatever the module declares —
-including the empty operand of `ordered {}` and `unordered {}`, an unprefixed
-pragma name, and `XQST0134` for a bare `namespace-node()` step. Those are
-accepted at every version rather than refused at the earlier ones. This is a
-permissive divergence: a 1.0 module that a conforming 1.0 processor would
-reject is accepted here, but no module is given a wrong *answer*.
+The last three rows are the ones the QT3 suite pairs across versions over
+identical source (`K-OrderExpr-1`/`-1a`, `K-ExtensionExpression-4`/`-4a`,
+`Axes127`/`Axes128`). Everything else is judged by 3.1's rules whatever the
+module declares. That includes the other places 3.1 made an `EnclosedExpr`'s
+expression optional (a function body, `text {}`, `<a>{}</a>`), and a
+`Q{}name` pragma. A 1.0 or 3.0 module that writes one of those is accepted
+where a processor for that version would refuse it. This is a permissive
+divergence: such a module is accepted, but no module gets a wrong *answer*.
 
 ## Importing modules
 
@@ -259,7 +264,10 @@ Writing one that reads the filesystem or the network is a deliberate grant to
 whoever wrote the query. See [security.md](security.md).
 
 A module may import its own target namespace; §4.12 allows it in as many
-words, and the loader treats the revisit like any other cycle.
+words, and the loader treats the revisit like any other cycle. The import may
+reuse the module declaration's own prefix, since §4.12 makes a prefix clash
+`XQST0033` only against "a module declaration with a different target
+namespace".
 
 ### Loading a module at run time
 
@@ -339,6 +347,15 @@ functions and variables, and those are resolved late.)
 
 The facets the schema author wrote are applied, not merely the base type: a
 `hatsize` restricted to 4–12 makes `99 castable as h:hatsize` false.
+
+A validated node copied into a constructor follows the **construction mode**
+(§4.6). Under `preserve`, the default, the copy keeps its annotation, so
+`<w>{validate { <h:hat>8</h:hat> }}</w>/* instance of element(*, h:hatsize)`
+is true. Under `declare construction strip` (or `Construction: StripTypes`)
+the copied elements become `xs:untyped` and their attributes
+`xs:untypedAtomic`, and the node that was copied keeps its type.
+`schema-element(E)` matches a validated child accepted through `E`'s
+substitution group.
 
 ### Casting to a schema type
 

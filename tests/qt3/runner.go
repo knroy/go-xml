@@ -269,13 +269,18 @@ func unsupportedSpec(deps []Dependency, target TargetVersion) string {
 			// it. Lifting it is verified by the IN-SCOPE count moving, which
 			// is the rule the note above states.
 			//
+			// moduleImport is NOT on this list either. "import module" is
+			// implemented (xquery/module.go), and a case's <module> elements
+			// reach it through caseModules. The catalog declares it only as
+			// satisfied="true" -- 21 cases, all in CombinedErrorCodes.
+			//
 			// schemaValidation and typedData stay. Both ask for the INPUT
 			// DOCUMENT to arrive already validated and annotated, which is a
 			// different thing from importing a schema, and a source declared
 			// validation="strict" is skipped separately in Run for the same
 			// reason.
 			case "schemaValidation", "typedData",
-				"staticTyping", "moduleImport",
+				"staticTyping",
 				"xpath-1.0-compatibility", "fn-format-integer-CLDR",
 				"non_empty_sequence_collection", "collection-stability",
 				"directory-as-collection-uri", "simple-uca-fallback",

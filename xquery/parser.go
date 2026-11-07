@@ -41,6 +41,9 @@ type parser struct {
 	// static context's map cannot answer it: the five predeclared prefixes
 	// are in there from the start, and rebinding one of those is legal.
 	declaredNS map[string]bool
+	// moduleDeclPrefix is the prefix a library module's declaration bound,
+	// which §4.12 lets a module import reuse for the same namespace.
+	moduleDeclPrefix string
 
 	// ctorPrefixes records every prefix bound by an xmlns declaration
 	// attribute on a direct element constructor, anywhere in the module.
@@ -604,7 +607,7 @@ func isXMLChar(r rune) bool {
 // source first — see literal.go. Everything else about the expression language
 // is shared, which is why these are the only three.
 func (p *parser) compileExpr(src string) (*compiledExpr, error) {
-	if err := rejectNamespaceAxis(src); err != nil {
+	if err := rejectNamespaceAxis(src, p.sc.xqVersion); err != nil {
 		return nil, err
 	}
 	// %public and %private have to be refused before the strip removes them.
@@ -689,7 +692,7 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 // The test is lexical because the expression has not been parsed yet, and it
 // deliberately does not fire inside a string literal or a comment, where
 // "namespace::" is just text.
-func rejectNamespaceAxis(src string) error {
+func rejectNamespaceAxis(src string, v XQVersion) error {
 	for i := 0; i+len("namespace::") <= len(src); i++ {
 		// A literal, a comment or a pragma is not source, and "namespace::"
 		// inside one is text rather than the axis. An unterminated region
@@ -715,7 +718,7 @@ func rejectNamespaceAxis(src string) error {
 		return fmt.Errorf(
 			"XPST0003: XQuery has no %q axis", "namespace")
 	}
-	return rejectNamespaceNodeStep(src)
+	return rejectNamespaceNodeStep(src, v)
 }
 
 // rejectNamespaceNodeStep refuses "namespace-node()" written as a step of its
@@ -730,13 +733,11 @@ func rejectNamespaceAxis(src string) error {
 // two, so the test is for the test standing alone after a "/" or at the head
 // of the expression.
 //
-// XQST0134 is raised whatever version the module declared, and deliberately.
-// The namespace-node() kind test does not exist in XQuery 1.0 at all, so a 1.0
-// module writing this step is in error either way -- only the code a 1.0
-// processor would report differs, and it would be a grammar error rather than
-// a right answer this engine withholds. Routing it would trade one refusal for
-// another and is not worth a branch.
-func rejectNamespaceNodeStep(src string) error {
+// XQST0134 is XQuery 3.0's code. The namespace-node() kind test does not exist
+// in XQuery 1.0, which reads the step as a call to a function nobody defined:
+// Axes127 asserts XPST0017 for "/*/namespace-node()" under "XQ10", and Axes128
+// XQST0134 for the same source under "XQ30+".
+func rejectNamespaceNodeStep(src string, v XQVersion) error {
 	const kind = "namespace-node("
 	for i := 0; i+len(kind) <= len(src); i++ {
 		// A literal, a comment or a pragma is not source, and "namespace::"
@@ -766,6 +767,11 @@ func rejectNamespaceNodeStep(src string) error {
 			if r, _ := utf8.DecodeLastRuneInString(src[:j]); xdm.IsNameChar(r) {
 				continue
 			}
+		}
+		if !v.atLeast30() {
+			return fmt.Errorf(
+				"XPST0017: XQuery 1.0 has no namespace-node() test, and no "+
+					"function %s) is defined", kind)
 		}
 		return fmt.Errorf(
 			"XQST0134: XQuery has no %q axis, so %s) cannot stand as a step",
