@@ -697,13 +697,16 @@ func TestDeclarationsAfterUnreadParameterEntity(t *testing.T) {
 		}
 		return s
 	}
-	cases := []struct{ name, prolog, decl, want string }{
-		{"external PE unread", "", `<!ENTITY % p SYSTEM "p.ent">`, "[B] c=C"},
-		{"internal PE unread", "", `<!ENTITY % p "">`, "[B] c=C"},
-		{"standalone", `<?xml version="1.0" standalone="yes"?>`, `<!ENTITY % p "">`, "[Bv] c=C a=d"},
+	// The &e; the unprocessed declaration would define is refused rather
+	// than dropped (X2; see TestUndeclaredEntityWFCOrVC), so the first two
+	// documents leave it out and a third checks the refusal.
+	cases := []struct{ name, prolog, decl, ref, want string }{
+		{"external PE unread", "", `<!ENTITY % p SYSTEM "p.ent">`, "", "[B] c=C"},
+		{"internal PE unread", "", `<!ENTITY % p "">`, "", "[B] c=C"},
+		{"standalone", `<?xml version="1.0" standalone="yes"?>`, `<!ENTITY % p "">`, "&e;", "[Bv] c=C a=d"},
 	}
 	for _, c := range cases {
-		src := c.prolog + "<!DOCTYPE r [" + c.decl + subset + "]><r>[&b;&e;]</r>"
+		src := c.prolog + "<!DOCTYPE r [" + c.decl + subset + "]><r>[&b;" + c.ref + "]</r>"
 		tree, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
 		if err != nil {
 			t.Errorf("%s: %v", c.name, err)
@@ -712,6 +715,10 @@ func TestDeclarationsAfterUnreadParameterEntity(t *testing.T) {
 		if got := summary(tree); got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
+	}
+	if _, err := ParseString("<!DOCTYPE r [<!ENTITY % p \"\">"+subset+"]><r>[&b;&e;]</r>",
+		ParseOptions{AllowDOCTYPE: true}); err == nil || !strings.Contains(err.Error(), "VC: Entity Declared") {
+		t.Errorf("a reference to an unprocessed declaration: %v, want it refused", err)
 	}
 	dir := writeFiles(t, map[string]string{
 		"p.ent":   "",

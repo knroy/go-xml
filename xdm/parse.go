@@ -762,8 +762,13 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 						tree.text.share(d.value)
 					}
 					if !wfc {
-						declared := ents
-						dec.Undeclared = func(name string) bool { return !declared.declares(name) }
+						declared, read := ents, ps.opts.ExternalEntities != nil
+						dec.Undeclared = func(name string) string {
+							if declared.declares(name) {
+								return ""
+							}
+							return undeclaredNote(name, read)
+						}
 					}
 					if ents != nil && !ps.opts.entitiesExpanded {
 						ents.version11 = dec.IsVersion11()
