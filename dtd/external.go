@@ -248,6 +248,7 @@ func Load(directive string, opts LoadOptions) (*DTD, error) {
 			d.HasExternalSubset = hasExternal
 			d.name = doctypeName(head)
 			d.v11 = l.v11
+			d.nesting = l.nesting
 		}
 		return d, nil
 	}
@@ -277,6 +278,7 @@ func Load(directive string, opts LoadOptions) (*DTD, error) {
 		d.ExternalSubset = expandedExternal
 		d.name = doctypeName(head)
 		d.v11 = l.v11
+		d.nesting = l.nesting
 	}
 	return d, nil
 }
@@ -331,6 +333,17 @@ type loader struct {
 	// instead of reading it, for LoadOptions.InternalSubsetOnly, which
 	// promises to fetch nothing.
 	noFetch bool
+
+	// inDecl is set while the body of a markup declaration other than
+	// <!ENTITY> is expanded: the context in which a replacement text must
+	// nest properly with the declaration and its groups. An entity value
+	// is a literal, where any text may be included.
+	inDecl bool
+
+	// nesting holds the PE nesting validity errors found while expanding,
+	// first occurrence of each only, for Validate to report. See
+	// nestingViolation.
+	nesting []string
 
 	// sections counts the INCLUDE sections currently being expanded, for
 	// maxConditionalDepth.
@@ -629,11 +642,21 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 			if declLevel && strings.HasPrefix(construct, "<!") &&
 				!strings.HasPrefix(construct, "<!--") &&
 				strings.Contains(construct, "%") {
-				inner, err := l.expand(construct[2:len(construct)-1], base, depth+1, declLevel)
+				// A declaration whose '>' is not in the raw text — it is in
+				// a replacement text, which is a nesting error — runs to the
+				// end of the subset, and has no '>' to strip.
+				body, closer := construct[2:], ""
+				if strings.HasSuffix(body, ">") {
+					body, closer = body[:len(body)-1], ">"
+				}
+				outer := l.inDecl
+				l.inDecl = !strings.HasPrefix(body, "ENTITY")
+				inner, err := l.expand(body, base, depth+1, declLevel)
+				l.inDecl = outer
 				if err != nil {
 					return "", err
 				}
-				sb.WriteString("<!" + inner + ">")
+				sb.WriteString("<!" + inner + closer)
 			} else {
 				sb.WriteString(construct)
 			}
@@ -708,6 +731,11 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 		if err := l.chargeExpansion(max(len(text), j+1)); err != nil {
 			return "", err
 		}
+		if l.inDecl {
+			if vc := nestingViolation(text); vc != "" {
+				l.violation("the replacement text of %%%s; is not properly nested (XML 1.0 %s)", name, vc)
+			}
+		}
 		sb.WriteString(text)
 		i += j + 1
 	}
@@ -735,15 +763,37 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 // be. §3.4 says exactly that.
 func (l *loader) conditional(sb *strings.Builder, s, base string, depth int, declLevel bool) (int, error) {
 	rest := s[len("<!["):]
-	open := strings.IndexByte(rest, '[')
-	if open < 0 {
+	// The keyword is read up to its '[', expanding references as they come,
+	// so that a '[' supplied by the keyword's own entity is found. That is
+	// §3.4 VC Proper Conditional Section/PE Nesting — the "<![", "[" and
+	// "]]>" must all be in one replacement text — and a validity error, so
+	// the section is still read.
+	var kwb strings.Builder
+	open, extra := 0, ""
+	for open < len(rest) && rest[open] != '[' {
+		if j := strings.IndexByte(rest[open:], ';'); rest[open] == '%' && j > 0 {
+			t, err := l.expand(rest[open:open+j+1], base, depth+1, declLevel)
+			if err != nil {
+				return 0, err
+			}
+			open += j + 1
+			if k := strings.IndexByte(t, '['); k >= 0 {
+				l.violation("a conditional section's '[' is in the replacement text of %s (XML 1.0 §3.4 VC Proper Conditional Section/PE Nesting)", rest[open-j-1:open])
+				kwb.WriteString(t[:k])
+				extra = t[k+1:]
+				open--
+				break
+			}
+			kwb.WriteString(t)
+			continue
+		}
+		kwb.WriteByte(rest[open])
+		open++
+	}
+	if open >= len(rest) {
 		return 0, fmt.Errorf("a conditional section is missing its '['")
 	}
-	kw, err := l.expand(rest[:open], base, depth+1, declLevel)
-	if err != nil {
-		return 0, err
-	}
-	kw = strings.Trim(kw, " \t\r\n")
+	kw := strings.Trim(kwb.String(), " \t\r\n")
 	if kw != "INCLUDE" && kw != "IGNORE" {
 		// Not a conditional section — a CDATA section cannot appear in a
 		// DTD, but an unexpanded "%kw;" can when the entity was never
@@ -769,7 +819,7 @@ func (l *loader) conditional(sb *strings.Builder, s, base string, depth int, dec
 		// The contents of an INCLUDE are ordinary declarations, and may
 		// contain further conditional sections of their own.
 		l.sections++
-		inner, err := l.expand(body[:end], base, depth, declLevel)
+		inner, err := l.expand(extra+body[:end], base, depth, declLevel)
 		l.sections--
 		if err != nil {
 			return 0, err
@@ -777,6 +827,56 @@ func (l *loader) conditional(sb *strings.Builder, s, base string, depth int, dec
 		sb.WriteString(inner)
 	}
 	return len("<![") + open + 1 + end + len("]]>"), nil
+}
+
+// violation records a PE nesting validity error, once per message.
+func (l *loader) violation(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	for _, m := range l.nesting {
+		if m == msg {
+			return
+		}
+	}
+	l.nesting = append(l.nesting, msg)
+}
+
+// nestingViolation reports which nesting constraint the replacement text of a
+// parameter entity referenced inside a markup declaration breaks, or "".
+//
+// XML 1.0 §2.8 VC Proper Declaration/PE Nesting: "if either the first
+// character or the last character of a markup declaration ... is contained in
+// the replacement text for a parameter-entity reference, both MUST be
+// contained in the same replacement text." Inside a declaration's body that
+// means the text holds no '<' or '>' outside a literal.
+//
+// §3.2.1 VC Proper Group/PE Nesting: "if either of the opening or closing
+// parentheses in a choice, seq, or Mixed construct is contained in the
+// replacement text for a parameter entity, both MUST be contained in the same
+// replacement text": its parentheses balance.
+func nestingViolation(text string) string {
+	depth := 0
+	for i := 0; i < len(text); i++ {
+		switch c := text[i]; c {
+		case '"', '\'':
+			j := strings.IndexByte(text[i+1:], c)
+			if j < 0 {
+				return ""
+			}
+			i += j + 1
+		case '(':
+			depth++
+		case ')':
+			if depth--; depth < 0 {
+				return "§3.2.1 VC Proper Group/PE Nesting"
+			}
+		case '<', '>':
+			return "§2.8 VC Proper Declaration/PE Nesting"
+		}
+	}
+	if depth != 0 {
+		return "§3.2.1 VC Proper Group/PE Nesting"
+	}
+	return ""
 }
 
 // matchingSectionEnd returns the offset of the "]]>" that closes the section

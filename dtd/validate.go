@@ -159,6 +159,9 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 			v.fail(root, "the DTD's external resource %s declares XML 1.1 but the document is XML 1.0 (XML §4.3.4)", d.v11)
 		}
 	}
+	for _, msg := range d.nesting {
+		v.fail(root, "%s", msg)
+	}
 	v.walk(root)
 	v.checkIDRefs()
 	if len(v.errs) == 0 {

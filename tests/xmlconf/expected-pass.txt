@@ -67,6 +67,9 @@ ibm-invalid-P39-ibm39i03.xml
 ibm-invalid-P39-ibm39i04.xml
 ibm-invalid-P41-ibm41i01.xml
 ibm-invalid-P41-ibm41i02.xml
+ibm-invalid-P49-ibm49i01.xml
+ibm-invalid-P50-ibm50i01.xml
+ibm-invalid-P51-ibm51i01.xml
 ibm-invalid-P56-ibm56i02.xml
 ibm-invalid-P56-ibm56i07.xml
 ibm-invalid-P56-ibm56i08.xml
@@ -967,6 +970,9 @@ inv-dtd03
 inv-required00
 inv-required01
 inv-required02
+invalid--002
+invalid--005
+invalid--006
 invalid-bo-1
 invalid-bo-2
 invalid-bo-3
@@ -1539,6 +1545,7 @@ pubid03
 pubid04
 pubid05
 required00
+rmt-e2e-14
 rmt-e2e-15e
 rmt-e2e-15f
 rmt-e2e-15i

@@ -1016,3 +1016,44 @@ func TestUTF16ExternalSubsetIsDecoded(t *testing.T) {
 		}
 	}
 }
+
+// A parameter entity's replacement text must nest properly with the markup it
+// is used in: a declaration's "<!" and ">" (XML 1.0 §2.8 VC Proper
+// Declaration/PE Nesting), a content model group's parentheses (§3.2.1 VC
+// Proper Group/PE Nesting), and a conditional section's "<![", "[" and "]]>"
+// (§3.4 VC Proper Conditional Section/PE Nesting). Each is a VALIDITY
+// constraint, so the DTD still loads and Validate reports it; libxml2 makes
+// them fatal, which XML 1.0 Second Edition erratum E14 corrects.
+func TestParameterEntityNestingIsAValidityError(t *testing.T) {
+	const doc = `<!DOCTYPE r SYSTEM "r.dtd">`
+	bad := map[string]string{
+		"group split":       `<!ENTITY % e "(#PCDATA"><!ELEMENT r %e;)>`,
+		"group across two":  `<!ENTITY % a "(#PCDATA|"><!ENTITY % b "x)*"><!ELEMENT x EMPTY><!ELEMENT r %a;%b;>`,
+		"declaration close": `<!ENTITY % e "(#PCDATA)>"><!ELEMENT r %e;`,
+		"attlist close":     `<!ELEMENT r EMPTY><!ENTITY % e "a CDATA #IMPLIED>"><!ATTLIST r %e;`,
+		"section bracket":   `<!ELEMENT r EMPTY><!ENTITY % e "INCLUDE["><![ %e; <!ATTLIST r a CDATA #IMPLIED> ]]>`,
+	}
+	for name, subset := range bad {
+		opts := mapOpts(map[string]string{"r.dtd": subset})
+		if _, err := Load(doc, opts); err != nil {
+			t.Errorf("%s: a nesting violation must not stop the load: %v", name, err)
+			continue
+		}
+		err := loadCheck(t, doc+`<r/>`, opts)
+		if err == nil || !strings.Contains(err.Error(), "Nesting") {
+			t.Errorf("%s: want a PE nesting validity error, got %v", name, err)
+		}
+	}
+	good := map[string]string{
+		"whole group":   `<!ENTITY % e "(#PCDATA)"><!ELEMENT r %e;>`,
+		"no parens":     `<!ENTITY % e "#PCDATA"><!ELEMENT r (%e;)*>`,
+		"quoted":        `<!ELEMENT r EMPTY><!ENTITY % e "a CDATA '(>'"><!ATTLIST r %e;>`,
+		"entity value":  `<!ENTITY % e "("><!ENTITY % f "%e;"><!ELEMENT r EMPTY>`,
+		"keyword alone": `<!ELEMENT r EMPTY><!ENTITY % e "INCLUDE"><![ %e; [ <!ATTLIST r a CDATA #IMPLIED> ]]>`,
+	}
+	for name, subset := range good {
+		if err := loadCheck(t, doc+`<r/>`, mapOpts(map[string]string{"r.dtd": subset})); err != nil {
+			t.Errorf("%s: properly nested, want valid: %v", name, err)
+		}
+	}
+}

@@ -96,6 +96,11 @@ declarations, and conditional sections — `<![INCLUDE[` and `<![IGNORE[`, §3.4
 are resolved, including nested ones. Each fetched resource is decoded by its
 own byte order mark (UTF-8 or UTF-16, §4.3.3), as `xdm.Parse` decodes a
 document.
+A parameter entity's replacement text must nest properly with the markup it
+appears in: a declaration's `<!` and `>` (§2.8), a content model's parentheses
+(§3.2.1), and a conditional section's `<![`, `[` and `]]>` (§3.4). These are
+validity constraints, so a DTD breaking one still loads, and `dtd.Validate`
+reports the violation (libxml2 treats them as fatal errors).
 
 Five things to know before relying on it:
 

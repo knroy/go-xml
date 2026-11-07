@@ -54,6 +54,9 @@ type DTD struct {
 	// text declaration says version="1.1", or "". Validate refuses it for a
 	// document that is not XML 1.1 (XML 1.1 §4.3.4).
 	v11 string
+	// nesting holds the parameter-entity nesting validity errors Load found
+	// (XML 1.0 §2.8, §3.2.1, §3.4), which Validate reports.
+	nesting []string
 }
 
 // ContentKind is what an element's content model permits.
