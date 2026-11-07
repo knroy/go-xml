@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
-
-	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
 
 // The markup-declaration grammar of XML 1.0 §2.8 and §3.2-§4.7, recognised
@@ -76,22 +74,6 @@ func checkDoctypeGrammar(raw string, external bool) error {
 	}
 	if p.i != len(p.s) {
 		return dtdErr("unexpected %q in the DOCTYPE", p.rest())
-	}
-	return nil
-}
-
-// checkDoctypeChars holds the DOCTYPE directive raw to XML 1.0 §2.2 [2] Char:
-// the tokeniser checks the characters of content but not of a directive, so a
-// noncharacter in an unused entity value was accepted (xmlconf not-wf-sa-175).
-//
-// ponytail: under XML 1.1 this is the reference rule, LegalCharRef, so a
-// literal [2a] RestrictedChar passes here; checking directives in the
-// tokeniser's checkChars would hold them to the literal rule too.
-func checkDoctypeChars(raw string, v11 bool) error {
-	for _, r := range raw {
-		if !xml.LegalCharRef(r, v11) {
-			return dtdErr("illegal character code %U in the DOCTYPE", r)
-		}
 	}
 	return nil
 }

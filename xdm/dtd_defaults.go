@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"sort"
 	"strings"
 
 	xml "github.com/knroy/go-xml/v2/internal/xmltok"
@@ -18,6 +19,7 @@ type attDeclaredType struct {
 	element string
 	attr    string
 	typ     string
+	outside bool // an external markup declaration (see declOrigins)
 }
 
 // attDefault is one defaulted attribute from an ATTLIST declaration.
@@ -32,6 +34,7 @@ type attDefault struct {
 	// before it (XML 1.0 §4.1, WFC: Entity Declared).
 	at       int
 	entities map[string]int
+	outside  bool // an external markup declaration (see declOrigins)
 }
 
 // declIndex maps the element name an ATTLIST declaration was written with to
@@ -96,13 +99,14 @@ func (ix declIndex) at(prefix, local string) []int {
 // '...'" is how a DTD supplies a binding — which is why the result has to
 // reach the element before its namespaces are built.
 func parseAttListDefaults(subset string) []attDefault {
-	out, _ := parseAttList(subset)
+	out, _ := parseAttList(subset, nil)
 	return out
 }
 
 // parseAttList reads both the defaults and the declared ID types from the
-// internal subset.
-func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
+// internal subset. outside, when not nil, is declOrigins of subset, and marks
+// what an external markup declaration supplies.
+func parseAttList(subset string, outside []bool) ([]attDefault, []attDeclaredType) {
 	var out []attDefault
 	var types []attDeclaredType
 	// XML 1.0 §3.3: when an attribute is declared more than once, the first
@@ -137,6 +141,7 @@ func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 			name, decl := fields[i], fields[i+1]
 			i += 2
 			key, nOut, nTypes := element+" "+name, len(out), len(types)
+			ext := at < len(outside) && outside[at]
 			switch {
 			case decl == "CDATA", decl == "#REQUIRED", decl == "#IMPLIED", decl == "#FIXED",
 				strings.HasPrefix(decl, `"`), strings.HasPrefix(decl, `'`):
@@ -145,7 +150,7 @@ func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 				// XML 1.0 §3.3.3 requires a processor that has read the
 				// declaration to collapse the value's spaces, whatever the
 				// type. applyAttTypes annotates only ID, IDREF and IDREFS.
-				types = append(types, attDeclaredType{element, name, decl})
+				types = append(types, attDeclaredType{element, name, decl, ext})
 			}
 			if decl == "NOTATION" && i < len(fields) {
 				i++ // the parenthesised notation list is part of the type
@@ -155,11 +160,11 @@ func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 				// No default to supply.
 			case decl == "#FIXED":
 				if i < len(fields) {
-					out = append(out, attDefault{element, name, unquote(fields[i]), at, entities})
+					out = append(out, attDefault{element, name, unquote(fields[i]), at, entities, ext})
 					i++
 				}
 			case strings.HasPrefix(decl, `"`), strings.HasPrefix(decl, `'`):
-				out = append(out, attDefault{element, name, unquote(decl), at, entities})
+				out = append(out, attDefault{element, name, unquote(decl), at, entities, ext})
 			default:
 				// decl was the attribute *type*; the default follows it.
 				if i < len(fields) {
@@ -169,11 +174,11 @@ func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 					case d == "#REQUIRED", d == "#IMPLIED":
 					case d == "#FIXED":
 						if i < len(fields) {
-							out = append(out, attDefault{element, name, unquote(fields[i]), at, entities})
+							out = append(out, attDefault{element, name, unquote(fields[i]), at, entities, ext})
 							i++
 						}
 					case strings.HasPrefix(d, `"`), strings.HasPrefix(d, `'`):
-						out = append(out, attDefault{element, name, unquote(d), at, entities})
+						out = append(out, attDefault{element, name, unquote(d), at, entities, ext})
 					}
 				}
 			}
@@ -230,14 +235,16 @@ func unquote(s string) string {
 	return s
 }
 
-// applyAttDefaults adds any declared default the element does not carry.
+// applyAttDefaults adds any declared default the element does not carry, and
+// names one of them that an external markup declaration supplied, or "".
 //
 // An attribute present in the document always wins: a default supplies a value
 // that was omitted, it does not override one that was given. Even a #FIXED
 // default only constrains what may be written, and validating that constraint
 // is DTD validation, which this parser does not do.
-func applyAttDefaults(t xml.StartElement, defs []attDefault, ix declIndex) xml.StartElement {
+func applyAttDefaults(t xml.StartElement, defs []attDefault, ix declIndex) (xml.StartElement, string) {
 	var add []xml.Attr
+	outside := ""
 	// A DTD is not namespace-aware: an ATTLIST names the element as
 	// written, prefix included. Matching the local name alone missed
 	// "p:doc", and with it a defaulted xmlns:p the element's own name
@@ -258,9 +265,12 @@ func applyAttDefaults(t xml.StartElement, defs []attDefault, ix declIndex) xml.S
 			continue
 		}
 		add = append(add, xml.Attr{Name: attrNameOf(d.name), Value: d.value})
+		if d.outside {
+			outside = d.name
+		}
 	}
 	if len(add) == 0 {
-		return t
+		return t, ""
 	}
 	// Copy rather than append in place: encoding/xml reuses the attribute
 	// slice across tokens, so appending would leak a defaulted attribute into
@@ -268,7 +278,7 @@ func applyAttDefaults(t xml.StartElement, defs []attDefault, ix declIndex) xml.S
 	attrs := make([]xml.Attr, len(t.Attr), len(t.Attr)+len(add))
 	copy(attrs, t.Attr)
 	t.Attr = append(attrs, add...)
-	return t
+	return t, outside
 }
 
 // smallAttrScan is the declarations-times-attributes product up to which a
@@ -404,8 +414,18 @@ func applyAttTypes(el *Node, types []attDeclaredType, ix declIndex) {
 	}
 }
 
-// parseElementOnlyDecls returns the set of element names whose <!ELEMENT>
-// declaration gives them an element-only content model.
+// What the parse keeps of an element type's <!ELEMENT> declarations
+// (parseElementDecls), as bits.
+const (
+	declElementOnly uint8 = 1 << iota // element content: see parseElementDecls
+	declEmpty                         // EMPTY
+	declOutside                       // an external markup declaration (see declOrigins)
+)
+
+// parseElementDecls returns, by element name, what the <!ELEMENT>
+// declarations say that the parse needs: whether the model is element-only,
+// whether it is EMPTY, and, where outside is declOrigins of subset, whether
+// the declaration is an external markup declaration.
 //
 // XML §3.2.1 calls such a model "element content", and §2.10 makes the
 // whitespace between its children *ignorable*: a validating processor knows
@@ -420,9 +440,11 @@ func applyAttTypes(el *Node, types []attDeclaredType, ix declIndex) {
 // model mentions #PCDATA or is EMPTY/ANY — and skips anything it does not
 // understand. A model it cannot classify is treated as NOT element-only, so a
 // misparse loses the optimisation rather than deleting content.
-func parseElementOnlyDecls(subset string) map[string]bool {
-	var out map[string]bool
+func parseElementDecls(subset string, outside []bool) map[string]uint8 {
+	var out map[string]uint8
+	at := -1
 	for kw, body := range markupDecls(subset) {
+		at++
 		if kw != "ELEMENT" {
 			continue
 		}
@@ -432,15 +454,58 @@ func parseElementOnlyDecls(subset string) map[string]bool {
 		}
 		name := fields[0]
 		model := strings.Join(fields[1:], " ")
-		if !isElementOnlyModel(model) {
+		var k uint8
+		switch {
+		case isElementOnlyModel(model):
+			k = declElementOnly
+		case model == "EMPTY":
+			k = declEmpty
+		default:
 			continue
 		}
-		if out == nil {
-			out = map[string]bool{}
+		if at < len(outside) && outside[at] {
+			k |= declOutside
 		}
-		out[name] = true
+		if out == nil {
+			out = map[string]uint8{}
+		}
+		out[name] |= k
 	}
 	return out
+}
+
+// declKindOf is what parseElementDecls recorded for el's name, as written or
+// by its local name alone.
+func declKindOf(el *Node, kinds map[string]uint8) uint8 {
+	en := el.Name()
+	k := kinds[en.Local]
+	if en.Prefix != "" {
+		k |= kinds[en.Lexical()]
+	}
+	return k
+}
+
+// declOrigins says, for each item markupDecls yields from full, whether it is
+// an external markup declaration: XML 1.0 §2.9 defines one as "a markup
+// declaration occurring in the external subset or in a parameter entity
+// (external or internal, the latter being included because non-validating
+// processors are not required to read them)". full is the internal subset,
+// its parameter-entity references substituted, for its first n bytes, and
+// the external subset after; peSpans are where in those n bytes the
+// substitutions landed, in order.
+func declOrigins(full string, n int, peSpans [][2]int) []bool {
+	var out []bool
+	scanMarkupDecls(full, func(at int, _, _ string) bool {
+		out = append(out, at >= n || inSpans(peSpans, at))
+		return true
+	})
+	return out
+}
+
+// inSpans reports whether off falls in one of the ordered, disjoint spans.
+func inSpans(spans [][2]int, off int) bool {
+	i := sort.Search(len(spans), func(i int) bool { return spans[i][1] > off })
+	return i < len(spans) && spans[i][0] <= off
 }
 
 // isElementOnlyModel reports whether a content model is element content.
@@ -468,8 +533,8 @@ func isElementOnlyModel(model string) bool {
 // rules: it is not a preference that xsl:preserve-space can turn off. An
 // explicit xml:space="preserve" is still honoured, since XML §2.10 makes that
 // the document's own statement about its whitespace.
-func ignorableWhitespaceIn(el *Node, elementOnly map[string]bool) bool {
-	if en := el.Name(); !elementOnly[en.Lexical()] && !elementOnly[en.Local] {
+func ignorableWhitespaceIn(el *Node, kinds map[string]uint8) bool {
+	if declKindOf(el, kinds)&declElementOnly == 0 {
 		return false
 	}
 	a := el.Attr(NSXML, "space")

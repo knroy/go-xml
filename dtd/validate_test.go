@@ -2,6 +2,7 @@ package dtd
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -754,6 +755,71 @@ func TestDeclarationValidityConstraints(t *testing.T) {
 	for _, decl := range invalid {
 		if err := check(t, head+decl+`]><r/>`); err == nil {
 			t.Errorf("%s should be invalid", decl)
+		}
+	}
+}
+
+// xdmEntities lends a MapResolver to xdm.Parse.
+type xdmEntities struct{ *MapResolver }
+
+func (r xdmEntities) ResolveEntity(sys, pub, base string) (io.ReadCloser, string, error) {
+	return r.ResolveExternal(sys, pub, base)
+}
+
+// TestFaultsOnlyTheParseSees: what a tree cannot show — which attribute values
+// an external declaration defaulted or normalized, and whether white space was
+// written as a reference or a CDATA section — is recorded by xdm as it parses
+// and reported here. XML 1.0 §2.9 VC: Standalone Document Declaration, and §3
+// VC: Element Valid as erratum E15 reads it, and §4.1 VC: Entity Declared
+// for a reference xdm dropped (erratum E13).
+func TestFaultsOnlyTheParseSees(t *testing.T) {
+	const sa = `<?xml version="1.0" standalone="yes"?>`
+	const ext = `<!ELEMENT r (c*)><!ELEMENT c EMPTY>` +
+		`<!ATTLIST r d CDATA "x" n NMTOKEN #IMPLIED>`
+	const in = `<!DOCTYPE r [<!ELEMENT r (c|e)*><!ELEMENT c EMPTY><!ELEMENT e EMPTY>` +
+		`<!ENTITY s1 " "><!ENTITY s2 "&#32;"><!ENTITY s3 "&#38;#32;"><!ENTITY s4 "&s3;"><!ENTITY z "">`
+	cases := []struct{ name, src, want string }{
+		{"external default applied", sa + `<!DOCTYPE r SYSTEM "r.dtd"><r/>`, "takes its default"},
+		{"external default given", sa + `<!DOCTYPE r SYSTEM "r.dtd"><r d="x"/>`, ""},
+		{"not standalone", `<!DOCTYPE r SYSTEM "r.dtd"><r> <c/> </r>`, ""},
+		{"parameter entity default", sa + `<!DOCTYPE r [<!ENTITY % p "<!ATTLIST r d CDATA 'x'>">%p;` +
+			`<!ELEMENT r EMPTY>]><r/>`, "takes its default"},
+		{"internal default", sa + `<!DOCTYPE r [<!ATTLIST r d CDATA 'x'><!ELEMENT r EMPTY>]><r/>`, ""},
+		{"external normalization", sa + `<!DOCTYPE r SYSTEM "r.dtd"><r d="x" n=" t "/>`, "is normalized"},
+		{"external value normal already", sa + `<!DOCTYPE r SYSTEM "r.dtd"><r d="x" n="t"/>`, ""},
+		{"external element content", sa + `<!DOCTYPE r SYSTEM "r.dtd"><r d="x"> <c/></r>`, "white space in element content"},
+		{"internal element content", sa + in + `]><r> <c/> </r>`, ""},
+		{"character reference", in + `]><r><c/>&#32;<c/></r>`, "is not white space"},
+		{"CDATA section", in + `]><r><![CDATA[ ]]><c/></r>`, "is not white space"},
+		{"empty CDATA section", in + `]><r><![CDATA[]]><c/></r>`, "is not white space"},
+		{"preserved character reference", in + `<!ATTLIST r xml:space (preserve) "preserve">]><r>&#10;<c/></r>`, "is not white space"},
+		{"entity of white space", in + `]><r>&s1;<c/>&s2;&z;</r>`, ""},
+		{"entity of a character reference", in + `]><r>&s3;<c/></r>`, "is not white space"},
+		{"nested entity of a character reference", in + `]><r>&s4;<c/></r>`, "is not white space"},
+		{"EMPTY with an empty entity", in + `]><r><e>&z;</e></r>`, "declared EMPTY"},
+		{"EMPTY with an empty CDATA section", in + `]><r><e><![CDATA[]]></e></r>`, "declared EMPTY"},
+		{"EMPTY", in + `]><r><e/><e></e></r>`, ""},
+		{"undeclared entity", `<!DOCTYPE r SYSTEM "r.dtd"><r>&u;</r>`, "VC: Entity Declared"},
+		{"undeclared entity after a parameter entity", `<!DOCTYPE r [<!ENTITY % p "<!ELEMENT r ANY>">%p;]><r>&u;</r>`, "VC: Entity Declared"},
+	}
+	res := xdmEntities{&MapResolver{Docs: map[string]string{"r.dtd": ext}}}
+	for _, c := range cases {
+		tree, err := xdm.ParseString(c.src, xdm.ParseOptions{AllowDOCTYPE: true, ExternalEntities: res})
+		if err != nil {
+			t.Errorf("%s: parse: %v", c.name, err)
+			continue
+		}
+		d, err := Load(tree.DocType, LoadOptions{Resolver: res.MapResolver})
+		if err != nil {
+			t.Errorf("%s: load: %v", c.name, err)
+			continue
+		}
+		err = Validate(tree.Root, d, Options{})
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: should be valid: %v", c.name, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: err = %v, want one containing %q", c.name, err, c.want)
 		}
 	}
 }

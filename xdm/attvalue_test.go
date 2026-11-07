@@ -390,18 +390,30 @@ func TestUndeclaredEntityWFCOrVC(t *testing.T) {
 		t.Errorf("default = %q, want 1L2", got)
 	}
 
-	// With the external subset read, an entity in neither subset is refused
-	// too, and the note says it was looked for.
+	// With every external entity read, an entity in neither subset is
+	// declared nowhere, so the document is well formed and only invalid:
+	// the reference is dropped and the fault kept for dtd.Validate (erratum
+	// E13; xmlconf rmt-e3e-13), in content and in an attribute value.
 	dir := writeFiles(t, map[string]string{
 		"r.dtd":   `<!ENTITY e "v">`,
 		"doc.xml": `<!DOCTYPE r SYSTEM "r.dtd"><r>&e;&u;</r>`,
 	})
-	_, err = ParseString(`<!DOCTYPE r SYSTEM "r.dtd"><r>&e;&u;</r>`, ParseOptions{
-		AllowDOCTYPE: true, ExternalEntities: &dirResolver{root: dir},
-		BaseURI: fileuri.Of(filepath.Join(dir, "doc.xml")),
-	})
-	if err == nil || !strings.Contains(err.Error(), "in either subset") {
-		t.Errorf("undeclared with the external subset read: %v", err)
+	for _, prolog := range []string{`<!DOCTYPE r SYSTEM "r.dtd">`, `<!DOCTYPE r [<!ENTITY % p "<!ENTITY e 'v'>"> %p;]>`} {
+		tree, err := ParseString(prolog+`<r a="&u;&e;">&e;&u;</r>`, ParseOptions{
+			AllowDOCTYPE: true, ExternalEntities: &dirResolver{root: dir},
+			BaseURI: fileuri.Of(filepath.Join(dir, "doc.xml")),
+		})
+		if err != nil {
+			t.Errorf("%s: undeclared with every entity read: %v", prolog, err)
+			continue
+		}
+		r := tree.Root.ChildElements()[0]
+		if r.StringValue() != "v" || r.Attr("", "a").Value() != "v" {
+			t.Errorf("%s: got %q and a=%q, want the reference dropped", prolog, r.StringValue(), r.Attr("", "a").Value())
+		}
+		if n := tree.source.dtdNotes; len(n) != 2 || !strings.Contains(n[0].msg, "VC: Entity Declared") {
+			t.Errorf("%s: recorded %v, want the VC twice", prolog, n)
+		}
 	}
 
 	// Declared but external, with no resolver: still refused.

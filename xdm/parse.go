@@ -358,7 +358,17 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 	// is complete when it is flushed, so the decision is made there and the
 	// node never joins the tree.
 	stripSpaceAt := func(el *Node) bool {
-		return (ps.elementOnly != nil && ignorableWhitespaceIn(el, ps.elementOnly)) ||
+		// XML 1.0 §2.9, VC: Standalone Document Declaration: under
+		// standalone="yes", no external markup declaration may declare
+		// "element types with element content, if white space occurs
+		// directly within any instance of those types". This is where such
+		// white space is seen, preserved or not.
+		if ps.standalone && declKindOf(el, ps.elemDecls)&(declElementOnly|declOutside) == declElementOnly|declOutside {
+			ps.note(tree, el, "element %s has white space in element content an external markup declaration "+
+				"declares, and the document says standalone=\"yes\" (XML 1.0 §2.9, VC: Standalone Document Declaration)",
+				el.Name().Lexical())
+		}
+		return (ps.elemDecls != nil && ignorableWhitespaceIn(el, ps.elemDecls)) ||
 			(ps.opts.StripSpace != nil && stripsWhitespaceIn(el, ps.opts.StripSpace)) ||
 			(bs != nil && bs.strip != nil && bs.strip(el))
 	}
@@ -448,6 +458,10 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 			switch tok := tok.(type) {
 			case *xml.StartElement:
 				t := *tok
+				// The attribute an external markup declaration defaulted or
+				// had normalized, for §2.9 below. A burst records no notes,
+				// so the held path loses nothing.
+				var saDefault, saNorm string
 				if ps.prologHeld {
 					t, ps.prologHeld = ps.heldT, false
 					goto prologTold
@@ -480,13 +494,13 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 					if ps.defIdx == nil {
 						ps.defIdx = indexDecls(len(ps.attDefaults), func(i int) string { return ps.attDefaults[i].element })
 					}
-					t = applyAttDefaults(t, ps.attDefaults, ps.defIdx)
+					t, saDefault = applyAttDefaults(t, ps.attDefaults, ps.defIdx)
 				}
 				if len(ps.attTypes) > 0 {
 					if ps.typeIdx == nil {
 						ps.typeIdx = indexDecls(len(ps.attTypes), func(i int) string { return ps.attTypes[i].element })
 					}
-					t = normalizeAttTokens(t, ps.attTypes, ps.typeIdx)
+					t, saNorm = normalizeAttTokens(t, ps.attTypes, ps.typeIdx)
 				}
 				if err := validateStartElement(t, &ps.ns, dec.IsVersion11()); err != nil {
 					return nil, err
@@ -518,6 +532,25 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 				el, decls := buildElement(t, ps.cur, &ps.ns, names)
 				if off := encodeOffset(start, trackPos); off != 0 {
 					el.setOffset(off)
+				}
+				// XML 1.0 §2.9, VC: Standalone Document Declaration: under
+				// standalone="yes" no external markup declaration may give
+				// "attributes with default values, if elements to which these
+				// attributes apply appear in the document without
+				// specifications of values for these attributes", nor
+				// "attributes with values subject to normalization, where the
+				// attribute appears in the document with a value which will
+				// change as a result of normalization". Only such
+				// declarations set the two (declOrigins).
+				if saDefault != "" {
+					ps.note(tree, el, "attribute %s of %s takes its default from an external markup declaration, "+
+						"and the document says standalone=\"yes\" (XML 1.0 §2.9, VC: Standalone Document Declaration)",
+						saDefault, el.Name().Lexical())
+				}
+				if saNorm != "" {
+					ps.note(tree, el, "attribute %s of %s is normalized by the type an external markup declaration "+
+						"gives it, and the document says standalone=\"yes\" (XML 1.0 §2.9, VC: Standalone Document Declaration)",
+						saNorm, el.Name().Lexical())
 				}
 				// A node written inside an external parsed entity takes its base
 				// URI from that entity, not from its parent in the tree — XML
@@ -595,6 +628,9 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 					ps.sawPrologToken = true
 					continue
 				}
+				if ps.elemDecls != nil && !dec.Literal() {
+					ps.checkTextOrigin(tree, t, dec)
+				}
 				ps.run.add(ps.cur, t, dec)
 
 			case *xml.Comment:
@@ -664,9 +700,6 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 				}
 				// §5.1: every processor checks the whole internal subset
 				// for well-formedness, whatever it goes on to read of it.
-				if err := checkDoctypeChars(string(t), dec.IsVersion11()); err != nil {
-					return nil, fmt.Errorf("parse XML: %w", err)
-				}
 				if err := checkDoctypeGrammar(string(t), false); err != nil {
 					return nil, fmt.Errorf("parse XML: %w", err)
 				}
@@ -694,10 +727,10 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 					if ps.opts.ExternalEntities == nil && !ps.standalone {
 						declText = declsBeforeUnreadPE(d)
 					}
-					defs, types := parseAttList(declText)
+					defs, types := parseAttList(declText, nil)
 					ps.attDefaults = append(ps.attDefaults, defs...)
 					ps.attTypes = append(ps.attTypes, types...)
-					ps.elementOnly = parseElementOnlyDecls(d)
+					ps.elemDecls = parseElementDecls(d, nil)
 					// Internal general entities are declared here and referenced
 					// in content, so the table has to be installed before the
 					// decoder reads any. encoding/xml consults dec.Entity lazily,
@@ -738,6 +771,9 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 						}
 						subset = expandedSubset
 						ents.parseDecls(subset, ps.opts.BaseURI)
+						if ps.standalone {
+							ents.markPEDeclared(subset)
+						}
 						ents.subsetText = subset
 						if sys, pub, ok := externalSubsetOf(d); ok {
 							if err := ents.loadExternalSubset(sys, pub, ps.opts.BaseURI); err != nil {
@@ -760,9 +796,16 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 						// declared no entities still nils ents out, and the
 						// <!ELEMENT> models it brought in would be lost with it.
 						if ents.subsetText != "" {
-							ps.elementOnly = parseElementOnlyDecls(ents.subsetText)
+							ps.elemDecls = parseElementDecls(ents.subsetText, nil)
 						}
 						full := ents.subsetText
+						// Which declarations are external markup
+						// declarations matters only to §2.9's VC, which
+						// only standalone="yes" brings into play.
+						var origin []bool
+						if ps.standalone {
+							origin = declOrigins(full, len(subset), ents.peSpans)
+						}
 						if len(ents.raw) == 0 && len(ents.external) == 0 {
 							ents = nil
 						}
@@ -772,10 +815,10 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 						// expanded text rather than the original.
 						if subset != d || full != subset {
 							text := full
-							defs, types := parseAttList(text)
+							defs, types := parseAttList(text, origin)
 							ps.attDefaults = defs
 							ps.attTypes = types
-							ps.elementOnly = parseElementOnlyDecls(text)
+							ps.elemDecls = parseElementDecls(text, origin)
 						}
 					} else {
 						ents = parseEntityDecls(declText, ps.opts.BaseURI, ps.opts.entityBudget)
@@ -797,11 +840,28 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 					}
 					if !wfc {
 						declared, read := ents, ps.opts.ExternalEntities != nil
-						dec.Undeclared = func(name string) string {
+						// With every external entity read, an undeclared name
+						// is declared nowhere: the document is well formed and
+						// invalid (VC: Entity Declared; erratum E13 makes an
+						// internal parameter-entity reference enough for that).
+						// The reference, which the XDM has no node for, is
+						// dropped and the fault recorded for dtd.Validate.
+						//
+						// ponytail: the second parse of a rewritten source
+						// (parseExpandedSteps) knows only the internal subset's
+						// declarations, so it still refuses; handing it the
+						// first parse's table would lift that.
+						drop := read && !ps.opts.entitiesExpanded
+						dec.Undeclared = func(name string) (string, bool) {
 							if declared.declares(name) {
-								return ""
+								return "", false
 							}
-							return undeclaredNote(name, read)
+							if drop {
+								ps.note(tree, ps.cur, "entity %s is referenced but declared in neither subset, "+
+									"and the reference was dropped (XML 1.0 §4.1, VC: Entity Declared)", name)
+								return "", true
+							}
+							return undeclaredNote(name, read), false
 						}
 					}
 					if ents != nil && !ps.opts.entitiesExpanded {
@@ -863,6 +923,9 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 							dec.Entity[k] = v
 						}
 						dec.AttrEntity = ents.attrEntityMap(m)
+						if ps.elemDecls != nil {
+							dec.EscapedEntity = ents.escapedSpaceMap(m)
+						}
 					}
 				}
 			}
@@ -964,11 +1027,12 @@ type parseState struct {
 	// The declarations by element name, built when the first element needs
 	// them, after the DOCTYPE has settled both lists.
 	defIdx, typeIdx declIndex
-	// Element names whose DTD content model is element-only. Whitespace-only
-	// text in such an element is ignorable (XML §2.10) and is stripped
-	// regardless of what the stylesheet declares (XSLT 2.0 §4.4).
-	elementOnly map[string]bool
-	srcBuf      strings.Builder
+	// What the DTD's <!ELEMENT> declarations say, by element name (see
+	// parseElementDecls). Whitespace-only text in element-only content is
+	// ignorable (XML §2.10) and is stripped regardless of what the
+	// stylesheet declares (XSLT 2.0 §4.4).
+	elemDecls map[string]uint8
+	srcBuf    strings.Builder
 	// inner is the parse of the source rewritten when its entities hold
 	// markup (parseExpandedSteps), which goes on in this parse's place.
 	inner     func() (*Tree, error)
@@ -1031,6 +1095,32 @@ func (ps *parseState) checkXMLID(el *Node) {
 		case ps.idWarnings == maxIDWarnings+1:
 			ps.opts.Warn(Errorf("XQDY0091", "further xml:id errors suppressed after %d", maxIDWarnings))
 		}
+	}
+}
+
+// checkTextOrigin records the validity errors in character data t, read in
+// ps.cur and not written literally, that the tree cannot show once only its
+// characters are kept (XML 1.0 §3, VC: Element Valid):
+//
+//   - in element content, white space written as a CDATA section or a
+//     character reference: "a character reference to white space is not
+//     white space" there (erratum E15), and libxml2 likewise reports a CDATA
+//     section, even an empty one;
+//   - in an EMPTY element, a reference to an entity whose replacement text is
+//     empty, or an empty CDATA section: EMPTY means "no content (not even
+//     entity references, comments, PIs or white space)".
+//
+// Text that is not white space, in either, is a text node, which dtd.Validate
+// already holds to the content model.
+func (ps *parseState) checkTextOrigin(tree *Tree, t []byte, dec *xml.Decoder) {
+	k := declKindOf(ps.cur, ps.elemDecls)
+	switch {
+	case k&declElementOnly != 0 && dec.Escaped() && onlySpace(t):
+		ps.note(tree, ps.cur, "element %s has element content, where a CDATA section or a character reference "+
+			"is not white space (XML 1.0 §3, VC: Element Valid; erratum E15)", ps.cur.Name().Lexical())
+	case k&declEmpty != 0 && len(t) == 0:
+		ps.note(tree, ps.cur, "element %s is declared EMPTY but has content: an entity reference or a CDATA "+
+			"section (XML 1.0 §3, VC: Element Valid)", ps.cur.Name().Lexical())
 	}
 }
 

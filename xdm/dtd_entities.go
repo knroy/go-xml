@@ -208,11 +208,18 @@ type entityTable struct {
 	// refuses a reference to an outside entity in a standalone document.
 	outside    map[string]bool
 	standalone bool
+	// peSpans are where, in the internal subset as expandParameterEntities
+	// returned it, parameter entities' replacement text was substituted, in
+	// order: what lies in them is an external markup declaration (XML 1.0
+	// §2.9), however internal the entity.
+	peSpans [][2]int
 
 	// contentErr memoises contentOK per entity, and stubs is the entity map
 	// its tokeniser reads nested references through.
 	contentErr map[string]error
 	stubs      map[string]string
+	// attrErr memoises attrRefOK per entity.
+	attrErr map[string]error
 }
 
 // parseInternalEntities reads the <!ENTITY ...> declarations out of a DOCTYPE
@@ -343,56 +350,62 @@ func (t *entityTable) parseDecls(subset, base string) *entityTable {
 // seen, as they were before.
 func markupDecls(subset string) iter.Seq2[string, string] {
 	return func(yield func(string, string) bool) {
-		s := subset
-		semis := semiFinder{s: s, at: -1}
-		for i := 0; i < len(s); {
-			rest := s[i:]
-			switch {
-			case strings.HasPrefix(rest, "<!--"):
-				// A comment is yielded as "--" and its body, for the [15]
-				// check; an unterminated one ends the scan.
-				j := strings.Index(s[i+len("<!--"):], "-->")
-				if j < 0 {
-					return
-				}
-				if !yield("--", s[i+len("<!--"):i+len("<!--")+j]) {
-					return
-				}
-				i += len("<!--") + j + len("-->")
-			case strings.HasPrefix(rest, "<?"):
-				i = skipPast(s, i+len("<?"), "?>")
-			case strings.HasPrefix(rest, "<!["):
-				i += len("<![")
-			case strings.HasPrefix(rest, "<!"):
-				j := i + len("<!")
-				for j < len(s) && 'A' <= s[j] && s[j] <= 'Z' {
-					j++
-				}
-				end := endOfDeclaration(s[j:])
-				if end < 0 {
-					return
-				}
-				if !yield(s[i+len("<!"):j], s[j:j+end]) {
-					return
-				}
-				i = j + end + 1
-			case s[i] == '"' || s[i] == '\'':
-				i = skipPast(s, i+1, s[i:i+1])
-			case s[i] == '%':
-				// A parameter-entity reference between declarations is
-				// yielded with the keyword "%" and its name.
-				j := semis.from(i)
-				if j > 1 && isEntityName(rest[1:j]) {
-					if !yield("%", rest[1:j]) {
-						return
-					}
-					i += j + 1
-					continue
-				}
-				i++
-			default:
-				i++
+		scanMarkupDecls(subset, func(_ int, kw, body string) bool { return yield(kw, body) })
+	}
+}
+
+// scanMarkupDecls is markupDecls with the offset in subset at which each item
+// begins: the "<!" of a declaration or comment, the "%" of a reference.
+func scanMarkupDecls(subset string, yield func(at int, kw, body string) bool) {
+	s := subset
+	semis := semiFinder{s: s, at: -1}
+	for i := 0; i < len(s); {
+		rest := s[i:]
+		switch {
+		case strings.HasPrefix(rest, "<!--"):
+			// A comment is yielded as "--" and its body, for the [15]
+			// check; an unterminated one ends the scan.
+			j := strings.Index(s[i+len("<!--"):], "-->")
+			if j < 0 {
+				return
 			}
+			if !yield(i, "--", s[i+len("<!--"):i+len("<!--")+j]) {
+				return
+			}
+			i += len("<!--") + j + len("-->")
+		case strings.HasPrefix(rest, "<?"):
+			i = skipPast(s, i+len("<?"), "?>")
+		case strings.HasPrefix(rest, "<!["):
+			i += len("<![")
+		case strings.HasPrefix(rest, "<!"):
+			j := i + len("<!")
+			for j < len(s) && 'A' <= s[j] && s[j] <= 'Z' {
+				j++
+			}
+			end := endOfDeclaration(s[j:])
+			if end < 0 {
+				return
+			}
+			if !yield(i, s[i+len("<!"):j], s[j:j+end]) {
+				return
+			}
+			i = j + end + 1
+		case s[i] == '"' || s[i] == '\'':
+			i = skipPast(s, i+1, s[i:i+1])
+		case s[i] == '%':
+			// A parameter-entity reference between declarations is
+			// yielded with the keyword "%" and its name.
+			j := semis.from(i)
+			if j > 1 && isEntityName(rest[1:j]) {
+				if !yield(i, "%", rest[1:j]) {
+					return
+				}
+				i += j + 1
+				continue
+			}
+			i++
+		default:
+			i++
 		}
 	}
 }
@@ -477,8 +490,8 @@ func (t *entityTable) resolve(name string) (string, error) {
 	// reference must match a declaration "that does not occur within the
 	// external subset or a parameter entity".
 	if t.standalone && t.outside[name] {
-		return "", fmt.Errorf("entity %q is declared in the external subset, "+
-			"and the document says standalone=\"yes\" (WFC: Entity Declared)", name)
+		return "", fmt.Errorf("entity %q is declared in the external subset or a "+
+			"parameter entity, and the document says standalone=\"yes\" (WFC: Entity Declared)", name)
 	}
 	if s, ok := t.expanded[name]; ok {
 		return s, nil
@@ -1025,6 +1038,48 @@ func (t *entityTable) attrEntityMap(content map[string]string) map[string]string
 	return out
 }
 
+// escapedSpaceMap is the decoder's EscapedEntity, given the map entityMap
+// returned: the entities whose value is white space that a character
+// reference in the replacement text, or in a nested entity's, produced.
+// "<!ENTITY s '&#38;#32;'>" is one; "<!ENTITY s '&#32;'>" is not, since that
+// reference is decoded at declaration and the replacement text is a space.
+func (t *entityTable) escapedSpaceMap(content map[string]string) map[string]bool {
+	var out map[string]bool
+	for name, s := range content {
+		if s == "" || !onlySpace([]byte(s)) || !t.spaceByCharRef(name, 0, map[string]bool{}) {
+			continue
+		}
+		if out == nil {
+			out = map[string]bool{}
+		}
+		out[name] = true
+	}
+	return out
+}
+
+// spaceByCharRef reports whether the replacement text of the internal entity
+// name, or of one it refers to, holds a character reference. seen holds the
+// entities already looked in, which held none, so that each is read once.
+func (t *entityTable) spaceByCharRef(name string, depth int, seen map[string]bool) bool {
+	if seen[name] {
+		return false
+	}
+	seen[name] = true
+	s := replacementText(t.raw[name])
+	for i := strings.IndexByte(s, '&'); i >= 0 && depth < maxEntityDepth; i = strings.IndexByte(s, '&') {
+		s = s[i+1:]
+		j := strings.IndexByte(s, ';')
+		if j < 0 {
+			return false
+		}
+		if ref := s[:j]; strings.HasPrefix(ref, "#") || t.spaceByCharRef(ref, depth+1, seen) {
+			return true
+		}
+		s = s[j+1:]
+	}
+	return false
+}
+
 // charRef decodes the character reference "&name;" and checks it against
 // WFC: Legal Character (§4.1) for the document's version — the tokeniser's
 // rule, so that a reference in the DTD is held to the one in content.
@@ -1306,6 +1361,11 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 		if depth <= 0 {
 			return "", fmt.Errorf("entity reference &%s; outside the document element", name)
 		}
+		if attrQuote != 0 {
+			if err := t.attrRefOK(name); err != nil {
+				return "", err
+			}
+		}
 		rep, err := t.resolve(name)
 		if err != nil {
 			// A REFUSED FETCH is reported here, not deferred. The document
@@ -1388,6 +1448,31 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 		i += j + 1
 	}
 	return sb.String(), nil
+}
+
+// attrRefOK is XML 1.0 §3.1, WFC: No External Entity References, for a
+// reference to name in an attribute value of a document being rewritten:
+// "Attribute values MUST NOT contain direct or indirect entity references to
+// external entities." expand's attribute mode holds a nested reference to it,
+// as it does a default's; an undeclared name is left to resolve and the
+// decoder. Each entity is checked once.
+func (t *entityTable) attrRefOK(name string) error {
+	if t.external[name] {
+		return fmt.Errorf("external entity %q is referenced in an attribute value", name)
+	}
+	raw, ok := t.raw[name]
+	if !ok {
+		return nil
+	}
+	if err, done := t.attrErr[name]; done {
+		return err
+	}
+	_, err := t.expand(replacementText(raw), 0, map[string]bool{name: true}, true)
+	if t.attrErr == nil {
+		t.attrErr = map[string]error{}
+	}
+	t.attrErr[name] = err
+	return err
 }
 
 // endOfInternalSubset returns the offset just past the DOCTYPE declaration, or

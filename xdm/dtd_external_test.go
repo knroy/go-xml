@@ -377,21 +377,25 @@ func TestExternalSubsetSuppliesEntities(t *testing.T) {
 }
 
 // WFC: Entity Declared (XML 1.0 §4.1): under standalone="yes" a reference in
-// the document must match a declaration outside the external subset, so one
-// the external subset alone declares is refused, in content and in an
+// the document must match a declaration outside the external subset or a
+// parameter entity, so one the external subset alone declares, or one an
+// internal parameter entity brings in, is refused, in content and in an
 // attribute value, while the internal declaration of the same name binds.
 // W3C xmlconf not-wf-sa03, ibm32n09, ibm68n06.
 func TestStandaloneRefusesExternallyDeclaredEntity(t *testing.T) {
 	const sa = `<?xml version="1.0" standalone="yes"?>`
 	dir := writeFiles(t, map[string]string{
-		"d.dtd":    `<!ENTITY greeting "from-external"><!ENTITY other "external-only"><!ENTITY frag "<b/>">`,
-		"text.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
-		"attr.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r a="&other;"/>`,
-		"frag.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&frag;</r>`,
-		"ok.xml":   sa + `<!DOCTYPE r SYSTEM "d.dtd" [<!ENTITY greeting "from-internal">]><r>&greeting;</r>`,
-		"nosa.xml": `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
+		"d.dtd":     `<!ENTITY greeting "from-external"><!ENTITY other "external-only"><!ENTITY frag "<b/>">`,
+		"text.xml":  sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
+		"attr.xml":  sa + `<!DOCTYPE r SYSTEM "d.dtd"><r a="&other;"/>`,
+		"frag.xml":  sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&frag;</r>`,
+		"ok.xml":    sa + `<!DOCTYPE r SYSTEM "d.dtd" [<!ENTITY greeting "from-internal">]><r>&greeting;</r>`,
+		"nosa.xml":  `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
+		"pe.xml":    sa + `<!DOCTYPE r [<!ENTITY % p "<!ENTITY e 'by-pe'>">%p;]><r>&e;</r>`,
+		"pe2.xml":   sa + `<!DOCTYPE r [<!ENTITY e 'literal'><!ENTITY % p "<!ENTITY e 'by-pe'>">%p;]><r>&e;</r>`,
+		"nosa2.xml": `<!DOCTYPE r [<!ENTITY % p "<!ENTITY e 'by-pe'>">%p;]><r>&e;</r>`,
 	})
-	for _, name := range []string{"text.xml", "attr.xml", "frag.xml"} {
+	for _, name := range []string{"text.xml", "attr.xml", "frag.xml", "pe.xml"} {
 		if err := parseExternalErr(t, dir, name); err == nil {
 			t.Errorf("%s: parsed, want WFC: Entity Declared refused", name)
 		}
@@ -401,6 +405,55 @@ func TestStandaloneRefusesExternallyDeclaredEntity(t *testing.T) {
 	}
 	if got := mustParseExternal(t, dir, "nosa.xml").Root.StringValue(); got != "external-only" {
 		t.Errorf("nosa.xml: got %q, want external-only", got)
+	}
+	if got := mustParseExternal(t, dir, "pe2.xml").Root.StringValue(); got != "literal" {
+		t.Errorf("pe2.xml: got %q, want literal", got)
+	}
+	if got := mustParseExternal(t, dir, "nosa2.xml").Root.StringValue(); got != "by-pe" {
+		t.Errorf("nosa2.xml: got %q, want by-pe", got)
+	}
+}
+
+// WFC: No External Entity References (XML 1.0 §3.1): "Attribute values MUST
+// NOT contain direct or indirect entity references to external entities."
+// With a resolver, a declared external entity sends the document down the
+// rewrite path, which substituted the fetched text into the attribute.
+func TestAttributeValueRefusesExternalEntity(t *testing.T) {
+	const decls = `<!ENTITY x SYSTEM "x.ent"><!ENTITY y "&x;"><!ENTITY m "<b/>"><!ENTITY s "v">`
+	dir := writeFiles(t, map[string]string{
+		"x.ent":      "hello",
+		"direct.xml": `<!DOCTYPE r [` + decls + `]><r a="&x;"/>`,
+		"nested.xml": `<!DOCTYPE r [` + decls + `]><r a="&y;"/>`,
+		"ok.xml":     `<!DOCTYPE r [` + decls + `]><r a="&s;">&x;&m;</r>`,
+	})
+	for _, name := range []string{"direct.xml", "nested.xml"} {
+		if err := parseExternalErr(t, dir, name); err == nil || !strings.Contains(err.Error(), "in an attribute value") {
+			t.Errorf("%s: err = %v, want WFC: No External Entity References", name, err)
+		}
+	}
+	r := mustParseExternal(t, dir, "ok.xml").Root.ChildElements()[0]
+	if r.Attr("", "a").Value() != "v" || r.StringValue() != "hello" {
+		t.Errorf("ok.xml: a=%q, content %q", r.Attr("", "a").Value(), r.StringValue())
+	}
+}
+
+// The validity faults a parse records for dtd.Validate (dtdnote.go) are
+// bounded, as Validate's own report is, and one recurring in a row is kept
+// once: here an external default applied to 150 elements under
+// standalone="yes", and white space written five times by character reference
+// in one element's element content.
+func TestDTDNotesAreBounded(t *testing.T) {
+	const sa = `<?xml version="1.0" standalone="yes"?>`
+	dir := writeFiles(t, map[string]string{
+		"d.dtd":    `<!ELEMENT r (c*)><!ELEMENT c EMPTY><!ATTLIST c a CDATA "v">`,
+		"many.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>` + strings.Repeat("<c/>", 150) + `</r>`,
+		"runs.xml": `<!DOCTYPE r [<!ELEMENT r (c*)><!ELEMENT c EMPTY>]><r>` + strings.Repeat("&#32;<c/>", 5) + `</r>`,
+	})
+	if n := len(mustParseExternal(t, dir, "many.xml").source.dtdNotes); n != maxDTDNotes {
+		t.Errorf("many.xml: %d notes, want %d", n, maxDTDNotes)
+	}
+	if n := len(mustParseExternal(t, dir, "runs.xml").source.dtdNotes); n != 1 {
+		t.Errorf("runs.xml: %d notes, want 1", n)
 	}
 }
 
@@ -456,11 +509,14 @@ func TestExternalSubsetAttlistWithoutEntities(t *testing.T) {
 // 1.0 §3.4 (from memory), "the contents of ignored conditional sections MUST
 // be ignored when parsing the DTD". The keyword here comes from a parameter
 // entity of the internal subset (xmlconf valid-not-sa-015); the ATTLIST inside
-// used to default @a1 onto the element anyway.
+// used to default @a1 onto the element anyway. A "%" inside one is no
+// reference either ([63]): substituting %bad; there broke WFC: PE Between
+// Declarations, and %gone; was fetched.
 func TestExternalSubsetIgnoreSection(t *testing.T) {
 	dir := writeFiles(t, map[string]string{
-		"d.dtd": `<!ELEMENT doc (#PCDATA)>` +
-			`<![ %e; [<!ATTLIST doc a1 CDATA "v1"><![INCLUDE[<!ATTLIST doc a3 CDATA "v3">]]>]]>` +
+		"d.dtd": `<!ELEMENT doc (#PCDATA)><!ENTITY % bad "<!ELEMENT"><!ENTITY % gone SYSTEM "absent.ent">` +
+			`<![ %e; [<!ATTLIST doc a1 CDATA "v1"><![INCLUDE[<!ATTLIST doc a3 CDATA "v3">]]> %bad; %gone; ]]>` +
+			`<![IGNORE[ %bad; <![ %gone; ]]> %gone; ]]>` +
 			`<![INCLUDE[<!ATTLIST doc a4 CDATA "v4">]]>` +
 			`<!ATTLIST doc a2 CDATA "v2">`,
 		"doc.xml": `<!DOCTYPE doc SYSTEM "d.dtd" [<!ENTITY % e "IGNORE">]><doc></doc>`,

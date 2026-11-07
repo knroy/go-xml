@@ -514,6 +514,37 @@ func (t *entityTable) mergeUnder(sub *entityTable) {
 	}
 }
 
+// markPEDeclared marks outside each general entity whose binding (first)
+// declaration in the expanded internal subset came in through a parameter
+// entity (peSpans), as mergeUnder marks the external subset's. XML 1.0 §4.1
+// WFC: Entity Declared counts both alike: a standalone document's reference
+// must match "an entity declaration that does not occur within the external
+// subset or a parameter entity".
+func (t *entityTable) markPEDeclared(subset string) {
+	if len(t.peSpans) == 0 {
+		return
+	}
+	seen := map[string]bool{}
+	scanMarkupDecls(subset, func(at int, kw, body string) bool {
+		body = strings.TrimSpace(body)
+		if kw != "ENTITY" || strings.HasPrefix(body, "%") {
+			return true
+		}
+		f := attListFields(body)
+		if len(f) == 0 || seen[f[0]] {
+			return true
+		}
+		seen[f[0]] = true
+		if inSpans(t.peSpans, at) {
+			if t.outside == nil {
+				t.outside = map[string]bool{}
+			}
+			t.outside[f[0]] = true
+		}
+		return true
+	})
+}
+
 // expandParameterEntities substitutes parameter-entity references in a DTD
 // subset, so that the declarations a referenced module makes become visible.
 //
@@ -551,6 +582,14 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 		if skip := endOfDTDConstruct(subset, i); skip > i {
 			sb.WriteString(subset[i:skip])
 			i = skip
+			continue
+		}
+		// XML 1.0 §3.4 [63]: the contents of an IGNORE section are ignored
+		// but for nested section starts and ends, so a "%" in one is not a
+		// reference and is neither substituted nor fetched.
+		if kw, body, end := ignoredSection(subset, i, params); end > i {
+			sb.WriteString("<![" + kw + subset[body:end])
+			i = end
 			continue
 		}
 		if subset[i] != '%' {
@@ -610,15 +649,14 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 		// §2.8): "The replacement text of a parameter entity reference in a
 		// DeclSep MUST match the production extSubsetDecl." A reference
 		// inside a declaration is only a validity matter, and is never here.
-		//
-		// ponytail: a reference inside an IGNORE section is checked too,
-		// though §3.4 does not recognise it there; tracking IGNORE nesting
-		// here would lift that.
 		if !strings.HasSuffix(strings.TrimRight(sb.String(), " \t\r\n"), "<![") {
 			if err := checkExtSubsetGrammar(text); err != nil {
 				return "", fmt.Errorf("parameter entity %%%s between declarations "+
 					"(WFC: PE Between Declarations): %w", name, err)
 			}
+		}
+		if depth == 0 && t.externalDepth == 0 {
+			t.peSpans = append(t.peSpans, [2]int{sb.Len(), sb.Len() + len(text)})
 		}
 		sb.WriteString(text)
 		if sb.Len() > maxTotalEntityBytes {
@@ -629,6 +667,63 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 		i += j + 1
 	}
 	return sb.String(), nil
+}
+
+// ignoredSection recognises an IGNORE conditional section starting at s[i]:
+// "<![", its keyword written as IGNORE or as a reference to an internal
+// parameter entity whose replacement text is IGNORE, and "[". It returns the
+// keyword as substituted, the offset of the "[", and the offset just past the
+// section's "]]>", counting nested sections as §3.4 [64] does; end is i when
+// s[i:] is no such section or is unterminated, which the grammar check
+// refuses.
+func ignoredSection(s string, i int, params map[string]paramEntity) (kw string, body, end int) {
+	if !strings.HasPrefix(s[i:], "<![") {
+		return "", i, i
+	}
+	j := i + len("<![")
+	for j < len(s) && isXMLSpaceByte(s[j]) {
+		j++
+	}
+	kw = s[i+len("<![") : j]
+	switch rest := s[j:]; {
+	case strings.HasPrefix(rest, "IGNORE"):
+		kw += "IGNORE"
+		j += len("IGNORE")
+	case strings.HasPrefix(rest, "%"):
+		k := strings.IndexByte(rest, ';')
+		if k < 0 {
+			return "", i, i
+		}
+		p, ok := params[rest[1:k]]
+		if !ok || p.external || strings.TrimSpace(p.text) != "IGNORE" {
+			return "", i, i
+		}
+		kw += p.text
+		j += k + 1
+	default:
+		return "", i, i
+	}
+	for j < len(s) && isXMLSpaceByte(s[j]) {
+		j++
+	}
+	if j >= len(s) || s[j] != '[' {
+		return "", i, i
+	}
+	body = j
+	for depth := 0; j < len(s); j++ {
+		switch {
+		case strings.HasPrefix(s[j:], "<!["):
+			depth++
+			j += 2
+		case strings.HasPrefix(s[j:], "]]>"):
+			if depth == 0 {
+				return kw, body, j + len("]]>")
+			}
+			depth--
+			j += 2
+		}
+	}
+	return "", i, i
 }
 
 // paramEntity is a parameter-entity declaration: internal replacement text, or
