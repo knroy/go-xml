@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xmlname"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xsd"
 )
@@ -395,6 +396,9 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 			v.fail(el, "attribute %s = %q is not one of %s",
 				d.Name, val, strings.Join(d.Enum, ", "))
 		}
+		if f := lexicalFault(d.Type, val); f != "" {
+			v.fail(el, "attribute %s = %q %s", d.Name, val, f)
+		}
 		switch d.Type {
 		case "NOTATION":
 			// §3.3.1's Notation Attributes constraint has two halves. The
@@ -411,15 +415,9 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 			// entity's name is as wrong here as an undeclared one.
 			v.checkEntityValue(el, d.Name, val)
 		case "ENTITIES":
-			// The same rule over a whitespace-separated list. An empty list
-			// is not a Names, so it fails the type as surely as an unknown
-			// name would.
-			names := strings.Fields(val)
-			if len(names) == 0 {
-				v.fail(el, "attribute %s is ENTITIES but is empty, which "+
-					"names no unparsed entity", d.Name)
-			}
-			for _, n := range names {
+			// The same rule over the list. An empty list is not a Names,
+			// which lexicalFault has already reported.
+			for _, n := range tokens(val) {
 				v.checkEntityValue(el, d.Name, n)
 			}
 		case "ID":
@@ -430,14 +428,12 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 		case "IDREF":
 			v.refs = append(v.refs, idref{val, el})
 		case "IDREFS":
-			for _, r := range strings.Fields(val) {
+			for _, r := range tokens(val) {
 				v.refs = append(v.refs, idref{r, el})
 			}
 		case "CDATA", "NMTOKEN", "NMTOKENS", "ENUMERATION":
-			// Declared, and either unconstrained (CDATA) or constrained by
-			// something this package does not yet check. Silence here is a
-			// deliberate gap in coverage, not a failure to recognise the
-			// declaration.
+			// Unconstrained (CDATA), or constrained only lexically or by
+			// the enumeration, both checked above.
 		default:
 			// XML 1.0 §3.3.1 closes the type position to the names above.
 			// Without this branch an unrecognised type — "IDREFF" for
@@ -447,6 +443,64 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 				"type %s, so its value was not checked", d.Name, d.Type)
 		}
 	}
+}
+
+// lexicalFault applies the lexical half of XML 1.0 §3.3.1's VCs ID, IDREF,
+// Entity Name and Name Token to a normalized value of a tokenized type, and
+// says what is wrong, or returns "" for a value that matches. Types without a
+// production of their own (CDATA, the enumerations) always match.
+//
+// The list types are split on #x20 alone: Names and Nmtokens are tokens
+// separated by single spaces, and a TAB that reached the value through a
+// character reference survives normalization as a TAB (rmt-e2e-20).
+func lexicalFault(typ, val string) string {
+	var ok func(string) bool
+	switch typ {
+	case "ID", "IDREF", "ENTITY", "IDREFS", "ENTITIES":
+		ok = isName
+	case "NMTOKEN", "NMTOKENS":
+		ok = isNmtoken
+	default:
+		return ""
+	}
+	toks := []string{val}
+	if strings.HasSuffix(typ, "S") {
+		if toks = tokens(val); len(toks) == 0 {
+			return "is " + typ + " but is empty, and a list needs one or more tokens"
+		}
+	}
+	for _, t := range toks {
+		if !ok(t) {
+			if typ == "NMTOKEN" || typ == "NMTOKENS" {
+				return "does not match the Nmtoken production"
+			}
+			return "does not match the Name production"
+		}
+	}
+	return ""
+}
+
+// tokens splits a normalized list value on #x20.
+func tokens(val string) []string {
+	return strings.FieldsFunc(val, func(r rune) bool { return r == ' ' })
+}
+
+func isName(s string) bool {
+	for i, r := range s {
+		if i == 0 && !xmlname.IsNameStartRune(r) || !xmlname.IsNameRune(r) {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func isNmtoken(s string) bool {
+	for _, r := range s {
+		if !xmlname.IsNameRune(r) {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // checkNotationDecl applies the half of §3.3.1's Notation Attributes

@@ -654,3 +654,33 @@ func TestWideRepeatedChoiceValidates(t *testing.T) {
 		t.Fatal("an undeclared child of the same model must be rejected")
 	}
 }
+
+// XML 1.0 §3.3.1 VCs ID, IDREF, Entity Name and Name Token: a tokenized
+// attribute's value must match its production, and a list type is one or
+// more tokens separated by single spaces.
+func TestTokenizedValuesAreLexicallyChecked(t *testing.T) {
+	const dt = `<!DOCTYPE r [
+<!ELEMENT r ANY>
+<!NOTATION n SYSTEM "n">
+<!ENTITY u SYSTEM "u" NDATA n>
+<!ATTLIST r id ID #IMPLIED ref IDREF #IMPLIED refs IDREFS #IMPLIED
+  tok NMTOKEN #IMPLIED toks NMTOKENS #IMPLIED ent ENTITY #IMPLIED ents ENTITIES #IMPLIED>
+]>`
+	if err := check(t, dt+`<r id="a1" ref="a1" refs="a1 a1" tok="-1.x" toks=" 1  2 " ent="u" ents="u u"/>`); err != nil {
+		t.Errorf("lexically valid values should be valid: %v", err)
+	}
+	for _, attrs := range []string{
+		`id="42a"`,
+		`id="@c"`,
+		`id="x" ref="x" refs=""`,
+		`tok="dev@null"`,
+		`tok="x : image"`,
+		`toks=""`,
+		`toks="abc / def"`,
+		`toks="abc&#9;xyz"`,
+	} {
+		if err := check(t, dt+`<r `+attrs+`/>`); err == nil {
+			t.Errorf("<r %s/> should be invalid", attrs)
+		}
+	}
+}
