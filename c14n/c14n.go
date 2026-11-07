@@ -447,12 +447,24 @@ func FromXPath(doc *xdm.Node, expr string, ns map[string]string) (NodeSet, error
 // FromXPathContext is FromXPath with a context.Context: cancelling ctx stops
 // the evaluation, which then returns an error wrapping ctx.Err().
 func FromXPathContext(ctx context.Context, doc *xdm.Node, expr string, ns map[string]string) (NodeSet, error) {
+	return FromXPathHere(ctx, doc, nil, expr, ns)
+}
+
+// FromXPathHere is FromXPathContext with the XML-DSig here() function
+// (XML-DSig section 6.6.3.3) bound to here, the node that bears expr; see
+// FromXPathFilterHere for how here is interpreted. A nil here leaves here()
+// undefined, as in FromXPathContext.
+func FromXPathHere(ctx context.Context, doc, here *xdm.Node, expr string, ns map[string]string) (NodeSet, error) {
+	here, err := hereNode(doc, here)
+	if err != nil {
+		return nil, err
+	}
 	c, err := xpath.Compile(expr, prefixMap(ns))
 	if err != nil {
 		return nil, err
 	}
 	c = c.WithCompatMode(true) // XML-DSig transforms are XPath 1.0
-	seq, err := c.Eval(filterContext(ctx, doc))
+	seq, err := c.Eval(filterContext(ctx, doc, here))
 	if err != nil {
 		return nil, err
 	}
@@ -495,7 +507,8 @@ type NamespaceSet interface {
 // by contrast, takes the nodes an expression returns and lets namespace
 // declarations follow their elements. The filter is compiled as XPath 2.0
 // and evaluated in XPath 1.0 compatibility mode, with ns supplying its prefix
-// bindings; the XML-DSig here() function is not provided.
+// bindings; the XML-DSig here() function is not provided, and
+// FromXPathFilterHere is the form that provides it.
 //
 // The filter is compiled once, and every per-node evaluation spends one
 // shared item and byte budget (xpath.MaxItems, xpath.MaxBytes), so a filter
@@ -510,6 +523,24 @@ func FromXPathFilter(doc *xdm.Node, filter string, ns map[string]string) (NodeSe
 // reaches every per-node evaluation, so cancelling it stops the whole filter
 // within one node's evaluation, and the error returned wraps ctx.Err().
 func FromXPathFilterContext(ctx context.Context, doc *xdm.Node, filter string, ns map[string]string) (NodeSet, error) {
+	return FromXPathFilterHere(ctx, doc, nil, filter, ns)
+}
+
+// FromXPathFilterHere is FromXPathFilterContext with the XML-DSig here()
+// function, an unprefixed function of arity 0 in the filter's function
+// library (XML-DSig section 6.6.3.3). here is the node that bears the filter
+// in the signature: the text node of the ds:XPath element, or an attribute
+// or processing instruction. here() returns it, except that a text node is
+// replaced by its parent element, since the section defines here() as "the
+// attribute or processing instruction node or the parent element of the text
+// node that directly bears the XPath expression". here must be in doc's tree;
+// any other node is refused with an error. A nil here leaves here()
+// undefined, as in FromXPathFilterContext.
+func FromXPathFilterHere(ctx context.Context, doc, here *xdm.Node, filter string, ns map[string]string) (NodeSet, error) {
+	here, err := hereNode(doc, here)
+	if err != nil {
+		return nil, err
+	}
 	c, err := xpath.Compile(filter, prefixMap(ns))
 	if err != nil {
 		return nil, err
@@ -519,7 +550,7 @@ func FromXPathFilterContext(ctx context.Context, doc *xdm.Node, filter string, n
 	// One context for the whole filter: the per-node evaluations are focus
 	// changes on it, so they share its cancellation and, held, its item and
 	// byte counters, instead of each minting a fresh allowance.
-	base := filterContext(ctx, root).HoldItemBudget().HoldByteBudget()
+	base := filterContext(ctx, root, here).HoldItemBudget().HoldByteBudget()
 	seq, err := allNodes.Eval(base)
 	if err != nil {
 		return nil, err
@@ -548,15 +579,44 @@ func FromXPathFilterContext(ctx context.Context, doc *xdm.Node, filter string, n
 	return set, nil
 }
 
-// filterContext is the evaluation context FromXPathContext and
-// FromXPathFilterContext start from, carrying ctx's cancellation.
-func filterContext(ctx context.Context, item *xdm.Node) *xpath.Context {
-	return xpath.NewContext(item, xpath.Builtins(), func(e *xpath.Env) {
+// filterContext is the evaluation context FromXPathHere and
+// FromXPathFilterHere start from, carrying ctx's cancellation. A non-nil here
+// adds here#0 to the builtins, in the default function namespace so that the
+// unprefixed here() of an XML-DSig expression finds it.
+func filterContext(ctx context.Context, item, here *xdm.Node) *xpath.Context {
+	var lib xpath.FunctionLibrary = xpath.Builtins()
+	if here != nil {
+		l := xpath.NewLibrary(lib)
+		l.Add(xpath.Function{
+			Name:  xdm.QName{URI: xdm.NSFN, Local: "here"},
+			Arity: 0,
+			Call: func(*xpath.Context, []xdm.Sequence) (xdm.Sequence, error) {
+				return xdm.Sequence{here}, nil
+			},
+		})
+		lib = l
+	}
+	return xpath.NewContext(item, lib, func(e *xpath.Env) {
 		e.Ctx = ctx
 		if testEnv != nil {
 			testEnv(e)
 		}
 	})
+}
+
+// hereNode checks that here is in doc's tree and maps a text node to its
+// parent element, the node XML-DSig section 6.6.3.3 says here() returns.
+func hereNode(doc, here *xdm.Node) (*xdm.Node, error) {
+	if here == nil {
+		return nil, nil
+	}
+	if top(here) != top(doc) {
+		return nil, errors.New("c14n: here() node is not in the document")
+	}
+	if here.Kind() == xdm.KindText {
+		here = here.Parent()
+	}
+	return here, nil
 }
 
 // Test hooks: testEnv adjusts the filter's environment (a smaller budget),

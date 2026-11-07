@@ -1145,7 +1145,11 @@ and `c14n.FromXPathFilterContext(ctx, doc, filter, ns)` stop when `ctx` is
 done, and a filter's per-node evaluations spend one shared `xpath.MaxItems` and
 `xpath.MaxBytes` budget. `FromXPath` and `FromXPathFilter` are these with
 `context.Background()`; use the context forms for a filter that arrives in a
-signature.
+signature. `c14n.FromXPathFilterHere(ctx, doc, here, filter, ns)` and
+`c14n.FromXPathHere(ctx, doc, here, expr, ns)` also bind XML-DSig's `here()` to
+`here`, the node bearing the expression (a text node maps to its parent
+element; a node outside `doc` is refused); a nil `here` makes them the context
+forms.
 
 See [c14n.md](c14n.md) for the guide.
 

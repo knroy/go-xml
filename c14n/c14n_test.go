@@ -2,6 +2,7 @@ package c14n
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"io"
@@ -503,6 +504,71 @@ func TestFromXPathEnvelopedSignature(t *testing.T) {
 	want := "<?p?>\n<doc xmlns=\"urn:d\" xmlns:ds=\"" + dsigNS + "\" xml:lang=\"en\"><!--c--><item id=\"1\">v</item><tail></tail></doc>"
 	if got := canonSet(t, ExcludeSubtree(doc, sig), Inclusive10WithComments); got != want {
 		t.Errorf("enveloped:\n got %q\nwant %q", got, want)
+	}
+}
+
+// hereXPath is XML-DSig section 6.6.4's enveloped-signature filter written
+// with here(): it drops only the ds:Signature that bears the expression.
+const hereXPath = `count(ancestor-or-self::dsig:Signature | here()/ancestor::dsig:Signature[1]) > count(ancestor-or-self::dsig:Signature)`
+
+// The here() filter, with here the text node of the ds:XPath element that
+// bears it. want is xmlsec1 1.2.41's (Debian trixie) pre-digest output for
+// the same document signed with this filter as the Reference's one
+// transform, C14N 1.0 after it: the bearing signature goes, the other
+// ds:Signature stays.
+func TestFromXPathFilterHereEnvelopedSignature(t *testing.T) {
+	doc := parse(t, `<doc xmlns="urn:d" xml:lang="en"><!--c--><item id="1">v</item><ds:Signature xmlns:ds="`+dsigNS+`"><ds:SignedInfo><ds:Reference URI=""><ds:Transforms><ds:Transform Algorithm="http://www.w3.org/TR/1999/REC-xpath-19991116"><ds:XPath xmlns:dsig="`+dsigNS+`">`+
+		strings.ReplaceAll(hereXPath, ">", "&gt;")+`</ds:XPath></ds:Transform></ds:Transforms></ds:Reference></ds:SignedInfo></ds:Signature><other><ds:Signature xmlns:ds="`+dsigNS+`" Id="o">kept</ds:Signature></other></doc>`)
+	text := find(t, doc, "XPath").FirstChild()
+	set, err := FromXPathFilterHere(context.Background(), doc, text, hereXPath, map[string]string{"dsig": dsigNS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `<doc xmlns="urn:d" xml:lang="en"><item id="1">v</item><other><ds:Signature xmlns:ds="` + dsigNS + `" Id="o">kept</ds:Signature></other></doc>`
+	if got := canonSet(t, set, Inclusive10); got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+// here() returns the parent element of a text node passed as here, refuses a
+// node outside doc's tree, and is an unknown function without a here node.
+func TestFromXPathHere(t *testing.T) {
+	ctx := context.Background()
+	doc := parse(t, `<r><x>t</x><y a="1"/></r>`)
+	x := find(t, doc, "x")
+	set, err := FromXPathHere(ctx, doc, x.FirstChild(), "here()", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !set.Contains(x) || set.Contains(x.FirstChild()) {
+		t.Errorf("here() of a text node: element in set %v, text in set %v", set.Contains(x), set.Contains(x.FirstChild()))
+	}
+	attr := find(t, doc, "y").Attr("", "a")
+	set, err = FromXPathHere(ctx, doc, attr, "here()", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !set.Contains(attr) {
+		t.Error("here() of an attribute is not the attribute")
+	}
+
+	outside := find(t, parse(t, `<r><x>t</x></r>`), "x").FirstChild()
+	if _, err := FromXPathHere(ctx, doc, outside, "here()", nil); err == nil || !strings.Contains(err.Error(), "not in the document") {
+		t.Errorf("FromXPathHere outside node: err = %v", err)
+	}
+	if _, err := FromXPathFilterHere(ctx, doc, outside, "true()", nil); err == nil || !strings.Contains(err.Error(), "not in the document") {
+		t.Errorf("FromXPathFilterHere outside node: err = %v", err)
+	}
+
+	for name, f := range map[string]func() (NodeSet, error){
+		"FromXPath":           func() (NodeSet, error) { return FromXPath(doc, "here()", nil) },
+		"FromXPathFilter":     func() (NodeSet, error) { return FromXPathFilter(doc, "here()", nil) },
+		"FromXPathHere":       func() (NodeSet, error) { return FromXPathHere(ctx, doc, nil, "here()", nil) },
+		"FromXPathFilterHere": func() (NodeSet, error) { return FromXPathFilterHere(ctx, doc, nil, "here()", nil) },
+	} {
+		if _, err := f(); err == nil || !strings.Contains(err.Error(), "XPST0017") {
+			t.Errorf("%s with no here node: err = %v, want an unknown-function error", name, err)
+		}
 	}
 }
 
