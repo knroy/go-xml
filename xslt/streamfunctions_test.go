@@ -432,6 +432,14 @@ func TestTypeDeterminedUsageAtomizes(t *testing.T) {
 	if got := typeDeterminedUsage("node()*"); got != usageNavigation {
 		t.Errorf("type-determined usage of node()* = %v, want navigation", got)
 	}
+	// "function(*) or a subtype thereof, then inspection": maps and arrays
+	// are function items too.
+	for _, as := range []string{"function(*)", "function(xs:string) as xs:string?", "map(*)",
+		"map(xs:string, item()*)*", "array(xs:integer)", "(function() as item())?"} {
+		if got := typeDeterminedUsage(as); got != usageInspection {
+			t.Errorf("type-determined usage of %s = %v, want inspection", as, got)
+		}
+	}
 }
 
 // TestNavigationFromStreamingParamIsFreeRanging checks the rule that makes

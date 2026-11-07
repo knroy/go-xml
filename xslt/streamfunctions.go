@@ -311,15 +311,23 @@ func stripOccurrence(as string) string {
 }
 
 // typeDeterminedUsage gives the operand usage that a declared parameter type
-// implies for the corresponding argument (§19.4).
+// implies for the corresponding argument (§19.4): "if the required type
+// (ignoring occurrence indicator) is function(*) or a subtype thereof, then
+// inspection; if the required type (ignoring occurrence indicator) is an
+// atomic or union type, then absorption; otherwise navigation."
 //
-// A parameter declared with an atomic type atomizes any node supplied to it,
-// which is absorption. A parameter that permits nodes places no constraint the
-// analysis can exploit, so the usage is navigation -- the answer §19.4 gives
-// when what is done with the node is not known.
+// A parameter that permits nodes places no constraint the analysis can
+// exploit, so the usage is navigation. A function, map or array type is
+// inspection: a function item is opaque, building one reads nothing of the
+// stream. A parameter declared with an atomic type atomizes any node
+// supplied to it, which is absorption.
 func typeDeterminedUsage(as string) usage {
 	if typePermitsNodes(as) {
 		return usageNavigation
+	}
+	t := strings.TrimLeft(stripOccurrence(as), "( \t\n\r")
+	if strings.HasPrefix(t, "function(") || strings.HasPrefix(t, "map(") || strings.HasPrefix(t, "array(") {
+		return usageInspection
 	}
 	return usageAbsorption
 }
