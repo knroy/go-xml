@@ -197,6 +197,7 @@ tree, err := xdm.ParseString(src, xdm.ParseOptions{
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Nesting limit. Deep input is the cheapest route to stack exhaustion. |
 | `MaxBytes` | `int64` | `DefaultMaxBytes` = 64 MB | Source size limit, enforced on the read. |
 | `MaxNodes` | `int` | `DefaultMaxNodes` = 10,000,000 | Node count limit: elements, attributes, namespace declarations, text, comments and PIs. Whitespace-only text is not counted (it always sits between two counted nodes, and a tree strips it after the parse where a stream strips it during, so counting it would make the two disagree). |
+| `Warn` | `func(error)` | silent | Receives the errors a parse reports without failing: today the xml:id errors of xml:id §4/§6, a duplicate value and a value that is not an NCName after normalisation. Each is an `*xdm.Error` with code `XQDY0091`; the attribute stays an ID and the parse succeeds. At most 100 per parse, then one "suppressed" summary. Applies to `Parse`, `ParseString` and `ParseBursts`. |
 
 ### Why there are two size limits
 

@@ -93,6 +93,21 @@ type ParseOptions struct {
 	// MaxBytes bounds the read; MaxNodes bounds what the read can allocate.
 	MaxNodes int
 
+	// Warn, when non-nil, receives the errors a parse reports without
+	// failing. Nil, the default, reports nothing and changes nothing.
+	//
+	// Today these are the xml:id errors (xml:id §4, §6): a value that is
+	// not an NCName once normalised, and a value another xml:id in the
+	// document already holds. The Recommendation says such errors "are not
+	// fatal, but should be reported", so the parse goes on and the
+	// attribute is still an ID. Each is an *Error with Code "XQDY0091",
+	// the code XQuery gives an xml:id error, and a message naming the
+	// value (at most 64 characters of it) and nothing of the host.
+	//
+	// At most 100 are delivered per parse, then one saying the rest were
+	// suppressed, so a document cannot flood the callback.
+	Warn func(error)
+
 	// entitiesExpanded marks the second parse of a document whose entities
 	// held markup: their references are already substituted, so the DOCTYPE's
 	// entity declarations must not be applied again.
@@ -520,6 +535,9 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 				}
 				if len(ps.attTypes) > 0 {
 					applyAttTypes(el, ps.attTypes, ps.typeIdx)
+				}
+				if ps.opts.Warn != nil {
+					ps.checkXMLID(el)
 				}
 				// Attributes and namespaces are nodes too, and a document made
 				// of elements carrying many attributes allocates most of its
@@ -958,6 +976,46 @@ type parseState struct {
 	heldT      xml.StartElement
 	prologHeld bool
 	ended      bool
+	// xmlIDs and idWarnings are checkXMLID's: the xml:id values seen and
+	// the warnings delivered. Used only when opts.Warn is set.
+	xmlIDs     map[string]struct{}
+	idWarnings int
+}
+
+// maxIDWarnings bounds the xml:id warnings one parse delivers to
+// ParseOptions.Warn; past it one summary is delivered and the rest dropped.
+const maxIDWarnings = 100
+
+// checkXMLID reports el's xml:id errors (xml:id §4, §6) to opts.Warn: a
+// value that is not an NCName, or one already used in this document. The
+// value is already normalised (buildElement), and stays an ID either way.
+//
+// ponytail: the seen-set holds every xml:id value of the document, also
+// under ParseBursts; it costs nothing unless Warn is set.
+func (ps *parseState) checkXMLID(el *Node) {
+	a := el.Attr(NSXML, "id")
+	if a == nil {
+		return
+	}
+	v := a.Value()
+	var err error
+	if !IsNCName(v) {
+		err = Errorf("XQDY0091", "xml:id value %.64q is not an NCName", v)
+	} else if _, dup := ps.xmlIDs[v]; dup {
+		err = Errorf("XQDY0091", "duplicate xml:id value %.64q", v)
+	} else {
+		if ps.xmlIDs == nil {
+			ps.xmlIDs = map[string]struct{}{}
+		}
+		ps.xmlIDs[strings.Clone(v)] = struct{}{}
+		return
+	}
+	switch ps.idWarnings++; {
+	case ps.idWarnings <= maxIDWarnings:
+		ps.opts.Warn(err)
+	case ps.idWarnings == maxIDWarnings+1:
+		ps.opts.Warn(Errorf("XQDY0091", "further xml:id errors suppressed after %d", maxIDWarnings))
+	}
 }
 
 // release returns b to the pool, without the caller's reader.
