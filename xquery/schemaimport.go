@@ -385,13 +385,15 @@ func (l *schemaLoader) parse(r io.Reader, baseURI, ns string) (*xsd.Schema, erro
 		// package's default is the stricter of the two: nothing is opened.
 		Resolver:     chargedResolver{l: l, ns: ns},
 		ParseOptions: l.opts.SchemaParseOptions,
-	}
-	// A schema document may declare with vc:minVersion that it is written for
-	// XSD 1.1. Read under 1.0 the whole document is conditionally excluded and
-	// contributes nothing -- silently, since that exclusion is what the
-	// attribute asks a 1.0 processor to do.
-	if v, ok := xsd.DocumentRequiresVersion(tree.Root); ok {
-		opts.Version = v
+		// An imported schema is read as XSD 1.1. XQuery 3.1 Appendix D makes
+		// it implementation-defined "Whether the type system is based on
+		// [XML Schema 1.0] or [XML Schema 1.1]", and this engine's is 1.1:
+		// xs:dateTimeStamp and xs:error are TypeNames in its queries, which
+		// the same appendix excuses only a 1.0-based implementation from. A
+		// 1.0 reading would also refuse a schema naming xs:dayTimeDuration
+		// (QT3 xq-e18.xsd) and drop every vc:minVersion="1.1" document. It
+		// matches xslt, which reads xsl:import-schema as 1.1 for XSLT 3.0.
+		Version: xsd.Version11,
 	}
 	loaded, err := xsd.Load(tree.Root, baseURI, opts)
 	if l.over != nil {
