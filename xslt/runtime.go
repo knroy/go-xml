@@ -509,7 +509,10 @@ func execSequenceBody(body []Instruction, rt *runtime, out *outputBuilder) error
 	// constructor produced, so it goes to the section 8.4.4 algorithm
 	// instead. See onempty.go.
 	if hasConditionalContent(body) {
-		return execConditionalSequence(body, rt, out)
+		if err := execConditionalSequence(body, rt, out); err != nil {
+			return err
+		}
+		return out.Refused()
 	}
 	for _, instr := range body {
 		if err := rt.ctx.Err(); err != nil {
@@ -552,7 +555,9 @@ func execSequenceBody(body []Instruction, rt *runtime, out *outputBuilder) error
 			return stampPosition(err, instr)
 		}
 	}
-	return nil
+	// What the last instruction latched is reported here, not lost: no
+	// iteration follows to see it.
+	return out.Refused()
 }
 
 // evalVariable computes a variable's value from its select expression or its

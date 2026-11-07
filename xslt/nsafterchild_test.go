@@ -16,6 +16,11 @@ func TestNamespaceAfterChildTree(t *testing.T) {
 		"sequence":      `<out><a/><xsl:sequence select="//*:name[1]/namespace::*[name() = 'p']"/></out>`,
 		"attr-sequence": `<out><a/><xsl:sequence select="//rec[1]/@k"/></out>`,
 		"in-variable":   `<xsl:variable name="v"><out><a/><xsl:namespace name="q" select="'urn:q'"/></out></xsl:variable><xsl:copy-of select="$v"/>`,
+		// Paths other than xsl:sequence that put a node back on the builder
+		// (xdmbuild.Builder.AppendNode) dropped the error.
+		"where-populated":  `<out><a/><xsl:where-populated><xsl:attribute name="x">1</xsl:attribute></xsl:where-populated></out>`,
+		"on-non-empty-sel": `<out><a/><xsl:on-non-empty select="//rec[1]/@k"/></out>`,
+		"on-empty-ns":      `<out><a/><xsl:sequence select="//*:name[1]/namespace::*[name() = 'p']"/><xsl:on-empty><e/></xsl:on-empty></out>`,
 	} {
 		sheet := outSheet(t, ``, `<xsl:template match="/">`+body+`</xsl:template>`)
 		for _, main := range []bool{false, true} {

@@ -133,6 +133,17 @@ func (b *Builder) countNodes(n int) bool {
 	return true
 }
 
+// latch records err, if it is the construction's first, where Refused finds
+// it. AppendNode has no error to return, and an attribute or namespace node
+// it adds after content is XTDE0410 (XSLT 3.0 §5.7.1) or, on a document node,
+// XTDE0420: latched like a budget refusal, it stops the sequence constructor
+// instead of vanishing.
+func (b *Builder) latch(err error) {
+	if err != nil && b.refused != nil && *b.refused == nil {
+		*b.refused = err
+	}
+}
+
 // SetItemSeparator records the item-separator that applies to the tree this
 // builder produces. A nil argument leaves the default 5.7.1 rules in force.
 func (b *Builder) SetItemSeparator(sep *string) { b.itemSep = sep }
@@ -178,7 +189,7 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 	// it and made the element look as if it already had content, so a later
 	// xsl:attribute was rejected with XTDE0410.
 	if n.Kind() == xdm.KindNamespace && b.open != nil {
-		_ = b.AddNamespace(n.Name().Local, n.Value())
+		b.latch(b.AddNamespace(n.Name().Local, n.Value()))
 		return
 	}
 	// An attribute node in a result sequence joins the element's attributes,
@@ -189,7 +200,7 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 	// an element with an attribute node among its children, which no
 	// serialiser can write.
 	if n.Kind() == xdm.KindAttribute && b.open != nil {
-		_ = b.AddAttribute(n.Name(), n.Value())
+		b.latch(b.AddAttribute(n.Name(), n.Value()))
 		return
 	}
 	if n.Kind() == xdm.KindDocument && b.open != nil {
