@@ -63,6 +63,9 @@ type DTD struct {
 	// for XML 1.0 §4.2.2 VC Notation Declared. Validate checks it because
 	// only Validate knows whether the DTD was read whole.
 	ndata [][2]string
+	// nesting holds the parameter-entity nesting validity errors Load found
+	// (XML 1.0 §2.8, §3.2.1, §3.4), which Validate reports.
+	nesting []string
 }
 
 // ContentKind is what an element's content model permits.

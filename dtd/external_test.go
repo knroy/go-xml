@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -918,5 +919,144 @@ func TestLoadEnforcesEntityVersion(t *testing.T) {
 		"r.dtd": `<?xml version="1.7" encoding="UTF-8"?><!ELEMENT r EMPTY>`}}})
 	if err == nil || !strings.Contains(err.Error(), "unsupported XML version") {
 		t.Errorf("version 1.7: err = %v, want it refused", err)
+	}
+}
+
+// A parameter entity in a purely internal subset is expanded: XML 1.0 §2.8
+// lets a reference between declarations stand for whole declarations, so the
+// <!ELEMENT> below is as binding as one written inline. Load used to parse an
+// internal-only subset without expanding it, and reported r undeclared.
+//
+// An internal-only DOCTYPE still needs no Resolver, unless it references an
+// EXTERNAL parameter entity: then there is text to read and nothing to read
+// it with, which is ErrNoResolver, for the reason that note gives.
+func TestInternalSubsetParameterEntitiesAreExpanded(t *testing.T) {
+	const internal = `<!DOCTYPE r [
+<!ENTITY % e "<!ELEMENT r EMPTY>">
+%e;
+]>`
+	if err := loadCheck(t, internal+`<r/>`, LoadOptions{}); err != nil {
+		t.Errorf("an internal parameter entity should declare r, with no resolver: %v", err)
+	}
+	if err := loadCheck(t, internal+`<r>x</r>`, LoadOptions{}); err == nil {
+		t.Error("the expanded declaration should be enforced: r is EMPTY")
+	}
+
+	const external = `DOCTYPE r [
+<!ENTITY % e SYSTEM "e.ent">
+%e;
+]`
+	_, err := Load(external, LoadOptions{})
+	if !errors.Is(err, ErrNoResolver) {
+		t.Errorf("an external parameter entity with no resolver: err = %v, want ErrNoResolver", err)
+	}
+	d, err := Load(external, mapOpts(map[string]string{"e.ent": `<!ELEMENT r EMPTY>`}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.Elements["r"]; !ok {
+		t.Error("the external parameter entity's declaration should be read")
+	}
+	// InternalSubsetOnly fetches nothing, so the reference is left as written
+	// rather than refused.
+	r := &countingResolver{}
+	if _, err := Load(external, LoadOptions{Resolver: r, InternalSubsetOnly: true}); err != nil {
+		t.Errorf("InternalSubsetOnly should not refuse an external parameter entity: %v", err)
+	}
+	if r.calls != 0 {
+		t.Errorf("InternalSubsetOnly made %d fetches, want 0", r.calls)
+	}
+}
+
+// A parameter entity declared inside an INCLUDE section is in scope after it,
+// and one declared inside an IGNORE section is not declared at all: XML 1.0
+// §3.4 makes an INCLUDE's contents ordinary declarations and leaves an
+// IGNORE's unread. Declarations were collected before sections were resolved,
+// by a scan that could not see inside "<![", so the first was lost.
+func TestParameterEntityDeclaredInAConditionalSection(t *testing.T) {
+	opts := mapOpts(map[string]string{"r.dtd": `<![INCLUDE[
+<!ENTITY % root "<!ELEMENT r (a)>">
+]]>
+%root;
+<![IGNORE[
+<!ENTITY % a "<!ELEMENT a (#PCDATA)>">
+]]>
+<!ENTITY % a "<!ELEMENT a EMPTY>">
+%a;`})
+	const doc = `<!DOCTYPE r SYSTEM "r.dtd">`
+	if err := loadCheck(t, doc+`<r><a/></r>`, opts); err != nil {
+		t.Errorf("the INCLUDE's entity should declare r, and the IGNORE's should not shadow a: %v", err)
+	}
+	if err := loadCheck(t, doc+`<r><a>x</a></r>`, opts); err == nil {
+		t.Error("a is EMPTY: the declaration inside IGNORE must not win")
+	}
+}
+
+// An external subset carries its own encoding (XML 1.0 §4.3.3), and every
+// processor must read UTF-16, which begins with a byte order mark. The
+// loader read the bytes as UTF-8, so a UTF-16 subset declared nothing.
+func TestUTF16ExternalSubsetIsDecoded(t *testing.T) {
+	const subset = `<?xml version="1.0" encoding="UTF-16"?><!ELEMENT r (a)><!ELEMENT a EMPTY>`
+	for _, bigEndian := range []bool{true, false} {
+		b := []byte{0xFF, 0xFE}
+		if bigEndian {
+			b = []byte{0xFE, 0xFF}
+		}
+		for _, u := range utf16.Encode([]rune(subset)) {
+			if bigEndian {
+				b = append(b, byte(u>>8), byte(u))
+			} else {
+				b = append(b, byte(u), byte(u>>8))
+			}
+		}
+		opts := mapOpts(map[string]string{"r.dtd": string(b)})
+		const doc = `<!DOCTYPE r SYSTEM "r.dtd">`
+		if err := loadCheck(t, doc+`<r><a/></r>`, opts); err != nil {
+			t.Errorf("bigEndian=%v: a UTF-16 subset should be read: %v", bigEndian, err)
+		}
+		if err := loadCheck(t, doc+`<r/>`, opts); err == nil {
+			t.Errorf("bigEndian=%v: the UTF-16 subset's model should be enforced", bigEndian)
+		}
+	}
+}
+
+// A parameter entity's replacement text must nest properly with the markup it
+// is used in: a declaration's "<!" and ">" (XML 1.0 §2.8 VC Proper
+// Declaration/PE Nesting), a content model group's parentheses (§3.2.1 VC
+// Proper Group/PE Nesting), and a conditional section's "<![", "[" and "]]>"
+// (§3.4 VC Proper Conditional Section/PE Nesting). Each is a VALIDITY
+// constraint, so the DTD still loads and Validate reports it; libxml2 makes
+// them fatal, which XML 1.0 Second Edition erratum E14 corrects.
+func TestParameterEntityNestingIsAValidityError(t *testing.T) {
+	const doc = `<!DOCTYPE r SYSTEM "r.dtd">`
+	bad := map[string]string{
+		"group split":       `<!ENTITY % e "(#PCDATA"><!ELEMENT r %e;)>`,
+		"group across two":  `<!ENTITY % a "(#PCDATA|"><!ENTITY % b "x)*"><!ELEMENT x EMPTY><!ELEMENT r %a;%b;>`,
+		"declaration close": `<!ENTITY % e "(#PCDATA)>"><!ELEMENT r %e;`,
+		"attlist close":     `<!ELEMENT r EMPTY><!ENTITY % e "a CDATA #IMPLIED>"><!ATTLIST r %e;`,
+		"section bracket":   `<!ELEMENT r EMPTY><!ENTITY % e "INCLUDE["><![ %e; <!ATTLIST r a CDATA #IMPLIED> ]]>`,
+	}
+	for name, subset := range bad {
+		opts := mapOpts(map[string]string{"r.dtd": subset})
+		if _, err := Load(doc, opts); err != nil {
+			t.Errorf("%s: a nesting violation must not stop the load: %v", name, err)
+			continue
+		}
+		err := loadCheck(t, doc+`<r/>`, opts)
+		if err == nil || !strings.Contains(err.Error(), "Nesting") {
+			t.Errorf("%s: want a PE nesting validity error, got %v", name, err)
+		}
+	}
+	good := map[string]string{
+		"whole group":   `<!ENTITY % e "(#PCDATA)"><!ELEMENT r %e;>`,
+		"no parens":     `<!ENTITY % e "#PCDATA"><!ELEMENT r (%e;)*>`,
+		"quoted":        `<!ELEMENT r EMPTY><!ENTITY % e "a CDATA '(>'"><!ATTLIST r %e;>`,
+		"entity value":  `<!ENTITY % e "("><!ENTITY % f "%e;"><!ELEMENT r EMPTY>`,
+		"keyword alone": `<!ELEMENT r EMPTY><!ENTITY % e "INCLUDE"><![ %e; [ <!ATTLIST r a CDATA #IMPLIED> ]]>`,
+	}
+	for name, subset := range good {
+		if err := loadCheck(t, doc+`<r/>`, mapOpts(map[string]string{"r.dtd": subset})); err != nil {
+			t.Errorf("%s: properly nested, want valid: %v", name, err)
+		}
 	}
 }

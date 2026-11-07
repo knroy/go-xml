@@ -78,6 +78,9 @@ ibm-invalid-P39-ibm39i04.xml
 ibm-invalid-P41-ibm41i01.xml
 ibm-invalid-P41-ibm41i02.xml
 ibm-invalid-P45-ibm45i01.xml
+ibm-invalid-P49-ibm49i01.xml
+ibm-invalid-P50-ibm50i01.xml
+ibm-invalid-P51-ibm51i01.xml
 ibm-invalid-P51-ibm51i03.xml
 ibm-invalid-P56-ibm56i01.xml
 ibm-invalid-P56-ibm56i02.xml
@@ -595,8 +598,10 @@ ibm-valid-P27-ibm27v03.xml
 ibm-valid-P28-ibm28v01.xml
 ibm-valid-P28-ibm28v02.xml
 ibm-valid-P29-ibm29v01.xml
+ibm-valid-P29-ibm29v02.xml
 ibm-valid-P30-ibm30v01.xml
 ibm-valid-P30-ibm30v02.xml
+ibm-valid-P31-ibm31v01.xml
 ibm-valid-P32-ibm32v01.xml
 ibm-valid-P32-ibm32v02.xml
 ibm-valid-P32-ibm32v03.xml
@@ -666,7 +671,9 @@ ibm-valid-P68-ibm68v01.xml
 ibm-valid-P68-ibm68v02.xml
 ibm-valid-P69-ibm69v01.xml
 ibm-valid-P69-ibm69v02.xml
+ibm-valid-P70-ibm70v01.xml
 ibm-valid-P78-ibm78v01.xml
+ibm-valid-P79-ibm79v01.xml
 ibm-valid-P82-ibm82v01.xml
 ibm-valid-P85-ibm85n03.xml
 ibm-valid-P85-ibm85n04.xml
@@ -990,12 +997,16 @@ inv-not-sa08
 inv-required00
 inv-required01
 inv-required02
+invalid--002
+invalid--005
+invalid--006
 invalid-bo-1
 invalid-bo-2
 invalid-bo-3
 invalid-bo-4
 invalid-bo-5
 invalid-bo-6
+invalid-not-sa-022
 invalid-sa-140
 invalid-sa-141
 not-sa01
@@ -1343,6 +1354,7 @@ o-p27pass3
 o-p27pass4
 o-p28fail1
 o-p28pass1
+o-p28pass3
 o-p28pass4
 o-p28pass5
 o-p29fail1
@@ -1352,6 +1364,7 @@ o-p30pass1
 o-p30pass2
 o-p31fail1
 o-p31pass1
+o-p31pass2
 o-p32fail1
 o-p32fail2
 o-p32fail3
@@ -1562,6 +1575,7 @@ pubid03
 pubid04
 pubid05
 required00
+rmt-e2e-14
 rmt-e2e-15b
 rmt-e2e-15c
 rmt-e2e-15d
@@ -1698,6 +1712,8 @@ valid-not-sa-007
 valid-not-sa-008
 valid-not-sa-009
 valid-not-sa-010
+valid-not-sa-011
+valid-not-sa-012
 valid-not-sa-013
 valid-not-sa-014
 valid-not-sa-015
@@ -1785,6 +1801,7 @@ valid-sa-066
 valid-sa-067
 valid-sa-068
 valid-sa-069
+valid-sa-070
 valid-sa-071
 valid-sa-072
 valid-sa-073
@@ -1834,6 +1851,8 @@ valid-sa-116
 valid-sa-117
 valid-sa-118
 valid-sa-119
+weekly-little
+weekly-utf-16
 weekly-utf-8
 x-ibm-1-0.5-not-wf-P04-ibm04n02.xml
 x-ibm-1-0.5-not-wf-P04-ibm04n03.xml

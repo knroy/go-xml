@@ -104,7 +104,14 @@ That reads both halves and applies them together: parameter entities span the
 two subsets with XML 1.0 §2.8's precedence (the internal subset is read first
 and its declarations bind), a `%pe;` in the external subset may expand to whole
 declarations, and conditional sections — `<![INCLUDE[` and `<![IGNORE[`, §3.4 —
-are resolved, including nested ones.
+are resolved, including nested ones. Each fetched resource is decoded by its
+own byte order mark (UTF-8 or UTF-16, §4.3.3), as `xdm.Parse` decodes a
+document.
+A parameter entity's replacement text must nest properly with the markup it
+appears in: a declaration's `<!` and `>` (§2.8), a content model's parentheses
+(§3.2.1), and a conditional section's `<![`, `[` and `]]>` (§3.4). These are
+validity constraints, so a DTD breaking one still loads, and `dtd.Validate`
+reports the violation (libxml2 treats them as fatal errors).
 
 Five things to know before relying on it:
 
@@ -114,6 +121,11 @@ Five things to know before relying on it:
   nothing, and reporting success on it would turn "I could not read the
   constraints" into "the constraints hold". Pass `LoadOptions.InternalSubsetOnly`
   to ask for the partial reading deliberately.
+  A DOCTYPE with no external subset needs no `Resolver`, and its internal
+  parameter entities are expanded (`<!ENTITY % e "<!ELEMENT r EMPTY>"> %e;`
+  declares `r`), but one that references an *external* parameter entity
+  (`<!ENTITY % e SYSTEM "e.ent"> %e;`) is refused with `dtd.ErrNoResolver`
+  for the same reason. `InternalSubsetOnly` leaves such a reference unread.
 * **A resolver hands control of what this process reads to whoever wrote the
   DOCTYPE.** `FileResolver` is confined to one `Root`, refusing `..`, absolute
   paths, symlinks leading out and any non-`file` scheme; `MapResolver` reads

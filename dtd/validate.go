@@ -176,6 +176,9 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 			}
 		}
 	}
+	for _, msg := range d.nesting {
+		v.fail(root, "%s", msg)
+	}
 	v.walk(root)
 	v.checkIDRefs()
 	if len(v.errs) == 0 {
