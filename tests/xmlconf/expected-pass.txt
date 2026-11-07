@@ -1609,6 +1609,8 @@ rmt-ns10-039
 rmt-ns10-040
 rmt-ns10-041
 rmt-ns10-042
+rmt-ns10-045
+rmt-ns10-046
 root
 sa01
 sa02

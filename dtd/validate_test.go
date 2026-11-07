@@ -684,3 +684,21 @@ func TestTokenizedValuesAreLexicallyChecked(t *testing.T) {
 		}
 	}
 }
+
+// Namespaces in XML 1.0 §7: in a namespace-valid document, every token XML
+// 1.0 requires to match Name must match NCName, so an ID or IDREF holds no
+// colon (rmt-ns10-045, 046).
+func TestNameTypedValuesHoldNoColon(t *testing.T) {
+	const dt = `<!DOCTYPE r [
+<!ELEMENT r ANY>
+<!ATTLIST r id ID #IMPLIED ref IDREF #IMPLIED tok NMTOKEN #IMPLIED>
+]>`
+	if err := check(t, dt+`<r id="a" ref="a" tok="a:b"/>`); err != nil {
+		t.Errorf("a colon in an NMTOKEN is legal: %v", err)
+	}
+	for _, attrs := range []string{`id="a:b"`, `id="a" ref="a:b"`} {
+		if err := check(t, dt+`<r `+attrs+`/>`); err == nil {
+			t.Errorf("<r %s/> should be invalid", attrs)
+		}
+	}
+}

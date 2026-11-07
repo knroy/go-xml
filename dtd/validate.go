@@ -457,7 +457,10 @@ func lexicalFault(typ, val string) string {
 	var ok func(string) bool
 	switch typ {
 	case "ID", "IDREF", "ENTITY", "IDREFS", "ENTITIES":
-		ok = isName
+		// NCName rather than Name, because xdm parses with namespaces:
+		// Namespaces in XML 1.0 §7 makes a namespace-valid document one in
+		// which every token XML 1.0 requires to match Name matches NCName.
+		ok = xdm.IsNCName
 	case "NMTOKEN", "NMTOKENS":
 		ok = isNmtoken
 	default:
@@ -474,7 +477,7 @@ func lexicalFault(typ, val string) string {
 			if typ == "NMTOKEN" || typ == "NMTOKENS" {
 				return "does not match the Nmtoken production"
 			}
-			return "does not match the Name production"
+			return "does not match the NCName production"
 		}
 	}
 	return ""
@@ -483,15 +486,6 @@ func lexicalFault(typ, val string) string {
 // tokens splits a normalized list value on #x20.
 func tokens(val string) []string {
 	return strings.FieldsFunc(val, func(r rune) bool { return r == ' ' })
-}
-
-func isName(s string) bool {
-	for i, r := range s {
-		if i == 0 && !xmlname.IsNameStartRune(r) || !xmlname.IsNameRune(r) {
-			return false
-		}
-	}
-	return s != ""
 }
 
 func isNmtoken(s string) bool {
