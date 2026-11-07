@@ -214,6 +214,32 @@ func TestSchemaImportTwiceIsXQST0058(t *testing.T) {
 	}
 }
 
+// TestSchemaImportInvalidIsXQST0012 is QT3 XQST0012: a schema that is found
+// but whose definitions fail schema validity. XQuery 3.1 §4.11: "It is a
+// static error [err:XQST0012] if the set of definitions contained in all
+// schemas imported by a Prolog do not satisfy the conditions for schema
+// validity". XQST0059 is for an import the processor cannot satisfy "by
+// finding a valid schema", which a missing one still is.
+func TestSchemaImportInvalidIsXQST0012(t *testing.T) {
+	const bad = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		targetNamespace="urn:bad"><xs:element name="e" type="undefinedType"/>
+		</xs:schema>`
+	src := `import schema namespace b = "urn:bad" at "bad.xsd"; 1`
+	for name, opts := range map[string]xquery.Options{
+		"store":    {Schemas: []xquery.Schema{{Namespace: "urn:bad", Source: bad}}},
+		"resolver": {SchemaResolver: &recordingResolver{docs: map[string]string{"bad.xsd": bad}}},
+	} {
+		_, err := run(t, src, opts)
+		if err == nil || !strings.HasPrefix(err.Error(), "XQST0012") {
+			t.Errorf("%s: want XQST0012, got %v", name, err)
+		}
+	}
+	_, err := run(t, src, xquery.Options{SchemaResolver: &recordingResolver{}})
+	if err == nil || !strings.HasPrefix(err.Error(), "XQST0059") {
+		t.Errorf("missing: want XQST0059, got %v", err)
+	}
+}
+
 // TestSchemaImportEmptyNamespaceWithPrefixIsXQST0057 is schema-import-3: a
 // prefix bound by a schema import must have a namespace to be bound to.
 func TestSchemaImportEmptyNamespaceWithPrefixIsXQST0057(t *testing.T) {
