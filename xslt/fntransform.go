@@ -634,14 +634,6 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 			return nil, xdm.ErrType(
 				"fn:transform: global-context-item must be a single item")
 		}
-		// Transform takes the global context item as its source document,
-		// so an atomic or function item has nowhere to go.
-		n, ok := it.(*xdm.Node)
-		if !ok {
-			return nil, xdm.Errorf("FOXT0001",
-				"fn:transform: a global-context-item that is not a node "+
-					"(%s) is not supported", it.TypeName())
-		}
 		if topts.InitialTemplate == "" && topts.InitialFunction.Local == "" &&
 			topts.InitialMatchSelection == nil {
 			if source != nil {
@@ -651,7 +643,14 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 					"initial-template", xdm.NSXSL
 			}
 		}
-		source = n
+		// F&O types the option item(). A node is the source Transform
+		// takes as its global context item; any other item travels beside
+		// a nil source, the selection above keeping source-node's role.
+		if n, ok := it.(*xdm.Node); ok {
+			source = n
+		} else {
+			source, topts.globalItem = nil, it
+		}
 	}
 
 	res, err := sheet.Transform(rt.goCtx, source, topts)
@@ -768,7 +767,13 @@ func nestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem)
 		base = resolveAgainst(ctx.StaticBaseURI(), base)
 	}
 	var named []string
-	for _, k := range []string{"stylesheet-location", "stylesheet-node", "stylesheet-text", "package-name"} {
+	// F&O 3.1 asks for "exactly one of" the stylesheet-* options "Or ...
+	// exactly one of" the package-* ones, so any two of the seven are
+	// "two mutually-exclusive parameters" (FOXT0002). package-location,
+	// -node and -text are otherwise unsupported: alone they reach the
+	// "no stylesheet" FOXT0002 below.
+	for _, k := range []string{"stylesheet-location", "stylesheet-node", "stylesheet-text",
+		"package-name", "package-location", "package-node", "package-text"} {
 		if _, ok := transformOption(opts, k); ok {
 			named = append(named, k)
 		}

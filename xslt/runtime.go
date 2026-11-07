@@ -891,6 +891,8 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	var item xdm.Item
 	if root != nil {
 		item = root
+	} else if opts.globalItem != nil {
+		item = opts.globalItem
 	}
 	// xsl:global-context-item use="absent" declares that the transformation
 	// reads no global context item, so the globals are evaluated without one

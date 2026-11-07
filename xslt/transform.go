@@ -380,6 +380,10 @@ type TransformOptions struct {
 	// terminates without recording its text. Unexported because only
 	// runNestedTransform sets it.
 	disableMessages bool
+	// globalItem is fn:transform's global-context-item when it is not a
+	// node, given with a nil source. Unexported because only
+	// runNestedTransform sets it.
+	globalItem xdm.Item
 }
 
 // Result is the outcome of a transform.
@@ -524,6 +528,8 @@ func (s *Stylesheet) transform(ctx context.Context, source *xdm.Node, opts Trans
 	var globalItem xdm.Item
 	if source != nil && !opts.noGlobalItem {
 		globalItem = source
+	} else if source == nil {
+		globalItem = opts.globalItem
 	}
 	if err := s.checkGlobalContextItem(globalItem); err != nil {
 		return nil, err

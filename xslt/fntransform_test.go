@@ -693,6 +693,28 @@ func TestFnTransformSourceLocationConflicts(t *testing.T) {
 	}
 }
 
+// F&O 3.1 asks for the stylesheet "either by supplying exactly one of"
+// stylesheet-location, stylesheet-node and stylesheet-text "Or by supplying
+// exactly one of" package-location, package-node, package-text and
+// package-name, and raises FOXT0002 "if two mutually-exclusive parameters are
+// supplied". A package-* option beside a stylesheet-* one was ignored.
+func TestFnTransformPackageAndStylesheetConflict(t *testing.T) {
+	for _, pkg := range []string{
+		`'package-location': 'p.xsl'`, `'package-node': /`, `'package-text': '&lt;p/&gt;'`,
+	} {
+		t.Run(pkg, func(t *testing.T) {
+			_, err := runPP(t, `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+			  <xsl:template match="/">
+			    <xsl:sequence select="transform(map{'stylesheet-node': /, 'source-node': /, `+pkg+`})?output"/>
+			  </xsl:template>
+			</xsl:stylesheet>`, `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:template match="/"><ok/></xsl:template></xsl:stylesheet>`)
+			if code := xdm.ErrorCode(err); code != "FOXT0002" || !strings.Contains(err.Error(), "mutually exclusive") {
+				t.Fatalf("got %v, want FOXT0002 for mutually exclusive options", err)
+			}
+		})
+	}
+}
+
 // F&O 3.1 applies the option parameter conventions to fn:transform's map: "It
 // is not an error if the options map contains options with names other than
 // those described in this specification." A misspelled string key and a
