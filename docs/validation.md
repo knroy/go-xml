@@ -64,7 +64,9 @@ err = dtd.Validate(tree.Root, d, dtd.Options{})
 ```
 
 That checks `<!ELEMENT>` content models, that every attribute is declared
-(VC Attribute Value Type; `xmlns` and `xmlns:*` are exempt when undeclared),
+(VC Attribute Value Type; namespace declarations count as the attributes
+`xmlns` and `xmlns:p` they are to XML 1.0, so a valid document declares them,
+as libxml2 also requires),
 attribute presence (`#REQUIRED` and `#FIXED`), enumerated values,
 `ID`/`IDREF`, and §3.3.1's two cross-referencing rules — a `NOTATION`
 attribute's enumeration must name only declared `<!NOTATION>`s, and an

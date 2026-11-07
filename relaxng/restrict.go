@@ -702,64 +702,62 @@ func overlapAcross(a, b []nameClass) string {
 
 // describeOverlap names a name both classes admit, or returns "".
 //
-// The classes are small and the interesting cases few, so this decides
-// overlap structurally rather than building the intersection: two QNames
-// overlap when equal, anyName overlaps everything it does not except, and an
-// nsName overlaps another class in its namespace.
+// It is exact, by James Clark's representative-name method (jing's
+// NameClass overlap test): two classes overlap only if one of finitely many
+// representative names is in both. The representatives are every QName either
+// class mentions, exceptions included; for every namespace an nsName mentions,
+// a name in it that no QName can equal; and, for anyName, a name in a
+// namespace no class mentions. Comparing the open classes structurally
+// instead ignored their exceptions, and refused xspec.rnc's
+// attribute xml:* {text}* beside attribute * - (local:* | xml:* | p:*) {text}*
+// as the same attribute twice, which jing accepts.
 func describeOverlap(a, b nameClass) string {
-	switch x := a.(type) {
-	case nameChoicePat:
-		if s := describeOverlap(x.Left, b); s != "" {
-			return s
+	var reps []xdm.QName
+	collectReps(a, &reps)
+	collectReps(b, &reps)
+	for _, n := range reps {
+		if !a.contains(n) || !b.contains(n) {
+			continue
 		}
-		return describeOverlap(x.Right, b)
-	}
-	switch y := b.(type) {
-	case nameChoicePat:
-		if s := describeOverlap(a, y.Left); s != "" {
-			return s
-		}
-		return describeOverlap(a, y.Right)
-	}
-
-	switch x := a.(type) {
-	case qnamePat:
-		switch y := b.(type) {
-		case qnamePat:
-			if x.Name == y.Name {
-				return showQName(x.Name)
-			}
-		case anyNamePat:
-			if y.contains(x.Name) {
-				return showQName(x.Name)
-			}
-		case nsNamePat:
-			if y.contains(x.Name) {
-				return showQName(x.Name)
-			}
-		}
-	case anyNamePat:
-		switch b.(type) {
-		case qnamePat:
-			return describeOverlap(b, a)
-		case anyNamePat, nsNamePat:
-			// Two open classes always share a name unless one excepts the
-			// whole of the other, which no schema in practice writes.
+		switch {
+		case n.URI == repNs:
 			return "any name"
+		case n.Local == repLocal:
+			return "any name in " + showNs(n.URI)
 		}
-	case nsNamePat:
-		switch y := b.(type) {
-		case qnamePat:
-			return describeOverlap(b, a)
-		case anyNamePat:
-			return "any name in " + showNs(x.Ns)
-		case nsNamePat:
-			if x.Ns == y.Ns {
-				return "any name in " + showNs(x.Ns)
-			}
-		}
+		return showQName(n)
 	}
 	return ""
+}
+
+// repNs and repLocal are a namespace URI and a local name no schema can
+// write, since neither is an NCName nor a URI an XML name can carry: names
+// built from them stand for "some other namespace" and "some other local
+// name" in describeOverlap.
+const (
+	repNs    = "\x00"
+	repLocal = "\x00"
+)
+
+// collectReps appends c's representative names for describeOverlap.
+func collectReps(c nameClass, reps *[]xdm.QName) {
+	switch x := c.(type) {
+	case qnamePat:
+		*reps = append(*reps, x.Name)
+	case nsNamePat:
+		*reps = append(*reps, xdm.QName{URI: x.Ns, Local: repLocal})
+		if x.Except != nil {
+			collectReps(x.Except, reps)
+		}
+	case anyNamePat:
+		*reps = append(*reps, xdm.QName{URI: repNs, Local: repLocal})
+		if x.Except != nil {
+			collectReps(x.Except, reps)
+		}
+	case nameChoicePat:
+		collectReps(x.Left, reps)
+		collectReps(x.Right, reps)
+	}
 }
 
 func showQName(n xdm.QName) string {

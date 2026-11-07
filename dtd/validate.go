@@ -320,27 +320,40 @@ func (v *validator) matcherFor(decl *Element) (*xsd.SequenceMatcher, error) {
 // reports an attribute the ATTLIST does not declare (XML 1.0 §3.3.1, VC
 // Attribute Value Type). Names are matched as written, so a declared xml:lang
 // or o:x is checked like any other.
+//
+// The element's namespace declarations are checked as the attributes xmlns
+// and xmlns:p that XML 1.0 sees them as. A DTD predates namespaces, so a
+// valid document declares them in an ATTLIST like any other attribute, and
+// libxml2 reports one that is not declared ("No declaration for attribute
+// xmlns"). The tree holds them apart from the attributes, so they are added
+// back here.
 func (v *validator) checkAttributes(el *xdm.Node) {
 	decls := v.dtd.Attributes[el.Name().Lexical()]
+	type attr struct{ name, value string }
+	var attrs []attr
+	for p, uri := range el.DeclaredNamespaces() {
+		name := "xmlns"
+		if p != "" {
+			name += ":" + p
+		}
+		attrs = append(attrs, attr{name, uri})
+	}
+	for a := range el.Attrs() {
+		attrs = append(attrs, attr{a.Name().Lexical(), a.Value()})
+	}
 	if !v.allowUndec {
-		for a := range el.Attrs() {
-			name := a.Name().Lexical()
-			// A DTD predates namespaces and declares "xmlns" as an ordinary
-			// attribute when it declares it at all, so an undeclared
-			// namespace declaration is not reported.
-			if name == "xmlns" || strings.HasPrefix(name, "xmlns:") ||
-				slices.ContainsFunc(decls, func(d *Attribute) bool { return d.Name == name }) {
-				continue
+		for _, a := range attrs {
+			if !slices.ContainsFunc(decls, func(d *Attribute) bool { return d.Name == a.name }) {
+				v.fail(el, "attribute %s is not declared", a.name)
 			}
-			v.fail(el, "attribute %s is not declared", name)
 		}
 	}
 	if len(decls) == 0 {
 		return
 	}
-	present := map[string]string{}
-	for a := range el.Attrs() {
-		present[a.Name().Lexical()] = a.Value()
+	present := make(map[string]string, len(attrs))
+	for _, a := range attrs {
+		present[a.name] = a.value
 	}
 
 	for _, d := range decls {
