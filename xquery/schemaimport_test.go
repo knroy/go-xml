@@ -496,3 +496,90 @@ func TestValidateTypeNotInScopeIsStaticXQST0104(t *testing.T) {
 		t.Errorf("a built-in type needs no import: got %q, %v", got, err)
 	}
 }
+
+// TestValidatedCopyKeepsAnnotationUnderPreserve is §3.9.1.3 with §4.6:
+// "If construction mode is preserve, ... all attribute and element nodes
+// copied during node construction retain their original types. If
+// construction mode is strip, ... all element nodes copied during node
+// construction receive the type xs:untyped". Preserve is the default (C.1).
+// Stripping a copy must leave the original, $h, typed.
+func TestValidatedCopyKeepsAnnotationUnderPreserve(t *testing.T) {
+	const body = `
+		let $h := validate { <hat xmlns=%q>8</hat> }
+		let $w := <w>{$h}</w>
+		return ($w/* instance of element(*, h:hatsize),
+		        $w/* instance of element(*, xs:untyped),
+		        data($w/*) instance of xs:integer,
+		        element w2 {$h}/* instance of element(*, h:hatsize),
+		        document {$h}/* instance of element(*, h:hatsize),
+		        $h instance of element(*, h:hatsize))`
+	for _, c := range []struct{ decl, want string }{
+		{"", "truefalsetruetruetruetrue"},
+		{"declare construction preserve;", "truefalsetruetruetruetrue"},
+		{"declare construction strip;", "falsetruefalsefalsefalsetrue"},
+	} {
+		src := fmt.Sprintf(`%s import schema namespace h = %q;`+body,
+			c.decl, hatsNS, hatsNS)
+		got, err := run(t, src, withHats())
+		if err != nil {
+			t.Errorf("%q: %v", c.decl, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%q: got %q, want %q", c.decl, got, c.want)
+		}
+	}
+}
+
+// substSchema has a head element, a member of its substitution group, and a
+// container whose content model names only the head.
+const substSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    targetNamespace="http://example.org/subst" xmlns="http://example.org/subst"
+    elementFormDefault="qualified">
+  <xs:element name="head" type="xs:integer"/>
+  <xs:element name="member" substitutionGroup="head" type="xs:integer"/>
+  <xs:element name="bare" substitutionGroup="head"/>
+  <xs:element name="narrow" substitutionGroup="head" type="small"/>
+  <xs:simpleType name="small">
+    <xs:restriction base="xs:integer"><xs:maxInclusive value="9"/></xs:restriction>
+  </xs:simpleType>
+  <xs:element name="other" type="xs:integer"/>
+  <xs:element name="box">
+    <xs:complexType><xs:sequence>
+      <xs:element ref="head" maxOccurs="unbounded"/>
+    </xs:sequence></xs:complexType>
+  </xs:element>
+  <xs:element name="any">
+    <xs:complexType><xs:sequence>
+      <xs:any processContents="lax" maxOccurs="unbounded"/>
+    </xs:sequence></xs:complexType>
+  </xs:element>
+</xs:schema>`
+
+// TestSchemaElementMatchesSubstitutedChild is XQuery 3.1 §2.5.5.5: a
+// SchemaElementTest schema-element(EN) matches a node "if the name of the
+// candidate node matches the specified ElementName or matches the name of an
+// element in a substitution group headed by an element named ElementName",
+// and its type annotation is the declared type. A validated child accepted
+// through the head's group is such a node.
+func TestSchemaElementMatchesSubstitutedChild(t *testing.T) {
+	const ns = "http://example.org/subst"
+	opts := xquery.Options{Schemas: []xquery.Schema{{Namespace: ns, Source: substSchema}}}
+	src := fmt.Sprintf(`import schema namespace s = %q;
+		let $b := validate { <box xmlns=%q><head>1</head><member>2</member><bare>3</bare><narrow>4</narrow></box> }
+		let $o := validate { <other xmlns=%q>3</other> }
+		let $a := validate lax { <any xmlns=%q><member>5</member></any> }
+		return ($b/* ! (. instance of schema-element(s:head)),
+		        $b/s:member instance of schema-element(s:member),
+		        $o instance of schema-element(s:head),
+		        $a/* instance of schema-element(s:head),
+		        (<w>{$b}</w>)/*/* ! (. instance of schema-element(s:head)))`, ns, ns, ns, ns)
+	got, err := run(t, src, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "truetruetruetrue" + "true" + "false" + "true" +
+		"truetruetruetrue"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}

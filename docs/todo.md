@@ -550,8 +550,8 @@ predictions about them were wrong**: the pattern rule is not a facet-
 application rule inside `xsd`, and the impure pair needed a result **shape**
 rather than an annotation.)*
 
-**What is still missing, and it is not one thing.** Each of these is a separate
-small feature rather than a bug in the import:
+**What is still missing.** Each of these is a separate small feature rather
+than a bug in the import:
 
 * **Automatic input validation.** A source document is not validated because
   the query imported a schema, so it stays untyped until `validate { }` or the
@@ -568,13 +568,18 @@ small feature rather than a bug in the import:
   positions, not cast targets, and the suite asserts `true` rather than an
   error. `xslt`'s identical refusal is correct where it stands and was never a
   claim about casts, so this was never a joint gap.
-* **Annotation propagation.** A validated element that is then copied into a
-  constructor loses the annotation the assessment stamped, so
-  `qischema007`-style cases that validate and then wrap fail.
-* **Substitution groups on validated content.** `schema-element(s:H1)`
-  matching a substituted child needs the *node* to have been validated against
-  the head's group, which needs the assessment to record which declaration
-  accepted each child.
+* ~~**Annotation propagation.**~~ **Closed; this entry had outlived its fix.**
+  Under construction mode `preserve`, the default (§4.6, C.1), a validated
+  element copied into an element, computed element or document constructor
+  already kept its annotation. What was missing was the other half:
+  `declare construction strip` did not strip, so the copy stayed typed. It
+  now receives `xs:untyped` (attributes `xs:untypedAtomic`), and the original
+  stays typed (`TestValidatedCopyKeepsAnnotationUnderPreserve`).
+* ~~**Substitution groups on validated content.**~~ **Closed; already
+  worked.** `schema-element(s:head)` matches a validated child accepted
+  through the head's substitution group, whether the member declares the
+  head's type, a derived one or none, and still does after the parent is
+  copied (`TestSchemaElementMatchesSubstitutedChild`).
 
 **What it buys, delivered.** `validate` against a real schema, with the result
 annotated; `cast as` and `castable as` with the schema author's **facets**

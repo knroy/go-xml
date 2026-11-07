@@ -231,6 +231,30 @@ type valueNode interface {
 	sequence(ctx *evalContext) (xdm.Sequence, error)
 }
 
+// stripTypes reports whether "declare construction strip" is in force. §4.6:
+// "If construction mode is strip, ... all element nodes copied during node
+// construction receive the type xs:untyped, and all attribute nodes copied
+// during node construction receive the type xs:untypedAtomic." Preserve, the
+// default, keeps the copies' annotations, which the copy already does.
+func stripTypes(sc *staticContext) bool {
+	return sc != nil && sc.construction == StripTypes
+}
+
+// stripAnnotations removes every type annotation from a copied subtree, as
+// xslt's validation="strip" does, keeping is-id and is-idrefs.
+func stripAnnotations(n *xdm.Node) {
+	if n == nil || !n.TreeHasTyping() {
+		return
+	}
+	n.StripTyping()
+	for a := range n.Attrs() {
+		a.StripTyping()
+	}
+	for c := range n.Children() {
+		stripAnnotations(c)
+	}
+}
+
 func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error {
 	for _, it := range seq {
 		switch v := it.(type) {
@@ -263,8 +287,13 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 					// of an assessed node, and the name alone would leave its
 					// union member and resolved primitive to be guessed at
 					// from the process-global registries.
+					typing := xdm.TypingOf(v)
+					if stripTypes(sc) {
+						typing = xdm.Typing{IsID: typing.IsID,
+							IsIDREFS: typing.IsIDREFS}
+					}
 					if err := out.b.AddAttributeWithTyping(
-						v.Name(), v.Value(), xdm.TypingOf(v)); err != nil {
+						v.Name(), v.Value(), typing); err != nil {
 						return err
 					}
 					continue
@@ -301,6 +330,9 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 			}
 			if el := out.b.Open(); el != nil && el.LastChild() != before {
 				applyCopyNamespaces(el.LastChild(), srcScope, sc)
+				if stripTypes(sc) {
+					stripAnnotations(el.LastChild())
+				}
 			}
 		case *xdm.Atomic:
 			out.b.AppendValue(v)
@@ -1032,6 +1064,13 @@ func (n *document) eval(out *builderRef, ctx *evalContext) error {
 	// xml:base of the content rather than the constructor's own.
 	if doc != nil && doc.BaseURI() == "" && n.baseURI != "" {
 		doc.SetBaseURI(n.baseURI)
+	}
+	// The content was copied with no element open, so appendSequence's strip
+	// did not reach it; construction mode governs document constructors too.
+	if doc != nil && stripTypes(ctx.sc) {
+		for c := range doc.Children() {
+			stripAnnotations(c)
+		}
 	}
 	out.b.AppendNode(doc)
 	return nil

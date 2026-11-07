@@ -348,6 +348,15 @@ functions and variables, and those are resolved late.)
 The facets the schema author wrote are applied, not merely the base type: a
 `hatsize` restricted to 4–12 makes `99 castable as h:hatsize` false.
 
+A validated node copied into a constructor follows the **construction mode**
+(§4.6). Under `preserve`, the default, the copy keeps its annotation, so
+`<w>{validate { <h:hat>8</h:hat> }}</w>/* instance of element(*, h:hatsize)`
+is true. Under `declare construction strip` (or `Construction: StripTypes`)
+the copied elements become `xs:untyped` and their attributes
+`xs:untypedAtomic`, and the node that was copied keeps its type.
+`schema-element(E)` matches a validated child accepted through `E`'s
+substitution group.
+
 ### Casting to a schema type
 
 An imported simple type is a **cast target** and a **constructor function**,
