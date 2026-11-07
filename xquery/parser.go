@@ -41,6 +41,9 @@ type parser struct {
 	// static context's map cannot answer it: the five predeclared prefixes
 	// are in there from the start, and rebinding one of those is legal.
 	declaredNS map[string]bool
+	// moduleDeclPrefix is the prefix a library module's declaration bound,
+	// which §4.12 lets a module import reuse for the same namespace.
+	moduleDeclPrefix string
 
 	// ctorPrefixes records every prefix bound by an xmlns declaration
 	// attribute on a direct element constructor, anywhere in the module.

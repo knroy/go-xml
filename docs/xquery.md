@@ -259,7 +259,10 @@ Writing one that reads the filesystem or the network is a deliberate grant to
 whoever wrote the query. See [security.md](security.md).
 
 A module may import its own target namespace; §4.12 allows it in as many
-words, and the loader treats the revisit like any other cycle.
+words, and the loader treats the revisit like any other cycle. The import may
+reuse the module declaration's own prefix, since §4.12 makes a prefix clash
+`XQST0033` only against "a module declaration with a different target
+namespace".
 
 ### Loading a module at run time
 

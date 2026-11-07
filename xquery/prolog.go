@@ -1520,8 +1520,13 @@ func (p *parser) parseModuleImport() error {
 		// §4.12: two module imports may not bind the same prefix, and neither
 		// may an import and a "declare namespace". The check is the prolog's
 		// own XQST0033 rather than a code of the import's, because the fault
-		// is the double binding and not the import.
-		if p.declaredNS[imp.prefix] {
+		// is the double binding and not the import. The one exception is the
+		// module declaration's prefix reused for its own namespace: §4.12
+		// forbids only "a module declaration with a different target
+		// namespace", and XQST0093a imports a module's own namespace so.
+		uri, _ := p.sc.ResolvePrefix(imp.prefix)
+		sameAsDecl := imp.prefix == p.moduleDeclPrefix && uri == imp.ns
+		if p.declaredNS[imp.prefix] && !sameAsDecl {
 			return p.errorf(
 				"XQST0033: the prefix %q is already bound in this prolog",
 				imp.prefix)
@@ -1613,6 +1618,7 @@ func (p *parser) parseModuleDecl() (string, error) {
 		return "", p.errorf("%s", err.Error())
 	}
 	p.declaredNS[prefix] = true
+	p.moduleDeclPrefix = prefix
 	p.skipSpaceAndComments()
 	if !p.consume(";") {
 		return "", p.errorf("XPST0003: expected %q after a module declaration", ";")
