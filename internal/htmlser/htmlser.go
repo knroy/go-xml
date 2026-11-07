@@ -131,8 +131,20 @@ func MetaEnd(head *xdm.Node, xhtml, html5 bool) string {
 	switch {
 	case xhtml:
 		return `" />`
-	case head.Name().URI != "" && !(html5 && head.Name().URI == NSXHTML):
+	case Island(head, html5):
 		return `"></meta>`
 	}
 	return `">`
+}
+
+// Island reports whether the html method writes element n with XML syntax
+// rather than HTML's: n is in a namespace that is neither absent nor, under
+// HTML5, XHTML's. Serialization 3.1 §7.1 has the html method write an element
+// differently from the xml method only "if the element is to be serialized
+// as an HTML element", so such an "XML island" self-closes when empty:
+// Serialization-html-5 and -6 embed <magic xmlns="..."/> and ask for it back
+// self-closed, and -3 (HTML 4) wants the XHTML-namespace elements -4 (HTML5)
+// writes as HTML self-closed too, since HTML 4 did not know that namespace.
+func Island(n *xdm.Node, html5 bool) bool {
+	return n.Name().URI != "" && !(html5 && n.Name().URI == NSXHTML)
 }

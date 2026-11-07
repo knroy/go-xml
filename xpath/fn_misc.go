@@ -417,8 +417,14 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 			want[v] = true
 			continue
 		}
+		// F&O §14.5.2: "If any of the tokens is not a lexically valid
+		// IDREF (that is, if it is not lexically an xs:NCName), it is
+		// ignored." So no ID value that is not an NCName can be found,
+		// whatever typed it ID.
 		for _, f := range splitXMLSpace(v) {
-			want[f] = true
+			if isNCName(f) {
+				want[f] = true
+			}
 		}
 	}
 	if len(want) == 0 {
@@ -463,23 +469,11 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 				// with no declaration (xml:id §4): an attribute annotated ID
 				// counts however it is spelled, and one merely called "id"
 				// does not.
-				// An xml:id whose value is not an NCName is not an ID.
-				//
-				// xml:id §4 normalises the value and §5 makes a value that is
-				// not an NCName an xml:id error, whose consequence is that the
-				// attribute's is-id property is false -- so fn:id must not
-				// find it. XQuery permits reporting XQDY0091 instead, which is
-				// why fn-id-25 accepts either; answering with the element is
-				// the one thing neither allows.
-				//
-				// The check applies only to the name-based fallback for
-				// xml:id. An attribute the data model has already marked IsID,
-				// or one a schema annotated as xs:ID, was validated by
-				// whatever produced it and is taken at its word.
-				if a.Name().URI == xdm.NSXML && a.Name().Local == "id" &&
-					!isNCName(trimXMLSpace(a.Value())) {
-					continue
-				}
+				// An xml:id whose value is not an NCName is still an ID:
+				// xml:id §4 assigns the type whatever the value, and XQuery
+				// 3.1 §3.9.3.2 sets is-id true for every xml:id. It is never
+				// found because fn:id ignores a candidate that is not an
+				// NCName (above), which is what fn-id-25 expects.
 				isIDAttr := a.IsID() || isIDAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation()) ||
 					(a.Name().URI == xdm.NSXML && a.Name().Local == "id")
 				isRefAttr := a.IsIDREFS() || isIDREFAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation())

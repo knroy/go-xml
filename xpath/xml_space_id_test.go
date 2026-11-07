@@ -54,3 +54,21 @@ func TestIDUsesXMLWhitespaceOnly(t *testing.T) {
 		})
 	}
 }
+
+// F&O §14.5.2 ignores a candidate IDREF that is not an NCName, so an ID
+// value that is not one is never found, whether xml:id or a DTD typed it
+// ID. The xml:id stays an ID (xml:id §4); it is the candidate that drops out.
+func TestIDIgnoresNonNCNameCandidates(t *testing.T) {
+	doc := `<?xml version="1.0"?>
+<!DOCTYPE r [<!ATTLIST u id ID #IMPLIED>]>
+<r><x xml:id="9z"/><u id="7q"/><y xml:id="ok"/></r>`
+	for _, tc := range []struct{ expr, want string }{
+		{"count(id('9z'))", "0"},
+		{"count(id('7q'))", "0"},
+		{"id('9z ok 7q')/name()", "y"},
+	} {
+		if got := evalStr(t, doc, tc.expr); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.expr, got, tc.want)
+		}
+	}
+}

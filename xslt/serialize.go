@@ -1453,8 +1453,7 @@ func (s *serializer) htmlNativeElement(n *xdm.Node) bool {
 // as the self-closed XML the island rule produces, where html-4 at 5.0 wants
 // the bare HTML start tag.
 func (s *serializer) htmlIsland(n *xdm.Node) bool {
-	return s.html && !s.xhtml && n.Name().URI != "" &&
-		!(s.html5 && n.Name().URI == nsXHTML)
+	return s.html && !s.xhtml && htmlser.Island(n, s.html5)
 }
 
 func (s *serializer) suppressed(n *xdm.Node) bool {
