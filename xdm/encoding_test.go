@@ -97,8 +97,8 @@ func TestParseUTF16OddLength(t *testing.T) {
 
 func TestRewriteEncodingDecl(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{`<?xml version="1.0" encoding="UTF-16"?><r/>`, `<?xml version="1.0"?><r/>`},
-		{`<?xml version="1.0" encoding='UTF-16'?><r/>`, `<?xml version="1.0"?><r/>`},
+		{`<?xml version="1.0" encoding="UTF-16"?><r/>`, `<?xml version="1.0" encoding="UTF-8"?><r/>`},
+		{`<?xml version="1.0" encoding='UTF-16'?><r/>`, `<?xml version="1.0" encoding="UTF-8"?><r/>`},
 		{`<?xml version="1.0"?><r/>`, `<?xml version="1.0"?><r/>`},
 		{`<r/>`, `<r/>`},
 	}

@@ -7,6 +7,8 @@ import (
 	"io"
 	"strings"
 	"unicode/utf8"
+
+	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
 
 // External entity resolution.
@@ -219,7 +221,10 @@ func (t *entityTable) resolveExternalText(name string) (string, error) {
 	// document entity, and this text never passes through Parse's reader.
 	folded, _ := foldLineEnds([]byte(text), true)
 	text = string(folded)
-	text, version := stripTextDecl(text)
+	text, version, err := stripTextDecl(text)
+	if err != nil {
+		return "", fmt.Errorf("external entity %s: %w", name, err)
+	}
 	if err := t.checkEntityVersion(name, version); err != nil {
 		return "", err
 	}
@@ -239,27 +244,41 @@ func (t *entityTable) resolveExternalText(name string) (string, error) {
 // It is only a text declaration if it is at the very start and is an XML
 // declaration — "<?xml" followed by whitespace or the closing "?>". A
 // processing instruction whose target merely begins with "xml", such as
-// <?xml-stylesheet?>, is content and stays.
+// <?xml-stylesheet?>, is content and stays. One preceded by white space is
+// left in place too, where the reserved target makes it an error (§2.6 [17]).
+//
+// A text declaration is not an XML declaration: §4.3.1 "[77] TextDecl ::=
+// '<?xml' VersionInfo? EncodingDecl S? '?>'" — the encoding is required, the
+// version optional, and a standalone declaration has no place in one. A
+// declaration that does not match is an error.
 //
 // The version is returned rather than discarded because XML §4.3.4 makes it
 // load-bearing: an entity that declares 1.1 may not be included by a 1.0
 // document. An entity with no text declaration, or one that omits the version,
 // returns "" and is 1.0 by default — §4.3.4 says an entity without a
 // declaration is treated as 1.0.
-func stripTextDecl(s string) (text, version string) {
-	rest := strings.TrimLeft(s, " \t\r\n")
-	if !strings.HasPrefix(rest, "<?xml") {
-		return s, ""
+func stripTextDecl(s string) (text, version string, err error) {
+	if !strings.HasPrefix(s, "<?xml") {
+		return s, "", nil
 	}
-	after := rest[len("<?xml"):]
+	after := s[len("<?xml"):]
 	if after != "" && !isXMLSpaceByte(after[0]) && !strings.HasPrefix(after, "?>") {
-		return s, ""
+		return s, "", nil
 	}
-	end := strings.Index(rest, "?>")
+	end := strings.Index(after, "?>")
 	if end < 0 {
-		return s, ""
+		return s, "", nil
 	}
-	return rest[end+len("?>"):], declVersion(rest[:end])
+	body := strings.Trim(after[:end], " \t\r\n")
+	v, enc, sa, ok := xml.ParseXMLDecl(body)
+	if !ok {
+		v = ""
+		_, enc, sa, ok = xml.ParseXMLDecl(`version="1.0" ` + body)
+	}
+	if !ok || enc == "" || sa != "" {
+		return "", "", fmt.Errorf("malformed text declaration <?xml %s?> (XML 1.0 §4.3.1 [77] TextDecl)", body)
+	}
+	return after[end+len("?>"):], v, nil
 }
 
 // checkEntityVersion enforces XML §4.3.4 on a fetched external entity.
@@ -286,37 +305,6 @@ func (t *entityTable) checkEntityVersion(name, version string) error {
 	default:
 		return fmt.Errorf("external entity %s declares unsupported XML version %q", name, version)
 	}
-}
-
-// declVersion reads the version pseudo-attribute out of a text declaration.
-//
-// It scans for the keyword rather than the position, since VersionInfo is
-// first in [77] TextDecl but the same function reads declarations that have
-// only an encoding. A malformed declaration yields "", which the caller treats
-// as undeclared rather than as an error: rejecting the entity here would turn
-// a lax text declaration into a parse failure that no version rule asked for.
-func declVersion(decl string) string {
-	i := strings.Index(decl, "version")
-	if i < 0 {
-		return ""
-	}
-	rest := strings.TrimLeft(decl[i+len("version"):], " \t\r\n")
-	if !strings.HasPrefix(rest, "=") {
-		return ""
-	}
-	rest = strings.TrimLeft(rest[1:], " \t\r\n")
-	if rest == "" {
-		return ""
-	}
-	quote := rest[0]
-	if quote != '\'' && quote != '"' {
-		return ""
-	}
-	end := strings.IndexByte(rest[1:], quote)
-	if end < 0 {
-		return ""
-	}
-	return rest[1 : 1+end]
 }
 
 func isXMLSpaceByte(c byte) bool {
@@ -435,7 +423,10 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 	// document entity, and this text never passes through Parse's reader.
 	folded, _ := foldLineEnds([]byte(text), true)
 	text = string(folded)
-	text, version := stripTextDecl(text)
+	text, version, err := stripTextDecl(text)
+	if err != nil {
+		return fmt.Errorf("external DTD subset %s: %w", resolved, err)
+	}
 	if err := t.checkEntityVersion("(external subset)", version); err != nil {
 		return err
 	}
@@ -444,6 +435,9 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 	text, err = t.expandParameterEntities(text, resolved, 0)
 	if err != nil {
 		return err
+	}
+	if err := checkExtSubsetGrammar(text); err != nil {
+		return fmt.Errorf("external DTD subset %s: %w", resolved, err)
 	}
 	// Retained for the attribute defaults and declared types the caller
 	// reads out of it: those only exist once parameter entities have been
@@ -579,7 +573,9 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 				return "", err
 			}
 			var version string
-			text, version = stripTextDecl(text)
+			if text, version, err = stripTextDecl(text); err != nil {
+				return "", fmt.Errorf("external parameter entity %%%s: %w", name, err)
+			}
 			if err := t.checkEntityVersion("%"+name, version); err != nil {
 				return "", err
 			}

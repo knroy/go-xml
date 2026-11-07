@@ -220,7 +220,7 @@ func TestAttributeDefaultNormalization(t *testing.T) {
 	}
 	bad := []struct{ name, subset, want string }{
 		{"literal <", `<!ATTLIST r v CDATA "a<b">`, "contains <"},
-		{"bare &", `<!ATTLIST r v CDATA "a & b">`, "begins no reference"},
+		{"bare &", `<!ATTLIST r v CDATA "a & b">`, "malformed reference"},
 		{"undeclared", `<!ATTLIST r v CDATA "&u;">`, `entity "u" is not declared before`},
 		{"declared after", `<!ATTLIST r v CDATA "&late;"><!ENTITY late "x">`, `entity "late" is not declared before`},
 		{"declared in a PI", `<?p <!ENTITY e "x">?><!ATTLIST r v CDATA "&e;">`, `entity "e" is not declared before`},
@@ -356,7 +356,7 @@ func TestUndeclaredEntityWFCOrVC(t *testing.T) {
 		{"parameter-entity reference", `<!DOCTYPE r [<!ENTITY % p ""> %p; ]>`, true},
 		{"standalone with external subset", `<?xml version="1.0" standalone="yes"?><!DOCTYPE r SYSTEM "r.dtd">`, false},
 		{"standalone no", `<?xml version="1.0" standalone="no"?><!DOCTYPE r SYSTEM "r.dtd">`, true},
-		{"percent in a literal is no reference", `<!DOCTYPE r [<!ENTITY e "%p;">]>`, false},
+		{"percent written as a reference is no reference", `<!DOCTYPE r [<!ENTITY e "&#37;p;">]>`, false},
 	}
 	for _, c := range cases {
 		for _, d := range []string{doc, `<r>x&u;y</r>`} {

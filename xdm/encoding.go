@@ -183,12 +183,13 @@ func declaredEncoding(s string) string {
 	return ""
 }
 
-// rewriteEncodingDecl removes an encoding declaration from an XML declaration.
+// rewriteEncodingDecl rewrites the encoding an XML declaration names to UTF-8.
 //
 // The text has already been decoded to UTF-8, so a declaration naming UTF-16 is
-// now false, and encoding/xml would act on it. Removing it rather than
-// rewriting it to UTF-8 keeps the change minimal: with no declaration the
-// decoder assumes UTF-8, which is what the text now is.
+// now false, and the tokeniser would act on it. It is rewritten rather than
+// removed because the same decoding serves an external entity, whose text
+// declaration must name an encoding (XML 1.0 §4.3.1 [77] TextDecl): removing
+// it left "<?xml version='1.0'?>", which is not one.
 func rewriteEncodingDecl(s string) string {
 	if !strings.HasPrefix(s, "<?xml") {
 		return s
@@ -214,5 +215,5 @@ func rewriteEncodingDecl(s string) string {
 		return s
 	}
 	cut := i + len("encoding") + q + 1 + closeAt + 1
-	return strings.TrimRight(decl[:i], " \t") + decl[cut:] + s[end:]
+	return decl[:i] + `encoding="UTF-8"` + decl[cut:] + s[end:]
 }

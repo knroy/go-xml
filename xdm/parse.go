@@ -642,6 +642,11 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 						"reading external entities additionally requires " +
 						"ExternalEntities)")
 				}
+				// §5.1: every processor checks the whole internal subset
+				// for well-formedness, whatever it goes on to read of it.
+				if err := checkDoctypeGrammar(string(t), false); err != nil {
+					return nil, fmt.Errorf("parse XML: %w", err)
+				}
 				// An ATTLIST may give an attribute a #FIXED or literal default,
 				// which a processor is required to add to every matching element
 				// — including a namespace declaration, since "xmlns:p CDATA
@@ -699,6 +704,14 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 						expandedSubset, err := ents.expandParameterEntities(d, ps.opts.BaseURI, 0)
 						if err != nil {
 							return nil, fmt.Errorf("parse XML: %w", err)
+						}
+						// The parameter entities' text is held to the
+						// grammar too, by the rules for it (see
+						// checkDoctypeGrammar).
+						if expandedSubset != d {
+							if err := checkDoctypeGrammar(expandedSubset, true); err != nil {
+								return nil, fmt.Errorf("parse XML: in a parameter entity: %w", err)
+							}
 						}
 						subset = expandedSubset
 						ents.parseDecls(subset, ps.opts.BaseURI)
