@@ -588,3 +588,29 @@ func TestSchemaElementMatchesSubstitutedChild(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// TestSchemaImportReadsXSD11 pins the XSD version an imported schema is read
+// under. XQuery 3.1 Appendix D leaves "whether the type system is based on
+// [XML Schema 1.0] or [XML Schema 1.1]" implementation-defined; this engine's
+// is 1.1, as its xs:dateTimeStamp and xs:error are, so a schema document is
+// read as 1.1 and may name the 1.1 built-ins. QT3 xq-e18.xsd restricts both
+// durations, which XSD 1.0 does not define.
+func TestSchemaImportReadsXSD11(t *testing.T) {
+	const ns = "http://example.org/d"
+	schema := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	    targetNamespace="http://example.org/d" xmlns="http://example.org/d">
+	  <xs:simpleType name="short"><xs:restriction base="xs:dayTimeDuration">
+	    <xs:maxInclusive value="PT12H"/></xs:restriction></xs:simpleType>
+	  <xs:simpleType name="stamp"><xs:restriction base="xs:dateTimeStamp"/></xs:simpleType>
+	</xs:schema>`
+	src := fmt.Sprintf(`import schema namespace d = %q;
+		("PT3H" cast as d:short) instance of xs:dayTimeDuration`, ns)
+	got, err := run(t, src, xquery.Options{Schemas: []xquery.Schema{
+		{Namespace: ns, Source: schema}}})
+	if err != nil {
+		t.Fatalf("a schema naming 1.1 built-ins must import: %v", err)
+	}
+	if got != "true" {
+		t.Errorf("got %q, want true", got)
+	}
+}

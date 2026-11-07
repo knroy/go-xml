@@ -77,13 +77,20 @@ versioning attributes, and the 1.1 built-in types. `xs:yearMonthDuration` and
 `xs:dayTimeDuration` carry the pattern facets Part 2 defines them by, so `P1D`
 is not a year-month duration, in an instance or in a derived type's facet value.
 
-Of the five 1.1 built-in types, a 1.0 schema cannot name `xs:dateTimeStamp` or
-`xs:error` (in `type=`, `base=`, `itemType=`, `memberTypes=` or `xsi:type`).
-`xs:anyAtomicType`, `xs:yearMonthDuration` and `xs:dayTimeDuration` resolve
-under 1.0 as well: the XPath data model defines them for every XPath 2.0+ host,
-and schemas imported into XQuery, which are read as 1.0, use them. This is a
-deliberate leniency; `vc:typeAvailable` still reports all five unavailable
-under 1.0.
+A 1.0 schema cannot name any of the five 1.1 built-in types --
+`xs:anyAtomicType`, `xs:yearMonthDuration`, `xs:dayTimeDuration`,
+`xs:dateTimeStamp` and `xs:error` -- in `type=`, `base=`, `itemType=`,
+`memberTypes=` or `xsi:type`. The XSD 1.0 schema for schemas defines none of
+them, so under `Version10` such a reference names no type definition and is
+`src-resolve`; under `Version11` all five resolve. `vc:typeAvailable` reports
+the same five unavailable under 1.0. `xs:untypedAtomic` and `xs:untyped` are
+XPath data model types, not schema ones, and resolve under neither version.
+
+The hosts read schemas as 1.1: XQuery's `import schema` (its type system is
+XSD 1.1-based, which XQuery 3.1 Appendix D leaves implementation-defined), and
+XSLT 3.0's `xsl:import-schema`. A schema imported into either may therefore
+restrict `xs:dayTimeDuration` or name `xs:dateTimeStamp`. A schema loaded
+directly through `xsd.Load` keeps the 1.0 default.
 
 Under `Version10` the 1.1 constructs are schema errors, because the XSD 1.0
 schema for schemas does not declare them: the elements `xs:assert`,

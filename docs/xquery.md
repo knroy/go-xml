@@ -348,6 +348,13 @@ functions and variables, and those are resolved late.)
 The facets the schema author wrote are applied, not merely the base type: a
 `hatsize` restricted to 4–12 makes `99 castable as h:hatsize` false.
 
+A schema document given as `Source` is read as **XSD 1.1**. XQuery 3.1
+Appendix D makes it implementation-defined "whether the type system is based
+on [XML Schema 1.0] or [XML Schema 1.1]", and this engine's is 1.1, so an
+imported schema may name `xs:dayTimeDuration`, `xs:dateTimeStamp` and the other
+1.1 built-ins, and its 1.1 constructs are applied. A schema registered as
+`Components` keeps the version it was assembled with.
+
 A validated node copied into a constructor follows the **construction mode**
 (§4.6). Under `preserve`, the default, the copy keeps its annotation, so
 `<w>{validate { <h:hat>8</h:hat> }}</w>/* instance of element(*, h:hatsize)`

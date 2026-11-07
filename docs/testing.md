@@ -630,6 +630,12 @@ An environment's `<schema>` is loaded as XSD 1.1 when it says
 (an `xs:assert`) is refused and the case runs with no schema
 (`go test ./tests/xslts -run TestEnvSchemaHonoursXSDVersion`).
 
+QT3 is different: its environment schemas are what `import schema` imports,
+so `tests/qt3` assembles every one as XSD 1.1, the version `xquery` reads an
+imported schema at (`go test ./tests/qt3 -run TestCaseSchemasReadAsXSD11`).
+A case written for a 1.0 type system declares `<dependency type="xsd-version"
+value="1.0"/>` and is skipped.
+
 `-output` runs a fourth leg with `GOXSLT_OUTPUT_CHECK`
 ([`tests/xslts/outputcheck.go`](../tests/xslts/outputcheck.go)): every case
 again with its principal result streamed to `TransformOptions.Output`,
