@@ -222,7 +222,7 @@ func (a *analyzer) exprRule(e xpath.Expr) props {
 		return a.varRef(x)
 
 	case *xpath.Step:
-		return a.step(x, a.ctxPosture)
+		return a.step(x, a.ctxPosture, a.ctxAllowsChildren)
 
 	case *xpath.PathExpr:
 		return a.path(x)
@@ -557,9 +557,18 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 
 // step applies §19.8.8.8 to a single axis step evaluated in the given context
 // posture.
-func (a *analyzer) step(s *xpath.Step, ctx posture) props {
+func (a *analyzer) step(s *xpath.Step, ctx posture, ctxChildren bool) props {
 	if ctx == postureRoaming {
 		return roamingFreeRanging
+	}
+	// §19.8.8.9's third rule: "If the statically-inferred context item type
+	// is such that the axis will always be empty (for example, applying the
+	// child axis to a text node or the parent axis to a document node), or
+	// if the NodeTest is one that can never select nodes on the chosen axis
+	// (for example, selecting attribute nodes on the child axis), then the
+	// sweep is motionless and the posture is grounded".
+	if ctx != postureGrounded && axisAlwaysEmpty(s, ctxChildren) {
+		return groundedMotionless
 	}
 	base := postureOfAxisStep(ctx, axisOf(s.Axis), stepSelectsElements(s))
 	if !base.streamable() {
@@ -627,15 +636,24 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 	if x.Root {
 		// A leading "/" is rewritten to a call on fn:root (§19.8.8.8),
 		// which from a striding posture in a streamed document yields the
-		// document node -- striding and motionless (§19.8.9.18). From any
-		// other context posture the analysis has no opinion.
-		if a.ctxPosture != postureStriding && a.ctxPosture != postureGrounded {
-			return a.unknown()
-		}
-		if a.ctxPosture == postureGrounded {
+		// document node -- striding and motionless (§19.8.9.18).
+		//
+		// From a crawling or climbing posture the rewrite to X does not
+		// apply, since §19.8.9.18 asks that "its posture is striding", so
+		// root(self::node()) is "rewritten as
+		// head((X)/ancestor-or-self::node())": self from either posture
+		// keeps it, ancestor-or-self is climbing and motionless (the
+		// §19.8.8.9 table), and head transmits that. A roaming context
+		// item roams.
+		switch a.ctxPosture {
+		case postureGrounded:
 			cur = groundedMotionless
-		} else {
+		case postureStriding:
 			cur = props{postureStriding, sweepMotionless}
+		case postureCrawling, postureClimbing:
+			cur = props{postureClimbing, sweepMotionless}
+		default:
+			return roamingFreeRanging
 		}
 	}
 	// §19.8.8.8 assesses a path in two phases: a provisional posture folded
@@ -664,7 +682,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 	for i, e := range x.Steps {
 		var next props
 		if st, ok := e.(*xpath.Step); ok {
-			next = a.step(st, cur.posture)
+			next = a.step(st, cur.posture, curAllowsChildren)
 			curAllowsChildren = stepAllowsChildren(st)
 		} else {
 			// A non-step operand in a path, as in "(a|b)/c". Assessed in
@@ -1202,9 +1220,9 @@ var singletonBuiltin = map[string]bool{
 // A function absent from this table is not necessarily unstreamable; it is
 // merely one the analysis has no entry for, and the caller treats it as "no
 // opinion". Functions that §19.8.9 gives their own section -- fn:current,
-// fn:last, fn:position, fn:root, fn:reverse, fn:innermost, fn:outermost,
-// fn:fold-right, fn:function-lookup, and the accumulator and merge functions
-// -- are deliberately absent, because the general rules do not describe them.
+// fn:last, fn:position, fn:root, fn:outermost, and the accumulator and merge
+// functions -- are deliberately absent, because the general rules do not
+// describe them.
 func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 	const (
 		A = usageAbsorption
@@ -1293,12 +1311,21 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 		// known to be in the result until its descendants have been read.
 		// fn:outermost stays absent: §19.8.9.15 gives it a genuine exception
 		// to the general rules, turning a crawling argument striding.
-		"reverse":                   {1: {N}},
-		"innermost":                 {1: {N}},
-		"filter":                    {2: {N, I}},
-		"for-each":                  {2: {N, I}},
-		"for-each-pair":             {3: {N, N, I}},
-		"fold-left":                 {3: {N, A, I}},
+		"reverse":       {1: {N}},
+		"innermost":     {1: {N}},
+		"filter":        {2: {N, I}},
+		"for-each":      {2: {N, I}},
+		"for-each-pair": {3: {N, N, I}},
+		"fold-left":     {3: {N, A, I}},
+		// §19.8.9.9: fold-right "follows the general streamability rules,
+		// with the first argument having operand usage navigation"; the
+		// other two are fold-left's, the same signature.
+		"fold-right": {3: {N, A, I}},
+		// §19.8.9.12: "the function follows the general streamability
+		// rules, for a function with two arguments that both have operand
+		// usage absorption". §10.3.6's caveat is dynamic: the context is
+		// saved with an absent focus.
+		"function-lookup":           {2: {A, A}},
 		"lang":                      {2: {A, I}},
 		"id":                        {2: {A, N}},
 		"idref":                     {2: {A, N}},
@@ -1482,6 +1509,40 @@ func stepSelectsElements(s *xpath.Step) bool {
 	default:
 		return true
 	}
+}
+
+// axisAlwaysEmpty reports whether §19.8.8.9 knows statically that step s
+// selects nothing. Without static type inference only two facts are used:
+// the node kinds each axis can reach, against a kind test; and a context
+// item that cannot have children (ctxChildren false: an attribute, namespace,
+// text, comment or processing-instruction node), whose child, descendant,
+// attribute and namespace axes are empty.
+func axisAlwaysEmpty(s *xpath.Step, ctxChildren bool) bool {
+	if !ctxChildren {
+		switch s.Axis {
+		case xpath.AxisChild, xpath.AxisDescendant, xpath.AxisAttribute, xpath.AxisNamespace:
+			return true
+		}
+	}
+	kt, ok := s.Test.(*xpath.KindTest)
+	if !ok || kt.Any {
+		return false
+	}
+	switch s.Axis {
+	case xpath.AxisAttribute:
+		return kt.Kind != xdm.KindAttribute
+	case xpath.AxisNamespace:
+		return kt.Kind != xdm.KindNamespace
+	case xpath.AxisChild, xpath.AxisDescendant, xpath.AxisFollowing, xpath.AxisFollowingSibling,
+		xpath.AxisPreceding, xpath.AxisPrecedingSibling:
+		// Children and the other tree axes reach no attribute, namespace
+		// or document node.
+		return kt.Kind == xdm.KindAttribute || kt.Kind == xdm.KindNamespace || kt.Kind == xdm.KindDocument
+	case xpath.AxisParent, xpath.AxisAncestor:
+		// A parent is an element or a document node.
+		return kt.Kind != xdm.KindElement && kt.Kind != xdm.KindDocument
+	}
+	return false
 }
 
 // stepAllowsChildren reports whether the nodes a step selects can have

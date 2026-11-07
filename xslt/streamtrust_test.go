@@ -53,20 +53,20 @@ func TestStreamTrustReproducers(t *testing.T) {
 			hdr + `<xsl:function name="f:g" streamability="inspection" as="xs:string"><xsl:param name="n" as="node()"/><xsl:choose><xsl:when test="true()"><xsl:sequence select="string($n/../rec[last()]/@k)"/></xsl:when></xsl:choose></xsl:function>` +
 				sd(fe(`<v><xsl:value-of select="f:g(.)"/></v>`)) + end, ""},
 		{"F1e absorbing fn, unmodelled two-instruction body", "unverified", nil,
-			hdr + `<xsl:function name="f:g" streamability="absorbing" as="xs:string"><xsl:param name="n" as="node()"/><xsl:variable name="v" select="1"/><xsl:sequence select="fold-right((), string($n/` + sib + `), concat#2)"/></xsl:function>` +
+			hdr + `<xsl:function name="f:g" streamability="absorbing" as="xs:string"><xsl:param name="n" as="node()"/><xsl:variable name="v" select="1"/><xsl:sequence select="(root($n), string($n/` + sib + `))[2]"/></xsl:function>` +
 				sd(fe(`<v><xsl:value-of select="f:g(.)"/></v>`)) + end, ""},
 		{"F1 control: absorbing fn, modelled body", "verified", nil,
 			hdr + `<xsl:function name="f:g" streamability="absorbing" as="xs:string"><xsl:param name="n" as="node()"/><xsl:sequence select="string($n/@k)"/></xsl:function>` +
 				sd(fe(`<v><xsl:value-of select="f:g(.)"/></v>`)) + end, ""},
 		// A streamable attribute set and accumulators whose checks gave up.
-		{"F1d streamable attribute set via fold-right", "unverified", nil,
-			hdr + `<xsl:attribute-set name="as" streamable="yes"><xsl:attribute name="a" select="fold-right((), string(` + sib + `), concat#2)"/></xsl:attribute-set>` +
+		{"F1d streamable attribute set via root(.)", "unverified", nil,
+			hdr + `<xsl:attribute-set name="as" streamable="yes"><xsl:attribute name="a" select="(root(.), string(` + sib + `))[2]"/></xsl:attribute-set>` +
 				sd(fe(`<v xsl:use-attribute-sets="as"/>`)) + end, ""},
 		{"F1d control: motionless attribute set", "verified", nil,
 			hdr + `<xsl:attribute-set name="as" streamable="yes"><xsl:attribute name="a" select="string(@k)"/></xsl:attribute-set>` +
 				sd(fe(`<v xsl:use-attribute-sets="as"/>`)) + end, ""},
 		{"F1e accumulator rule select via concat/2", "unverified", nil,
-			hdr + `<xsl:accumulator name="a" initial-value="''" streamable="yes"><xsl:accumulator-rule match="rec" select="fold-right((), string(` + sib + `), concat#2)"/></xsl:accumulator>` +
+			hdr + `<xsl:accumulator name="a" initial-value="''" streamable="yes"><xsl:accumulator-rule match="rec" select="(root(.), string(` + sib + `))[2]"/></xsl:accumulator>` +
 				sdAcc(fe(`<v><xsl:value-of select="accumulator-before('a')"/></v>`)) + end, ""},
 		{"A1 accumulator rule with a sequence constructor", "unverified", nil,
 			hdr + `<xsl:accumulator name="a" initial-value="''" streamable="yes"><xsl:accumulator-rule match="rec"><xsl:sequence select="string(` + sib + `)"/></xsl:accumulator-rule></xsl:accumulator>` +
@@ -93,16 +93,16 @@ func TestStreamTrustReproducers(t *testing.T) {
 		{"M3 control: comparison with a numeric literal, motionless", "verified", nil,
 			hdr + mode + `<xsl:template match="rec[@k = 3]" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
 		{"M4 rule pattern unknown", "unverified", nil,
-			hdr + mode + `<xsl:template match="rec[fold-right((), ` + sib + `, concat#2) = '3']" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
+			hdr + mode + `<xsl:template match="rec[(root(.), ` + sib + `)[2] = '3']" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
 		{"M5 rule body unknown", "unverified", nil,
-			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="fold-right((), string(` + sib + `), concat#2)"/></v></xsl:template>` + apply + end, ""},
+			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="(root(.), string(` + sib + `))[2]"/></v></xsl:template>` + apply + end, ""},
 		// M8: a rule pattern may read a streamable accumulator
 		// (§19.8.9.2), and "." is a motionless pattern (§19.8.10).
 		{"M8 rule pattern reads a verified accumulator", "verified", nil,
 			hdr + `<xsl:accumulator name="a" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>` + mode +
 				`<xsl:template match="rec[accumulator-before('a') = 2]" mode="s"><hit k="{@k}"/></xsl:template>` + sdAcc(`<xsl:apply-templates select="doc/rec" mode="s"/>`) + end, ""},
 		{"M8 rule pattern reads an unverified accumulator", "unverified", nil,
-			hdr + `<xsl:accumulator name="a" initial-value="''" streamable="yes"><xsl:accumulator-rule match="rec" select="fold-right((), string(` + sib + `), concat#2)"/></xsl:accumulator>` + mode +
+			hdr + `<xsl:accumulator name="a" initial-value="''" streamable="yes"><xsl:accumulator-rule match="rec" select="(root(.), string(` + sib + `))[2]"/></xsl:accumulator>` + mode +
 				`<xsl:template match="rec[accumulator-before('a') = '2']" mode="s"><hit k="{@k}"/></xsl:template>` + sdAcc(`<xsl:apply-templates select="doc/rec" mode="s"/>`) + end, ""},
 		{"M8 rule pattern . (verified; the planner does not take it)", "verified", nil,
 			hdr + mode + `<xsl:template match="." mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
