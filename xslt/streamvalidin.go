@@ -190,10 +190,13 @@ func (sv *streamValidation) attach(c *xdmstream.Cursor, strip func(*xdm.Node) bo
 	if sv.docIDs {
 		ids = &docIDs{owners: map[string]uint64{}}
 	}
-	stripped := error(nil)
+	stripped, docElem := error(nil), ""
 	c.Observe(func(n *xdm.Node, d int, end bool, ord uint64) {
-		if sv.dropDTD && d == 1 && !end && n != nil && n.Kind() == xdm.KindElement {
-			xdmburst.DropDTD(n)
+		if d == 1 && !end && n != nil && n.Kind() == xdm.KindElement {
+			if sv.dropDTD {
+				xdmburst.DropDTD(n)
+			}
+			docElem = describeNode(n)
 		}
 		for _, v := range vs {
 			v.Observe(n, d, end)
@@ -207,11 +210,24 @@ func (sv *streamValidation) attach(c *xdmstream.Cursor, strip func(*xdm.Node) bo
 	})
 	c.StripWhitespace(validatedStripper(vs, strip, sv.pre != nil))
 	return func() error {
-		for _, v := range vs {
+		for k, v := range vs {
 			if err := v.Err(); err != nil {
 				if sv.main != 0 {
 					return sourceError(sv.main, err)
 				}
+				if k == len(vs)-1 && sv.schema != nil && sv.mode.Root == xsdstream.Type {
+					// type= is the tree's XTTE1540 whatever the failure
+					// (assess: ValidateAgainstTypeCopy). ERR XTTE1540: "if
+					// an [xsl:]type attribute is defined ... and the outcome
+					// of schema validity assessment against that type is
+					// that the validity property ... is other than valid".
+					// Not final: the tree's text lists every failure, Err
+					// the first; the re-run raises it.
+					return fmt.Errorf("XTTE1540: %s is not valid against %s: %w", docElem, sv.mode.Type.Lexical(), err)
+				}
+				// validation= strict or lax: the tree's code (XTTE1510,
+				// 1512, 1515, 1555) turns on every failure, the stream's
+				// Err on the first; the re-run raises it.
 				return fmt.Errorf("XTTE1510: the streamed document is not valid: %w", err)
 			}
 		}
@@ -609,12 +625,12 @@ func (e *treesError) Error() string { return e.err.Error() }
 func (e *treesError) Unwrap() error { return e.err }
 
 // settle is the error of a streamed body that failed with err: err as the
-// tree's when it is invalidity (invalidError) and the rest of the document
-// reads, validates and accumulates without error, which the tree had done
-// before its body ran; otherwise err, for the re-run.
+// tree's when it is final (invalidity, invalidError, or a family of
+// finalCodes: streamFinal) and the rest of the document reads, validates
+// and accumulates without error, which the tree had done before its body
+// ran; otherwise err, for the re-run.
 func (run *streamRun) settle(err error, valid func() error, acc *streamAccums) error {
-	var ie *invalidError
-	if !errors.As(err, &ie) {
+	if !streamFinal(err, nil) { // streamexec.go
 		return err
 	}
 	if run.c.At().Kind != xdmstream.EndDocument && run.drain() != nil || valid() != nil || acc.finish() != nil {

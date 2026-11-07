@@ -647,8 +647,17 @@ final (§19.8.8.5: an error during streamed processing invalidates the output
 written before it; §2.14: the first error detected may be the one raised).
 The error path's memory is pinned by `go test ./xslt -run
 TestStreamErrorPathMemory -v`: a sum over big transactions that fails at the
-last one holds 2.6 MB streamed against the tree's 48 MB (with the re-run,
-43.6 MB).
+last one (FORG0001, a final family) holds 3.1 MB streamed, with no re-run,
+against the tree's 48.6 MB.
+
+A container's streamed error is final, with no re-run, when its family is
+listed in `finalCodes` (`xslt/streamexec.go`; `mergeFinalCodes` adds the
+merge's own) and the rest of the document then reads, validates and
+accumulates without error (`settle`; the merge's `settleMerge` reads every
+input to its end); the list's comment gives each family's argument.
+`go test ./xslt -run TestStreamFinalErrors` raises each family streamed and
+on the tree, requires the same text with no re-run, then drops the family
+from the list and requires the re-run.
 
 A principal input the catalog declares `streaming="true"`, a file or inline
 `<content>` (no `@select` or XInclude, no initial-mode selection), is handed
@@ -699,6 +708,17 @@ code, and 4 a wrong one: `stream-002` and `non-stream-002` (a missing
 document: the streamed open error carries no `FODC0002`) and `stream-104` and
 `non-stream-104` (`XTTE1510` where the tree's `type=` validation raises
 `XTTE1540`).
+
+At round SI lane ST3, with `-output` against a77565f9: 2,661 cases streamed,
+8 with a fallback, 28 re-run (107 at a77565f9), 0 guard hits, zero
+unexplained differences; base, branch and norerun legs 11,505 passing. All
+28 containers that still fail while streaming give the tree's code and
+verdict: XPTY0004 (14, not listed: a rewritten set operator's text says
+"union" for an `except`), the input's own invalidity under `validation=`
+(5) or `type=` (2: the tree's text lists every failure, the stream's the
+first), XTDE0640 (1), and 6 whose error the settle could not confirm
+(`merge-072`, `merge-074`, `si-map-007`, `sx-MapExpr-007`, `sx-treat-102`,
+`sx-treat-103`).
 
 The TSV line holds the runs per strategy (core: containers; main: principal
 inputs `TransformReader` streamed; merge: streamed merge sources), fallbacks, guard hits, re-runs and

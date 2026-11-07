@@ -1718,6 +1718,89 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	return true, terr
 }
 
+// finalCodes are the error families whose streamed error a container
+// returns as final, with no re-run on the tree, once the rest of its
+// document is known to be what the tree reads before its body runs
+// (settle; the merge's settleMerge): well-formed, valid, its accumulators
+// without error. Every other failure re-runs.
+//
+// What makes a family final: it is raised by evaluating a construct of the
+// body on the values the stream gives it, which are the tree's (the same
+// document, typed alike: the differential's base and off legs), and the
+// stream evaluates the constructs the tree does, under the same xsl:if,
+// xsl:choose and xsl:try. So the error is one the tree raises too, at the
+// same item, or at another one where the body has several errors: XSLT 3.0
+// §2.14, "the detection of dynamic errors is to some degree
+// implementation-dependent", and XPath 3.1 §2.3.4, "An implementation is
+// always free to evaluate the operands of an operator in any order".
+// §19.8.8.5: "Dynamic errors during streamed processing of an input
+// document invalidate all output generated prior to the failure": what the
+// body wrote is dropped with the transformation, or by the xsl:try that
+// catches the error, as the tree's is. Each family below has a case in
+// TestStreamFinalErrors that fails when the family is dropped from the
+// list, and its streamdiff norerun leg gives the tree's code and verdict in
+// every W3C case that raises it.
+//
+// Left out: XTTE15xx by code (invalidity of what the body constructs is
+// final through invalidError, marked where assess raises it; an unmarked one
+// is the input's, whose code the tree takes from every failure: attach),
+// XTDE0640 (a circularity, met where the accumulators are evaluated, which
+// the stream does in another order than the tree), FODC0002 (final only
+// when the document cannot be opened: runStream), XPTY0004 (the plans
+// evaluate rewritten expressions, whose own text it can carry: an except
+// split to "$v union ()" says "union", streamsplit_k2.go), and every error
+// with no code (a posture fault, a resource limit, a parse error).
+var finalCodes = map[string]bool{
+	// XPath: a value the expression's own rules refuse, at the item it is
+	// evaluated on. XPDY0050, treat as; FOTY0013, atomizing a function.
+	"XPDY0050": true, "FOTY0013": true,
+	// F&O: an argument the function refuses: FORG0001, a cast; FORG0003,
+	// FORG0004, FORG0005, zero-or-one, one-or-more, exactly-one; FORG0006,
+	// an effective boolean value, avg, sum, min, max; FOCH0001, a codepoint;
+	// FOAR0001, division by zero. FOCH0002, an unknown collation, is raised
+	// at the call, whose collation comes from its argument or a parameter,
+	// not from the document: the tree raises it at the same call.
+	"FORG0001": true, "FORG0003": true, "FORG0004": true, "FORG0005": true, "FORG0006": true,
+	"FOCH0001": true, "FOCH0002": true, "FOAR0001": true,
+	// XSLT construction: the computed name or namespace of xsl:element
+	// (XTDE0820, 0830, 0835) and xsl:attribute (XTDE0850, 0855, 0860, 0865),
+	// a zero-length xsl:namespace (XTDE0930), a function item in content
+	// (XTDE0450), an xsl:copy select of more than one item (XTTE3180), a
+	// variable's value against its as (XTTE0570), xsl:map's entries
+	// (XTTE3375, XTDE3365): each raised as the instruction is evaluated on
+	// its values. XTDE3362: accumulator-before or -after for an accumulator
+	// that does not apply, raised at the call whatever the document holds.
+	"XTDE0820": true, "XTDE0830": true, "XTDE0835": true,
+	"XTDE0850": true, "XTDE0855": true, "XTDE0860": true, "XTDE0865": true,
+	"XTDE0930": true, "XTDE0450": true, "XTTE3180": true, "XTTE0570": true,
+	"XTTE3375": true, "XTDE3365": true, "XTDE3362": true,
+}
+
+// mergeFinalCodes are the families final for a streamed xsl:merge besides
+// finalCodes, raised by the merge itself: XTDE2220, an input out of order,
+// at the first pair the stream reads out of order (the tree checks every
+// input after collecting them all: settleMerge reads the rest, so the
+// tree's collect has no earlier error); XTDE3480 and XTDE3510,
+// current-merge-group() and current-merge-key() where they are absent,
+// raised in the action, which the tree runs on the same groups in the
+// same order.
+var mergeFinalCodes = map[string]bool{"XTDE2220": true, "XTDE3480": true, "XTDE3510": true}
+
+// streamFinal reports whether err, a streamed container's failure, is of a
+// final family: invalidError, or a code of finalCodes or of extra.
+func streamFinal(err error, extra map[string]bool) bool {
+	var ie *invalidError
+	if errors.As(err, &ie) {
+		return true
+	}
+	var pe *streamtrace.PostureError
+	if errors.As(err, &pe) || errors.Is(err, xdm.ErrResourceLimit) {
+		return false
+	}
+	code := xdm.ErrorCode(err)
+	return finalCodes[code] || extra[code]
+}
+
 // errKeptStreamNode sends a container to the tree when its result, a
 // sequence, would hold a node of the stream at its top.
 var errKeptStreamNode = errors.New("streaming: a node of the stream at the top of the result")
@@ -1755,7 +1838,26 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 			return br.(*FileResolver).streamDocAs(ctx, uri, base, false, fn) // the copy's: no document URI
 		}
 	}
+	opened := false
+	defer func() {
+		if err == nil || opened {
+			return
+		}
+		// The document could not be read at all: what fn:doc raises, as the
+		// tree's load does. 18.1: "The process of obtaining a document node
+		// given a URI is the same as for the doc function"; F&O 14.6.1: "A
+		// dynamic error is raised [err:FODC0002] if the resource cannot be
+		// retrieved or cannot be parsed successfully as XML".
+		unread()
+		err = fmt.Errorf("FODC0002: cannot retrieve %q: %w", href, err)
+		if _, ok := br.(*FileResolver); ok {
+			// The tree's load resolves, confines, opens and size-checks the
+			// same file as streamDocAs: its error is this one.
+			err = &treesError{err}
+		}
+	}()
 	return stream(rt.ctx, href, base, func(c *xdmstream.Cursor) error {
+		opened = true
 		if strip != nil {
 			c.StripWhitespace(strip)
 		}

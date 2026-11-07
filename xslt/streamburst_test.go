@@ -228,7 +228,7 @@ func TestBurstsFailedReadIsNotRead(t *testing.T) {
 // Each row runs streamed and on the tree; the two must agree, error text
 // included, and an error must have come from the tree path (fallback: the
 // select gave up and was evaluated on the tree, or the container was run on
-// it again).
+// it again) unless its family is final (finalCodes).
 func TestBurstSelectsMatchTree(t *testing.T) {
 	const recs = `<doc><rec k="a" v="3"/><rec k="B" v="1.5"><x>p</x><x>q</x></rec><other v="99"/><rec k="a" v="10"><x>r</x></rec></doc>`
 	const nan = `<doc><rec v="2"/><rec v="NaN"/><rec v="1"/></doc>`
@@ -248,14 +248,14 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"sum, empty", `<xsl:value-of select="sum(doc/none/@v)"/>`, recs, true, false},
 		{"sum, zero", `<xsl:sequence select="sum(doc/none/@v, 'zero')"/>`, recs, true, false},
 		{"sum, mixed numerics", `<xsl:value-of select="sum(doc/rec/(if (@k = 'a') then xs:decimal(@v) else xs:double(@v)))"/>`, recs, true, false},
-		{"sum, untyped error", `<xsl:value-of select="sum(doc/rec/@v)"/>`, bad, true, true},
+		{"sum, untyped error", `<xsl:value-of select="sum(doc/rec/@v)"/>`, bad, true, false},
 		{"sum, error before a malformed tail", `<xsl:value-of select="sum(doc/rec/xs:integer(@v))"/>`, tail, true, true},
 		{"max", `<xsl:value-of select="max(doc/rec/@v) + 1"/>`, recs, true, false},
 		{"min, NaN", `<xsl:value-of select="min(doc/rec/@v)"/>`, nan, true, false},
 		{"max, strings by collation", `<xsl:value-of select="max(doc/rec/@k/string(), ` + ci + `)"/>`, recs, true, false},
 		{"min, strings", `<xsl:value-of select="min(doc/rec/@k/string())"/>`, recs, true, false},
 		{"max, mixed numerics", `<xsl:value-of select="max(doc/rec/(if (@k = 'a') then xs:decimal(@v) else xs:float(@v)))"/>`, recs, true, true},
-		{"max, untyped error", `<xsl:value-of select="max(doc/rec/@k)"/>`, recs, true, true},
+		{"max, untyped error", `<xsl:value-of select="max(doc/rec/@k)"/>`, recs, true, false},
 		{"max, empty", `<xsl:sequence select="empty(max(doc/none/@v))"/>`, recs, true, false},
 		// bounded reducers, not folded
 		{"avg", `<xsl:value-of select="avg(doc/rec/@v)"/>`, recs, true, false},
@@ -267,7 +267,7 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"some, type error", `<xsl:value-of select="some $r in doc/rec satisfies $r/@v gt 5"/>`, recs, true, true}, // held at the document node (streamhold.go)
 		{"literal position", `<xsl:value-of select="(doc/rec/@v)[2] + 1"/>`, recs, true, false},
 		{"head", `<xsl:copy-of select="head(doc/rec/@k/string())"/>`, recs, true, false},
-		{"exactly-one error", `<xsl:copy-of select="exactly-one(doc/rec)"/>`, recs, true, true}, // held at the document node (streamhold.go)
+		{"exactly-one error", `<xsl:copy-of select="exactly-one(doc/rec)"/>`, recs, true, false}, // held at the document node (streamhold.go)
 		{"deep-equal", `<xsl:value-of select="deep-equal(doc/rec/@k/string(), ('a', 'B', 'a'))"/>`, recs, true, false},
 		{"cast", `<xsl:value-of select="xs:string(doc/rec[@k = 'B']/@v)"/>`, recs, true, false},
 		{"positional within the record", `<xsl:value-of select="count(doc/rec/x[1])"/>`, recs, true, false},
@@ -284,10 +284,10 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"unordered", `<xsl:value-of select="sum(unordered(doc/rec/@v))"/>`, recs, true, false}, // held at the document node (streamhold.go)
 		{"malformed tail", `<xsl:value-of select="doc/rec/@v"/>`, tail, true, true},
 		// the same consumers over values: admitted
-		{"boolean over values", `<xsl:value-of select="not(boolean(doc/rec/x/data()))"/>`, recs, true, true},
+		{"boolean over values", `<xsl:value-of select="not(boolean(doc/rec/x/data()))"/>`, recs, true, false},
 		{"some over values", `<xsl:value-of select="some $v in doc/rec/@v/data() satisfies $v > 5"/>`, recs, true, false},
 		{"literal position over values", `<xsl:value-of select="(doc/rec/@v/data())[2] + 1"/>`, recs, true, false},
-		{"exactly-one over values", `<xsl:copy-of select="exactly-one(doc/rec/@k/string())"/>`, recs, true, true},
+		{"exactly-one over values", `<xsl:copy-of select="exactly-one(doc/rec/@k/string())"/>`, recs, true, false},
 		{"simple map over values", `<xsl:value-of select="doc/rec/@k/string() ! upper-case(.)"/>`, recs, true, false},
 		{"copies the path made", `<out><xsl:copy-of select="doc/rec[@v > 2]/copy-of()"/></out>`, recs, true, false},
 		{"copies the path made, counted", `<xsl:value-of select="count(doc/rec[@v > 2]/copy-of())"/>`, recs, true, false},

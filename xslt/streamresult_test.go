@@ -59,7 +59,8 @@ func TestStreamResultDocMatchesTree(t *testing.T) {
 		{"motionless", `<xsl:result-document href="m.xml" method="text">m</xsl:result-document><xsl:value-of select="count(doc/rec)"/>`, false},
 		{"same-href", `<xsl:for-each select="doc/rec"><xsl:result-document href="same.xml"><x/></xsl:result-document></xsl:for-each>`, true},
 		{"kept", `<xsl:for-each select="doc/rec"><xsl:result-document href="k{position()}.xml"><xsl:sequence select="."/></xsl:result-document></xsl:for-each>`, true},
-		{"rollback", `<xsl:result-document href="a.xml"><a/></xsl:result-document><xsl:value-of select="sum(doc/rec/@v)"/>`, true},
+		{"rollback", `<xsl:result-document href="a.xml"><a/></xsl:result-document><xsl:value-of select="doc/rec/@v eq '1'"/>`, true},
+		{"final", `<xsl:result-document href="a.xml"><a/></xsl:result-document><xsl:value-of select="sum(doc/rec/@v)"/>`, false}, // FORG0001: finalCodes
 	} {
 		want, _ := resultDocRun(t, c.body, dir, false)
 		got, tr := resultDocRun(t, c.body, dir, true)

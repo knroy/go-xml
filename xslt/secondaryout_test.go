@@ -256,11 +256,11 @@ func TestSecondaryOutputHeldUntilDone(t *testing.T) {
 		t.Errorf("try: err %v, opened %v", err, w.order)
 	}
 	before := streamtrace.Snapshot()
-	sheet = secSheet(t, dir, ``, `<xsl:template match="/"><xsl:source-document href="doc.xml" streamable="yes"><xsl:result-document href="a.xml"><a><b/></a></xsl:result-document><xsl:value-of select="sum(doc/rec/@v)"/></xsl:source-document></xsl:template>`)
+	sheet = secSheet(t, dir, ``, `<xsl:template match="/"><xsl:source-document href="doc.xml" streamable="yes"><xsl:result-document href="a.xml"><a><b/></a></xsl:result-document><xsl:value-of select="doc/rec/@v eq '1'"/></xsl:source-document></xsl:template>`)
 	w = &secWriters{}
 	_, err := secRun(t, sheet, secDoc, false, w, dir)
 	tr := streamtrace.Snapshot().Sub(before)
-	if err == nil || xdm.ErrorCode(err) != "FORG0001" || len(w.bufs) != 0 || tr.Reruns == 0 {
+	if err == nil || xdm.ErrorCode(err) != "XPTY0004" || len(w.bufs) != 0 || tr.Reruns == 0 {
 		t.Errorf("re-run: err %v, opened %v, re-runs %d", err, w.order, tr.Reruns)
 	}
 }

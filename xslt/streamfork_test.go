@@ -96,9 +96,10 @@ func TestStreamForkMatchesTree(t *testing.T) {
 	}
 }
 
-// TestStreamForkErrorOrder: the error a tee returns, before the re-run on the
-// tree replaces it, is the tree's: that of the first prong in prong order
-// that fails, though a later prong fails earlier in the document. The
+// TestStreamForkErrorOrder: the error a tee returns, final (FORG0001:
+// finalCodes) with no re-run on the tree, is the tree's: that of the first
+// prong in prong order that fails, though a later prong fails earlier in
+// the document. The
 // document: rec 1 has v="x", where the early prong's cast fails; the late
 // prong's fails once it has read every @k.
 func TestStreamForkErrorOrder(t *testing.T) {
@@ -112,16 +113,13 @@ func TestStreamForkErrorOrder(t *testing.T) {
 	fine := `<xsl:sequence select="count(//rec)"/>`
 	for _, prongs := range [][]string{{late, early}, {early, late}, {fine, late, early}, {fine, early, fine, late}} {
 		body := "<out><xsl:fork>" + strings.Join(prongs, "") + "</xsl:fork></out>"
-		var streamErr error
-		traceRerun = func(err error) { streamErr = err }
 		_, se, st := coreRun(coreSheet(body), dir, true, TransformOptions{})
-		traceRerun = nil
 		_, te, _ := coreRun(coreSheet(body), dir, false, TransformOptions{})
-		if st.Kinds[streamtrace.KindFork] != 1 || st.Reruns != 1 || streamErr == nil {
-			t.Fatalf("%s: trace %+v, stream error %v", body, st, streamErr)
+		if st.Kinds[streamtrace.KindFork] != 1 || st.Reruns != 0 {
+			t.Fatalf("%s: trace %+v", body, st)
 		}
-		if se != te || !strings.Contains(te, streamErr.Error()) {
-			t.Errorf("%s:\nstream %v\ntree   %s", body, streamErr, te)
+		if se == "" || se != te {
+			t.Errorf("%s:\nstream %s\ntree   %s", body, se, te)
 		}
 	}
 }

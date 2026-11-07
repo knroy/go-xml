@@ -329,6 +329,10 @@ func (i *mergeInstr) executeStream(rt *runtime, out *outputBuilder) (bool, error
 	if cerr := rt.ctx.Err(); cerr != nil {
 		return true, cerr // cancelled: no rerun on the tree
 	}
+	if fe, ok := err.(*treesError); ok {
+		rt.localsPop(mark)
+		return true, fe.err // settleMerge: the tree's error, no rerun
+	}
 	streamtrace.Rerun()
 	if streamtrace.NoRerun() {
 		return true, err // tests/streamdiff's norerun leg: the streamed error
@@ -467,7 +471,7 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 	open = func(j int) error {
 		if j == len(docs) {
 			if err := i.merge(rt, out, inputs, resolved, colls); err != nil {
-				return err
+				return i.settleMerge(rt, err, inputs, resolved, colls, accs)
 			}
 			return mergeAccumsPending(accs) // streammerge_accum.go
 		}
@@ -522,6 +526,35 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 		})
 	}
 	return open(0)
+}
+
+// settleMerge is the error of a streamed merge that failed with err: err as
+// the tree's (treesError) when it is of a final family (streamFinal,
+// mergeFinalCodes) and every input reads to its end, its keys computed and
+// its order checked, its document valid, its accumulators without error,
+// and the keys across sources comparable: what the tree's collect, its
+// XTTE2230 check and its XTDE2220 check do before its first action runs.
+// Otherwise err, for the re-run.
+func (i *mergeInstr) settleMerge(rt *runtime, err error, inputs []*mergeInput, resolved [][]*sortKey,
+	colls [][]xpath.Collation, accs []*mergeAccums) error {
+
+	if !streamFinal(err, mergeFinalCodes) {
+		return err
+	}
+	for _, in := range inputs {
+		for {
+			if in.advance(rt, resolved[in.src], colls[in.src]) != nil {
+				return err
+			}
+			if in.head == nil {
+				break
+			}
+		}
+	}
+	if i.comparableAcross(inputs) != nil || mergeAccumsPending(accs) != nil {
+		return err
+	}
+	return &treesError{err}
 }
 
 // mergeOpenCount is how many documents enclosing streamed merges hold open.
@@ -746,8 +779,12 @@ func (i *mergeInstr) merge(rt *runtime, out *outputBuilder, inputs []*mergeInput
 			return err
 		}
 	}
-	// XTTE2230 across sources, on the samples the tree would take: per
-	// source, the first of each kind in anchor order.
+	return i.comparableAcross(inputs)
+}
+
+// comparableAcross is XTTE2230 across sources, on the samples the tree
+// would take: per source, the first of each kind in anchor order.
+func (i *mergeInstr) comparableAcross(inputs []*mergeInput) error {
 	var samples []mergeEntry
 	for _, in := range inputs {
 		for k := range in.typed {
