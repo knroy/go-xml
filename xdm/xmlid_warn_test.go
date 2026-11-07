@@ -20,7 +20,7 @@ func TestParseWarnXMLIDErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || !strings.Contains(got[0], `duplicate xml:id value "x"`) ||
+	if len(got) != 2 || !strings.Contains(got[0], `duplicate ID value "x"`) ||
 		!strings.Contains(got[1], `xml:id value "9z" is not an NCName`) {
 		t.Fatalf("warnings = %q", got)
 	}
@@ -52,5 +52,28 @@ func TestParseWarnXMLIDFloodBounded(t *testing.T) {
 	}
 	if len(got) != maxIDWarnings+1 || !strings.Contains(got[maxIDWarnings].Error(), "suppressed") {
 		t.Fatalf("%d warnings, last %v", len(got), got[len(got)-1])
+	}
+}
+
+// A DTD-typed ID shares one ID space with xml:id (xml:id §4; XML 1.0 VC: ID),
+// so an xml:id repeating a DTD ID value, or a DTD ID repeating an xml:id
+// value, is a duplicate. Two DTD IDs alike are XML 1.0's validity error,
+// which a non-validating parse does not report, and stay silent here.
+func TestParseWarnXMLIDDuplicatesDTDID(t *testing.T) {
+	var got []string
+	_, err := ParseString(`<!DOCTYPE r [<!ATTLIST e k ID #IMPLIED>]>
+<r><e k="p"/><a xml:id="p"/><b xml:id="q"/><e k=" q "/><e k="s"/><e k="s"/></r>`,
+		ParseOptions{AllowDOCTYPE: true, Warn: func(e error) {
+			if ErrorCode(e) != "XQDY0091" {
+				t.Errorf("code %q, want XQDY0091", ErrorCode(e))
+			}
+			got = append(got, e.Error())
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || !strings.Contains(got[0], `duplicate ID value "p"`) ||
+		!strings.Contains(got[1], `duplicate ID value "q"`) {
+		t.Fatalf("warnings = %q", got)
 	}
 }
