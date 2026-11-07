@@ -345,6 +345,10 @@ func TestUnrecognisedAttributeDefault(t *testing.T) {
 		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #FIXED "v">]><r a="v"/>`,
 		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA "dflt">]><r/>`,
 		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA "dflt">]><r a="other"/>`,
+		// §3.3.2 normalizes the #FIXED default (§3.3.3) before it is
+		// compared: "&#41;" is ")" (xmlconf ibm-valid-P32-ibm32v03.xml).
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #FIXED "&#41;&#x29;&amp;">]><r a="))&amp;"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #FIXED "&#41;">]><r/>`,
 	}
 	for _, src := range valid {
 		if err := check(t, src); err != nil {

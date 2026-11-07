@@ -74,14 +74,13 @@ var tryOutSheets = []struct {
 	{"first-attr-no", ``, `<xsl:template match="/"><out><xsl:try rollback-output="no"><xsl:attribute name="a">1</xsl:attribute><x/><y/><xsl:catch/></xsl:try></out></xsl:template>`, true, ""},
 	{"first-attr-no-fail", ``, `<xsl:template match="/"><out><xsl:try rollback-output="no"><xsl:attribute name="a">1</xsl:attribute><x/><y/><xsl:sequence select="error()"/><xsl:catch/></xsl:try></out></xsl:template>`, true, "XTDE3530"},
 	{"first-attr-nested", ``, `<xsl:template match="/"><out><xsl:try><xsl:attribute name="a">1</xsl:attribute><x/><w><xsl:try><xsl:attribute name="b">2</xsl:attribute><y/><z/><xsl:sequence select="error()"/><xsl:catch><c/></xsl:catch></xsl:try></w><xsl:sequence select="error()"/><xsl:catch><o/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
-	// The try succeeds and returns (@a, x, y) or (x, y, @a, z); the attribute
-	// then follows content in <out>'s result sequence, XTDE0410 (§5.7.1),
-	// raised constructing <out>, outside the try: "returns the result of that
-	// evaluation if it succeeds without error" (§8.3). The attribute used to
-	// be dropped silently. Saxon-HE 12.7 catches it inside the try instead.
-	{"first-attr-after-content", ``, `<xsl:template match="/"><out><a/><xsl:try><xsl:attribute name="a">1</xsl:attribute><x/><y/><xsl:catch><c/></xsl:catch></xsl:try></out></xsl:template>`, false, "XTDE0410"},
+	// The try returns (@a, x, y) or (x, y, @a, z); the attribute then
+	// follows content in <out>'s result sequence, XTDE0410 (§5.7.1), which
+	// the try catches: 8.3.1 has its output "written to the result tree
+	// during the execution of xsl:try". Saxon-HE 12.7 catches it there too.
+	{"first-attr-after-content", ``, `<xsl:template match="/"><out><a/><xsl:try><xsl:attribute name="a">1</xsl:attribute><x/><y/><xsl:catch><c/></xsl:catch></xsl:try></out></xsl:template>`, false, ""},
 	{"first-attr-level", ``, `<xsl:template match="/"><z/><xsl:try><xsl:attribute name="a">1</xsl:attribute><x/><y/><xsl:catch><c/></xsl:catch></xsl:try></xsl:template>`, false, "SENR0001"},
-	{"attr-after-content", ``, `<xsl:template match="/"><out><xsl:try><x/><y/><xsl:attribute name="a">1</xsl:attribute><z/><xsl:catch/></xsl:try></out></xsl:template>`, true, "XTDE0410"},
+	{"attr-after-content", ``, `<xsl:template match="/"><out><xsl:try><x/><y/><xsl:attribute name="a">1</xsl:attribute><z/><xsl:catch/></xsl:try></out></xsl:template>`, true, ""},
 	{"nested", ``, `<xsl:template match="/"><out><xsl:try><xsl:for-each select="//rec"><xsl:try><r k="{@k}"/><s><xsl:value-of select="xs:integer(@v)"/></s><xsl:catch><bad k="{@k}"/></xsl:catch></xsl:try></xsl:for-each><xsl:catch><outer/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
 	{"nested-outer-fails", ``, `<xsl:template match="/"><out><xsl:try><xsl:for-each select="//rec"><xsl:try><r k="{@k}"/><s><xsl:value-of select="xs:integer(@v)"/></s><xsl:catch errors="err:XPTY0004"><bad/></xsl:catch></xsl:try></xsl:for-each><xsl:catch><outer code="{$err:code}"/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
 	{"nested-inner-uncaught", ``, `<xsl:template match="/"><out><xsl:try><a/><xsl:try><b/><c/><xsl:sequence select="error()"/><xsl:catch errors="err:XPTY0004"/></xsl:try><xsl:catch><outer/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
@@ -155,8 +154,8 @@ var tryOutSheets = []struct {
 	// (TestStreamOutFuzz seed 56434).
 	{"element-inner-rollback-text-catch", ``, `<xsl:template match="/"><out><xsl:try><tw><tz/><xsl:try><xsl:sequence select="1, 2"/><xsl:sequence select="error()"/><xsl:catch>caught</xsl:catch></xsl:try></tw><xsl:catch><outer/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
 	{"element-inner-rollback-atoms-late-attr", ``, `<xsl:template match="/"><out><xsl:try><tw><tz/><xsl:try><xsl:sequence select="1, 2"/><xsl:sequence select="error()"/><xsl:catch/></xsl:try><xsl:attribute name="late">x</xsl:attribute></tw><xsl:catch><caught code="{$err:code}"/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
-	// XTDE0410 constructing <out>, as first-attr-after-content.
-	{"element-then-attr", ``, `<xsl:template match="/"><out><xsl:try><a><b/></a><xsl:attribute name="late">1</xsl:attribute><xsl:catch><c/></xsl:catch></xsl:try></out></xsl:template>`, true, "XTDE0410"},
+	// XTDE0410 caught by the try, as first-attr-after-content.
+	{"element-then-attr", ``, `<xsl:template match="/"><out><xsl:try><a><b/></a><xsl:attribute name="late">1</xsl:attribute><xsl:catch><c/></xsl:catch></xsl:try></out></xsl:template>`, true, ""},
 	// rollback-output="no": XTDE3530 when the body produced an item before
 	// the error, a zero-length text node included; caught otherwise.
 	{"no-written", ``, `<xsl:template match="/"><out><xsl:try rollback-output="no"><xsl:for-each select="//rec"><r><xsl:value-of select="xs:integer(@v)"/></r></xsl:for-each><xsl:catch><bad/></xsl:catch></xsl:try></out></xsl:template>`, true, "XTDE3530"},

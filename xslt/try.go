@@ -7,6 +7,7 @@ import (
 
 	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
@@ -234,6 +235,16 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	st := rt.streamTry()
 	err := i.run(rt.inTryBody(), sub) // secondaryout.go
 	if err == nil {
+		// Placing the body's attribute and namespace nodes on the element
+		// the try writes to is part of the try: 8.3.1 has the body's output
+		// "written to the result tree during the execution of xsl:try", so
+		// XTDE0410 there is caught by the try, and its rollback undoes the
+		// body's output. Saxon-HE 12.7 catches it there too, and DocBook
+		// xslTNG relies on that (titles.xsl, "Adding attributes will fail if
+		// we're not at the start of an element").
+		err = attrAfterContent(sub.Sequence(), out)
+	}
+	if err == nil {
 		tryEnd(rt, sub, true)
 		return appendSequence(sub.Sequence(), out)
 	}
@@ -288,6 +299,44 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return appendSequence(seq, out)
 	}
 	return execSequence(cl.body, crt, out)
+}
+
+// attrAfterContent returns the XTDE0410 that appending seq to out's open
+// element would raise, before anything is appended: an attribute or namespace
+// node "preceded by a node that is neither an attribute nor a namespace node"
+// (5.7.1), counting the element's existing children. Zero-length text adds no
+// content, as AppendText drops it. A document node's content (XTDE0420) is
+// left to the append.
+func attrAfterContent(seq xdm.Sequence, out *outputBuilder) error {
+	open := out.Open()
+	if open == nil || open.Kind() != xdm.KindElement {
+		return nil
+	}
+	content := open.FirstChild() != nil
+	for _, it := range seq {
+		n, ok := it.(*xdm.Node)
+		switch {
+		case !ok:
+			a, atomic := it.(*xdm.Atomic)
+			content = content || !atomic || a.String() != ""
+		case n.Kind() == xdm.KindAttribute && content:
+			return xsltPolicy{}.Err(xdmbuild.FaultAttrAfterChild,
+				fmt.Sprintf("attribute %q added after the element already has children",
+					n.Name().Lexical()))
+		case n.Kind() == xdm.KindNamespace && content:
+			return xsltPolicy{}.Err(xdmbuild.FaultAttrAfterChild,
+				fmt.Sprintf("namespace node %q added after the element %s has children",
+					n.Name().Local, open.Name().Lexical()))
+		case n.Kind() == xdm.KindAttribute || n.Kind() == xdm.KindNamespace:
+		case n.Kind() == xdm.KindText:
+			content = content || n.Value() != ""
+		case n.Kind() == xdm.KindDocument:
+			content = content || n.FirstChild() != nil
+		default:
+			content = true
+		}
+	}
+	return nil
 }
 
 // run instantiates the try body, from @select or from the constructor.

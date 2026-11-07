@@ -3,6 +3,7 @@ package dtd
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -378,7 +379,7 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 				continue
 			}
 		case AttrFixed:
-			if have && val != d.Value {
+			if have && val != normalizedDefault(d.Value) {
 				v.fail(el, "attribute %s is #FIXED %q but is %q",
 					d.Name, d.Value, val)
 			}
@@ -504,4 +505,60 @@ func containsString(set []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// normalizedDefault applies XML 1.0 §3.3.3 attribute-value normalization to a
+// declared default (from memory: §3.3.2 says it "is applied to the default
+// value"), so that a #FIXED default is compared as the parser reports the
+// attribute: character references and the predefined entities are replaced,
+// and white space characters become spaces. A reference to any other entity
+// is left as written, which can only make the comparison stricter than the
+// parser's, never looser.
+func normalizedDefault(v string) string {
+	if !strings.ContainsAny(v, "&\t\n\r") {
+		return v
+	}
+	var sb strings.Builder
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c == '\t' || c == '\n' || c == '\r' {
+			sb.WriteByte(' ')
+			continue
+		}
+		j := strings.IndexByte(v[i:], ';')
+		if c != '&' || j < 0 {
+			sb.WriteByte(c)
+			continue
+		}
+		name := v[i+1 : i+j]
+		r, ok := rune(0), true
+		switch name {
+		case "lt":
+			r = '<'
+		case "gt":
+			r = '>'
+		case "amp":
+			r = '&'
+		case "apos":
+			r = '\''
+		case "quot":
+			r = '"'
+		default:
+			var n uint64
+			var err error = strconv.ErrSyntax
+			if strings.HasPrefix(name, "#x") {
+				n, err = strconv.ParseUint(name[2:], 16, 32)
+			} else if strings.HasPrefix(name, "#") {
+				n, err = strconv.ParseUint(name[1:], 10, 32)
+			}
+			r, ok = rune(n), err == nil
+		}
+		if !ok {
+			sb.WriteByte(c)
+			continue
+		}
+		sb.WriteRune(r)
+		i += j
+	}
+	return sb.String()
 }

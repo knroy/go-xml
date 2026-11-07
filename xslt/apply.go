@@ -777,9 +777,9 @@ type userFunction struct {
 	// equal ones. cache="yes" on an elidable function sets it too.
 	deterministic bool
 	// cacheAtomic is cache="yes" on a proactive function: a result is
-	// reused only when it holds atomic values alone, since 10.3.7 makes
-	// such a function create new nodes on each invocation, and a map,
-	// array or function item may hold nodes.
+	// reused only when it holds no node -- atomic values, alone or in
+	// arrays and maps -- since 10.3.7 makes such a function create new
+	// nodes on each invocation, and a function item may capture nodes.
 	cacheAtomic bool
 	// baseURI is the xsl:function element's base URI; see Template.baseURI.
 	baseURI string
@@ -913,10 +913,35 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	return res, nil
 }
 
-// allAtomic reports whether seq holds atomic values only.
-func allAtomic(seq xdm.Sequence) bool {
+// allAtomic reports whether seq holds atomic values only, directly or as
+// the members and entries of arrays and maps: such a result holds no node,
+// so reusing it is unobservable. A function item may capture nodes, and
+// nesting past 500 levels is treated like one -- not reused.
+func allAtomic(seq xdm.Sequence) bool { return atomicOnly(seq, 0) }
+
+func atomicOnly(seq xdm.Sequence, depth int) bool {
+	if depth >= 500 {
+		return false
+	}
 	for _, it := range seq {
-		if _, ok := it.(*xdm.Atomic); !ok {
+		switch it := it.(type) {
+		case *xdm.Atomic:
+		case *xdm.ArrayItem:
+			for _, m := range it.Members() {
+				if !atomicOnly(m, depth+1) {
+					return false
+				}
+			}
+		case *xdm.MapItem:
+			if it.Entries(func(_ *xdm.Atomic, v xdm.Sequence) error {
+				if !atomicOnly(v, depth+1) {
+					return errNotCacheable
+				}
+				return nil
+			}) != nil {
+				return false
+			}
+		default:
 			return false
 		}
 	}

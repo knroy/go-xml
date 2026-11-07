@@ -168,3 +168,48 @@ func TestCacheHintKeepsProactiveNodesFresh(t *testing.T) {
 		})
 	}
 }
+
+// An array or map of atomic values holds no node, so reusing it is as
+// unobservable as reusing an atomic value: cache="yes" on a proactive
+// function memoises it. DocBook xslTNG's fcals:overhang, which returns
+// array(xs:integer) and recurses on the preceding row, relies on that to
+// keep its recursion shallow on table-cals.049.
+func TestCacheHintMemoisesNodeFreeArrays(t *testing.T) {
+	tree, err := xdm.ParseString(`<xsl:stylesheet version="3.0"
+	    xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	    xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	    xmlns:f="urn:f" exclude-result-prefixes="f xs">
+	  <xsl:output method="text"/>
+	  <xsl:function name="f:arr" as="array(xs:integer)" cache="yes">
+	    <xsl:param name="n" as="xs:integer"/>
+	    <xsl:message>computed</xsl:message>
+	    <xsl:sequence select="[$n, $n]"/>
+	  </xsl:function>
+	  <xsl:function name="f:map" as="map(*)" cache="yes">
+	    <xsl:param name="n" as="xs:integer"/>
+	    <xsl:message>computed</xsl:message>
+	    <xsl:sequence select="map{'a': [$n], 'b': map{'c': $n}}"/>
+	  </xsl:function>
+	  <xsl:template name="xsl:initial-template">
+	    <xsl:sequence select="f:arr(1)(1) + f:arr(1)(2) + f:map(1)?b?c + f:map(1)?b?c"/>
+	  </xsl:template>
+	</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Compile(tree.Root, CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	res, err := s.Transform(context.Background(), nil, TransformOptions{
+		InitialTemplate: "initial-template", InitialTemplateURI: xdm.NSXSL})
+	if err != nil {
+		t.Fatalf("transform: %v", err)
+	}
+	if got := strings.TrimSpace(res.String()); got != "4" {
+		t.Errorf("got %q, want 4", got)
+	}
+	if n := len(res.Messages); n != 2 {
+		t.Errorf("the functions ran %d times, want 2: a node-free array or map is memoised", n)
+	}
+}
