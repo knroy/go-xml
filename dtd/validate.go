@@ -272,12 +272,13 @@ func (v *validator) checkContent(el *xdm.Node) {
 	case ContentAny:
 		return
 	case ContentEmpty:
-		for c := range el.Children() {
-			if c.Kind() == xdm.KindElement || (c.Kind() == xdm.KindText && strings.TrimSpace(c.Value()) != "") {
-				v.fail(el, "element %s is declared EMPTY but has content",
-					name)
-				return
-			}
+		// XML 1.0 §3 VC Element Valid: "The declaration matches EMPTY and
+		// the element has no content (not even entity references,
+		// comments, PIs or white space)." Any child at all is content.
+		for range el.Children() {
+			v.fail(el, "element %s is declared EMPTY but has content",
+				name)
+			return
 		}
 	case ContentMixed:
 		for c := range el.Children() {

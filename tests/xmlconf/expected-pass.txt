@@ -1543,6 +1543,9 @@ pubid03
 pubid04
 pubid05
 required00
+rmt-e2e-15b
+rmt-e2e-15c
+rmt-e2e-15d
 rmt-e2e-15e
 rmt-e2e-15f
 rmt-e2e-15i

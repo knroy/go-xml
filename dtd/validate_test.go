@@ -85,6 +85,13 @@ func TestEmptyAndAny(t *testing.T) {
 	if err := check(t, dt+`<r><e>text</e><x/></r>`); err == nil {
 		t.Error("an EMPTY element with content should be invalid")
 	}
+	// XML 1.0 §3 VC Element Valid: EMPTY means no content at all, so a
+	// comment, a PI or white space is content too (rmt-e2e-15b, c, d).
+	for _, e := range []string{`<e><!-- c --></e>`, `<e><?pi x?></e>`, `<e> </e>`} {
+		if err := check(t, dt+`<r>`+e+`<x/></r>`); err == nil {
+			t.Errorf("%s should be invalid for an EMPTY e", e)
+		}
+	}
 }
 
 // Mixed content constrains which elements may appear, but not their order or
