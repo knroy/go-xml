@@ -10,7 +10,7 @@ import (
 
 // TestStreamRerunMessages: a streamed merge whose action (or a rule its
 // xsl:apply-templates reaches), or a streamed container, that tells a
-// message and then fails re-runs on the tree; under an xsl:try the
+// message and then fails re-runs on the tree, or returns its final error; under an xsl:try the
 // transformation succeeds, and each message is told once, as the tree
 // tells it (effectsMark at both re-run points).
 func TestStreamRerunMessages(t *testing.T) {
@@ -48,12 +48,21 @@ func TestStreamRerunMessages(t *testing.T) {
 			t.Errorf("action %d: the merge did not stream", i)
 		}
 	}
-	bodies := []string{
-		// A message, then a value that is no integer (a1): the container fails.
-		`<xsl:message select="'m'"/><n><xsl:value-of select="sum(log/e/xs:integer(@v))"/></n>`,
-		`<xsl:for-each select="log/e"><xsl:message select="string(@v)"/><r v="{xs:integer(@t) div (3 - xs:integer(@t))}"/></xsl:for-each>`,
+	bodies := []struct {
+		b     string
+		rerun bool
+	}{
+		// A message, then XPTY0004 (not final: finalCodes): the container
+		// fails and re-runs.
+		{`<xsl:message select="'m'"/><n><xsl:value-of select="log/e/@v eq 'a1'"/></n>`, true},
+		{`<xsl:for-each select="log/e"><xsl:message select="string(@v)"/><r v="{(@t, @v) eq '3'}"/></xsl:for-each>`, true},
+		// A message, then a value that is no integer (a1): FORG0001 is
+		// final, and the messages told before it are the tree's.
+		{`<xsl:message select="'m'"/><n><xsl:value-of select="sum(log/e/xs:integer(@v))"/></n>`, false},
+		{`<xsl:for-each select="log/e"><xsl:message select="string(@v)"/><r v="{xs:integer(@t) div (3 - xs:integer(@t))}"/></xsl:for-each>`, false},
 	}
-	for i, b := range bodies {
+	for i, c := range bodies {
+		b := c.b
 		sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
  xmlns:xs="http://www.w3.org/2001/XMLSchema" exclude-result-prefixes="xs">
 <xsl:template name="main"><xsl:try><out><xsl:source-document streamable="yes" href="a.xml">` + b +
@@ -63,8 +72,8 @@ func TestStreamRerunMessages(t *testing.T) {
 		if so != to || se != te || sm != tm {
 			t.Errorf("container %d:\nstream %q %q %q\ntree   %q %q %q", i, so, se, sm, to, te, tm)
 		}
-		if st.Guards != 0 || st.Runs[streamtrace.Core] == 0 || st.Reruns == 0 {
-			t.Errorf("container %d: guards %d, core runs %d, re-runs %d (want a streamed run that re-ran)", i, st.Guards, st.Runs[streamtrace.Core], st.Reruns)
+		if st.Guards != 0 || st.Runs[streamtrace.Core] == 0 || (st.Reruns != 0) != c.rerun {
+			t.Errorf("container %d: guards %d, core runs %d, re-runs %d (want a streamed run, re-run %v)", i, st.Guards, st.Runs[streamtrace.Core], st.Reruns, c.rerun)
 		}
 	}
 }
