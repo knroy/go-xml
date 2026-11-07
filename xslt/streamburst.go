@@ -23,6 +23,7 @@ package xslt
 //     the resolvers that can stream a document (FileResolver).
 
 import (
+	"io"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
@@ -707,4 +708,58 @@ func (r *FileResolver) wantsBursts(uri, base string) (string, bool) {
 	defer r.mu.Unlock()
 	_, cached := r.cache[path]
 	return fileURIOf(path), !cached
+}
+
+// openedResolver is the burstResolver of a StreamingDocumentResolver, for one
+// read of one document. Only OpenDocument knows the document's URI, which
+// wantsBursts is asked for before the read, so wantsBursts opens it, once,
+// and streamDoc reads that reader. release closes a reader nothing read:
+// every caller defers it.
+type openedResolver struct {
+	r      StreamingDocumentResolver
+	opened bool
+	rc     io.ReadCloser
+	docURI string
+}
+
+// wantsBursts implements burstResolver: false, and the tree, when the
+// document does not open or has no URI (ResolveDocument then reports it).
+func (o *openedResolver) wantsBursts(uri, base string) (string, bool) {
+	if !o.opened {
+		o.opened = true
+		var err error
+		if o.rc, o.docURI, err = o.r.OpenDocument(uri, base); err != nil || o.docURI == "" {
+			o.release()
+			o.docURI = ""
+		}
+	}
+	return o.docURI, o.docURI != ""
+}
+
+// streamDoc implements burstResolver, with the zero ParseOptions' limits.
+func (o *openedResolver) streamDoc(ctx *xpath.Context, uri, base string, fn func(*xdmstream.Cursor) error) error {
+	rc := o.rc
+	o.rc = nil
+	if rc == nil {
+		var err error
+		if rc, _, err = o.r.OpenDocument(uri, base); err != nil {
+			return err
+		}
+	}
+	return streamOpened(ctx, rc, uri, xdm.ParseOptions{BaseURI: o.docURI, DocumentURI: o.docURI}, -1, -1, fn)
+}
+
+// release closes the reader wantsBursts opened, if streamDoc has not.
+func (o *openedResolver) release() {
+	if o.rc != nil {
+		o.rc.Close()
+		o.rc = nil
+	}
+}
+
+// releaseBursts is release for any burstResolver.
+func releaseBursts(br burstResolver) {
+	if o, ok := br.(*openedResolver); ok {
+		o.release()
+	}
 }

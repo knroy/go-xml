@@ -199,6 +199,29 @@ const resolverCacheMaxBytes int64 = 32 << 20
 // allocate.
 const DefaultMaxResourceBytes int64 = 64 << 20
 
+// StreamingDocumentResolver is a DocumentResolver that can hand over a
+// document unparsed. When the TransformOptions.Documents resolver implements
+// it, a streamable xsl:source-document or xsl:merge-source reads the document
+// from OpenDocument's reader as it parses, instead of building the tree
+// ResolveDocument returns; a resolver that does not implement it is read as a
+// tree, as before.
+//
+// uri and base are ResolveDocument's. docURI is the absolute URI of the
+// document read: its base URI and document URI, and the URI XTDE1500 records
+// as read. A document opened with an empty docURI is read as a tree instead.
+// The reader is closed once read, or on error or cancellation, and may be
+// asked for again when the instruction re-runs on the tree (see
+// docs/known-gaps.md). It is parsed with the zero xdm.ParseOptions' limits
+// (64 MB, 10M nodes, depth 1,000, no DOCTYPE), whatever ResolveDocument
+// allows: a document over them, or one the stream cannot take, is read again
+// through ResolveDocument.
+//
+// FileResolver implements it; it streams through its own options (MaxBytes,
+// MaxNodes, AllowDOCTYPE) and declines a document its cache already holds.
+type StreamingDocumentResolver interface {
+	OpenDocument(uri, base string) (rc io.ReadCloser, docURI string, err error)
+}
+
 // NewFileResolver returns a resolver confined to the given directories.
 func NewFileResolver(roots ...string) (*FileResolver, error) {
 	r := &FileResolver{cache: map[string]*xdm.Tree{}}
@@ -255,6 +278,18 @@ func (r *FileResolver) readConfined(path, name string) ([]byte, error) {
 // openConfined is readConfined up to the read: it opens path the same way and
 // hands the open file to use, closing it afterwards.
 func (r *FileResolver) openConfined(path, name string, use func(f *os.File) error) error {
+	f, err := r.openConfinedFile(path, name)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return use(f)
+}
+
+// openConfinedFile is openConfined's open: the file, for the caller to close.
+// The os.Root it was opened through is closed before it returns, which leaves
+// the file open: the confinement is decided at the open.
+func (r *FileResolver) openConfinedFile(path, name string) (*os.File, error) {
 	for _, root := range r.Roots {
 		absRoot, err := filepath.Abs(root)
 		if err != nil {
@@ -294,28 +329,21 @@ func (r *FileResolver) openConfined(path, name string, use func(f *os.File) erro
 			// from parent" -- is the same refusal as no root containing
 			// the path, and names only the href (A4-F3).
 			if errors.Is(err, fs.ErrNotExist) {
-				return err
+				return nil, err
 			}
-			return &outsideRootsError{href: name}
+			return nil, &outsideRootsError{href: name}
 		}
-		err = use(f)
-		f.Close()
 		rt.Close()
-		return err
+		return f, nil
 	}
 	// No root contains it. A resolver with no roots at all is the documented
 	// unconfined case, and reaching here means resolvePath admitted a path
 	// this loop did not, so fall back rather than refuse a file the caller
 	// was told was readable.
 	if len(r.Roots) == 0 {
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		return use(f)
+		return os.Open(path)
 	}
-	return &outsideRootsError{href: name}
+	return nil, &outsideRootsError{href: name}
 }
 
 // outsideRootsError refuses a file no root of the resolver contains. It
@@ -527,6 +555,22 @@ func (r *FileResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
 		return nil, err
 	}
 	return r.load(path, uri, nil)
+}
+
+// OpenDocument implements StreamingDocumentResolver: the file uri names,
+// confined to Roots as ResolveDocument's is, open for reading, and its file:
+// URI. It reads nothing and caches nothing, and the reader is not limited:
+// MaxBytes and MaxNodes bound the parse when this package streams it.
+func (r *FileResolver) OpenDocument(uri, base string) (io.ReadCloser, string, error) {
+	path, err := r.resolvePath(uri, base)
+	if err != nil {
+		return nil, "", err
+	}
+	f, err := r.openConfinedFile(path, uri)
+	if err != nil {
+		return nil, "", err
+	}
+	return f, fileURIOf(path), nil
 }
 
 // ResolveDocumentIn implements xpath.ContextDocumentResolver, charging the

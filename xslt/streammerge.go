@@ -394,6 +394,11 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 	// order of the merge's ties.
 	bySrc := make([][]*mergeInput, len(i.sources))
 	var docs []*mergeDoc
+	defer func() {
+		for _, d := range docs {
+			releaseBursts(d.br) // a reader the merge did not reach
+		}
+	}()
 	for pass := range 2 {
 		for s, src := range i.sources {
 			if onCursor := src.streamed && src.sourceURIs != nil; onCursor != (pass == 1) {
@@ -528,7 +533,7 @@ func (rt *runtime) mergeOpenCount() int {
 // wraps around the caller's, as executeStream looks through them (the
 // document recorded as read, for XTDE1500, and its whitespace stripped);
 // errMergeTree when it cannot be streamed.
-func mergeDocOf(rt *runtime, href, base string, unread *[]func(), spec validationSpec) (*mergeDoc, error) {
+func mergeDocOf(rt *runtime, href, base string, unread *[]func(), spec validationSpec) (md *mergeDoc, err error) {
 	if validSourceDocumentURI(href) != nil || strings.ContainsRune(href, '#') {
 		return nil, errMergeTree
 	}
@@ -549,6 +554,13 @@ func mergeDocOf(rt *runtime, href, base string, unread *[]func(), spec validatio
 			strip, d = v.sheet.whitespaceStripper(pkg), v.inner
 		case burstResolver:
 			br = v
+		case StreamingDocumentResolver:
+			br = &openedResolver{r: v}
+			defer func() {
+				if md == nil {
+					releaseBursts(br)
+				}
+			}()
 		default:
 			return nil, errMergeTree
 		}
