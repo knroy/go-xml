@@ -249,7 +249,13 @@ func (p *parser) scanExprSingleSource() (string, error) {
 			// Inside a FLWOR opened in a conditional branch it separates that
 			// FLWOR's own bindings instead -- one clause may bind several
 			// variables -- so it is part of this expression, not a boundary.
+			//
+			// An operand follows a comma, so a "<" after it opens markup.
+			// Leaving prev at the byte before the comma read the "<" of
+			// "return (1, <w>{1}</w>)" as less-than, and the "</w>" after
+			// the enclosed expression as a start tag.
 			p.pos++
+			prev = c
 			branchHead = false
 			continue
 
