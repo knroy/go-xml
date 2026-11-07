@@ -328,6 +328,12 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 			} else {
 				out.b.AppendNode(v)
 			}
+			// AppendNode has no error to return, so a namespace node it adds
+			// after content -- XQTY0024 by the policy, §3.9.1.3 -- or one
+			// that conflicts (XQDY0102) is latched where Refused finds it.
+			if err := out.b.Refused(); err != nil {
+				return err
+			}
 			if el := out.b.Open(); el != nil && el.LastChild() != before {
 				applyCopyNamespaces(el.LastChild(), srcScope, sc)
 				if stripTypes(sc) {
