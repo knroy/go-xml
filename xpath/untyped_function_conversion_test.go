@@ -94,6 +94,10 @@ func TestUntypedAtomicConversionFailureIsFORG0001(t *testing.T) {
 		`format-date(/report/@bad,"[Y]")`,
 		`format-time(/report/@bad,"[H01]")`,
 		`days-from-duration(/report/@bad)`,
+		`year-from-dateTime(/report/@bad)`,
+		`month-from-date(/report/@bad)`,
+		`hours-from-time(/report/@bad)`,
+		`timezone-from-dateTime(/report/@bad)`,
 	} {
 		err := evalErrXSLT(t, untypedConvDoc, expr)
 		if err == nil {
