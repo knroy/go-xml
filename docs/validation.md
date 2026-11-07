@@ -71,6 +71,17 @@ attribute presence (`#REQUIRED` and `#FIXED`), enumerated values,
 `ID`/`IDREF`, and §3.3.1's two cross-referencing rules — a `NOTATION`
 attribute's enumeration must name only declared `<!NOTATION>`s, and an
 `ENTITY`/`ENTITIES` attribute must name entities declared with `NDATA`.
+Tokenized values are checked lexically too (§3.3.1): `NMTOKEN(S)` against
+Nmtoken, and `ID`, `IDREF(S)` and `ENTITY(IES)` against NCName rather than
+Name, because xdm parses with namespaces (Namespaces in XML §7); a list type
+needs one or more tokens separated by single spaces. An `EMPTY` element admits
+no comment, PI or white space either. The declarations themselves are checked
+as well, and `dtd.Load` still succeeds with the faults recorded for
+`dtd.Validate` to report, used or not: a repeated element type (even across
+subsets), a name repeated in a mixed model or a token in an enumeration, a
+second `ID` attribute for one element, an `ID` with a default, a default that
+does not fit its type (§3.3.2, lexically only), and an `NDATA` notation no
+`<!NOTATION>` declares. A repeated `<!ATTLIST>` for one attribute stays legal.
 Element and attribute names are matched as written, prefix included
 (`xml:lang`, `o:order`), because a DTD declares them that way.
 `Options.AllowUndeclared` skips undeclared attributes as well as elements.

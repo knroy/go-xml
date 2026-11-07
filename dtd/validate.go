@@ -76,7 +76,9 @@ const DefaultMaxErrors = 100
 // since without it the parse fails before this is reachable.
 //
 // What is checked: element content models, attribute presence (#REQUIRED and
-// #FIXED), enumerated attribute values, ID/IDREF, and the two §3.3.1 rules
+// #FIXED), enumerated attribute values, the lexical form of tokenized values,
+// ID/IDREF, the validity constraints on the declarations themselves (recorded
+// as the DTD was read; see declarationsInto), and the two §3.3.1 rules
 // that tie an attribute to a declaration elsewhere in the DTD — every name in
 // a NOTATION attribute's enumeration must be declared by a <!NOTATION>, and
 // the value of an ENTITY or ENTITIES attribute must name an entity declared
