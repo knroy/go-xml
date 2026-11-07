@@ -481,6 +481,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `xsl:stream`, the last-call draft's name, was accepted beside `xsl:source-document` | It is XTSE0010 under version 3.0 again (REC change log, Bug29747). | [`b6aef3e`][b6aef3e] |
 | `Result.Warnings` grew with the input under `warning-on-no-match` | It keeps the first 100 and one "further warnings suppressed" line. | [`94acc9f`][94acc9f] |
 | `P instance of T*` at the document node held every match and fell back to the tree | It streams as a count of matches failing T (§27.5); fallbacks 26 → 23. | [`50bba71`][50bba71] |
+| An external DTD subset's IGNORE sections were kept and their `%e;` keyword never substituted, so ignored defaults applied | Conditional sections are resolved before declarations are read (XML 1.0 §3.4). | [`170d907`][170d907] |
+| `dtd.Validate` compared a `#FIXED` value with its raw default, so `&#41;` never matched `)` | The comparison uses the normalized default (XML 1.0 §3.3.3). | [`b50260b`][b50260b] |
 
 ### Changed — behaviour
 
@@ -527,8 +529,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | XSD 1.0 refuses XSD 1.1 components | A 1.1 schema loaded as 1.0 fails with "requires XSD 1.1" instead of losing its constraints. | [`f9a904d`][f9a904d] |
 | A key field on an unassessed wildcard attribute is invalid | Tree and stream, XSD 1.0 and 1.1; declare the attribute globally to keep a lax match typed. | [`7362b27`][7362b27] |
 | `xsl:stream` is XTSE0010 | Write `xsl:source-document`; forwards-compatible mode takes the `xsl:fallback`. | [`b6aef3e`][b6aef3e] |
-| An attribute after content from a successful `xsl:try` raises XTDE0410 outside the try | The error arises building the parent (§5.7.1, §8.3); it was dropped. Saxon-HE 12.7 catches it inside. | [`2ef0012`][2ef0012] |
-| `cache="yes"` on a proactive function returns fresh nodes | Only atomic results are reused; mark the function `new-each-time="maybe"` to memoise nodes. | [`605d0be`][605d0be] |
+| An attribute after content in a successful `xsl:try` body is XTDE0410 caught by that try | §8.3: errors during the try's evaluation, its output included, are caught; it was dropped. Matches Saxon. | [`2ef0012`][2ef0012], [`400c28c`][400c28c] |
+| `cache="yes"` on a proactive function returns fresh nodes | Only node-free results (atomics, arrays and maps of them) are reused; `new-each-time="maybe"` memoises nodes. | [`605d0be`][605d0be], [`9298bc6`][9298bc6] |
 | `fn:transform` refuses `package-*` beside `stylesheet-*` | FOXT0002 where the `package-*` option was ignored. | [`57a0c9d`][57a0c9d] |
 | Date and time component accessors raise FORG0001 for a bad untyped value | `catch err:XPTY0004` no longer sees a failed cast there. | [`1505000`][1505000] |
 | XQuery `validate type` checks its type at compile | XQST0104 from `Compile`; a built-in type with no schema import validates instead of XQDY0084. | [`ff9032d`][ff9032d], [`1889367`][1889367] |
@@ -2832,6 +2834,10 @@ here so every entry in this file sits under a release.
 [f41bb8c]: https://github.com/knroy/go-xml/commit/f41bb8c
 [090a9a8]: https://github.com/knroy/go-xml/commit/090a9a8
 [2ef0012]: https://github.com/knroy/go-xml/commit/2ef0012
+[400c28c]: https://github.com/knroy/go-xml/commit/400c28c
+[9298bc6]: https://github.com/knroy/go-xml/commit/9298bc6
+[170d907]: https://github.com/knroy/go-xml/commit/170d907
+[b50260b]: https://github.com/knroy/go-xml/commit/b50260b
 [2a1e3b9]: https://github.com/knroy/go-xml/commit/2a1e3b9
 [ff9032d]: https://github.com/knroy/go-xml/commit/ff9032d
 [1889367]: https://github.com/knroy/go-xml/commit/1889367

@@ -1583,17 +1583,18 @@ by the parse work recorded in [CHANGELOG.md](../CHANGELOG.md).
 
 * A character error is reported against the line where the run ended.
 
-### The xmlconf lane: 111 failures left (XML 1.0)
+### The xmlconf lane: 106 failures left (XML 1.0)
 
-`TestXMLConf` (`tests/xmlconf/xmlconf_test.go`, ratchet mark 1854) runs the W3C XML
-Conformance Test Suite: 1,965 cases in scope, **1,854 pass**. Round SG
+`TestXMLConf` (`tests/xmlconf/xmlconf_test.go`, ratchet mark 1859) runs the W3C XML
+Conformance Test Suite: 1,965 cases in scope, **1,859 pass**. Round SG
 brought it from 1,460 by checking the DTD declaration grammar (252b65b), the
 text declaration (§4.3.1 [77]), the XML declaration (72599d9), undeclared
-entities (8650527) and §4.3.4 in `dtd` (ee5018c). The 111 still failing are
+entities (8650527), §4.3.4 in `dtd` (ee5018c), and IGNORE sections and
+normalized `#FIXED` defaults (170d907, b50260b). The 106 still failing are
 not yet triaged one by one:
 
-- **not-wf, 23**: documents still accepted that XML 1.0 makes fatal.
-- **invalid, 77**: documents `dtd.Validate` accepts that the suite expects
+- **not-wf, 21**: documents still accepted that XML 1.0 makes fatal.
+- **invalid, 74**: documents `dtd.Validate` accepts that the suite expects
   invalid.
 - **valid, 11**: documents `dtd.Load` or `dtd.Validate` refuses that the suite
   expects valid.
@@ -1625,23 +1626,6 @@ leaving external entities off. The default itself is unchanged.
 Honouring it lets the document choose the schema it is validated against, which
 defeats the purpose of validating. `WithInstanceLocations` opts in, with a
 policy that names which namespaces may be resolved.
-
-### An attribute after content from a successful `xsl:try` raises XTDE0410 outside the try
-
-When an `xsl:try` body succeeds and returns `(@a, x)` or `(x, @a)` into an
-element that already has content, the XTDE0410 is raised while the parent
-element is built, so the try's `xsl:catch` does not see it (2ef0012; the
-attribute used to be dropped silently). XSLT 3.0 §5.7.1: "If the result
-sequence contains an attribute or namespace node that is preceded by a node
-that is neither an attribute nor a namespace node, a dynamic error is raised
-[XTDE0410]", and that result sequence is the parent's content, not the try's.
-§8.3: `xsl:try` "returns the result of that evaluation if it succeeds without
-error", and here it did. Saxon-HE 12.7 catches the error inside the try.
-
-**Cost of changing it: none measured, because no W3C suite case covers it.**
-The divergence from Saxon is deliberate and grounded in the text: catching it
-would mean the try's result is judged by where it lands, which §8.3 does not
-say. `TestStreamTryOut` pins the behaviour.
 
 ### An initial mode without `use-accumulators` makes no accumulator applicable (`accumulator-073`)
 

@@ -23,7 +23,7 @@ Current position:
 | XSLT 3.0 | 99.85% — 11,505 of 11,522 in scope (17 failing) |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 3,422 `func Test` declarations, clean under `-race` |
+| Tests | 3,425 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -218,11 +218,11 @@ stricter rule).
 
 The W3C `xmlconf` suite (xmlts20130923) is a lane since round SG:
 `TestXMLConf` (`tests/xmlconf/xmlconf_test.go`, fetched by
-`tests/fetch-xmlconf.sh`) runs 1,965 cases, 1,854 passing. With the
+`tests/fetch-xmlconf.sh`) runs 1,965 cases, 1,859 passing. With the
 `XmlVersions` cases in the XSD suite (xv003, xv006, xv008, xv009 pass) it is
 what the gate repeats for 1.1.
 
-### 1.2 DTD validation — the `xmlconf` lane at 1,854 of 1,965
+### 1.2 DTD validation — the `xmlconf` lane at 1,859 of 1,965
 
 The `dtd` package validates against `<!ELEMENT>`, `<!ATTLIST>` and
 `<!ENTITY>`: content models, attribute defaults, enumerations, `ID`/`IDREF`.
@@ -255,10 +255,10 @@ internal one does. See [security.md](security.md) and
   [validation.md](validation.md)).
 * **The `xmlconf` lane's 111 failures.** `TestXMLConf` runs not-wf cases
   through `xdm.Parse` and valid/invalid ones through `dtd.Load` and
-  `dtd.Validate`. Round SG took it from 1,460 to 1,854 by checking the DTD
+  `dtd.Validate`. Round SG took it from 1,460 to 1,859 by checking the DTD
   declaration grammar under `AllowDOCTYPE` (252b65b: not-wf 417 → 23), the
   text declaration, the XML declaration (72599d9) and undeclared entities
-  (8650527). Open: **23 not-wf** documents still accepted, **77 invalid**
+  (8650527). Open: **21 not-wf** documents still accepted, **74 invalid**
   documents `dtd.Validate` accepts, and **11 valid** documents refused. None
   is triaged yet; see [known-gaps.md](known-gaps.md).
 * **`xmlns` attributes are validated** (c516340). XML 1.0 sees `xmlns` and
