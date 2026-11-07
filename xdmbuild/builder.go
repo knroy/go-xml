@@ -713,15 +713,17 @@ func (b *Builder) AddNamespace(prefix, uri string) error {
 		b.items = append(b.items, b.newItem(xdm.KindNamespace, xdm.QName{Local: prefix}, uri))
 		return nil
 	}
-	// A streamed element whose start tag is written cannot take one more
-	// declaration. XSLT 3.0 §5.7.1 makes a namespace node after content
-	// XTDE0410; this builder admits it otherwise, and the streamed output
-	// cannot, so it is refused here and latched like a budget refusal.
-	if b.sink != nil && b.fr != 0 && b.open.FirstChild() != nil {
+	// XSLT 3.0 §5.7.1: "If the result sequence contains an attribute or
+	// namespace node that is preceded by a node that is neither an attribute
+	// nor a namespace node, a dynamic error is raised [XTDE0410]" (XQuery:
+	// XQTY0024). A streamed element whose start tag is written cannot take
+	// the declaration at all, so there the refusal is also latched like a
+	// budget refusal.
+	if b.open.FirstChild() != nil {
 		err := b.policy.Err(FaultAttrAfterChild,
-			fmt.Sprintf("namespace node %q added after the element %s has children, "+
-				"whose start tag the streamed output has written", prefix, b.open.Name().Lexical()))
-		if *b.refused == nil {
+			fmt.Sprintf("namespace node %q added after the element %s has children",
+				prefix, b.open.Name().Lexical()))
+		if b.sink != nil && b.fr != 0 && *b.refused == nil {
 			*b.refused = err
 		}
 		return err
