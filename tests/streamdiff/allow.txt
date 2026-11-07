@@ -72,3 +72,12 @@ xslt30 document/document-0115 (?s).+
 # streamed input raises XTDE3350 (§10.3.6, be09e991): accumulator-061.
 xslt30 streamable/streamable-116 (?s).+
 xslt30 accumulator/accumulator-061 (?s).+
+
+# Round SI lane ST1, against base 70e049a5: [$extraItem, //ITEM/copy-of()]?*
+# / PRICE streams now (streamhold.go copiesAsked) where it fell back. The
+# "/" sorts PRICEs of two trees, $extraItem's and the copies', whose relative
+# order is "stable but implementation-dependent" (XPath 3.1 §2.4.1): the
+# streamed run puts $extraItem's first, the tree last. Both catalogs accept
+# either order (any-of).
+xslt30 sx-SquareArrayConstructor/sx-square-array-041 (?s).+
+xslt30 sx-SquareArrayConstructor/sx-square-array-043 (?s).+
