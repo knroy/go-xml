@@ -329,14 +329,15 @@ parameters; `#` comments and the `\` identifier escape.
   does not arbitrate it either way: it passes at 965 of 965 both before and
   after, and contains only nine `zeroOrMore` occurrences in total.
 
-* **Section 7.3's *first* clause may be over-strict for two `<zeroOrMore>`s.**
-  `xspec.rnc` sequences `xml-ns-attributes` with `common-attributes`, which
-  itself begins with `xml-ns-attributes`, so `attribute xml:* { text }*`
-  appears twice in one group and is refused as "required twice". Two
-  `<zeroOrMore>`s can each match nothing, so whether "required" is the right
-  reading of that shape is a real question — but it is a different clause from
-  the one settled above, and settling it needs the spec text this repository
-  does not vendor.
+* **Done: `xspec.rnc`'s "required twice" was a false overlap, not §7.3.**
+  The refused shape is in `p:document`: `attribute xml:* { text }*` beside
+  `attribute * - (local:* | xml:* | p:*) { text }*`. The overlap test compared
+  `anyName` with `nsName` structurally and ignored the exception, so it saw
+  `xml:*` twice. It now uses the representative-name method jing uses. jing
+  (20241231) accepts `xspec.rnc` and refuses two genuine `attribute xml:*`
+  repetitions in one group, as this package still does: §7.3's first clause
+  is applied after §4.20 rewrites `<zeroOrMore>`, so "can match nothing" is no
+  excuse.
 
 ### 1.4 Schema Component Constraints — the remaining bulk
 

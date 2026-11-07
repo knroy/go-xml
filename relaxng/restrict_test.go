@@ -184,6 +184,18 @@ func TestCompetitionRules(t *testing.T) {
 			`<element` + rngNS + ` name="foo"><attribute name="bar"/>
 				<oneOrMore><attribute><anyName/></attribute></oneOrMore></element>`},
 
+		// The class excepts xml:* but not xml:lang. jing: duplicate attribute.
+		{"anyName except leaves a named attribute", "7.3",
+			`<element` + rngNS + ` name="foo"><optional><attribute name="xml:lang"/></optional>
+				<zeroOrMore><attribute><anyName><except><nsName ns="` + xdm.NSXML + `">
+				<except><name>xml:lang</name></except></nsName></except></anyName></attribute></zeroOrMore></element>`},
+
+		// Each excepts one namespace, and every other namespace is in both.
+		{"two anyName excepts", "7.3",
+			`<element` + rngNS + ` name="foo">
+				<zeroOrMore><attribute><anyName><except><nsName ns="urn:a"/></except></anyName></attribute></zeroOrMore>
+				<zeroOrMore><attribute><anyName><except><nsName ns="urn:b"/></except></anyName></attribute></zeroOrMore></element>`},
+
 		{"interleave branches share an element", "7.4",
 			`<element` + rngNS + ` name="foo"><interleave>
 				<element name="bar"><empty/></element>
@@ -201,6 +213,18 @@ func TestCompetitionRules(t *testing.T) {
 	mustAccept(t, "the same attribute in two choice branches",
 		`<element`+rngNS+` name="foo"><choice>
 			<attribute name="bar"/><attribute name="bar"/></choice></element>`)
+
+	// An anyName's exception is honoured: xspec.rnc's xml:* beside
+	// * - (local:* | xml:*) names no attribute twice, and jing accepts both.
+	mustAccept(t, "nsName beside an anyName that excepts it",
+		`<element`+rngNS+` name="foo">
+			<zeroOrMore><attribute><nsName ns="`+xdm.NSXML+`"/></attribute></zeroOrMore>
+			<zeroOrMore><attribute><anyName><except><nsName ns=""/><nsName ns="`+xdm.NSXML+`"/></except></anyName></attribute></zeroOrMore>
+		</element>`)
+	mustAccept(t, "named attribute the anyName excepts",
+		`<element`+rngNS+` name="foo"><optional><attribute name="xml:space"/></optional>
+			<zeroOrMore><attribute><anyName><except><nsName ns="`+xdm.NSXML+`">
+			<except><name>xml:lang</name></except></nsName></except></anyName></attribute></zeroOrMore></element>`)
 
 	// Two repetitions over disjoint namespaces do not overlap.
 	mustAccept(t, "disjoint nsName repetitions",
