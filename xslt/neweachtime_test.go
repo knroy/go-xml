@@ -112,3 +112,59 @@ func TestNewEachTimeIdenticalArguments(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// §10.3.8 makes cache="yes" a hint whose use must still "respect the
+// semantics", and §10.3.7 makes a function proactive by default: "when the
+// function creates new nodes, it creates new nodes on each invocation". So the
+// hint may reuse a result only where reuse is unobservable -- the function is
+// deterministic or elidable, or the result holds no nodes. The hint alone
+// returned the same constructed node from both calls. An atomic result is
+// still memoised, which is what the hint is for (function-1031's fib).
+func TestCacheHintKeepsProactiveNodesFresh(t *testing.T) {
+	for _, tc := range []struct{ attrs, want string }{
+		{`cache="yes"`, "false"},
+		{`cache="yes" new-each-time="yes"`, "false"},
+		{`cache="yes" new-each-time="no"`, "true"},
+		{`cache="yes" new-each-time="maybe"`, ""}, // either identity is allowed
+	} {
+		t.Run(tc.attrs, func(t *testing.T) {
+			tree, err := xdm.ParseString(`<xsl:stylesheet version="3.0"
+			    xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+			    xmlns:xs="http://www.w3.org/2001/XMLSchema"
+			    xmlns:f="urn:f" exclude-result-prefixes="f xs">
+			  <xsl:output method="text"/>
+			  <xsl:function name="f:make" as="element()" `+tc.attrs+`>
+			    <xsl:param name="n" as="xs:integer"/>
+			    <e n="{$n}"/>
+			  </xsl:function>
+			  <xsl:function name="f:num" as="xs:integer" `+tc.attrs+`>
+			    <xsl:param name="n" as="xs:integer"/>
+			    <xsl:message>computed</xsl:message>
+			    <xsl:sequence select="$n"/>
+			  </xsl:function>
+			  <xsl:template name="xsl:initial-template">
+			    <xsl:value-of select="f:make(1) is f:make(1)"/>
+			    <xsl:sequence select="f:num(1) + f:num(1)"/>
+			  </xsl:template>
+			</xsl:stylesheet>`, xdm.ParseOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := Compile(tree.Root, CompileOptions{})
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			res, err := s.Transform(context.Background(), nil, TransformOptions{
+				InitialTemplate: "initial-template", InitialTemplateURI: xdm.NSXSL})
+			if err != nil {
+				t.Fatalf("transform: %v", err)
+			}
+			if got := strings.TrimSpace(res.String()); tc.want != "" && !strings.HasPrefix(got, tc.want) {
+				t.Errorf("%s: f:make(1) is f:make(1) gave %q, want %q", tc.attrs, got, tc.want)
+			}
+			if n := len(res.Messages); n != 1 {
+				t.Errorf("%s: f:num(1) ran %d times, want 1: an atomic result is memoised", tc.attrs, n)
+			}
+		})
+	}
+}

@@ -1688,6 +1688,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	if stub != nil {
 		body = stub
 	}
+	det, cache := functionDeterminism(el), cacheMemoises(el.AttrValue("cache"))
 	fn := &userFunction{
 		name: qn, params: params, body: body, baseURI: el.BaseURI(),
 		// Two attributes reach the same machinery. @new-each-time="no" is a
@@ -1697,16 +1698,19 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 		// is what makes function-1031 terminate: it computes fib(92) by naive
 		// double recursion, which without memoisation is some 2^92 calls.
 		//
-		// Only the explicit "no" obliges anything on the first: 10.3's
-		// default is "maybe", under which reusing a result and recomputing it
-		// are both allowed.
+		// The hint is bounded by the function's category. 10.3.8: "In all
+		// cases the results must respect the semantics". An elidable
+		// function ("maybe") may share results outright; a proactive one,
+		// the default ("By default, stylesheet functions are proactive",
+		// 10.3.7), creates new nodes on each invocation, so only a result
+		// holding no nodes is reused -- see cacheAtomic.
 		//
 		// The hint is read through cacheMemoises, which names the boolean
 		// trues the Recommendation types the attribute with (cache? =
 		// boolean, 10.3); the Last Call draft's cache="full" is refused by
 		// the element table.
-		deterministic: functionDeterminism(el) == "no" ||
-			cacheMemoises(el.AttrValue("cache")),
+		deterministic: det == "no" || cache && det == "maybe",
+		cacheAtomic:   cache && det == "yes",
 	}
 	// The function's own "as" declaration converts the returned value, which
 	// matters for the same reason the parameter declarations do.
