@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -608,6 +609,51 @@ func TestCopyFreeBodyReadsEveryRoute(t *testing.T) {
 		el := tree.Root.FirstChild().FirstChild().NextSibling().FirstChild()
 		if got := copyFreeBody(el); got != c.ok {
 			t.Errorf("%s %s: copy-free %v, want %v", c.attrs, c.body, got, c.ok)
+		}
+	}
+}
+
+// TestStreamValidatedCopyOnStream: a validated copy of the document element
+// (copy-of select="*" with validation or a type: si-copy-of-121 to -128) is
+// built off the cursor rather than the document re-read on the tree, and a
+// schema-invalid construction (XTTE1510/1512/1540, §2.12) is returned as the
+// stream meets it, the tree's error, with no re-run -- unless the rest of the
+// document does not parse, which the tree reports first.
+func TestStreamValidatedCopyOnStream(t *testing.T) {
+	decls := `<xsl:import-schema><xs:schema>
+ <xs:element name="r"><xs:complexType><xs:sequence><xs:element name="n" type="xs:integer" maxOccurs="unbounded"/></xs:sequence></xs:complexType></xs:element>
+ <xs:element name="m" type="xs:integer"/></xs:schema></xsl:import-schema>`
+	copyOf := func(attrs string) string {
+		return `<xsl:variable name="c" as="element()"><xsl:copy-of select="*" ` + attrs + `/></xsl:variable>` +
+			`<v><xsl:value-of select="$c/n[2] instance of xs:integer"/></v>`
+	}
+	for _, c := range []struct {
+		name, doc, body string
+		rerun           bool
+	}{
+		{"strict", `<r><n>1</n><n>2</n></r>`, copyOf(`validation="strict"`), false},
+		{"lax", `<r><n>1</n><n>2</n></r>`, copyOf(`validation="lax"`), false},
+		{"type", `<r><n>1</n><n>2</n></r>`, copyOf(`type="xs:anyType"`), false},
+		{"strict invalid", `<r><n>1</n><n>x</n></r>`, copyOf(`validation="strict"`), false},
+		{"undeclared", `<q><n>1</n></q>`, copyOf(`validation="strict"`), false},
+		{"lre invalid", `<r><n>1</n><n>x</n></r>`,
+			`<xsl:for-each select="r/n"><m xsl:validation="strict"><xsl:value-of select="."/></m></xsl:for-each>`, false},
+		{"element type invalid", `<r><n>1</n><n>x</n></r>`,
+			`<xsl:for-each select="r/n"><xsl:element name="m" type="xs:integer"><xsl:value-of select="."/></xsl:element></xsl:for-each>`, false},
+		{"invalid, then malformed", `<r><n>x</n><n>1</n></r><junk`, copyOf(`validation="strict"`), true},
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(c.doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sheet := coreSheetWith(decls, c.body)
+		so, se, st := coreRun(sheet, dir, true, TransformOptions{})
+		to, te, _ := coreRun(sheet, dir, false, TransformOptions{})
+		if so != to || se != te {
+			t.Errorf("%s:\ncore %q %q\ntree %q %q", c.name, so, se, to, te)
+		}
+		if st.Runs[streamtrace.Core] == 0 || st.Fallbacks != 0 || st.Guards != 0 || (st.Reruns != 0) != c.rerun {
+			t.Errorf("%s: %+v (error %q), want a streamed run, re-run %v", c.name, st, se, c.rerun)
 		}
 	}
 }

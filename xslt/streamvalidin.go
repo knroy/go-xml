@@ -15,7 +15,9 @@ package xslt
 // tree's error with its code, its message and in its order -- including
 // when the body failed first, since the tree validates before it runs the
 // body. So the stream must be exact on a valid document and exact about
-// whether a document is valid; the error text is the tree's.
+// whether a document is valid; the error text is the tree's. (Invalidity of
+// what the body constructs is another matter: its error is the tree's as
+// the stream meets it, and is returned with no re-run; settle, below.)
 //
 // What the tree's copy is besides typed is the stream's too: no document
 // URI (streamDocAs), no DTD (dropped at the document element's start tag,
@@ -572,4 +574,51 @@ func (d *mergeDoc) stream(ctx *xpath.Context, fn func(*xdmstream.Cursor) error) 
 		return d.br.streamDoc(ctx, d.href, d.base, fn)
 	}
 	return d.br.(*FileResolver).streamDocAs(ctx, d.href, d.base, false, fn)
+}
+
+// A schema-validity failure of what the body constructs -- a validated
+// copy, xsl:copy, xsl:element, a literal result element, an
+// xsl:result-document, xsl:document -- is raised by assess at the end tag
+// where it becomes known, from the same content and the same code as the
+// tree's, so its text is the tree's. REC §2.12: "Schema invalidity, however,
+// is treated as a dynamic error of the instruction that processes the entire
+// input stream". The container returns it with no re-run once the rest of
+// the document is known to be what the tree would have read before running
+// its body: well-formed, valid when the container validates it, and its
+// accumulators' rules without error (settle). Every other failure re-runs.
+
+// invalidError is a failure of assess: XTTE1510, XTTE1512, XTTE1515,
+// XTTE1540 or XTTE1555 (§2.12's schema invalidity).
+type invalidError struct{ err error }
+
+func (e *invalidError) Error() string { return e.err.Error() }
+func (e *invalidError) Unwrap() error { return e.err }
+
+// markInvalid marks *err, a failure of assess, when it is invalidity.
+func markInvalid(err *error) {
+	if *err != nil && strings.HasPrefix(xdm.ErrorCode(*err), "XTTE15") {
+		*err = &invalidError{*err}
+	}
+}
+
+// treesError is a streamed container's failure that is the tree's: the
+// container returns err, with no re-run (executeStream).
+type treesError struct{ err error }
+
+func (e *treesError) Error() string { return e.err.Error() }
+func (e *treesError) Unwrap() error { return e.err }
+
+// settle is the error of a streamed body that failed with err: err as the
+// tree's when it is invalidity (invalidError) and the rest of the document
+// reads, validates and accumulates without error, which the tree had done
+// before its body ran; otherwise err, for the re-run.
+func (run *streamRun) settle(err error, valid func() error, acc *streamAccums) error {
+	var ie *invalidError
+	if !errors.As(err, &ie) {
+		return err
+	}
+	if run.c.At().Kind != xdmstream.EndDocument && run.drain() != nil || valid() != nil || acc.finish() != nil {
+		return err
+	}
+	return &treesError{err}
 }

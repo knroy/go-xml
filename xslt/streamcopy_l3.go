@@ -280,6 +280,34 @@ func eventCopier(instr Instruction, typed bool) bool {
 	return false
 }
 
+// validatesBuilt reports whether instr is an xsl:copy-of whose copy of the
+// document element copiesReadOut builds and hands over (rather than writing
+// it as events, eventCopier): one that validates or retypes it, with the
+// default copy-namespaces and no copy-accumulators (the copy answers for
+// the source's accumulators only through recordCopy).
+func validatesBuilt(instr Instruction, typed bool) bool {
+	i, ok := instr.(*copyOfInstr)
+	return ok && !i.noNamespaces && !i.copyAccumulators && !eventCopier(instr, typed)
+}
+
+// buildRoot copies the document element, whose start tag the cursor c has
+// just returned, into a parentless element with its whole typing, as
+// buildElem does the context element.
+func buildRoot(rt *runtime, c *xdmstream.Cursor) (*xdm.Node, error) {
+	b := newOutputBuilder(rt)
+	if err := copyEvents(rt, b, c, 1, false, nil); err != nil {
+		return nil, err
+	}
+	if err := b.Refused(); err != nil {
+		return nil, err
+	}
+	seq := b.Sequence()
+	if len(seq) != 1 {
+		return nil, errStreamPlan
+	}
+	return seq[0].(*xdm.Node), nil
+}
+
 // --- Planning ------------------------------------------------------------------
 
 // docCopySplit is the split of e at the document node when e copies the
@@ -480,12 +508,15 @@ func (i *copyOfInstr) copyBuilt(rt *runtime, out *outputBuilder, doc *xdm.Node) 
 // its items over as they are read (op.copies): as read does, but a match
 // that is the document element, which the split gives up on (noRoot), is
 // written as events into out, when the instruction copies as copyEvents
-// does and out is where its copy goes.
+// does and out is where its copy goes; or, for a copy-of that validates
+// (validatesBuilt), built off the cursor and handed to each, which copies
+// and assesses it as the tree's copy-of does its document element.
 func (run *streamRun) copiesReadOut(rt *runtime, op *streamOp, g *groupAt, read func(func(xdm.Item) error) error) func(*outputBuilder, func(xdm.Item) error) error {
 	return func(out *outputBuilder, each func(xdm.Item) error) error {
 		s := op.split
+		built := validatesBuilt(op.instr, run.typed)
 		if !s.noRoot || run.d != 0 || s.nests || s.tail != nil || s.tailText != "" || s.group ||
-			!eventCopier(op.instr, run.typed) {
+			!built && !eventCopier(op.instr, run.typed) {
 			return read(each)
 		}
 		if run.used {
@@ -504,6 +535,16 @@ func (run *streamRun) copiesReadOut(rt *runtime, op *streamOp, g *groupAt, read 
 			}
 			if _, ok := op.instr.(*sequenceInstr); ok && out.Open() == nil {
 				return errSplitGiveUp // the node itself, not a copy, at the top
+			}
+			if built {
+				// ponytail: the built element is copied once more by each
+				// (copyItem's deepCopy), as the tree copies its source's;
+				// building straight into the copy would save it.
+				el, err := buildRoot(rt, run.c)
+				if err != nil {
+					return err
+				}
+				return each(el)
 			}
 			return copyEvents(rt, out, run.c, 1, stripsTyping(op.instr), nil)
 		}
