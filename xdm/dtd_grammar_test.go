@@ -42,6 +42,8 @@ func TestDTDDeclarationGrammar(t *testing.T) {
 		"stray percent":           `% p;`,
 		"reserved pi":             `<?xml version="1.0"?>`,
 		"trailing garbage":        `<!ELEMENT r EMPTY extra>`,
+		"noncharacter in a pe":    "<!ENTITY % e \"\uFFFF\">",
+		"control in an attlist":   "<!ATTLIST r a CDATA \"\x01\">",
 	}
 	for name, subset := range bad {
 		_, err := ParseString("<!DOCTYPE r ["+subset+"]><r/>", ParseOptions{AllowDOCTYPE: true})
