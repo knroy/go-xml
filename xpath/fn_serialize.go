@@ -1361,7 +1361,8 @@ func (o *serializeOptions) isVoidElement(local string) bool {
 // html5 reports whether the HTML version asked for is 5 or later, which is
 // what selects between the two version-specific void-element lists. The
 // spelling test is xslt/serialize.go's: a prefix match on "5", so that "5.0"
-// and "5" both say HTML 5 and an absent parameter says HTML 4.
+// and "5" both say HTML 5 and an absent parameter says HTML 4. The map form
+// is never absent: mapSerializationParams defaults it to 5.
 func (o *serializeOptions) html5() bool {
 	v := o.htmlVersion
 	if v == "" {
@@ -1513,6 +1514,14 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 		return a.String(), nil
 	}
 
+	// The map form, unlike the element form, has a fixed default for
+	// html-version. F&O 3.1 fn:serialize: "The default value is used when the
+	// map contains no entry for the parameter in question, and also when an
+	// entry is present, with the empty sequence as its value", and its table
+	// gives "html-version xs:decimal? 5". The element form and the
+	// one-argument call leave absent parameters implementation-defined, and
+	// keep HTML 4, as xsl:output does.
+	opts.htmlVersion = "5"
 	err := m.Entries(func(key *xdm.Atomic, val xdm.Sequence) error {
 		// Serialization 3.1 §3: the key naming a parameter defined by these
 		// specifications is an xs:string. An xs:QName key is reserved for an
@@ -1717,7 +1726,10 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 			// html method minimises against. Serialization 3.1 types it as a
 			// decimal, but only its leading "5" is ever tested, so it is read
 			// through the same string reader the element form uses and kept
-			// as written.
+			// as written. The empty sequence keeps the default, 5.
+			if len(val) == 0 {
+				return nil
+			}
 			v, err := strParam(name, val)
 			if err != nil {
 				return err
