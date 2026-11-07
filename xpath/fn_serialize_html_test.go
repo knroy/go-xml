@@ -131,3 +131,23 @@ func TestSerializeHTML4XHTMLHeadMetaIsClosed(t *testing.T) {
 		}
 	}
 }
+
+// An empty element in an XML island self-closes under the html method, as
+// xsl:result-document writes it (htmlser.Island; Serialization-html-3, -5,
+// -6): a foreign namespace always, XHTML's under HTML 4 only. Native HTML
+// keeps its explicit end tag.
+func TestSerializeHTMLIslandSelfCloses(t *testing.T) {
+	const doc = `parse-xml('<html><p/><m:magic xmlns:m="urn:m"/><x:p xmlns:x="http://www.w3.org/1999/xhtml"/></html>')`
+	for _, c := range []struct{ version, want string }{
+		{"4.0", `<p></p><m:magic xmlns:m="urn:m"/><x:p xmlns:x="http://www.w3.org/1999/xhtml"/>`},
+		{"5.0", `<p></p><m:magic xmlns:m="urn:m"/><x:p xmlns:x="http://www.w3.org/1999/xhtml"></x:p>`},
+	} {
+		got, err := evalSerialize(t, `serialize(`+doc+`, map{'method':'html','html-version':`+c.version+`})`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(got, c.want) {
+			t.Errorf("html-version %s: want %s in %s", c.version, c.want, got)
+		}
+	}
+}

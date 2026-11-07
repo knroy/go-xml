@@ -958,6 +958,10 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 			// is the same rule.
 			if opts.method == "html" || opts.method == "xhtml" {
 				switch {
+				// An XML island is written as XML, self-closed:
+				// htmlser.Island, shared with xslt/serialize.go.
+				case opts.method == "html" && htmlser.Island(n, opts.html5()):
+					sb.WriteString("/>")
 				case opts.method == "html" && opts.isVoidElement(n.Name().Local):
 					sb.WriteString(">")
 				case opts.method == "xhtml" && opts.isVoidElement(n.Name().Local) &&
