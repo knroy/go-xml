@@ -137,6 +137,10 @@ func TestHTMLDefaultVersionIsFive(t *testing.T) {
 		{"html-version 4.01", "3.0", `method="html" html-version="4.01"`, `<html><br/></html>`,
 			"<html><br></html>"},
 		{"not html", "3.0", `method="html"`, `<p><br/></p>`, "<p><br></p>"},
+		// No HTML version under xml: no prefix normalisation (§7.1 is the
+		// html method's, §6 the xhtml one's).
+		{"xml", "3.0", `method="xml" omit-xml-declaration="yes"`,
+			`<h:p xmlns:h="http://www.w3.org/1999/xhtml"/>`, `<h:p xmlns:h="http://www.w3.org/1999/xhtml"/>`},
 		{"xhtml", "3.0", `method="xhtml" omit-xml-declaration="yes"`,
 			`<html xmlns="http://www.w3.org/1999/xhtml"><frame/><p/></html>`,
 			`<html xmlns="http://www.w3.org/1999/xhtml"><frame /><p></p></html>`},

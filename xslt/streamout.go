@@ -14,9 +14,13 @@ package xslt
 //   - the output method chosen from the result waits for its first element
 //     (methodOf); until then, and for good when a parameter needs the whole
 //     result (a separator, normalization, a doctype or standalone, json,
-//     adaptive, HTML5's prefix normalization, a parameter document,
-//     build-tree="no"), nothing is written and End serializes the result as
-//     the tree does;
+//     adaptive, a parameter document, build-tree="no"), nothing is written
+//     and End serializes the result as the tree does;
+//   - HTML5 streams too: prefix normalization is decided element by element
+//     as each start tag is written (serializer.elemPrefix), and its bare
+//     doctype, owed until the first element, is written or not by that
+//     element's start tag (openTag), the whitespace, comments and
+//     instructions before it written as they come;
 //   - under indent="yes" an element's children are indented unless one of
 //     them is text that is not whitespace (or the element has no element
 //     child), which is known only once it closes, and an element that is
@@ -191,11 +195,6 @@ func (o *streamOut) Begin(seq xdm.Sequence) (ok, never bool) {
 	if opts.indentByMethod && (method == "html" || method == "xhtml") {
 		opts.Indent = true
 	}
-	if method == "html" || method == "xhtml" {
-		if strings.HasPrefix(effectiveHTMLVersion(opts, method == "xhtml"), "5") {
-			return false, true // prefix normalization reads the whole tree
-		}
-	}
 	switch method {
 	case "json", "adaptive":
 		return false, true
@@ -227,7 +226,7 @@ func (o *streamOut) Open(n *xdm.Node, depth int, kind xdm.NodeKind, text string)
 	}
 	s := o.s
 	if !o.text {
-		if s.pendingDoctype || s.html && (strings.EqualFold(n.Name().Local, "head") ||
+		if s.html && (strings.EqualFold(n.Name().Local, "head") ||
 			strings.EqualFold(n.Name().Local, "meta")) {
 			return false
 		}
