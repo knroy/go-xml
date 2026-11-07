@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -265,6 +266,7 @@ func Load(directive string, opts LoadOptions) (*DTD, error) {
 		d.HasExternalSubset = true
 		d.ExternalSubset = expandedExternal
 		d.name = doctypeName(head)
+		d.v11 = l.v11
 	}
 	return d, nil
 }
@@ -314,6 +316,10 @@ type loader struct {
 	// is looked at, which is how §2.8's precedence reaches parameter
 	// entities specifically.
 	params map[string]paramEntity
+
+	// v11 is the system identifier of the first external resource read
+	// whose text declaration says version="1.1", or "". See fetch.
+	v11 string
 
 	// active names the parameter entities currently being substituted. A
 	// name already in it is a cycle — "%a;" inside the replacement text of
@@ -460,7 +466,23 @@ func (l *loader) fetch(systemID, publicID, base string) (text, resolved string, 
 	if got == "" {
 		got = systemID
 	}
-	return stripTextDecl(string(data)), got, nil
+	text, version := stripTextDecl(string(data))
+	// XML 1.1 §4.3.4: "If an entity (including the document entity) is not
+	// labeled with a version number, it is treated as if labeled as version
+	// 1.0", and a 1.1 entity may be included only by a 1.1 document. The
+	// document is not in view here (Load takes the DOCTYPE alone), so a 1.1
+	// entity is recorded for Validate, which has the document, and a version
+	// neither 1.0 nor 1.1 is refused now, as xdm refuses it.
+	switch version {
+	case "", "1.0":
+	case "1.1":
+		if l.v11 == "" {
+			l.v11 = systemID
+		}
+	default:
+		return "", "", fmt.Errorf("external resource %q declares unsupported XML version %q (XML §4.3.4)", systemID, version)
+	}
+	return text, got, nil
 }
 
 // expandSubset substitutes parameter-entity references in one subset and, when
@@ -808,28 +830,31 @@ func endOfDeclaration(s string) int {
 	return -1
 }
 
-// stripTextDecl removes an external subset's text declaration.
+// stripTextDecl removes an external subset's text declaration, and returns
+// the version it declares ("" when it names none).
 //
 // XML 1.0 §4.3.1: "<?xml version='1.0' encoding='...'?>" at the very start of
 // an external parsed entity is a text declaration and is not part of the
 // entity's content. Leaving it would put a processing instruction where the
 // declaration reader would try to read one as markup.
-func stripTextDecl(s string) string {
+func stripTextDecl(s string) (text, version string) {
 	rest := strings.TrimLeft(s, " \t\r\n")
 	if !strings.HasPrefix(rest, "<?xml") {
-		return s
+		return s, ""
 	}
 	after := rest[len("<?xml"):]
 	// <?xml-stylesheet?> is content, not a text declaration: the target
 	// merely begins with "xml".
 	if after != "" && !isSpace(rune(after[0])) && !strings.HasPrefix(after, "?>") {
-		return s
+		return s, ""
 	}
 	end := strings.Index(rest, "?>")
 	if end < 0 {
-		return s
+		return s, ""
 	}
-	return rest[end+len("?>"):]
+	// [77] TextDecl: VersionInfo is optional and comes first when present.
+	version, _, _, _ = xml.ParseXMLDecl(strings.Trim(rest[len("<?xml"):end], " \t\r\n"))
+	return rest[end+len("?>"):], version
 }
 
 // externalSubsetOf returns the external subset a DOCTYPE head names.

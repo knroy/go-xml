@@ -95,7 +95,7 @@ and its declarations bind), a `%pe;` in the external subset may expand to whole
 declarations, and conditional sections — `<![INCLUDE[` and `<![IGNORE[`, §3.4 —
 are resolved, including nested ones.
 
-Four things to know before relying on it:
+Five things to know before relying on it:
 
 * **Nothing is fetched without a `Resolver`, and with none the load is
   refused.** `dtd.Load` returns an error wrapping `dtd.ErrNoResolver` rather
@@ -124,6 +124,20 @@ Four things to know before relying on it:
   be able to tell a validated attribute from an unexamined one. The
   declaration is kept rather than the parse failed, so the rest of the subset
   still applies.
+* **The XML version is checked across both calls.** XML 1.1 §4.3.4 lets a
+  1.1 document include 1.0 entities but not the reverse, and an entity with no
+  version is 1.0. `dtd.Load` takes the DOCTYPE alone and cannot see the
+  document's version, so it records an external subset or parameter-entity
+  module whose text declaration says `version="1.1"`, and `dtd.Validate`
+  reports it for a document whose `Tree.XMLVersion` is not `"1.1"`. A version
+  other than 1.0 or 1.1 is refused by `dtd.Load` itself.
+
+The parser, by contrast, is a well-formedness check of the DOCTYPE: under
+`AllowDOCTYPE`, `xdm.Parse` holds the internal subset, and the external subset
+when `ExternalEntities` lets it read one, to the declaration grammar of XML 1.0
+§2.8–§4.7, so `<!ATTLIST r a CDATA #REQUIRE>` is refused there as not well
+formed. Hand such a directive to `dtd.Parse` or `dtd.Load` directly and the
+report above still applies.
 
 `ID`/`IDREF` are checked as a *validity* constraint, and the parser also feeds
 `ID`, `IDREF` and `IDREFS` declarations back into the data model as the is-id

@@ -2,8 +2,11 @@ package xdm
 
 import (
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/fileuri"
 )
 
 // chunkReader hands out at most n bytes per Read, so that the normalizer is
@@ -217,7 +220,7 @@ func TestAttributeDefaultNormalization(t *testing.T) {
 	}
 	bad := []struct{ name, subset, want string }{
 		{"literal <", `<!ATTLIST r v CDATA "a<b">`, "contains <"},
-		{"bare &", `<!ATTLIST r v CDATA "a & b">`, "begins no reference"},
+		{"bare &", `<!ATTLIST r v CDATA "a & b">`, "malformed reference"},
 		{"undeclared", `<!ATTLIST r v CDATA "&u;">`, `entity "u" is not declared before`},
 		{"declared after", `<!ATTLIST r v CDATA "&late;"><!ENTITY late "x">`, `entity "late" is not declared before`},
 		{"declared in a PI", `<?p <!ENTITY e "x">?><!ATTLIST r v CDATA "&e;">`, `entity "e" is not declared before`},
@@ -334,14 +337,17 @@ func TestCommentAndPILineEnds(t *testing.T) {
 // parameter-entity references, or with standalone="yes", a reference to an
 // undeclared entity is a well-formedness error. Otherwise the declaration may
 // be in an external subset or parameter entity a non-validating processor has
-// not read, the error is a validity error that it does not report, and the
-// reference contributes nothing — in content, in an attribute value and in a
-// default alike. An entity that is declared but cannot be read stays an error.
+// not read, and the error is VC: Entity Declared. The reference used to be
+// dropped there, silently (X2); the XDM has no entity-reference node to keep
+// it in, and §4.4.3 requires the application to be told of an entity that
+// was recognised but not read, so it is refused, with the VC named — in
+// content, in an attribute value and in a default alike. An entity that is
+// declared but cannot be read stays an error.
 func TestUndeclaredEntityWFCOrVC(t *testing.T) {
 	const doc = `<r a="1&u;2">x&u;y</r>`
 	cases := []struct {
 		name, prolog string
-		ok           bool
+		vc           bool
 	}{
 		{"no DTD", ``, false},
 		{"internal subset only", `<!DOCTYPE r [<!ENTITY e "v">]>`, false},
@@ -350,37 +356,52 @@ func TestUndeclaredEntityWFCOrVC(t *testing.T) {
 		{"parameter-entity reference", `<!DOCTYPE r [<!ENTITY % p ""> %p; ]>`, true},
 		{"standalone with external subset", `<?xml version="1.0" standalone="yes"?><!DOCTYPE r SYSTEM "r.dtd">`, false},
 		{"standalone no", `<?xml version="1.0" standalone="no"?><!DOCTYPE r SYSTEM "r.dtd">`, true},
-		{"percent in a literal is no reference", `<!DOCTYPE r [<!ENTITY e "%p;">]>`, false},
+		{"percent written as a reference is no reference", `<!DOCTYPE r [<!ENTITY e "&#37;p;">]>`, false},
 	}
 	for _, c := range cases {
-		tree, err := ParseString(c.prolog+doc, ParseOptions{AllowDOCTYPE: true})
-		if !c.ok {
+		for _, d := range []string{doc, `<r>x&u;y</r>`} {
+			_, err := ParseString(c.prolog+d, ParseOptions{AllowDOCTYPE: true})
 			if err == nil || !strings.Contains(err.Error(), "&u;") {
-				t.Errorf("%s: err = %v, want the undeclared reference refused", c.name, err)
+				t.Errorf("%s: %s: err = %v, want the undeclared reference refused", c.name, d, err)
+				continue
 			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("%s: %v", c.name, err)
-			continue
-		}
-		r := tree.Root.ChildElements()[0]
-		if got := r.StringValue() + "|" + r.Attr("", "a").Value(); got != "xy|12" {
-			t.Errorf("%s: got %q, want the reference dropped (xy|12)", c.name, got)
+			if got := strings.Contains(err.Error(), "VC: Entity Declared"); got != c.vc {
+				t.Errorf("%s: %v: names the VC %v, want %v", c.name, err, got, c.vc)
+			}
 		}
 	}
 
-	// Defaults follow the same rule, declaration order included.
+	// Defaults follow the same rule.
 	if _, err := ParseString(`<!DOCTYPE r [<!ATTLIST r d CDATA "1&u;2">]><r/>`, ParseOptions{AllowDOCTYPE: true}); err == nil {
 		t.Error("an undeclared entity in a default was accepted under the WFC")
 	}
-	tree, err := ParseString(`<!DOCTYPE r SYSTEM "r.dtd" [<!ATTLIST r d CDATA "1&u;&late;2"><!ENTITY late "L">]><r/>`,
+	_, err := ParseString(`<!DOCTYPE r SYSTEM "r.dtd" [<!ATTLIST r d CDATA "1&u;2">]><r/>`,
+		ParseOptions{AllowDOCTYPE: true})
+	if err == nil || !strings.Contains(err.Error(), "VC: Entity Declared") {
+		t.Errorf("an undeclared entity in a default under the VC: %v", err)
+	}
+	// Declaration order is the VC's too, and is not checked under it.
+	tree, err := ParseString(`<!DOCTYPE r SYSTEM "r.dtd" [<!ATTLIST r d CDATA "1&late;2"><!ENTITY late "L">]><r/>`,
 		ParseOptions{AllowDOCTYPE: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := tree.Root.ChildElements()[0].Attr("", "d").Value(); got != "1L2" {
 		t.Errorf("default = %q, want 1L2", got)
+	}
+
+	// With the external subset read, an entity in neither subset is refused
+	// too, and the note says it was looked for.
+	dir := writeFiles(t, map[string]string{
+		"r.dtd":   `<!ENTITY e "v">`,
+		"doc.xml": `<!DOCTYPE r SYSTEM "r.dtd"><r>&e;&u;</r>`,
+	})
+	_, err = ParseString(`<!DOCTYPE r SYSTEM "r.dtd"><r>&e;&u;</r>`, ParseOptions{
+		AllowDOCTYPE: true, ExternalEntities: &dirResolver{root: dir},
+		BaseURI: fileuri.Of(filepath.Join(dir, "doc.xml")),
+	})
+	if err == nil || !strings.Contains(err.Error(), "in either subset") {
+		t.Errorf("undeclared with the external subset read: %v", err)
 	}
 
 	// Declared but external, with no resolver: still refused.

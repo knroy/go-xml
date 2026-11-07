@@ -926,7 +926,7 @@ if [ "$MODE" = fast ]; then
 	# line reads the same as a full run's.
 	for _l in "W3C QT3 XPath 2.0" "W3C QT3 XPath 3.0" "W3C QT3 XPath 3.1" \
 		"W3C QT3 XQuery" "W3C XSD 1.0" "W3C XSD 1.1" \
-		"RELAX NG spectest" "W3C XSLT 2.0" "W3C XSLT 3.0" \
+		"RELAX NG spectest" "W3C xmlconf" "W3C XSLT 2.0" "W3C XSLT 3.0" \
 		UBL CII DocBook XSpec; do
 		lane "$_l" SKIP "fast mode: tests/check.sh fast does not run external suites"
 	done
@@ -1080,6 +1080,30 @@ else
     git clone --depth 1 https://github.com/relaxng/jing-trang.git
     cp jing-trang/mod/rng-validate/test/spectest.xml $RNG"
 	lane "RELAX NG spectest" SKIP "spectest.xml absent at $RNG"
+fi
+
+# The W3C XML Conformance Test Suite (xmlts20130923): not-wf cases through
+# xdm.Parse, valid and invalid ones through dtd.Load and dtd.Validate as well.
+# Like the C14N corpus it is fetched here, pinned by tests/xmlconf-corpus.txt,
+# rather than cloned by hand; GOXML_XMLCONF=1 makes the test fail rather than
+# skip if the fetch left nothing behind. A fetch that fails (no network) is a
+# SKIP, not a PASS: nothing was measured.
+section "W3C XML Conformance Test Suite (xmlconf)"
+if bash tests/fetch-xmlconf.sh; then
+	out=$(GOXML_XMLCONF=1 $GO test ./tests/xmlconf/ -count=1 -run TestXMLConf -v 2>&1) || true
+	if printf '%s' "$out" | grep -q 'in-scope:'; then
+		printf '%s\n' "$out" | grep -E 'xmlconf:|in-scope:|failing'
+		ratchet TestXMLConf "$out"
+		lane "W3C xmlconf" PASS \
+			"$(printf '%s\n' "$out" | grep 'in-scope:' | head -1 | sed 's/^ *//')"
+	else
+		fail "the xmlconf suite ran but reported no summary"
+		printf '%s\n' "$out" | tail -5
+		lane "W3C xmlconf" FAIL "ran but reported no summary"
+	fi
+else
+	skip "xmlconf could not be fetched (tests/fetch-xmlconf.sh)"
+	lane "W3C xmlconf" SKIP "tests/fetch-xmlconf.sh failed"
 fi
 
 # Both targets, always. The same catalog measures 2.0 and 3.0, and the question

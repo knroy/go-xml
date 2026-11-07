@@ -50,6 +50,10 @@ type DTD struct {
 	// Empty for a DTD a caller assembled, which then names no root and is
 	// checked as before.
 	name string
+	// v11 is the system identifier of an external resource Load read whose
+	// text declaration says version="1.1", or "". Validate refuses it for a
+	// document that is not XML 1.1 (XML 1.1 §4.3.4).
+	v11 string
 }
 
 // ContentKind is what an element's content model permits.

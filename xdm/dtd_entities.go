@@ -734,9 +734,9 @@ func (t *entityTable) entityMap() map[string]string {
 // whose replacement text holds "<". t may be nil when nothing was declared.
 //
 // wfc says whether WFC: Entity Declared governs the document (see
-// entityDeclaredIsWFC). When it does not, a reference to an entity with no
-// declaration is a validity error, which a non-validating processor does not
-// report: the reference is dropped, and declaration order is not checked.
+// entityDeclaredIsWFC). When it does not, declaration order is not checked,
+// and a reference to an entity with no declaration is still an error, as it
+// is in content: see undeclaredNote.
 func normalizeAttDefaults(defs []attDefault, t *entityTable, v11, wfc bool) ([]attDefault, error) {
 	if t == nil {
 		t = newEntityTable("", nil)
@@ -790,7 +790,7 @@ func (t *entityTable) normalizeDefault(d attDefault, wfc bool) (string, error) {
 			continue
 		}
 		if !wfc && !t.declares(name) {
-			continue
+			return "", fmt.Errorf("entity %q is not declared (%s)", name, undeclaredNote(name, t.resolver != nil))
 		}
 		if at, ok := d.entities[name]; wfc && (!ok || at > d.at) {
 			return "", fmt.Errorf("entity %q is not declared before the ATTLIST that refers to it", name)
@@ -844,6 +844,29 @@ func declsBeforeUnreadPE(subset string) string {
 		}
 	}
 	return subset
+}
+
+// undeclaredNote explains a reference to an undeclared entity in a document
+// where XML 1.0 §4.1's WFC: Entity Declared does not apply, for which the
+// VC of the same name does: "In a document with an external subset or
+// parameter entity references, if the document is not standalone ... the
+// Name given in the entity reference MUST match that in an entity
+// declaration."
+//
+// The reference is refused, not dropped. The XDM has no entity-reference
+// node to keep it in, and dropping it was silent: §4.4.3 requires a
+// non-validating processor that does not include an entity's replacement
+// text to "inform the application that it recognized, but did not read, the
+// entity", and the declaration may well be in the part of the DTD that was
+// not read. read says whether external entities were read, in which case it
+// is not there either and the document is simply invalid.
+func undeclaredNote(name string, read bool) string {
+	if read {
+		return "XML 1.0 §4.1, VC: Entity Declared: no declaration of " + name + " in either subset"
+	}
+	return "XML 1.0 §4.1, VC: Entity Declared: " + name + " may be declared in the external " +
+		"subset or a parameter entity, which were not read (ParseOptions.ExternalEntities); " +
+		"the reference cannot be kept or dropped"
 }
 
 // declares reports whether the DTD declares a general entity name, internal

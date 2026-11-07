@@ -472,6 +472,7 @@ func (p *includeProc) expandInclude(dst, inc *Node, depth int) error {
 	}
 
 	var holder *Node
+	var picked []*Node // what a local xpointer selected, holder's originals
 	var err error
 	switch {
 	case href == "" && parse == "xml" && xptr != "":
@@ -489,7 +490,7 @@ func (p *includeProc) expandInclude(dst, inc *Node, depth int) error {
 		// own pointer back at the reader. And it would address a *reparse*
 		// rather than this tree, so an xpointer naming content an earlier
 		// inclusion brought in would not find it.
-		holder, err = p.selectLocal(inc, xptr, base)
+		holder, picked, err = p.selectLocal(inc, xptr, base)
 	case href == "" && parse == "text":
 		// parse="text" with no href asks for the including document as
 		// characters. That is not a subresource selection and the resource
@@ -504,8 +505,20 @@ func (p *includeProc) expandInclude(dst, inc *Node, depth int) error {
 		}
 	}
 	if holder != nil && err == nil {
+		i := 0
 		for n := range holder.Children() {
-			appendSubtreeKeep(dst, n)
+			// The copies have lost their ancestors, so the language of
+			// §4.5.6 is read off the node the xpointer selected.
+			if picked != nil && n.Kind() == KindElement {
+				c := appendElementKeep(dst, n)
+				fixupLanguage(c, picked[i], dst)
+				for k := range n.Children() {
+					appendSubtreeKeep(c, k)
+				}
+			} else {
+				appendSubtreeKeep(dst, n)
+			}
+			i++
 		}
 		return nil
 	}
@@ -552,7 +565,7 @@ func (p *includeProc) expandInclude(dst, inc *Node, depth int) error {
 //
 // The nodes are given the include element's base, because they are being
 // written where the include element sat, not where they were read.
-func (p *includeProc) selectLocal(inc *Node, xptr, base string) (*Node, error) {
+func (p *includeProc) selectLocal(inc *Node, xptr, base string) (*Node, []*Node, error) {
 	root := inc.Root()
 	picked, err := selectXPointerIn(root, xptr, func(n *Node) *Node {
 		p.visits++
@@ -566,15 +579,15 @@ func (p *includeProc) selectLocal(inc *Node, xptr, base string) (*Node, error) {
 		return p.viewOf(n)
 	})
 	if limit := p.nodeLimit(); limit >= 0 && p.visits > limit {
-		return nil, fatalInclude{fmt.Errorf(
+		return nil, nil, fatalInclude{fmt.Errorf(
 			"resource limit exceeded: local xpointer searches visit more than %d nodes: %w",
 			limit, ErrResourceLimit)}
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(picked) == 0 {
-		return nil, fmt.Errorf("xpointer %q selected nothing in the including document", xptr)
+		return nil, nil, fmt.Errorf("xpointer %q selected nothing in the including document", xptr)
 	}
 	for _, n := range picked {
 		// Section 4.5.1: an inclusion of the include element itself, or of
@@ -582,18 +595,18 @@ func (p *includeProc) selectLocal(inc *Node, xptr, base string) (*Node, error) {
 		// cannot be caught by the URI stack, because the URI is the same
 		// document's and there is no second fetch to compare against.
 		if n == inc || isAncestorOf(n, inc) {
-			return nil, fatalInclude{fmt.Errorf(
+			return nil, nil, fatalInclude{fmt.Errorf(
 				"xpointer %q selects the include element or an ancestor of it", xptr)}
 		}
 	}
 	if err := p.charge(picked); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	holder := newHolder()
 	for _, n := range picked {
 		copySubtree(holder, n, base)
 	}
-	return holder, nil
+	return holder, picked, nil
 }
 
 // viewOf is the node a local xpointer sees in place of n: the processed copy
@@ -792,7 +805,8 @@ func (p *includeProc) fetch(dst *Node, target, base, parse, xptr, encoding strin
 }
 
 // copyFixedUp appends a copy of n, a top-level included node, with the base
-// URI fixup of section 4.5.5 applied.
+// URI fixup of section 4.5.5 and the language fixup of section 4.5.6
+// (fixupLanguage) applied.
 //
 // The included elements are about to sit in a document retrieved from a
 // *different* URI, so a relative reference written inside them would resolve
@@ -815,11 +829,19 @@ func copyFixedUp(dst, n *Node, includeBase string) {
 	// PI included alongside the document element has a base URI in the data
 	// model, but nothing can be written on it and nothing resolves a relative
 	// reference from it.
-	if n.Kind() != KindElement || n.BaseURI() == "" || n.BaseURI() == includeBase {
+	if n.Kind() != KindElement {
 		appendSubtreeKeep(dst, n)
 		return
 	}
-	if xb := n.Attr(NSXML, "base"); xb != nil {
+	c := appendElementKeep(dst, n)
+	fixupLanguage(c, n, dst)
+	xb := n.Attr(NSXML, "base")
+	switch {
+	case n.BaseURI() == "" || n.BaseURI() == includeBase:
+		for k := range n.Children() {
+			appendSubtreeKeep(c, k)
+		}
+	case xb != nil:
 		// The element states its own base. Leaving it alone has a consequence
 		// the attribute alone does not show: a RELATIVE xml:base now sits in
 		// a different document, so it resolves against the include element's
@@ -830,16 +852,53 @@ func copyFixedUp(dst, n *Node, includeBase string) {
 		// included into a document based at fn/base-uri/ the surviving
 		// attribute reads fn/base-uri/dir5/data.xml, which is what the case
 		// expects.
-		c := appendElementKeep(dst, n)
 		c.SetBaseURI(resolveBase(includeBase, xb.Value()))
 		copyRebased(c, n, c.BaseURI())
+	default:
+		c.AppendAttr(QName{Prefix: "xml", Local: "base", URI: NSXML}, n.BaseURI())
+		for k := range n.Children() {
+			appendSubtreeKeep(c, k)
+		}
+	}
+}
+
+// fixupLanguage is XInclude §4.5.6 for c, the copy of the top-level included
+// element n just appended under the include parent: "Each element information
+// item in the top-level included items which has a different value of
+// language than its include parent (taking case-insensitivity into account
+// per [IETF RFC 3066]), or that has a value if its include parent is a
+// document information item, has an attribute information item added to its
+// attributes property", xml:lang with the element's language as its value, or
+// "" when it has none. It must run before c has children.
+//
+// An element carrying its own xml:lang already says its language, and the
+// attribute that would replace it has the same value, so it is left alone.
+func fixupLanguage(c, n, parent *Node) {
+	if c.Attr(NSXML, "lang") != nil {
 		return
 	}
-	c := appendElementKeep(dst, n)
-	c.AppendAttr(QName{Prefix: "xml", Local: "base", URI: NSXML}, n.BaseURI())
-	for k := range n.Children() {
-		appendSubtreeKeep(c, k)
+	lang, has := languageOf(n)
+	plang, phas := languageOf(parent)
+	if has == phas && strings.EqualFold(lang, plang) {
+		return
 	}
+	c.AppendAttr(QName{Prefix: "xml", Local: "lang", URI: NSXML}, lang)
+}
+
+// languageOf is §4.5.6's language property of n: "the normalized value of
+// the xml:lang attribute appearing on that element if one exists, with
+// xml:lang="" resulting in no value, otherwise ... the value of the language
+// property of the element's parent element if one exists, otherwise the
+// property has no value." A node that is not an element (the document node,
+// as an include parent) has none.
+func languageOf(n *Node) (string, bool) {
+	for cur := n; cur != nil && cur.Kind() == KindElement; cur = cur.Parent() {
+		if a := cur.Attr(NSXML, "lang"); a != nil {
+			v := a.Value()
+			return v, v != ""
+		}
+	}
+	return "", false
 }
 
 // copyRebased appends to dst, the copy of n whose base was just recomputed,

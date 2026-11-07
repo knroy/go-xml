@@ -8,74 +8,14 @@ import (
 	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
 
-// parseXMLDecl matches productions [23]-[26] reduced to the declarations
-// this parser supports, and returns the standalone value ("" when absent). It
-// deliberately validates the *whole* PI data: searching for version= would
-// accept duplicate fields and trailing garbage, both of which make a document
-// not well formed.
-//
-// Each name is separated from its value by [25] Eq ::= S? '=' S?, not by a
-// bare "=". Requiring the bare form rejected `version = "1.0"` and
-// `encoding = "UTF-8"`, both well formed and both used by the QT3 corpus.
-//
-// It is the regular expression
-//
-//	^version Eq ("1\.[0-9]+"|'1\.[0-9]+')
-//	(S+ encoding Eq ("[A-Za-z][A-Za-z0-9._-]*"|'...'))?
-//	(S+ standalone Eq ("(yes|no)"|'(yes|no)'))?$
-//
-// written out, which costs a tenth of compiling the match per document did.
+// parseXMLDecl matches productions [23]-[26] (xmltok.ParseXMLDecl) and
+// returns the standalone value ("" when absent). It validates the *whole* PI
+// data: searching for version= would accept duplicate fields and trailing
+// garbage, both of which make a document not well formed.
 func parseXMLDecl(s string) (standalone string, ok bool) {
-	s, ok = declField(s, "version", false, func(v string) bool {
-		return len(v) > 2 && v[:2] == "1." && strings.Trim(v[2:], "0123456789") == ""
-	})
-	if !ok {
-		return "", false
-	}
-	if rest, ok := declField(s, "encoding", true, func(v string) bool {
-		return v != "" && isASCIILetter(v[0]) && strings.TrimLeft(v,
-			"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") == ""
-	}); ok {
-		s = rest
-	}
-	if rest, ok := declField(s, "standalone", true, func(v string) bool {
-		standalone = v
-		return v == "yes" || v == "no"
-	}); ok {
-		return standalone, rest == ""
-	}
-	return "", s == ""
+	_, _, standalone, ok = xml.ParseXMLDecl(s)
+	return standalone, ok
 }
-
-// declField reads name Eq quoted-value from the front of s, after S+ when
-// spaced, and returns the rest when valid accepts the value.
-func declField(s, name string, spaced bool, valid func(string) bool) (string, bool) {
-	if spaced {
-		t := strings.TrimLeft(s, " \t\r\n")
-		if len(t) == len(s) {
-			return s, false
-		}
-		s = t
-	}
-	if !strings.HasPrefix(s, name) {
-		return s, false
-	}
-	s = strings.TrimLeft(s[len(name):], " \t\r\n")
-	if s == "" || s[0] != '=' {
-		return s, false
-	}
-	s = strings.TrimLeft(s[1:], " \t\r\n")
-	if s == "" || s[0] != '"' && s[0] != '\'' {
-		return s, false
-	}
-	end := strings.IndexByte(s[1:], s[0])
-	if end < 0 || !valid(s[1:1+end]) {
-		return s, false
-	}
-	return s[end+2:], true
-}
-
-func isASCIILetter(b byte) bool { return 'a' <= b|0x20 && b|0x20 <= 'z' }
 
 // declStandaloneYes reports standalone="yes" in a declaration parseXMLDecl
 // has already accepted.
