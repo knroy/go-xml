@@ -395,9 +395,20 @@ resolver confined to the suite. `TYPE="error"`, XML 1.1, editions before the
 Fifth and `NAMESPACE="no"` cases are out of scope and counted as skipped. The
 passing count is the `TestXMLConf` ratchet mark.
 
+The count cannot see one case start failing while another starts passing, so
+`tests/xmlconf/expected-pass.txt` lists, one ID per line and sorted, every case
+that passes. With the suite present, a listed ID that does not pass fails the
+test as `regressed: <id>: <reason>`; a passing ID that is not listed is logged
+as `newly passing: <id>` and does not fail. After a change that makes cases
+pass (or, deliberately, stop passing), regenerate the list with
+`GOXML_XMLCONF_UPDATE=1`, which rewrites the file from the run instead of
+checking it. Review `git diff tests/xmlconf/expected-pass.txt` before
+committing: every removed line is a case that stopped passing.
+
 ```sh
 tests/fetch-xmlconf.sh
 go test ./tests/xmlconf/ -count=1 -run TestXMLConf -v   # every failure, by type
+GOXML_XMLCONF_UPDATE=1 go test ./tests/xmlconf/ -count=1 -run TestXMLConf   # rewrite expected-pass.txt
 ```
 
 DocBook needs its localisation files generated before it will transform
