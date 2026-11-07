@@ -584,6 +584,14 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 			i = skip
 			continue
 		}
+		// XML 1.0 §3.4 [63]: the contents of an IGNORE section are ignored
+		// but for nested section starts and ends, so a "%" in one is not a
+		// reference and is neither substituted nor fetched.
+		if kw, body, end := ignoredSection(subset, i, params); end > i {
+			sb.WriteString("<![" + kw + subset[body:end])
+			i = end
+			continue
+		}
 		if subset[i] != '%' {
 			sb.WriteByte(subset[i])
 			i++
@@ -641,10 +649,6 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 		// §2.8): "The replacement text of a parameter entity reference in a
 		// DeclSep MUST match the production extSubsetDecl." A reference
 		// inside a declaration is only a validity matter, and is never here.
-		//
-		// ponytail: a reference inside an IGNORE section is checked too,
-		// though §3.4 does not recognise it there; tracking IGNORE nesting
-		// here would lift that.
 		if !strings.HasSuffix(strings.TrimRight(sb.String(), " \t\r\n"), "<![") {
 			if err := checkExtSubsetGrammar(text); err != nil {
 				return "", fmt.Errorf("parameter entity %%%s between declarations "+
@@ -663,6 +667,63 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 		i += j + 1
 	}
 	return sb.String(), nil
+}
+
+// ignoredSection recognises an IGNORE conditional section starting at s[i]:
+// "<![", its keyword written as IGNORE or as a reference to an internal
+// parameter entity whose replacement text is IGNORE, and "[". It returns the
+// keyword as substituted, the offset of the "[", and the offset just past the
+// section's "]]>", counting nested sections as §3.4 [64] does; end is i when
+// s[i:] is no such section or is unterminated, which the grammar check
+// refuses.
+func ignoredSection(s string, i int, params map[string]paramEntity) (kw string, body, end int) {
+	if !strings.HasPrefix(s[i:], "<![") {
+		return "", i, i
+	}
+	j := i + len("<![")
+	for j < len(s) && isXMLSpaceByte(s[j]) {
+		j++
+	}
+	kw = s[i+len("<![") : j]
+	switch rest := s[j:]; {
+	case strings.HasPrefix(rest, "IGNORE"):
+		kw += "IGNORE"
+		j += len("IGNORE")
+	case strings.HasPrefix(rest, "%"):
+		k := strings.IndexByte(rest, ';')
+		if k < 0 {
+			return "", i, i
+		}
+		p, ok := params[rest[1:k]]
+		if !ok || p.external || strings.TrimSpace(p.text) != "IGNORE" {
+			return "", i, i
+		}
+		kw += p.text
+		j += k + 1
+	default:
+		return "", i, i
+	}
+	for j < len(s) && isXMLSpaceByte(s[j]) {
+		j++
+	}
+	if j >= len(s) || s[j] != '[' {
+		return "", i, i
+	}
+	body = j
+	for depth := 0; j < len(s); j++ {
+		switch {
+		case strings.HasPrefix(s[j:], "<!["):
+			depth++
+			j += 2
+		case strings.HasPrefix(s[j:], "]]>"):
+			if depth == 0 {
+				return kw, body, j + len("]]>")
+			}
+			depth--
+			j += 2
+		}
+	}
+	return "", i, i
 }
 
 // paramEntity is a parameter-entity declaration: internal replacement text, or

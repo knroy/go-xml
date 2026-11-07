@@ -45,13 +45,23 @@ func TestDTDDeclarationGrammar(t *testing.T) {
 		"colon in an entity name": `<!ENTITY a:b "x">`,
 		"colon in a pe name":      `<!ENTITY % a:b "x">`,
 		"colon in a notation":     `<!NOTATION a:b SYSTEM "n">`,
-		"noncharacter in a pe":    "<!ENTITY % e \"\uFFFF\">",
-		"control in an attlist":   "<!ATTLIST r a CDATA \"\x01\">",
 	}
 	for name, subset := range bad {
 		_, err := ParseString("<!DOCTYPE r ["+subset+"]><r/>", ParseOptions{AllowDOCTYPE: true})
 		if err == nil || !strings.Contains(err.Error(), "malformed DTD") {
 			t.Errorf("%s: %s: err = %v, want malformed DTD", name, subset, err)
+		}
+	}
+	// [2] Char, which the tokeniser holds a DOCTYPE to as it does content
+	// (xmlconf not-wf-sa-175).
+	for name, subset := range map[string]string{
+		"noncharacter in a pe":  "<!ENTITY % e \"\uFFFF\">",
+		"control in an attlist": "<!ATTLIST r a CDATA \"\x01\">",
+		"control in a comment":  "<!-- \x01 -->",
+	} {
+		_, err := ParseString("<!DOCTYPE r ["+subset+"]><r/>", ParseOptions{AllowDOCTYPE: true})
+		if err == nil || !strings.Contains(err.Error(), "illegal character code") {
+			t.Errorf("%s: %s: err = %v, want an illegal character", name, subset, err)
 		}
 	}
 	for _, d := range []string{`DOCTYPEr`, `DOCTYPE`, `DOCTYPE r SYSTEM`, `DOCTYPE r PUBLIC "p"`, `DOCTYPE r [] x`} {

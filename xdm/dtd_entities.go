@@ -218,6 +218,8 @@ type entityTable struct {
 	// its tokeniser reads nested references through.
 	contentErr map[string]error
 	stubs      map[string]string
+	// attrErr memoises attrRefOK per entity.
+	attrErr map[string]error
 }
 
 // parseInternalEntities reads the <!ENTITY ...> declarations out of a DOCTYPE
@@ -1359,6 +1361,11 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 		if depth <= 0 {
 			return "", fmt.Errorf("entity reference &%s; outside the document element", name)
 		}
+		if attrQuote != 0 {
+			if err := t.attrRefOK(name); err != nil {
+				return "", err
+			}
+		}
 		rep, err := t.resolve(name)
 		if err != nil {
 			// A REFUSED FETCH is reported here, not deferred. The document
@@ -1441,6 +1448,31 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 		i += j + 1
 	}
 	return sb.String(), nil
+}
+
+// attrRefOK is XML 1.0 §3.1, WFC: No External Entity References, for a
+// reference to name in an attribute value of a document being rewritten:
+// "Attribute values MUST NOT contain direct or indirect entity references to
+// external entities." expand's attribute mode holds a nested reference to it,
+// as it does a default's; an undeclared name is left to resolve and the
+// decoder. Each entity is checked once.
+func (t *entityTable) attrRefOK(name string) error {
+	if t.external[name] {
+		return fmt.Errorf("external entity %q is referenced in an attribute value", name)
+	}
+	raw, ok := t.raw[name]
+	if !ok {
+		return nil
+	}
+	if err, done := t.attrErr[name]; done {
+		return err
+	}
+	_, err := t.expand(replacementText(raw), 0, map[string]bool{name: true}, true)
+	if t.attrErr == nil {
+		t.attrErr = map[string]error{}
+	}
+	t.attrErr[name] = err
+	return err
 }
 
 // endOfInternalSubset returns the offset just past the DOCTYPE declaration, or

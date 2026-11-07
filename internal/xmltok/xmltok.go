@@ -850,9 +850,17 @@ func (d *Decoder) directive(b byte) (Token, error) {
 				if out, ok = d.commentBody(out); !ok {
 					return nil, d.err
 				}
+				if !d.checkChars(out[mark+1:], nil) {
+					return nil, d.err
+				}
 				out = append(out[:mark], ' ')
 			}
 		}
+	}
+	// [2] Char holds in a DOCTYPE as in content: a noncharacter in an entity
+	// value no one references is still not well formed.
+	if !d.checkChars(out, nil) {
+		return nil, d.err
 	}
 	out = foldLineEnds(out, d.v11)
 	d.scratch = out

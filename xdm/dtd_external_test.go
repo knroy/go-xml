@@ -414,6 +414,29 @@ func TestStandaloneRefusesExternallyDeclaredEntity(t *testing.T) {
 	}
 }
 
+// WFC: No External Entity References (XML 1.0 §3.1): "Attribute values MUST
+// NOT contain direct or indirect entity references to external entities."
+// With a resolver, a declared external entity sends the document down the
+// rewrite path, which substituted the fetched text into the attribute.
+func TestAttributeValueRefusesExternalEntity(t *testing.T) {
+	const decls = `<!ENTITY x SYSTEM "x.ent"><!ENTITY y "&x;"><!ENTITY m "<b/>"><!ENTITY s "v">`
+	dir := writeFiles(t, map[string]string{
+		"x.ent":      "hello",
+		"direct.xml": `<!DOCTYPE r [` + decls + `]><r a="&x;"/>`,
+		"nested.xml": `<!DOCTYPE r [` + decls + `]><r a="&y;"/>`,
+		"ok.xml":     `<!DOCTYPE r [` + decls + `]><r a="&s;">&x;&m;</r>`,
+	})
+	for _, name := range []string{"direct.xml", "nested.xml"} {
+		if err := parseExternalErr(t, dir, name); err == nil || !strings.Contains(err.Error(), "in an attribute value") {
+			t.Errorf("%s: err = %v, want WFC: No External Entity References", name, err)
+		}
+	}
+	r := mustParseExternal(t, dir, "ok.xml").Root.ChildElements()[0]
+	if r.Attr("", "a").Value() != "v" || r.StringValue() != "hello" {
+		t.Errorf("ok.xml: a=%q, content %q", r.Attr("", "a").Value(), r.StringValue())
+	}
+}
+
 // The validity faults a parse records for dtd.Validate (dtdnote.go) are
 // bounded, as Validate's own report is, and one recurring in a row is kept
 // once: here an external default applied to 150 elements under
@@ -486,11 +509,14 @@ func TestExternalSubsetAttlistWithoutEntities(t *testing.T) {
 // 1.0 §3.4 (from memory), "the contents of ignored conditional sections MUST
 // be ignored when parsing the DTD". The keyword here comes from a parameter
 // entity of the internal subset (xmlconf valid-not-sa-015); the ATTLIST inside
-// used to default @a1 onto the element anyway.
+// used to default @a1 onto the element anyway. A "%" inside one is no
+// reference either ([63]): substituting %bad; there broke WFC: PE Between
+// Declarations, and %gone; was fetched.
 func TestExternalSubsetIgnoreSection(t *testing.T) {
 	dir := writeFiles(t, map[string]string{
-		"d.dtd": `<!ELEMENT doc (#PCDATA)>` +
-			`<![ %e; [<!ATTLIST doc a1 CDATA "v1"><![INCLUDE[<!ATTLIST doc a3 CDATA "v3">]]>]]>` +
+		"d.dtd": `<!ELEMENT doc (#PCDATA)><!ENTITY % bad "<!ELEMENT"><!ENTITY % gone SYSTEM "absent.ent">` +
+			`<![ %e; [<!ATTLIST doc a1 CDATA "v1"><![INCLUDE[<!ATTLIST doc a3 CDATA "v3">]]> %bad; %gone; ]]>` +
+			`<![IGNORE[ %bad; <![ %gone; ]]> %gone; ]]>` +
 			`<![INCLUDE[<!ATTLIST doc a4 CDATA "v4">]]>` +
 			`<!ATTLIST doc a2 CDATA "v2">`,
 		"doc.xml": `<!DOCTYPE doc SYSTEM "d.dtd" [<!ENTITY % e "IGNORE">]><doc></doc>`,
