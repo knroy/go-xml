@@ -50,9 +50,9 @@ var particleNames = []string{"all", "choice", "sequence", "group"}
 var attrDecls = []srcTerm{star("attribute", "attributeGroup"), opt("anyAttribute")}
 
 // facetNames are the constraining facets that may appear in a simple type
-// restriction. The 1.1 additions are accepted in both versions: whether a
-// facet is *honoured* is Options.Version's business, but a document that uses
-// one is not made ill-formed by running the 1.0 rules over it.
+// restriction, unioned across the versions. The two 1.1 additions match
+// here so the grammar check stays version-free; under 1.0 checkSourceModel
+// refuses them through only11Elements.
 var facetNames = []string{
 	"minExclusive", "minInclusive", "maxExclusive", "maxInclusive",
 	"totalDigits", "fractionDigits", "length", "minLength", "maxLength",
@@ -142,10 +142,9 @@ var srcModels = map[string][]srcTerm{
 // 1.1 §3, unioned across the two versions. Taking the union is deliberate:
 // this check exists to catch a name that is simply not an XSD attribute — the
 // `foo="bar"` of wildI003, the `minOccurs` that wildQ002 puts on an
-// <anyAttribute> which has no occurrence range at all. Whether a 1.1-only
-// attribute is *honoured* under 1.0 is a separate question, decided where that
-// attribute is read (readDisallowedNames does exactly this for notQName), and
-// rejecting it here would pre-empt that decision for every one of them at once.
+// <anyAttribute> which has no occurrence range at all. A 1.1-only attribute
+// is then refused under 1.0 by only11Attr, since the 1.0 schema for schemas
+// does not declare it.
 var srcAttrs = map[string][]string{
 	"schema": {"attributeFormDefault", "blockDefault", "elementFormDefault",
 		"finalDefault", "targetNamespace", "version",
@@ -210,6 +209,29 @@ var srcAttrs = map[string][]string{
 	// namespaced) and, unlike every other XSD element, no id.
 	"appinfo":       {"source"},
 	"documentation": {"source"},
+}
+
+// only11Elements are the schema elements XSD 1.1 added. The XSD 1.0 schema for
+// schemas declares none of them, so checkSourceModel refuses each under 1.0.
+var only11Elements = map[string]bool{
+	"assert": true, "assertion": true, "alternative": true,
+	"openContent": true, "defaultOpenContent": true, "override": true,
+	"explicitTimezone": true,
+}
+
+// only11Attr reports an attribute srcAttrs lists for element el only because
+// XSD 1.1 added it there. notNamespace and notQName are not listed: the
+// wildcard reader refuses them under 1.0 already (readDisallowedNames).
+func only11Attr(el, attr string) bool {
+	switch el + "@" + attr {
+	case "schema@defaultAttributes", "schema@xpathDefaultNamespace",
+		"element@targetNamespace", "attribute@targetNamespace",
+		"attribute@inheritable", "complexType@defaultAttributesApply",
+		"selector@xpathDefaultNamespace", "field@xpathDefaultNamespace",
+		"unique@ref", "key@ref", "keyref@ref":
+		return true
+	}
+	return false
 }
 
 // srcAnyURIAttrs names the attributes the schema for schemas types as
@@ -309,6 +331,12 @@ func (p *parser) checkAttrs(el *xdm.Node) {
 		if !found || prohibitedHere(el, a.Name().Local) {
 			p.errs = append(p.errs, errorAt(el, "",
 				"attribute %q is not allowed on xs:%s",
+				a.Name().Local, el.Name().Local))
+			continue
+		}
+		if p.schema.Version < Version11 && only11Attr(el.Name().Local, a.Name().Local) {
+			p.errs = append(p.errs, errorAt(el, "",
+				"attribute %q on xs:%s requires XSD 1.1",
 				a.Name().Local, el.Name().Local))
 			continue
 		}
@@ -481,6 +509,15 @@ func (p *parser) checkSourceModel(el *xdm.Node) {
 
 	p.checkAttrs(el)
 	p.checkAnyURIAttrs(el)
+
+	// The 1.1-only elements are not in the XSD 1.0 schema for schemas, so
+	// under 1.0 a document that uses one is not a schema. One a vc:
+	// condition excludes never reaches this walk (includeElement), which is
+	// how a document carries a 1.1 construct for a 1.1 processor alone.
+	if p.schema.Version < Version11 && only11Elements[el.Name().Local] {
+		p.errs = append(p.errs, errorAt(el, "",
+			"<xs:%s> requires XSD 1.1", el.Name().Local))
+	}
 
 	if terms, ok := srcModelFor(el, el.Parent()); ok {
 		p.matchSourceModel(el, terms)

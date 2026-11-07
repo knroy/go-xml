@@ -20,9 +20,9 @@
 // adds assertions, conditional type assignment with xs:alternative and
 // inheritable attributes, open content, xs:override, the notNamespace and
 // notQName wildcard forms, explicitTimezone, and conditional inclusion through
-// the versioning attributes. The 1.1 constructs are always *parsed* — a schema
-// that uses one is not made valid by pretending it is absent — but they are
-// only honoured under Version11.
+// the versioning attributes. Under Version10 a 1.1 construct is a schema
+// error, as the 1.0 schema for schemas does not declare it, unless
+// vc:minVersion="1.1" excludes it.
 //
 // One constraint is deliberately not checked: Particle Valid (Restriction).
 // See CheckConstraints.
