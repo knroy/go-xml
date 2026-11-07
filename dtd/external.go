@@ -329,6 +329,10 @@ type loader struct {
 	// promises to fetch nothing.
 	noFetch bool
 
+	// sections counts the INCLUDE sections currently being expanded, for
+	// maxConditionalDepth.
+	sections int
+
 	// v11 is the system identifier of the first external resource read
 	// whose text declaration says version="1.1", or "". See fetch.
 	v11 string
@@ -498,7 +502,13 @@ func (l *loader) fetch(systemID, publicID, base string) (text, resolved string, 
 }
 
 // expandSubset substitutes parameter-entity references in one subset and, when
-// the subset is external, resolves its conditional sections.
+// the subset is external, resolves its conditional sections — both in one
+// pass, in document order, which is the order XML 1.0 gives them meaning in.
+// A parameter entity is in scope from its declaration on (§4.1 WFC/VC Entity
+// Declared), a declaration inside an INCLUDE section is an ordinary
+// declaration, and one inside an IGNORE section is not read at all (§3.4).
+// Collecting declarations over the whole subset first got all three wrong: it
+// could not see inside "<![", and would have seen into an IGNORE if it had.
 //
 // declLevel says which subset this is. XML 1.0 §2.8 draws a real line: in the
 // INTERNAL subset a parameter-entity reference may appear only where a whole
@@ -507,15 +517,7 @@ func (l *loader) fetch(systemID, publicID, base string) (text, resolved string, 
 // declarations, which is the mechanism DTD modularisation is built on.
 // Conditional sections (§3.4) are external-subset-only for the same reason.
 func (l *loader) expandSubset(subset, base string, declLevel bool) (string, error) {
-	l.collectParams(subset, base)
-	expanded, err := l.expand(subset, base, 0, declLevel)
-	if err != nil {
-		return "", err
-	}
-	if !declLevel {
-		return expanded, nil
-	}
-	return l.conditionals(expanded, 0)
+	return l.expand(subset, base, 0, declLevel)
 }
 
 // collectParams records the parameter-entity declarations a subset makes.
@@ -587,13 +589,24 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 			"parameter entities nested more than %d deep: %w",
 			maxParameterDepth, xdm.ErrResourceLimit)
 	}
-	if !strings.Contains(subset, "%") {
+	if !strings.Contains(subset, "%") && !(declLevel && strings.Contains(subset, "<![")) {
 		return subset, nil
 	}
 	var sb strings.Builder
 	for i := 0; i < len(subset); {
+		if declLevel && strings.HasPrefix(subset[i:], "<![") {
+			n, err := l.conditional(&sb, subset[i:], base, depth, declLevel)
+			if err != nil {
+				return "", err
+			}
+			i += n
+			continue
+		}
 		if end := endOfConstruct(subset, i); end > i {
 			construct := subset[i:end]
+			// A parameter entity comes into scope as its declaration is
+			// passed, never earlier; first declaration wins.
+			l.collectParams(construct, base)
 			// In the external subset a reference may appear inside a
 			// declaration — "<!ELEMENT r %model;>" is the idiom — so the
 			// body is expanded while the delimiters are kept. In the
@@ -655,9 +668,6 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 			if err != nil {
 				return "", err
 			}
-			// A module may declare further parameter entities, which come
-			// into scope beneath everything already declared.
-			l.collectParams(text, refBase)
 		}
 		l.active[name] = true
 		text, err := l.expand(text, refBase, depth+1, declLevel)
@@ -690,7 +700,9 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 	return sb.String(), nil
 }
 
-// conditionals resolves INCLUDE and IGNORE sections.
+// conditional resolves the INCLUDE or IGNORE section that begins s, writes an
+// INCLUDE's expanded contents to sb, and returns how many bytes of s it
+// consumed.
 //
 // XML 1.0 §3.4:
 //
@@ -700,72 +712,57 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 //
 // They are external-subset-only, and the keyword is usually a parameter
 // entity — "<![%draft;[ ... ]]>" with "%draft;" declared as "INCLUDE" or
-// "IGNORE" — which is why this runs AFTER expansion rather than before.
+// "IGNORE" — so the keyword is expanded before it is read.
 //
 // Nesting is the part that has to be right: the contents of an IGNORE section
 // are not parsed as declarations, but its "<![" and "]]>" delimiters still
 // have to be counted, or the first "]]>" of an inner section would end the
 // outer one and the declarations after it would be read when they should not
 // be. §3.4 says exactly that.
-func (l *loader) conditionals(subset string, depth int) (string, error) {
-	if depth > maxConditionalDepth {
-		return "", fmt.Errorf(
-			"conditional sections nested more than %d deep: %w",
-			maxConditionalDepth, xdm.ErrResourceLimit)
+func (l *loader) conditional(sb *strings.Builder, s, base string, depth int, declLevel bool) (int, error) {
+	rest := s[len("<!["):]
+	open := strings.IndexByte(rest, '[')
+	if open < 0 {
+		return 0, fmt.Errorf("a conditional section is missing its '['")
 	}
-	i := strings.Index(subset, "<![")
-	if i < 0 {
-		return subset, nil
+	kw, err := l.expand(rest[:open], base, depth+1, declLevel)
+	if err != nil {
+		return 0, err
 	}
-	var sb strings.Builder
-	for i >= 0 {
-		sb.WriteString(subset[:i])
-		rest := subset[i+len("<!["):]
-		kw := strings.TrimLeft(rest, " \t\r\n")
-		var include bool
-		switch {
-		case strings.HasPrefix(kw, "INCLUDE"):
-			include = true
-			kw = kw[len("INCLUDE"):]
-		case strings.HasPrefix(kw, "IGNORE"):
-			kw = kw[len("IGNORE"):]
-		default:
-			// Not a conditional section — a CDATA section cannot appear in a
-			// DTD, but an unexpanded "%kw;" can when the entity was never
-			// declared. Copying it through leaves the document less
-			// constrained rather than wrongly refused, which is the rule the
-			// rest of this package follows.
-			sb.WriteString(subset[i : i+len("<![")])
-			subset = rest
-			i = strings.Index(subset, "<![")
-			continue
-		}
-		kw = strings.TrimLeft(kw, " \t\r\n")
-		if !strings.HasPrefix(kw, "[") {
-			return "", fmt.Errorf("a conditional section is missing its '['")
-		}
-		body := kw[1:]
-		end := matchingSectionEnd(body)
-		if end < 0 {
-			return "", fmt.Errorf("a conditional section is not closed by ']]>'")
-		}
-		if include {
-			// The contents of an INCLUDE are ordinary declarations, and may
-			// contain further conditional sections of their own.
-			inner, err := l.conditionals(body[:end], depth+1)
-			if err != nil {
-				return "", err
-			}
-			sb.WriteString(inner)
-		}
-		// An IGNORE contributes nothing. Its contents are not even parsed,
-		// per §3.4 — only its delimiters were counted, which
-		// matchingSectionEnd did.
-		subset = body[end+len("]]>"):]
-		i = strings.Index(subset, "<![")
+	kw = strings.Trim(kw, " \t\r\n")
+	if kw != "INCLUDE" && kw != "IGNORE" {
+		// Not a conditional section — a CDATA section cannot appear in a
+		// DTD, but an unexpanded "%kw;" can when the entity was never
+		// declared. Copying it through leaves the document less
+		// constrained rather than wrongly refused, which is the rule the
+		// rest of this package follows.
+		sb.WriteString("<![")
+		return len("<!["), nil
 	}
-	sb.WriteString(subset)
-	return sb.String(), nil
+	body := rest[open+1:]
+	end := matchingSectionEnd(body)
+	if end < 0 {
+		return 0, fmt.Errorf("a conditional section is not closed by ']]>'")
+	}
+	// An IGNORE contributes nothing. Its contents are not even parsed, per
+	// §3.4 — only its delimiters were counted, which matchingSectionEnd did.
+	if kw == "INCLUDE" {
+		if l.sections >= maxConditionalDepth {
+			return 0, fmt.Errorf(
+				"conditional sections nested more than %d deep: %w",
+				maxConditionalDepth, xdm.ErrResourceLimit)
+		}
+		// The contents of an INCLUDE are ordinary declarations, and may
+		// contain further conditional sections of their own.
+		l.sections++
+		inner, err := l.expand(body[:end], base, depth, declLevel)
+		l.sections--
+		if err != nil {
+			return 0, err
+		}
+		sb.WriteString(inner)
+	}
+	return len("<![") + open + 1 + end + len("]]>"), nil
 }
 
 // matchingSectionEnd returns the offset of the "]]>" that closes the section

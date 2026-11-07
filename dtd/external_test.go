@@ -963,3 +963,27 @@ func TestInternalSubsetParameterEntitiesAreExpanded(t *testing.T) {
 		t.Errorf("InternalSubsetOnly made %d fetches, want 0", r.calls)
 	}
 }
+
+// A parameter entity declared inside an INCLUDE section is in scope after it,
+// and one declared inside an IGNORE section is not declared at all: XML 1.0
+// §3.4 makes an INCLUDE's contents ordinary declarations and leaves an
+// IGNORE's unread. Declarations were collected before sections were resolved,
+// by a scan that could not see inside "<![", so the first was lost.
+func TestParameterEntityDeclaredInAConditionalSection(t *testing.T) {
+	opts := mapOpts(map[string]string{"r.dtd": `<![INCLUDE[
+<!ENTITY % root "<!ELEMENT r (a)>">
+]]>
+%root;
+<![IGNORE[
+<!ENTITY % a "<!ELEMENT a (#PCDATA)>">
+]]>
+<!ENTITY % a "<!ELEMENT a EMPTY>">
+%a;`})
+	const doc = `<!DOCTYPE r SYSTEM "r.dtd">`
+	if err := loadCheck(t, doc+`<r><a/></r>`, opts); err != nil {
+		t.Errorf("the INCLUDE's entity should declare r, and the IGNORE's should not shadow a: %v", err)
+	}
+	if err := loadCheck(t, doc+`<r><a>x</a></r>`, opts); err == nil {
+		t.Error("a is EMPTY: the declaration inside IGNORE must not win")
+	}
+}

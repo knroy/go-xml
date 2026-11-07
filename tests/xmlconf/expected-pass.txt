@@ -578,6 +578,7 @@ ibm-valid-P29-ibm29v01.xml
 ibm-valid-P29-ibm29v02.xml
 ibm-valid-P30-ibm30v01.xml
 ibm-valid-P30-ibm30v02.xml
+ibm-valid-P31-ibm31v01.xml
 ibm-valid-P32-ibm32v01.xml
 ibm-valid-P32-ibm32v02.xml
 ibm-valid-P32-ibm32v03.xml
@@ -972,6 +973,7 @@ invalid-bo-3
 invalid-bo-4
 invalid-bo-5
 invalid-bo-6
+invalid-not-sa-022
 invalid-sa-140
 invalid-sa-141
 not-sa01
@@ -1326,6 +1328,7 @@ o-p30pass1
 o-p30pass2
 o-p31fail1
 o-p31pass1
+o-p31pass2
 o-p32fail1
 o-p32fail2
 o-p32fail3
