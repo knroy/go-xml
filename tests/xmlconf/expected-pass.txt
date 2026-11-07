@@ -513,6 +513,7 @@ ibm-not-wf-P88-ibm88n01.xml
 ibm-not-wf-P88-ibm88n02.xml
 ibm-not-wf-P89-ibm89n01.xml
 ibm-not-wf-P89-ibm89n02.xml
+ibm-not-wf-p28a-ibm28an01.xml
 ibm-valid-P01-ibm01v01.xml
 ibm-valid-P02-ibm02v01.xml
 ibm-valid-P03-ibm03v01.xml
@@ -990,6 +991,7 @@ not-wf-not-sa-004
 not-wf-not-sa-006
 not-wf-not-sa-007
 not-wf-not-sa-008
+not-wf-not-sa-009
 not-wf-sa-001
 not-wf-sa-002
 not-wf-sa-003

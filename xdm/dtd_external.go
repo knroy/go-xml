@@ -604,6 +604,22 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 		if err != nil {
 			return "", err
 		}
+		// Declarations are copied whole above, so a reference reaching here
+		// is between declarations — [28a] DeclSep — unless it is the keyword
+		// of a conditional section. WFC: PE Between Declarations (XML 1.0
+		// §2.8): "The replacement text of a parameter entity reference in a
+		// DeclSep MUST match the production extSubsetDecl." A reference
+		// inside a declaration is only a validity matter, and is never here.
+		//
+		// ponytail: a reference inside an IGNORE section is checked too,
+		// though §3.4 does not recognise it there; tracking IGNORE nesting
+		// here would lift that.
+		if !strings.HasSuffix(strings.TrimRight(sb.String(), " \t\r\n"), "<![") {
+			if err := checkExtSubsetGrammar(text); err != nil {
+				return "", fmt.Errorf("parameter entity %%%s between declarations "+
+					"(WFC: PE Between Declarations): %w", name, err)
+			}
+		}
 		sb.WriteString(text)
 		if sb.Len() > maxTotalEntityBytes {
 			return "", fmt.Errorf(
