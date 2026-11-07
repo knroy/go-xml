@@ -160,6 +160,20 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 			v.fail(root, "the DTD's external resource %s declares XML 1.1 but the document is XML 1.0 (XML §4.3.4)", d.v11)
 		}
 	}
+	// The faults in the declarations themselves, found as they were read.
+	for _, m := range d.declErrs {
+		v.fail(root, "%s", m)
+	}
+	// XML 1.0 §4.2.2 VC Notation Declared: "The Name MUST match the
+	// declared name of a notation." Like the other absence checks it is
+	// unsound on half a DTD.
+	if !v.partial {
+		for _, e := range d.ndata {
+			if !d.Notations[e[1]] {
+				v.fail(root, "unparsed entity %s names the notation %s, which no <!NOTATION> declares", e[0], e[1])
+			}
+		}
+	}
 	v.walk(root)
 	v.checkIDRefs()
 	if len(v.errs) == 0 {

@@ -709,3 +709,51 @@ func TestNameTypedValuesHoldNoColon(t *testing.T) {
 		}
 	}
 }
+
+// The validity constraints on the declarations themselves are reported by
+// Validate whether or not the document uses what they declare: XML 1.0
+// §3.2 Unique Element Type Declaration, §3.2.2 No Duplicate Types, §3.3.1
+// ID Attribute Default, One ID per Element Type and No Duplicate Tokens,
+// §3.3.2 Attribute Default Value Syntactically Correct, and §4.2.2 Notation
+// Declared.
+func TestDeclarationValidityConstraints(t *testing.T) {
+	const head = `<!DOCTYPE r [<!ELEMENT r ANY><!NOTATION n SYSTEM "n">`
+	valid := []string{
+		// A repeated ATTLIST for the same attribute: the first binds.
+		`<!ATTLIST r a CDATA #IMPLIED><!ATTLIST r a ID #IMPLIED>`,
+		// Only the syntax of an ENTITY or IDREF default is checked.
+		`<!ATTLIST e a ENTITY "undef" b IDREF "undef">`,
+		`<!ATTLIST r a NMTOKENS " x  y " b NOTATION (n) "n" c (x|y) #FIXED "y">`,
+		`<!ENTITY u SYSTEM "u" NDATA n>`,
+	}
+	for _, decl := range valid {
+		if err := check(t, head+decl+`]><r/>`); err != nil {
+			t.Errorf("%s should be valid: %v", decl, err)
+		}
+	}
+	// Declared on e, which the document never uses: these are faults in the
+	// DTD, not in an attribute value.
+	invalid := []string{
+		`<!ATTLIST e a ENTITY "2x">`,
+		`<!ATTLIST e a ENTITIES "x 2x">`,
+		`<!ATTLIST e a IDREF "34">`,
+		`<!ATTLIST e a NMTOKEN "a/b">`,
+		`<!ATTLIST e a NMTOKENS "a $b">`,
+		`<!ATTLIST e a NMTOKEN #FIXED "a/b">`,
+		`<!ATTLIST e a NOTATION (n) "m">`,
+		`<!ATTLIST e a (x|y) "z">`,
+		`<!ATTLIST e a ID #FIXED "x">`,
+		`<!ATTLIST e a ID "x">`,
+		`<!ATTLIST e a ID #IMPLIED><!ATTLIST e b ID #IMPLIED>`,
+		`<!ELEMENT e EMPTY><!ELEMENT e ANY>`,
+		`<!ELEMENT e (#PCDATA|x|x)*>`,
+		`<!ATTLIST e a (x|x) #IMPLIED>`,
+		`<!ATTLIST e a NOTATION (n|n) #IMPLIED>`,
+		`<!ENTITY u SYSTEM "u" NDATA undeclared>`,
+	}
+	for _, decl := range invalid {
+		if err := check(t, head+decl+`]><r/>`); err == nil {
+			t.Errorf("%s should be invalid", decl)
+		}
+	}
+}
