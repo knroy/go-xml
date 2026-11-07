@@ -360,6 +360,11 @@ imported schema may name `xs:dayTimeDuration`, `xs:dateTimeStamp` and the other
 1.1 built-ins, and its 1.1 constructs are applied. A schema registered as
 `Components` keeps the version it was assembled with.
 
+An imported schema that parses but is not a valid schema is a static
+`XQST0012` (XQuery 3.1 §4.11); `XQST0059` is kept for a schema that cannot be
+found or is not well-formed. Over several location hints, an invalid schema
+found by one hint is the error when no other hint answers.
+
 A validated node copied into a constructor follows the **construction mode**
 (§4.6). Under `preserve`, the default, the copy keeps its annotation, so
 `<w>{validate { <h:hat>8</h:hat> }}</w>/* instance of element(*, h:hatsize)`

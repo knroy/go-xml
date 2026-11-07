@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,425 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,459 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,260 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -47,7 +47,7 @@ figures* section, which fails the gate when this table drifts from the tree:
   `grep -hc "^func Test" ./*/limits_boundary*_test.go | awk '{n += $1} END {print n + 0}'`
 * **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'`
 * **W3C conformance suites** — the sum of the in-scope totals in the status
-  table: XPath 3.1 22,054 + XQuery 3.1 30,530 + XSLT 2.0 6,203 + XSLT 3.0 11,522
+  table: XPath 3.1 22,054 + XQuery 3.1 30,530 + XSLT 2.0 6,202 + XSLT 3.0 11,522
   + XSD 1.0 39,388 + XSD 1.1 41,598 + RELAX NG 965. XPath 2.0 and 3.0 are not
   added again — the QT3 catalog is one corpus measured at three XPath versions,
   and the 3.1 lane is the widest of them. An earlier
@@ -719,6 +719,13 @@ verdict: XPTY0004 (14, not listed: a rewritten set operator's text says
 first), XTDE0640 (1), and 6 whose error the settle could not confirm
 (`merge-072`, `merge-074`, `si-map-007`, `sx-MapExpr-007`, `sx-treat-102`,
 `sx-treat-103`).
+
+At 7ee44d8b (rounds SH and SI integrated), from the stream records of a
+`TestXSLT30Suite` run: 0 fallbacks (23 at round SG) and 9 re-runs (137), 0
+guard hits, 11,505 passing. Since ST4 made XPTY0004, XTDE2220 and XTDE0640
+final, the 9 are the input's own invalidity under `validation=` (5, XTTE1510)
+or `type=` (2, XTTE1540), and `si-map-007` and `sx-MapExpr-007` (XTDE3365);
+each gives the tree's code.
 
 The TSV line holds the runs per strategy (core: containers; main: principal
 inputs `TransformReader` streamed; merge: streamed merge sources), fallbacks, guard hits, re-runs and

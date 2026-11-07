@@ -133,13 +133,13 @@ and maintains it as a project of his own.
 | **XPath 3.0** | 100.00% of the W3C QT3 suite (19,362 of 19,362 in scope) |
 | **XPath 3.1** | 100.00% of the W3C QT3 suite (22,054 of 22,054 in scope); maps, arrays, the lookup operator, the JSON family, and `fn:transform`, measured since it became callable from XPath |
 | **XQuery 3.1** | 100.00% of the W3C QT3 suite (30,529 of 30,530 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 318 more passes; the 1 remaining failure, `contextDecl-052`, is a W3C fixture defect catalogued in [conformance-gaps.md](docs/conformance-gaps.md) |
-| **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,195 of 6,203 in scope); verified against Saxon-HE 12.4 on two production corpora |
+| **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,194 of 6,202 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSLT 3.0** | 99.85% of the W3C XSLT suite filtered to 3.0 (11,505 of 11,522 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases; every one of the 151 cases that wants the XTSE3430 refusal gets it — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.90% of the W3C xsdtests *instance* tests (24,974 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
 | **XSD 1.1** | 99.90% instance (26,218 of 26,244); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 3,425 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 3,459 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -429,7 +429,7 @@ result, err := sheet.TransformReader(ctx, f, xslt.TransformOptions{
 ```
 
 Inside an `xsl:try`, or a streamed `xsl:source-document` or `xsl:merge` (which a
-failure re-runs on the tree), a result is written once it is final; an error
+failure may re-run on the tree), a result is written once it is final; an error
 returned by the function or by `Close` is the transform's.
 
 `SourceValidation` validates the principal input against the stylesheet's
@@ -1103,7 +1103,8 @@ Both halves of `import` are implemented, through a store the caller fills:
 `import module` resolves against `Options.Modules` and then
 `Options.ModuleResolver`, `import schema` against `Options.Schemas` and then
 `Options.SchemaResolver`. Both resolvers are nil by default, so nothing is
-fetched and an import the store cannot answer raises `XQST0059`. See
+fetched and an import the store cannot answer raises `XQST0059`; an imported
+schema is read as XSD 1.1, and an invalid one raises `XQST0012`. See
 [docs/xquery.md](docs/xquery.md).
 
 **Collations.** Three are implemented: codepoint, the HTML ASCII
@@ -1507,12 +1508,12 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (3,425 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (3,459 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,530 XQuery cases | XSLT (it is an XPath suite) |
 | **W3C xsdtests suite** | systematic XSD conformance across 25,000 instance and 14,388 schema-validity tests (XSD 1.0; 1.1 adds 26,244 and 15,354) | schemas nobody writes by hand |
-| **W3C xmlconf suite** | XML 1.0 well-formedness and DTD validity: 1,859 of 1,965 cases (21 not-wf, 74 invalid and 11 valid still fail) | anything past the DTD layer |
+| **W3C xmlconf suite** | XML 1.0 well-formedness and DTD validity: all 1,965 cases, each guarded by ID (`tests/xmlconf/expected-pass.txt`) | anything past the DTD layer |
 | **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
 | **Fuzzing** (12 targets) | a crash, hang or wrong refusal on input no author would write | anything a coverage-guided search does not reach in the time it is given |
 **Every suite feeds the parser well-formed input**, which is the gap fuzzing

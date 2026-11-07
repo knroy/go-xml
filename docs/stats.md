@@ -23,7 +23,7 @@ claim is only as good as the command behind it.
 
 | figure | count | counted by |
 |---|---:|---|
-| Unit tests | 3,425 | `grep -rn '^func Test' --include='*_test.go' . \| grep -v '/\.claude/worktrees/' \| grep -vc '^\./bench/'` |
+| Unit tests | 3,459 | `grep -rn '^func Test' --include='*_test.go' . \| grep -v '/\.claude/worktrees/' \| grep -vc '^\./bench/'` |
 | Fuzz targets | 12 | `grep -rn '^func Fuzz' --include='*_test.go' . \| grep -v '/\.claude/worktrees/' \| grep -vc '^\./bench/'` |
 | Limit boundary tests | 14 | `grep -hc '^func Test' ./*/limits_boundary*_test.go \| awk '{n += $1} END {print n + 0}'` |
 
@@ -40,7 +40,7 @@ and `tests/docfigures.sh` cross-checks the same numbers against
 | QT3 — XPath 3.0 | XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** |  | 2026-09-11 | `tests/check.sh (TestQT3, lane xpath-3.0)` |
 | QT3 — XPath 3.1 | XPath 3.1 | 22,054 | 22,054 | 100.00% | **0** |  | 2026-10-01 | `tests/check.sh (TestQT3, lane xpath-3.1)` |
 | QT3 — XQuery 3.1 | XQuery 3.1 | 30,530 | 30,529 | 100.00% | **1** |  | 2026-11-06 | `tests/check.sh (TestQT3XQuery)` |
-| W3C XSLT 2.0 | XSLT 2.0 (Second Edition) | 6,203 | 6,195 | 99.87% | **8** | 8,332 / 66 | 2026-11-06 | `tests/check.sh (TestXSLTSuite)` |
+| W3C XSLT 2.0 | XSLT 2.0 (Second Edition) | 6,202 | 6,194 | 99.87% | **8** | 8,333 / 66 | 2026-11-07 | `tests/check.sh (TestXSLTSuite)` |
 | W3C XSLT 3.0 | XSLT 3.0 | 11,522 | 11,505 | 99.85% | **17** | 2,951 / 128 | 2026-11-06 | `tests/check.sh (TestXSLT30Suite)` |
 | W3C xsdtests 1.0 | XML Schema 1.0 (Second Edition) | 39,388 | 39,359 | 99.93% | **29** |  | 2026-11-06 | `tests/check.sh (XSD10)` |
 | W3C xsdtests 1.1 | XML Schema 1.1 | 41,598 | 41,568 | 99.93% | **30** |  | 2026-11-06 | `tests/check.sh (XSD11)` |

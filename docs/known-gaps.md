@@ -55,7 +55,7 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,203; XQuery 3.1 has 1 of 30,530; XSLT 3.0 has 17 of 11,522;
+failures of 6,202; XQuery 3.1 has 1 of 30,530; XSLT 3.0 has 17 of 11,522;
 XSD 1.0 disagrees on 29 of 39,388 and XSD 1.1 on 30 of 41,598. Everything below
 is an account of those 85 cases, or of a decision that produced some of them.
 The 85 is the sum of the nine figures above, computed from
@@ -829,40 +829,40 @@ modes, 606 before `TransformReader`, 629 before grouping, 707 before `xsl:try` a
 877 before accumulators, fork, merge and streamed output, 922 before the
 §19.8 analysis was completed, 1,009 before the gap lanes, 2,124 before
 validated inputs, 2,180 before the completion lanes J1–J4, 2,281 before rounds
-L, F and M): core 2,468 runs, main 175, merge 34; 23 fall back (26 before
-`P instance of T*` was counted, round SG) and 137 re-run on the tree, with 0
-guard hits. Where each of those builds the tree is the next paragraph.
+L, F and M): core 2,468 runs, main 175, merge 34; none falls back (23 before
+rounds SH and SI, 26 before `P instance of T*` was counted, round SG) and 9
+re-run on the tree (137 before round SI), with 0 guard hits. Where each of
+those builds the tree is the next paragraph.
 
 **Where a requested, guaranteed-streamable construct still builds the tree
 (T1, §27.5: a processor claiming the feature "must use streamed processing"),
-measured at round SG on the W3C run.** Each bucket, its count, why, and the
+measured at round SI on the W3C run.** Each bucket, its count, why, and the
 plan:
-- *A select at the document node that gives up* (23 cases, all at runtime,
-  the select re-read on the tree: `streamtrace` fallbacks). 13 hold their
-  matches and pass the tree's record count (`streamhold.go`): the nine
-  `sx-square-array-040`–`-043`, `-117`, `-140`–`-143`
-  (`[$x, P/copy-of()]?*!PRICE`: a copy of every record, which is most of the
-  small document), and `sx-treat-102`, `-103`, `si-try-022`, `-023`
-  (`(P, $b) treat as node()*`, its matches held for the treat). 10 would ground
-  the document element (`noRoot`, `streamsplit.go`): `si-copy-of-121`, `-122`,
-  `-125`–`-128` (a validated copy of `*` held in a variable: the copy is the
-  document, whole-document memory by the stylesheet's own demand),
-  `sx-instance-of-010` and `sx-treat-010` (`(.//* | .//text())` under
-  `instance of`/`treat as`), and `si-try-001`, `-010`
-  (`outermost(.//node()) treat as comment()*` and the union). Plan: `treat as`
-  as a per-item check on the view ahead of the outer (as `P instance of T*` is
-  now: `streamsplit_instance.go` counts the items failing T's kind test, so
-  `sx-instance-of-001`, `-102`, `-103` no longer fall back), and the same
-  rewrite for a union, which the split does not yet take with predicates on
-  its branches at the document node. The square-array and copy-of shapes keep
-  memory equal to the tree's, as the whole-document cases below do.
-- *Any error re-runs the container on the tree* (137 cases): the bullet below.
-  Each is a container that failed (XTTE1510/1512/1540 on validated input 37,
-  XPDY0050 treats 17, FORG0006 16, XPTY0004 14, FOCH0002 collations 10,
-  FORG0004/0005 8, the rest one to three each, 24 codes). The memory is
-  spent only on the failing path; streaming the error directly needs, per
-  construct, a proof that the stream's first error is the tree's, which the
-  differential checks and no construct has yet.
+- *A select at the document node that gives up*: closed at round SI, 23 → 0.
+  `P treat as T*` is a per-item check on the view and a union under
+  `instance of T*` is rewritten per operand (6f7d630c: `sx-treat-010`,
+  `-102`, `-103`, `si-try-001`, `-010`, `-022`, `-023`,
+  `sx-instance-of-010`); a tail starting with `copy-of()` or `snapshot()` is
+  held without the cap (d4b83536: the nine `sx-square-array` cases, whole-document
+  memory when P is the whole document, as on the tree); a validated copy of the
+  document element is built off the cursor (1bacfccd: `si-copy-of-121`, `-122`,
+  `-125`–`-128`).
+- *An error re-runs the container on the tree* (9 cases, from 137): in
+  progress (lane ST6). A container's error is final, with no re-run, when its
+  family is one the stream raises at the item the tree raises it at
+  (`finalCodes`, `xslt/streamexec.go`: XPDY0050, XPTY0004, FOTY0013, the
+  FORG/FOCH/FOAR casts, the XTDE08xx construction errors, XTTE3180/0570/3375,
+  XTDE3365/3362, and for a merge XTDE2220/3480/3510) and the rest of the input
+  then reads, validates and accumulates cleanly (fbcfc71f, 86cde00c); a
+  schema-invalid construction is final the same way (1bacfccd), and so is a
+  circular global reference, XTDE0640. XSLT 3.0 §2.14 lets the first error
+  detected be the one signalled. The 9 left: the input's own invalidity under
+  `validation=` (`streamable-149`, `stream-102`, `-106`, `non-stream-102`,
+  `-106`: XTTE1510) or `type=` (`stream-104`, `non-stream-104`: XTTE1540, whose
+  tree text lists every failure), and `si-map-007` and `sx-MapExpr-007`
+  (XTDE3365, which the settle cannot confirm is the tree's first error).
+  `streamdiff`'s norerun leg (`GOXSLT_STREAM_NORERUN=1`) sets each streamed
+  code against the tree's; none is wrong.
 - *A `DocumentResolver` that is not a `FileResolver`* (0 W3C cases: the
   harness uses `FileResolver`): closed at round SG. A resolver that implements
   `xslt.StreamingDocumentResolver` streams (the bullet below); one that does
@@ -885,8 +885,9 @@ Also:
   to the end and then written exactly as `Result.Serialize` writes them: the
   json and adaptive methods, `build-tree="no"`, `item-separator`,
   `normalization-form`, `standalone`, `doctype-system`/`-public`,
-  `parameter-document`, HTML5 under html or xhtml -- which since HTML5 became
-  the html method's default is every html result without `version="4.0"`.
+  `parameter-document`. HTML5, the html method's default since round SI,
+  streams as HTML 4 does (b888d21e: prefix normalisation is decided per
+  element, and the bare doctype waits only for the first element).
   Partly held: under
   `indent="yes"` (the html and xhtml default) an element at the top whose
   content is indented, so an indented document with no text in its document
@@ -905,11 +906,14 @@ Also:
   integer multiplied each record (`MaxDigits`), a sequence appended to or
   passed through `distinct-values` each record (`MaxItems`) run quadratic time
   and are stopped by the context deadline, before and after v2.3.0.
-- **Any error re-runs the container on the tree** (a container: see the
-  `TransformReader` bullet for a streamed principal input), so errors are the tree's,
-  in the tree's order. A cancelled context is the exception: since 383ed3d4 the
-  stream returns the context's error within one input read, with no re-run. The cost is a second read of the document, and the
-  1 GiB string budget charges the strings both attempts built. Under
+- **An error outside the final families re-runs the container on the tree**
+  (a container: see the `TransformReader` bullet for a streamed principal
+  input), so errors are the tree's, in the tree's order. A final family (the
+  bucket above, `finalCodes`) is returned from the stream once the rest of the
+  input reads cleanly, and a cancelled context returns the context's error
+  within one input read (383ed3d4); neither re-runs. For the rest the cost is a
+  second read of the document, and the 1 GiB string budget charges the strings
+  both attempts built. Under
   `xsl:try rollback-output="no"`, output already written can turn a caught
   error into `XTDE3530` where the tree fails before writing; no case shows it
   (a consuming try with `rollback-output="no"` is refused, so it runs on the
@@ -1161,12 +1165,17 @@ behind it.
 Verified in `xslt/stream*.go`. Each returns unknown, so a required
 `XTSE3430` can be missed; none is a wrong verdict. (Text value templates,
 `?`/`||`/placeholders in the inline-function walk, the declared-function-type
-split and a leading `/` in a crawling predicate were closed at round SG.)
+split and a leading `/` in a crawling predicate were closed at round SG; the
+§19.1 dynamic-call bases at round SH.)
 
-- A dynamic call whose base is not a variable reference (`(f#1)(.)`,
-  `$m?f(.)`, a call on a call's result) takes the no-signature fallback,
-  navigation, because the static type would come from inference this analyzer
-  does not do (§19.8.8.11; [conformance-gaps.md](conformance-gaps.md)).
+- A dynamic call whose base is a lookup (`$m?f(.)`), a conditional, another
+  dynamic call, a partial application or a constructor-function reference
+  takes the no-signature fallback, navigation: §19.1 lists no ancillary
+  information for those, so §19.8.8.11 gives "If no function signature is
+  available, then the usage of each of the argument expressions is
+  navigation". The bases §19.1 does list (`f#n`, an inline function, a map
+  constructor, a call on a function returning a function type) were read and
+  stream since round SH (900ce700, c3ff080a).
 - Static types are approximated syntactically, so `root(X)` of a striding X
   that may be a document node stays unmodelled (above).
 
@@ -1218,7 +1227,7 @@ group the same way rather than as absent machinery.
 
 ### XSLT 2.0: eight failures, and no cause peculiar to the lane
 
-**8 of 6,203.** They are recorded here only because the lane has no entry
+**8 of 6,202.** They are recorded here only because the lane has no entry
 anywhere else and eight is small enough to name: `docbook-001`,
 `format-number-070`, `import-schema-137`, `regex-syntax-xslt20-0984`, `-0985`,
 `-0987`, `sequence-0132` and `validation-0201`.
@@ -1576,6 +1585,19 @@ wrong language's rules. The version now reaches the tokeniser, and [2] `Char`,
 is in the external-entity and DTD layers, and is described in
 [todo.md](todo.md#11-xml-11-documents--character-rules-done-dtd-side-rules-outstanding).
 
+### An undeclared entity in a rewritten source is still refused (XML 1.0)
+
+With a resolver every external entity is read, so an entity declared in
+neither subset is declared nowhere and, where the document has an external
+subset or a parameter-entity reference, VC: Entity Declared applies (XML 1.0
+§4.1, erratum E13): the parse drops the reference and `dtd.Validate` reports
+it (dbe610d7). A document that goes down the rewrite path (an external entity
+referenced in content is substituted and the result parsed again) still
+refuses such a reference, because the second parse (`parseExpandedSteps`)
+knows only the internal subset's declarations: a false reject, marked
+`ponytail:` in `xdm/parse.go`. Handing it the first parse's table would lift
+it. No xmlconf case reaches it: the lane passes all 1,965.
+
 ### The tokeniser keeps one leniency
 
 `internal/xmltok` still carries this `parity:` behaviour from the
@@ -1585,22 +1607,6 @@ by the parse work recorded in [CHANGELOG.md](../CHANGELOG.md).
 
 * A character error is reported against the line where the run ended.
 
-### The xmlconf lane: 106 failures left (XML 1.0)
-
-`TestXMLConf` (`tests/xmlconf/xmlconf_test.go`, ratchet mark 1859) runs the W3C XML
-Conformance Test Suite: 1,965 cases in scope, **1,859 pass**. Round SG
-brought it from 1,460 by checking the DTD declaration grammar (252b65b), the
-text declaration (§4.3.1 [77]), the XML declaration (72599d9), undeclared
-entities (8650527), §4.3.4 in `dtd` (ee5018c), and IGNORE sections and
-normalized `#FIXED` defaults (170d907, b50260b). The 106 still failing are
-not yet triaged one by one:
-
-- **not-wf, 21**: documents still accepted that XML 1.0 makes fatal.
-- **invalid, 74**: documents `dtd.Validate` accepts that the suite expects
-  invalid.
-- **valid, 11**: documents `dtd.Load` or `dtd.Validate` refuses that the suite
-  expects valid.
-
 ---
 
 ## Deliberate divergences
@@ -1609,6 +1615,26 @@ Not gaps. Each is a behaviour that disagrees with a test, or with a reading
 someone will propose, on purpose — and each carries the spec clause it rests on
 and the **measured** cost of changing it. The number is the point of the entry:
 without it, the trade gets re-attempted.
+
+**Reviewed and confirmed by the owner on 2026-11-07** (after rounds SH and
+SI), in four groups, each kept as it stands:
+
+- **Security defaults** (inventory X1, F1, F10): DOCTYPE refused by default,
+  RE2 as the default regex engine (a variable-width backreference is
+  `FORX0002` unless backtracking is switched on), and resources that fail
+  closed until a resolver is configured (`fn:collection()` raises).
+- **Catalog and Saxon interop** (T3–T6, D5): the withheld `||` verdict
+  (`sx-union-C`), `xsl:copy` content not counted as a higher-order operand
+  (`si-copy-A`), `current-group()` over a grounded group in a nested
+  `xsl:source-document` (`si-group-051`), the union widening under grouping
+  (`si-group-055`), and the `xs:ENTITY` bail that keeps `as-34`, `as-3401`,
+  `match-208` and `match-209` (`id017.n01.xml`).
+- **W3C-bug and fixture-backed items**: every case resting on an open or
+  queried W3C bug (4113, 4126, 4146, 4957, 6901, 4048), an erratum, an interop
+  adjudication or a fixture defect, as each entry below and
+  [conformance-gaps.md](conformance-gaps.md) names it.
+- **The T13 opt-in**: `Compatibility.DropAttributesOnDocumentNode`, off by
+  default, for DocBook xslTNG.
 
 ### DOCTYPE is refused by default
 

@@ -34,7 +34,7 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.1 | 22,054 | 22,054 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,530 | 30,529 | 100.00% | **1** |
-| **xslt** | W3C XSLT 2.0 | 6,203 | 6,195 | 99.87% | **8** |
+| **xslt** | W3C XSLT 2.0 | 6,202 | 6,194 | 99.87% | **8** |
 | **xslt** | W3C XSLT 3.0 | 11,522 | 11,505 | 99.85% | **17** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,359 | 99.93% | **29** |
 | **xsd** | W3C xsdtests 1.1 | 41,598 | 41,568 | 99.93% | **30** |
@@ -43,13 +43,13 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
 | | **Total** | | | | **85** |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 17 + 29 + 30 + 0 = 85. Measured 2026-09-11, 2026-09-29, 2026-10-01, 2026-11-06.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 17 + 29 + 30 + 0 = 85. Measured 2026-09-11, 2026-09-29, 2026-10-01, 2026-11-06, 2026-11-07.
 <!-- END GENERATED CONFORMANCE SUMMARY -->
 
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 3,425 tests.
+The unit-test suite is 3,459 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -231,7 +231,7 @@ All eight are deliberate divergences, verified not ours. They are read in
 `docbook-001`, `sequence-0132`, `import-schema-137`, `validation-0201` and the
 three `regex-syntax-xslt20` cases.
 
-**XSLT 2.0: 6,195 / 6,203 = 99.87%.**
+**XSLT 2.0: 6,194 / 6,202 = 99.87%.**
 
 The 2.0 lane compiles with `CompileOptions.MaxVersion` 2.0, an XSLT 2.0
 processor, and that is the only setting under which a `version="2.0"` module
@@ -342,7 +342,7 @@ and tested on its own, in `xslt/streamlattice.go` and
 | 19.8.8.8 path expressions | complete, both phases, including the scanning-expression reassessment that makes `//x` streamable |
 | 19.8.8.9 axis steps | the posture table, the predicate rule, and the numeric-predicate rule that makes `descendant::section[1]` striding — decided for literals, arithmetic, ranges, the numeric built-ins, and a reference to an `xsl:variable`/`xsl:param` whose `as` is numeric, such as the spec's `[$i+1]`; the focus-dependent calls are the `focusDependent` table's |
 | 19.8.8.10 filter expressions | the motionless-predicate clause and the numeric-predicate rule that makes `(//x)[3]` striding, with the same static-type limits as the axis-step rule; both rules are applied at the position each section gives them, ahead of the motionless-predicate rule |
-| 19.8.8.11 dynamic function calls | complete for a function variable: the base operand (inspection), absorption under a declared `map`/`array` type, per-parameter usage under a declared `function(A, B)`, navigation otherwise; a base expression that is not a variable reference takes the no-signature fallback |
+| 19.8.8.11 dynamic function calls | complete for a function variable: the base operand (inspection), absorption under a declared `map`/`array` type, per-parameter usage under a declared `function(A, B)`, the §19.1 signature of an `f#n`, inline-function, map-constructor or function-returning-call base; a lookup, conditional or other base takes the no-signature fallback |
 | 19.8.8.12 variable references | the grounded case, the streaming-parameter case, and a data-flow environment for the range variable of a quantified expression |
 | 19.8.8.13 context item expression | complete |
 | 19.8.8.15 named function references | complete; focus dependence is read from a table transcribed from the F&O 3.1 and XSLT 3.0 "Properties" paragraphs (`xslt/streamfocus.go`) |
@@ -384,11 +384,15 @@ Still absent or partial:
   accumulator's `as`, and every top-level declaration), so `$m(@class)` under
   `map(*)` or `map(xs:string, xs:integer)` absorbs — grounded and consuming,
   the note's own example and `accumulator-054`'s shape — and a declared
-  `function(A, B)` gives each argument the usage of its parameter type. What
-  remains is a base expression that is not a variable reference — `(f#1)(.)`,
-  `$m?f(.)`, a call on a call's result — where the static type would come from
-  inference this analyzer does not do; that takes the no-signature fallback,
-  navigation, which refuses a streamed argument. A variable bound inside the
+  `function(A, B)` gives each argument the usage of its parameter type. The
+  other bases §19.1 lists are read too (round SH, 900ce700, c3ff080a): `f#n`
+  (the stylesheet function's `xsl:param` types or the built-in's signature), an
+  inline function's parameter types, a map constructor (`xs:anyAtomicType`),
+  and a call on a stylesheet function whose `as` is a function, map or array
+  type; their bodies stream. A lookup (`$m?f(.)`), a conditional, a dynamic
+  call, a partial application and a constructor-function reference are not in
+  §19.1's list, so they take the no-signature fallback, navigation, which
+  refuses a streamed argument. A variable bound inside the
   expression (`let`, `for`, a quantifier) is never looked up outside it.
 
 `let` expressions, §19.8.8.15 named function references and §19.8.8.16 inline
@@ -580,6 +584,26 @@ names — already agree.
 These are not gaps. Each is a decision not to conform, with the spec citation
 that says what conforming would mean and the **measured** cost of doing it. The
 numbers are the point: without them, someone re-attempts a bad trade.
+
+**Reviewed and confirmed by the owner on 2026-11-07** (after rounds SH and
+SI), in four groups, each kept as it stands:
+
+- **Security defaults** (inventory X1, F1, F10): DOCTYPE refused by default,
+  RE2 as the default regex engine (a variable-width backreference is
+  `FORX0002` unless backtracking is switched on), and resources that fail
+  closed until a resolver is configured (`fn:collection()` raises).
+- **Catalog and Saxon interop** (T3–T6, D5): the withheld `||` verdict
+  (`sx-union-C`), `xsl:copy` content not counted as a higher-order operand
+  (`si-copy-A`), `current-group()` over a grounded group in a nested
+  `xsl:source-document` (`si-group-051`), the union widening under grouping
+  (`si-group-055`), and the `xs:ENTITY` bail that keeps `as-34`, `as-3401`,
+  `match-208` and `match-209` (`id017.n01.xml`).
+- **W3C-bug and fixture-backed items**: every case resting on an open or
+  queried W3C bug (4113, 4126, 4146, 4957, 6901, 4048), an erratum, an interop
+  adjudication or a fixture defect, as each entry below and
+  [known-gaps.md](known-gaps.md) names it.
+- **The T13 opt-in**: `Compatibility.DropAttributesOnDocumentNode`, off by
+  default, for DocBook xslTNG.
 
 ## `xsl:fork` — the Recommendation and the test set disagree; Saxon-EE sides with the tests
 

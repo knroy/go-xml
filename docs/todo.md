@@ -19,11 +19,11 @@ Current position:
 | XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
 | XPath 3.1 | 100.00% — 22,054 of 22,054 in scope (0 failing) |
 | XQuery 3.1 | 100.00% — 30,529 of 30,530 in scope (1 failing) |
-| XSLT 2.0 | 99.87% — 6,195 of 6,203 in scope (8 failing) |
+| XSLT 2.0 | 99.87% — 6,194 of 6,202 in scope (8 failing) |
 | XSLT 3.0 | 99.85% — 11,505 of 11,522 in scope (17 failing) |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 3,426 `func Test` declarations, clean under `-race` |
+| Tests | 3,459 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -225,11 +225,12 @@ stricter rule).
 
 The W3C `xmlconf` suite (xmlts20130923) is a lane since round SG:
 `TestXMLConf` (`tests/xmlconf/xmlconf_test.go`, fetched by
-`tests/fetch-xmlconf.sh`) runs 1,965 cases, 1,859 passing. With the
+`tests/fetch-xmlconf.sh`) runs 1,965 cases, and all 1,965 pass since round
+SI, each guarded by ID (`tests/xmlconf/expected-pass.txt`). With the
 `XmlVersions` cases in the XSD suite (xv003, xv006, xv008, xv009 pass) it is
 what the gate repeats for 1.1.
 
-### 1.2 DTD validation — the `xmlconf` lane at 1,859 of 1,965
+### 1.2 DTD validation — the `xmlconf` lane at 1,965 of 1,965
 
 The `dtd` package validates against `<!ELEMENT>`, `<!ATTLIST>` and
 `<!ENTITY>`: content models, attribute defaults, enumerations, `ID`/`IDREF`.
@@ -241,8 +242,10 @@ precedence — the internal subset is read first and its declarations bind,
 later ones being ignored rather than an error — and a `%pe;` in the external
 subset may expand to whole declarations, which is what makes a modular DTD
 work. Conditional sections, `<![INCLUDE[` and `<![IGNORE[` (§3.4), are
-resolved after expansion, since the keyword is normally itself a parameter
-entity, and they nest.
+resolved where they stand as the subset is read once in document order, so a
+keyword that is itself a parameter entity works, a parameter entity declared
+inside an INCLUDE section is in scope after it, and an IGNORE section's
+declarations are never read; they nest.
 
 Nothing is fetched without a caller-supplied `LoadOptions.Resolver`, and with
 none a DOCTYPE naming an external subset is **refused** rather than validated
@@ -260,14 +263,18 @@ internal one does. See [security.md](security.md) and
   `<!NOTATION>`s, reported once per declaration, and an `ENTITY` or `ENTITIES`
   value must name entities declared with `NDATA` (`dtd/validate.go`; see
   [validation.md](validation.md)).
-* **The `xmlconf` lane's 111 failures.** `TestXMLConf` runs not-wf cases
+* **The `xmlconf` lane passes every case.** `TestXMLConf` runs not-wf cases
   through `xdm.Parse` and valid/invalid ones through `dtd.Load` and
   `dtd.Validate`. Round SG took it from 1,460 to 1,859 by checking the DTD
   declaration grammar under `AllowDOCTYPE` (252b65b: not-wf 417 → 23), the
   text declaration, the XML declaration (72599d9) and undeclared entities
-  (8650527). Open: **21 not-wf** documents still accepted, **74 invalid**
-  documents `dtd.Validate` accepts, and **11 valid** documents refused. None
-  is triaged yet; see [known-gaps.md](known-gaps.md).
+  (8650527). Round SI took it to 1,965: parameter entities in an internal-only
+  subset and in INCLUDE sections, the declaration-level and lexical validity
+  constraints, the EMPTY rule, UTF-16 external subsets, the WFCs on entity
+  replacement text, PE nesting and standalone documents, and the validity
+  facts a tree cannot show (standalone, element-content white space), which
+  xdm records as it parses. A listed case that stops passing fails by name.
+  What the suite does not reach is in [known-gaps.md](known-gaps.md).
 * **`xmlns` attributes are validated** (c516340). XML 1.0 sees `xmlns` and
   `xmlns:p` as attributes, so VC Attribute Value Type applies to them; the
   exemption is gone, and a declared `xmlns:p` now satisfies `#REQUIRED` and

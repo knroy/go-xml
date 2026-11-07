@@ -82,6 +82,16 @@ subsets), a name repeated in a mixed model or a token in an enumeration, a
 second `ID` attribute for one element, an `ID` with a default, a default that
 does not fit its type (§3.3.2, lexically only), and an `NDATA` notation no
 `<!NOTATION>` declares. A repeated `<!ATTLIST>` for one attribute stays legal.
+Some validity facts are gone by the time the tree exists, so `xdm.Parse`
+records them as it reads (at most 100 per tree) and `dtd.Validate` reports
+them: under `standalone="yes"`, a default applied, a value normalised or white
+space met in element content where the declaration is external markup (§2.9
+VC: Standalone Document Declaration); white space written as a character
+reference, or a CDATA section, in element content, and an empty reference in
+an `EMPTY` element (§3 VC: Element Valid, erratum E15); and, with a resolver
+that read every declaration, a reference to an entity declared in neither
+subset, which is dropped from the tree (§4.1 VC: Entity Declared, erratum
+E13).
 Element and attribute names are matched as written, prefix included
 (`xml:lang`, `o:order`), because a DTD declares them that way.
 `Options.AllowUndeclared` skips undeclared attributes as well as elements.

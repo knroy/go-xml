@@ -11,7 +11,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | What it does | Commit |
 |---|---|---|
 | Streamed record paths with `//`, wildcards and `outermost()` | `//rec`, `doc//rec`, `/*/*/rec`, `*:rec`, `p:*` stream; nested matches ride inside their outermost record. Small records share one tree: 900-deep `count(//rec)` 2.0 s CPU. | [`df9677e`][df9677e], [`fd31bb3`][fd31bb3], [`382983c`][382983c], [`22af5f4`][22af5f4] |
-| Streamed core for `xsl:source-document` | One streamed path for every trusted container: wrappers, choose, loops, split selects; any error re-runs on the tree, so errors are the tree's. W3C streamed cases 450 → 2,661. | [`ff0c463`][ff0c463], [`44db07f`][44db07f], [`096a587`][096a587], [`d1a98a8`][d1a98a8] |
+| Streamed core for `xsl:source-document` | One streamed path for every trusted container: wrappers, choose, loops, split selects; an error is the tree's: final where the stream raises it as the tree does, otherwise re-run on the tree. W3C streamed cases 450 → 2,661. | [`ff0c463`][ff0c463], [`44db07f`][44db07f], [`096a587`][096a587], [`d1a98a8`][d1a98a8] |
 | `Stylesheet.TransformReader`, `TransformOptions.SourceParseOptions` | Applies a stylesheet to a reader, streaming it when the initial mode is streamable and verified (a 1 GB filter in 620 MB heap, not 7.3 GB); otherwise exactly Parse + Transform. | [`bdf45d8`][bdf45d8] |
 | Streamed `xsl:apply-templates` | Template rules, built-in rules, `next-match`, `apply-imports` and tunnels run on the cursor in a streamable container: a 1 GB filter in 624 MB, not 7.4 GB. | [`c8c0a01`][c8c0a01] |
 | Streamed `xsl:for-each-group` | group-adjacent, -starting-with and -ending-with over a child path stream in a streamable container or rule, each group as it closes, `current-group()` read once off the cursor: a 1 GB log grouped in 158 MB heap, not 6.0 GB. | [`fe1eb18`][fe1eb18] |
@@ -341,6 +341,12 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A rule pattern calling `accumulator-before` left its streamable mode unverified | Verified when the accumulator is (§19.8.9.2). | [`7e2bec4`][7e2bec4] |
 | Streamed loops were refused after ~1M records of flat state | The node and byte budgets counted every temporary ever built. A loop item that writes no output now hands back what it dropped. | [`294b965`][294b965] |
 | `fn:copy-of` and `fn:snapshot` copies were not charged to the result-node budget | Unlike `xsl:copy-of`. They are charged before the copy, so a transform making over 2M such copies is now refused. | [`294b965`][294b965] |
+| A dynamic call on `f#n`, an inline function, a map or `g()` took navigation, so its container ran on the tree | Arguments take the usages of the base's §19.1 signature and stream; a function-typed parameter is inspection (§19.8.1). | [`900ce70`][900ce70], [`c3ff080`][c3ff080], [`ef170f9`][ef170f9] |
+| `P treat as T*` and a union under `instance of T*` held every match and fell back to the tree (8 W3C cases) | `treat as` is a per-item check on the view; a union is split per operand (§19.8.8.4, §19.8.8.6). | [`6f7d630`][6f7d630] |
+| `[$x, P/copy-of()]` hit the hold cap and fell back to the tree (9 `sx-square-array` cases) | A `copy-of()`/`snapshot()` tail is held uncapped, as the tree holds it; `MaxNodes` still bounds it. | [`d4b8353`][d4b8353] |
+| A validated `copy-of` of the document element re-read the document on the tree (6 `si-copy-of` cases) | It is built off the cursor and assessed as the tree's copy is. With the two rows above, fallbacks 23 → 0. | [`1bacfcc`][1bacfcc] |
+| A streamed container that failed re-ran on the tree, at the tree's memory | Its error is returned when the family is final and the rest reads cleanly (§2.14): re-runs 137 → 9, 3.1 MB vs 48.6 MB. | [`1bacfcc`][1bacfcc], [`fbcfc71`][fbcfc71], [`86cde00`][86cde00] |
+| Under `Output` or `SecondaryOutput` an HTML5 result was held to its end | Prefix normalisation is decided per element and the bare doctype waits only for the first element, so HTML5 streams. | [`b888d21`][b888d21] |
 
 
 ### Fixed
@@ -483,6 +489,27 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `P instance of T*` at the document node held every match and fell back to the tree | It streams as a count of matches failing T (§27.5); fallbacks 26 → 23. | [`50bba71`][50bba71] |
 | An external DTD subset's IGNORE sections were kept and their `%e;` keyword never substituted, so ignored defaults applied | Conditional sections are resolved before declarations are read (XML 1.0 §3.4). | [`170d907`][170d907] |
 | `dtd.Validate` compared a `#FIXED` value with its raw default, so `&#41;` never matched `)` | The comparison uses the normalized default (XML 1.0 §3.3.3). | [`b50260b`][b50260b] |
+| An XSD 1.0 schema could name `xs:anyAtomicType`, `xs:yearMonthDuration` and `xs:dayTimeDuration` | All five 1.1 built-ins are `src-resolve` under 1.0, as `vc:typeAvailable` already said. | [`5c39a0c`][5c39a0c] |
+| XQuery read imported schemas as XSD 1.0, so `xq-e18.xsd` restricting a 1.1 duration failed | Imports are read as XSD 1.1, this engine's type system (XQuery 3.1 Appendix D). | [`b42e77e`][b42e77e] |
+| An imported schema that parsed but was invalid raised XQST0059 "could not be loaded" | It is XQST0012 (XQuery 3.1 §4.11); XQST0059 stays for a schema not found or not well-formed. | [`9148c2d`][9148c2d] |
+| `fn:serialize`'s map form read an absent `html-version` as 4, and a `()` entry raised XPTY0004 | Absent or `()` takes the F&O 3.1 default, html-version 5; the xhtml method writes the HTML5 doctype. | [`c9adbaf`][c9adbaf], [`9180ee3`][9180ee3] |
+| `fn:serialize` wrote the DOCTYPE before the XML declaration, never declared xhtml, and put prolog comments after it | Declaration first, doctype at the first element; the bare HTML5 doctype needs only whitespace text before it. | [`99a96a5`][99a96a5] |
+| The bare HTML doctype was written before a non-`html` document element and for any `html-version` | Only before an `html` element (§7.4.6) and under version 5; item-separator text counts as text before it. | [`da68710`][da68710] |
+| A streamed `//rec except $v` raised XPTY0004 naming "union" | The check uses the operator itself, so the text is the tree's. | [`86cde00`][86cde00] |
+| An internal-only DTD subset never expanded its parameter entities, so `%e;` declared nothing | The internal subset goes through the loader on every path (XML 1.0 §2.8). | [`4bab79c`][4bab79c] |
+| A parameter entity declared in an INCLUDE section was out of scope, and an IGNORE one was read | The subset is expanded once in document order, each conditional section where it stands (§3.4). | [`64f2243`][64f2243] |
+| `dtd.Validate` never checked the lexical form of NMTOKEN(S), ID, IDREF(S) or ENTITY(IES) values | Each is checked; ID, IDREF and ENTITY values are NCNames, as xdm parses with namespaces. | [`8c47532`][8c47532], [`0cc940b`][0cc940b] |
+| An `EMPTY` element validated with a comment, PI or white space in it | It admits no content at all (§3 VC: Element Valid, erratum E15). | [`8a2b2da`][8a2b2da] |
+| Declaration-level VCs went unchecked: repeated element types, duplicate tokens, ID defaults, two IDs, bad defaults | `dtd.Load` records them and `dtd.Validate` reports them, used or not (§3.2, §3.3.1, §3.3.2, §4.2.2). | [`72903d9`][72903d9] |
+| A UTF-16 external subset or parameter-entity module was read as UTF-8 and declared nothing | Each fetched resource is decoded by its BOM; the expansion charge is on the decoded size (§4.3.3). | [`3f7b697`][3f7b697] |
+| A non-`Char` in the DOCTYPE, an unused PE value or a DOCTYPE comment was accepted | The tokeniser checks the DOCTYPE as it checks content; under 1.1 a literal RestrictedChar is refused. | [`12b68fa`][12b68fa], [`dabed51`][dabed51] |
+| A colon in an entity or notation name was accepted | Refused (Namespaces in XML §7). | [`cb762f7`][cb762f7] |
+| A `standalone="yes"` document could use an entity only the external subset declares | Refused (§4.1 WFC: Entity Declared), including one an internal-subset PE declares. | [`af26eb4`][af26eb4], [`ca0d7be`][ca0d7be] |
+| Improper PE nesting in a declaration, group or conditional section was accepted, or failed the load | A validity error from `dtd.Validate`; the DTD still loads (§2.8, §3.2.1, §3.4). | [`337c660`][337c660] |
+| A PE between declarations could open a comment or declaration the text after it closed | Its replacement text must match extSubsetDecl alone (§2.8 WFC: PE Between Declarations). | [`243a7af`][243a7af] |
+| Entity text could balance tags outside it, put `<` or a bare `&` in an attribute, or stand outside the root | Each entity's text must match content alone (§4.3.2); a reference at depth 0 is refused. | [`43ca8b3`][43ca8b3], [`9753ec8`][9753ec8] |
+| An external entity referenced in an attribute value was fetched and spliced in, and PEs in IGNORE were fetched | Refused (§3.1 WFC: No External Entity References); an IGNORE section is copied through unread. | [`dabed51`][dabed51] |
+| Standalone and element-content validity facts the tree loses were never checked (xmlconf I4, I5) | xdm records them as it parses, at most 100, and `dtd.Validate` reports them (§2.9, §3 VC). | [`ca0d7be`][ca0d7be] |
 
 ### Changed — behaviour
 
@@ -535,6 +562,14 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Date and time component accessors raise FORG0001 for a bad untyped value | `catch err:XPTY0004` no longer sees a failed cast there. | [`1505000`][1505000] |
 | XQuery `validate type` checks its type at compile | XQST0104 from `Compile`; a built-in type with no schema import validates instead of XQDY0084. | [`ff9032d`][ff9032d], [`1889367`][1889367] |
 | XQuery 1.0 and 3.0 modules apply their own version's rules | Empty `ordered{}`, an unprefixed pragma and a bare `namespace-node()` step are refused there; unversioned modules are 3.1. | [`cc13393`][cc13393] |
+| The html method defaults to HTML5 for XSLT 2.0 and 3.0 stylesheets | `<!DOCTYPE HTML>` and the HTML5 void list unless `version="4.0"`; xhtml stays XHTML 1.0. Matches Saxon-HE 12.7 (§26). | [`da68710`][da68710] |
+| A streamed container's error is the stream's when its family is final | No second read on the tree; the code and text are the tree's, the first error detected (§2.14). | [`fbcfc71`][fbcfc71], [`86cde00`][86cde00] |
+| An XSD 1.0 schema naming any XSD 1.1 built-in type fails `src-resolve` | Load it as `Version11`; XQuery and XSLT 3.0 imports already are. | [`5c39a0c`][5c39a0c], [`b42e77e`][b42e77e] |
+| An invalid imported XQuery schema is XQST0012 | `catch err:XQST0059` no longer sees it. | [`9148c2d`][9148c2d] |
+| With every declaration read, an entity declared in neither subset is a validity error | The document parses with the reference dropped, and `dtd.Validate` reports it (§4.1, erratum E13). | [`dbe610d`][dbe610d] |
+| `dtd.Validate` reports more validity errors | A DTD repeating an element type across subsets, or a document breaking the new VCs, is invalid now. | [`72903d9`][72903d9], [`8c47532`][8c47532], [`ca0d7be`][ca0d7be] |
+| An internal-only DOCTYPE that references an external PE needs a resolver | `dtd.Load` returns `ErrNoResolver`, as for an external subset; `InternalSubsetOnly` leaves it unread. | [`4bab79c`][4bab79c] |
+| Ill-formed DTD and entity forms are refused | The WFC fixes above make documents that parsed fail; all were ill-formed. | [`cb762f7`][cb762f7], [`af26eb4`][af26eb4], [`243a7af`][243a7af], [`43ca8b3`][43ca8b3], [`9753ec8`][9753ec8], [`12b68fa`][12b68fa], [`dabed51`][dabed51] |
 
 ## v2.2.0 — 2026-11-01
 
@@ -2838,6 +2873,39 @@ here so every entry in this file sits under a release.
 [9298bc6]: https://github.com/knroy/go-xml/commit/9298bc6
 [170d907]: https://github.com/knroy/go-xml/commit/170d907
 [b50260b]: https://github.com/knroy/go-xml/commit/b50260b
+[900ce70]: https://github.com/knroy/go-xml/commit/900ce70
+[c3ff080]: https://github.com/knroy/go-xml/commit/c3ff080
+[ef170f9]: https://github.com/knroy/go-xml/commit/ef170f9
+[6f7d630]: https://github.com/knroy/go-xml/commit/6f7d630
+[d4b8353]: https://github.com/knroy/go-xml/commit/d4b8353
+[1bacfcc]: https://github.com/knroy/go-xml/commit/1bacfcc
+[fbcfc71]: https://github.com/knroy/go-xml/commit/fbcfc71
+[86cde00]: https://github.com/knroy/go-xml/commit/86cde00
+[b888d21]: https://github.com/knroy/go-xml/commit/b888d21
+[5c39a0c]: https://github.com/knroy/go-xml/commit/5c39a0c
+[b42e77e]: https://github.com/knroy/go-xml/commit/b42e77e
+[9148c2d]: https://github.com/knroy/go-xml/commit/9148c2d
+[c9adbaf]: https://github.com/knroy/go-xml/commit/c9adbaf
+[9180ee3]: https://github.com/knroy/go-xml/commit/9180ee3
+[99a96a5]: https://github.com/knroy/go-xml/commit/99a96a5
+[da68710]: https://github.com/knroy/go-xml/commit/da68710
+[4bab79c]: https://github.com/knroy/go-xml/commit/4bab79c
+[64f2243]: https://github.com/knroy/go-xml/commit/64f2243
+[8c47532]: https://github.com/knroy/go-xml/commit/8c47532
+[0cc940b]: https://github.com/knroy/go-xml/commit/0cc940b
+[8a2b2da]: https://github.com/knroy/go-xml/commit/8a2b2da
+[72903d9]: https://github.com/knroy/go-xml/commit/72903d9
+[3f7b697]: https://github.com/knroy/go-xml/commit/3f7b697
+[12b68fa]: https://github.com/knroy/go-xml/commit/12b68fa
+[dabed51]: https://github.com/knroy/go-xml/commit/dabed51
+[cb762f7]: https://github.com/knroy/go-xml/commit/cb762f7
+[af26eb4]: https://github.com/knroy/go-xml/commit/af26eb4
+[ca0d7be]: https://github.com/knroy/go-xml/commit/ca0d7be
+[337c660]: https://github.com/knroy/go-xml/commit/337c660
+[243a7af]: https://github.com/knroy/go-xml/commit/243a7af
+[43ca8b3]: https://github.com/knroy/go-xml/commit/43ca8b3
+[9753ec8]: https://github.com/knroy/go-xml/commit/9753ec8
+[dbe610d]: https://github.com/knroy/go-xml/commit/dbe610d
 [2a1e3b9]: https://github.com/knroy/go-xml/commit/2a1e3b9
 [ff9032d]: https://github.com/knroy/go-xml/commit/ff9032d
 [1889367]: https://github.com/knroy/go-xml/commit/1889367

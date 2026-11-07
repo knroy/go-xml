@@ -61,12 +61,12 @@
       "component": "xslt",
       "suite": "W3C XSLT 2.0",
       "edition": "XSLT 2.0 (Second Edition)",
-      "passed": 6195,
+      "passed": 6194,
       "disagreements": 8,
-      "total": 6203,
-      "run_date": "2026-11-06",
+      "total": 6202,
+      "run_date": "2026-11-07",
       "command": "tests/check.sh (TestXSLTSuite)",
-      "skipped_out_of_scope": 8332,
+      "skipped_out_of_scope": 8333,
       "skipped_unimplemented": 66,
       "cases": [
         {

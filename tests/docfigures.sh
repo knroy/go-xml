@@ -41,7 +41,7 @@ TestQT3XPath30  19362 XPath-3.0
 TestQT3XPath31  22054 XPath-3.1
 TestQT3XQuery   30530 XQuery-3.1
 TestXSLT30Suite 11522 XSLT-3.0
-TestXSLTSuite   6203  XSLT-2.0
+TestXSLTSuite   6202  XSLT-2.0
 XSD10           39388 XSD-1.0
 XSD11           41598 XSD-1.1
 XSD10S          14388 XSD-1.0-schema
@@ -144,7 +144,7 @@ done
 # schema/instance split rows are components of XSD10/XSD11 and must not be
 # added twice.
 want_total=0
-for key_denom in 'TestQT3XPath31 22054' 'TestQT3XQuery 30530' 'TestXSLT30Suite 11522' 'TestXSLTSuite 6203' 'XSD10 39388' 'XSD11 41598'; do
+for key_denom in 'TestQT3XPath31 22054' 'TestQT3XQuery 30530' 'TestXSLT30Suite 11522' 'TestXSLTSuite 6202' 'XSD10 39388' 'XSD11 41598'; do
 	key=${key_denom% *}
 	denom=${key_denom#* }
 	pass=$(sed -n "s/^$key \([0-9]*\)$/\1/p" "$RATCHET" | head -1)
