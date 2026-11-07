@@ -145,6 +145,19 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 		v.fail(root, "root element %s is not the DOCTYPE's %s",
 			root.Name().Lexical(), d.name)
 	}
+	// XML 1.1 §4.3.4: a document takes its version from the document
+	// entity, one with no declaration is 1.0, and a 1.0 document may not
+	// include a 1.1 entity. Load read the external entities but never saw
+	// the document; this is where the two meet.
+	if d.v11 != "" {
+		ver := ""
+		if t := doc.Tree(); t != nil {
+			ver = t.XMLVersion
+		}
+		if ver != "1.1" {
+			v.fail(root, "the DTD's external resource %s declares XML 1.1 but the document is XML 1.0 (XML §4.3.4)", d.v11)
+		}
+	}
 	v.walk(root)
 	v.checkIDRefs()
 	if len(v.errs) == 0 {

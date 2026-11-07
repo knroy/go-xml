@@ -880,3 +880,40 @@ func TestFileResolverRefusesForeignFileHost(t *testing.T) {
 		t.Errorf("file:///C:/x.dtd was refused as remote: %v", err)
 	}
 }
+
+// TestLoadEnforcesEntityVersion is XML 1.1 §4.3.4 through Load (X5): a 1.0
+// document, or one with no declaration, may not include a 1.1 external
+// entity, while a 1.1 document may include either. Load never sees the
+// document, so it records what it read and Validate, which has the
+// document, refuses the combination; a version neither 1.0 nor 1.1 is
+// refused by Load itself.
+func TestLoadEnforcesEntityVersion(t *testing.T) {
+	const body = `<!DOCTYPE r SYSTEM "r.dtd"><r/>`
+	sub11 := `<?xml version="1.1" encoding="UTF-8"?><!ELEMENT r EMPTY>`
+	for _, c := range []struct {
+		name, decl, dtd string
+		ok              bool
+	}{
+		{"1.0 document, 1.1 subset", `<?xml version="1.0"?>`, sub11, false},
+		{"undeclared document, 1.1 subset", ``, sub11, false},
+		{"1.1 document, 1.1 subset", `<?xml version="1.1"?>`, sub11, true},
+		{"1.1 document, 1.0 subset", `<?xml version="1.1"?>`, `<?xml version="1.0" encoding="UTF-8"?><!ELEMENT r EMPTY>`, true},
+		{"1.0 document, unlabelled subset", `<?xml version="1.0"?>`, `<?xml encoding="UTF-8"?><!ELEMENT r EMPTY>`, true},
+		{"1.0 document, 1.1 module", `<?xml version="1.0"?>`,
+			`<!ENTITY % m SYSTEM "m.ent">%m;`, false},
+	} {
+		docs := map[string]string{"r.dtd": c.dtd, "m.ent": `<?xml version="1.1" encoding="UTF-8"?><!ELEMENT r EMPTY>`}
+		err := loadCheck(t, c.decl+body, LoadOptions{Resolver: &MapResolver{Docs: docs}})
+		if c.ok && err != nil {
+			t.Errorf("%s: %v", c.name, err)
+		}
+		if !c.ok && (err == nil || !strings.Contains(err.Error(), "§4.3.4")) {
+			t.Errorf("%s: err = %v, want the §4.3.4 refusal", c.name, err)
+		}
+	}
+	_, err := Load(`DOCTYPE r SYSTEM "r.dtd"`, LoadOptions{Resolver: &MapResolver{Docs: map[string]string{
+		"r.dtd": `<?xml version="1.7" encoding="UTF-8"?><!ELEMENT r EMPTY>`}}})
+	if err == nil || !strings.Contains(err.Error(), "unsupported XML version") {
+		t.Errorf("version 1.7: err = %v, want it refused", err)
+	}
+}
