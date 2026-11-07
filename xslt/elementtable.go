@@ -745,32 +745,6 @@ var xsltElements = sync.OnceValue(func() map[string]elementDef {
 		// evaluation, which this engine does not do; 18.1 defines the result as
 		// that of the non-streaming process either way, so the attribute is
 		// accepted and the instruction evaluated conventionally.
-		// xsl:stream is the name the XSLT 3.0 working draft gives this
-		// instruction in 18.1; the Recommendation of 8 June 2017 renamed it.
-		// Its own change log says so (Bug29747): "The xsl:stream instruction has
-		// been generalized to handle both streamed and unstreamed processing,
-		// and it has accordingly been renamed xsl:source-document, and has a
-		// streamable attribute."
-		//
-		// Both are accepted because a stylesheet written against either text is a
-		// legal one. The table carried only the later name, so the draft's
-		// spelling was refused outright.
-		//
-		// The attribute list is 18.1's own and is NOT source-document's: the
-		// draft's xsl:stream has no @streamable, which is precisely what the
-		// rename added when the instruction was generalised.
-		// compileSourceDocument reads attributes and never the element's local
-		// name, so one compiler serves both spellings.
-		//
-		// No suite case writes <xsl:stream, so this is invisible to the ratchet
-		// in both directions; it is here because a stylesheet written against the
-		// vendored spec is a legal one that the grammar rejected.
-		"stream": {since30: true, attrs: map[string]attrDef{
-			"href":             {required: true, avt: true},
-			"use-accumulators": {},
-			"validation":       {values: []string{"strict", "lax", "preserve", "strip"}},
-			"type":             {},
-		}},
 		"source-document": {since30: true, attrs: map[string]attrDef{
 			"href":             {required: true, avt: true},
 			"streamable":       {values: []string{"yes", "no", "true", "false", "1", "0"}},
@@ -1002,7 +976,6 @@ var contentModels = sync.OnceValue(func() map[string]contentModel {
 		"preserve-space":         {seqCtor: false, pcdata: false, kids: nil, model: ""},
 		"processing-instruction": {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 		"result-document":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-		"stream":                 {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 		"source-document":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 		"sequence":               {seqCtor30: true, pcdata: false, kids: map[string]bool{"fallback": true}, model: "xsl:fallback*"},
 		"sort":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
@@ -1075,7 +1048,6 @@ var xsltInstructions = map[string]bool{
 	"processing-instruction": true,
 	"result-document":        true,
 	"sequence":               true,
-	"stream":                 true,
 	"source-document":        true,
 	"text":                   true,
 	"value-of":               true,
@@ -1162,7 +1134,6 @@ var qnameAttrs = sync.OnceValue(func() map[string]map[string]qnameAttrDef {
 		"output":          {"name": {}, "cdata-section-elements": {list: true}, "use-character-maps": {list: true}},
 		"param":           {"name": {}},
 		"result-document": {"format": {avt: true, code: "XTDE1460"}, "type": {}, "cdata-section-elements": {list: true, avt: true}, "use-character-maps": {list: true}},
-		"stream":          {"type": {}},
 		"source-document": {"type": {}},
 		"template":        {"name": {}},
 		"variable":        {"name": {}},
