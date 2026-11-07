@@ -210,18 +210,7 @@ func Load(directive string, opts LoadOptions) (*DTD, error) {
 	head, internal := splitSubset(directive)
 	systemID, publicID, hasExternal := externalSubsetOf(head)
 
-	if !hasExternal || opts.InternalSubsetOnly {
-		d, err := parseSubsets(internal, "", opts)
-		if err != nil {
-			return nil, err
-		}
-		if d != nil {
-			d.HasExternalSubset = hasExternal
-			d.name = doctypeName(head)
-		}
-		return d, nil
-	}
-	if opts.Resolver == nil {
+	if hasExternal && !opts.InternalSubsetOnly && opts.Resolver == nil {
 		// Loud, per the note on ErrNoResolver: half a DTD proves nothing,
 		// and reporting success on it is how "could not check" becomes
 		// "checked and fine".
@@ -234,12 +223,30 @@ func Load(directive string, opts LoadOptions) (*DTD, error) {
 	}
 
 	l := newLoader(opts)
+	l.noFetch = opts.InternalSubsetOnly
 	// XML 1.0 §2.8: the internal subset is read first. Its parameter-entity
 	// declarations are therefore in scope while the external subset is being
 	// expanded, and they take precedence over any the external subset makes.
+	// It is expanded on every path, including a DOCTYPE with no external
+	// subset: "%e;" between declarations stands for the declarations its
+	// replacement text holds, and those bind like any written inline. An
+	// external parameter entity referenced there is fetched like any other,
+	// so with no Resolver it is ErrNoResolver (see fetch).
 	expandedInternal, err := l.expandSubset(internal, opts.BaseURI, false)
 	if err != nil {
 		return nil, err
+	}
+	if !hasExternal || opts.InternalSubsetOnly {
+		d, err := parseSubsets(expandedInternal, "", opts)
+		if err != nil {
+			return nil, err
+		}
+		if d != nil {
+			d.HasExternalSubset = hasExternal
+			d.name = doctypeName(head)
+			d.v11 = l.v11
+		}
+		return d, nil
 	}
 	text, resolved, err := l.fetch(systemID, publicID, opts.BaseURI)
 	if err != nil {
@@ -316,6 +323,11 @@ type loader struct {
 	// is looked at, which is how §2.8's precedence reaches parameter
 	// entities specifically.
 	params map[string]paramEntity
+
+	// noFetch leaves an external parameter-entity reference as written
+	// instead of reading it, for LoadOptions.InternalSubsetOnly, which
+	// promises to fetch nothing.
+	noFetch bool
 
 	// v11 is the system identifier of the first external resource read
 	// whose text declaration says version="1.1", or "". See fetch.
@@ -630,6 +642,11 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 		if l.active[name] {
 			return "", fmt.Errorf(
 				"parameter entity %%%s; is recursive", name)
+		}
+		if p.external && l.noFetch {
+			sb.WriteString(subset[i : i+j+1])
+			i += j + 1
+			continue
 		}
 		text, refBase := p.text, p.base
 		if p.external {

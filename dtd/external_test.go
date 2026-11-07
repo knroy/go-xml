@@ -917,3 +917,49 @@ func TestLoadEnforcesEntityVersion(t *testing.T) {
 		t.Errorf("version 1.7: err = %v, want it refused", err)
 	}
 }
+
+// A parameter entity in a purely internal subset is expanded: XML 1.0 §2.8
+// lets a reference between declarations stand for whole declarations, so the
+// <!ELEMENT> below is as binding as one written inline. Load used to parse an
+// internal-only subset without expanding it, and reported r undeclared.
+//
+// An internal-only DOCTYPE still needs no Resolver, unless it references an
+// EXTERNAL parameter entity: then there is text to read and nothing to read
+// it with, which is ErrNoResolver, for the reason that note gives.
+func TestInternalSubsetParameterEntitiesAreExpanded(t *testing.T) {
+	const internal = `<!DOCTYPE r [
+<!ENTITY % e "<!ELEMENT r EMPTY>">
+%e;
+]>`
+	if err := loadCheck(t, internal+`<r/>`, LoadOptions{}); err != nil {
+		t.Errorf("an internal parameter entity should declare r, with no resolver: %v", err)
+	}
+	if err := loadCheck(t, internal+`<r>x</r>`, LoadOptions{}); err == nil {
+		t.Error("the expanded declaration should be enforced: r is EMPTY")
+	}
+
+	const external = `DOCTYPE r [
+<!ENTITY % e SYSTEM "e.ent">
+%e;
+]`
+	_, err := Load(external, LoadOptions{})
+	if !errors.Is(err, ErrNoResolver) {
+		t.Errorf("an external parameter entity with no resolver: err = %v, want ErrNoResolver", err)
+	}
+	d, err := Load(external, mapOpts(map[string]string{"e.ent": `<!ELEMENT r EMPTY>`}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.Elements["r"]; !ok {
+		t.Error("the external parameter entity's declaration should be read")
+	}
+	// InternalSubsetOnly fetches nothing, so the reference is left as written
+	// rather than refused.
+	r := &countingResolver{}
+	if _, err := Load(external, LoadOptions{Resolver: r, InternalSubsetOnly: true}); err != nil {
+		t.Errorf("InternalSubsetOnly should not refuse an external parameter entity: %v", err)
+	}
+	if r.calls != 0 {
+		t.Errorf("InternalSubsetOnly made %d fetches, want 0", r.calls)
+	}
+}

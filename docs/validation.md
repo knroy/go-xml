@@ -103,6 +103,11 @@ Five things to know before relying on it:
   nothing, and reporting success on it would turn "I could not read the
   constraints" into "the constraints hold". Pass `LoadOptions.InternalSubsetOnly`
   to ask for the partial reading deliberately.
+  A DOCTYPE with no external subset needs no `Resolver`, and its internal
+  parameter entities are expanded (`<!ENTITY % e "<!ELEMENT r EMPTY>"> %e;`
+  declares `r`), but one that references an *external* parameter entity
+  (`<!ENTITY % e SYSTEM "e.ent"> %e;`) is refused with `dtd.ErrNoResolver`
+  for the same reason. `InternalSubsetOnly` leaves such a reference unread.
 * **A resolver hands control of what this process reads to whoever wrote the
   DOCTYPE.** `FileResolver` is confined to one `Root`, refusing `..`, absolute
   paths, symlinks leading out and any non-`file` scheme; `MapResolver` reads

@@ -575,6 +575,7 @@ ibm-valid-P27-ibm27v03.xml
 ibm-valid-P28-ibm28v01.xml
 ibm-valid-P28-ibm28v02.xml
 ibm-valid-P29-ibm29v01.xml
+ibm-valid-P29-ibm29v02.xml
 ibm-valid-P30-ibm30v01.xml
 ibm-valid-P30-ibm30v02.xml
 ibm-valid-P32-ibm32v01.xml
@@ -646,7 +647,9 @@ ibm-valid-P68-ibm68v01.xml
 ibm-valid-P68-ibm68v02.xml
 ibm-valid-P69-ibm69v01.xml
 ibm-valid-P69-ibm69v02.xml
+ibm-valid-P70-ibm70v01.xml
 ibm-valid-P78-ibm78v01.xml
+ibm-valid-P79-ibm79v01.xml
 ibm-valid-P82-ibm82v01.xml
 ibm-valid-P85-ibm85n03.xml
 ibm-valid-P85-ibm85n04.xml
@@ -1313,6 +1316,7 @@ o-p27pass3
 o-p27pass4
 o-p28fail1
 o-p28pass1
+o-p28pass3
 o-p28pass4
 o-p28pass5
 o-p29fail1
@@ -1651,6 +1655,8 @@ valid-not-sa-007
 valid-not-sa-008
 valid-not-sa-009
 valid-not-sa-010
+valid-not-sa-011
+valid-not-sa-012
 valid-not-sa-013
 valid-not-sa-014
 valid-not-sa-015
@@ -1738,6 +1744,7 @@ valid-sa-066
 valid-sa-067
 valid-sa-068
 valid-sa-069
+valid-sa-070
 valid-sa-071
 valid-sa-072
 valid-sa-073
