@@ -708,12 +708,78 @@ func (a *analyzer) dynamicCall(x *xpath.DynamicCall) props {
 }
 
 // dynamicCallUsages reads the argument usages §19.8.8.11 derives from the
-// declared type of the function variable, or returns nil when no signature
-// is available. A nil result, or one shorter than the argument list, leaves
-// the remaining arguments with usage navigation.
+// signature of the base expression, or returns nil when no signature is
+// available. A nil result, or one shorter than the argument list, leaves the
+// remaining arguments with usage navigation.
+//
+// Where a signature is available is §19.1's to say, and it says it in full:
+//
+//	"This ancillary information is available for a NamedFunctionRef, for an
+//	InlineFunctionExpr, for a MapConstructor, for a FunctionCall whose
+//	static type is U{function(*)}, and for a VarRef if the variable is bound
+//	to any of the forgoing, or if it has a declared type corresponding to
+//	U{function(*)}."
+//
+// So a base that is none of those -- a lookup "$m?f", a conditional "if (C)
+// then f#1 else g#1", a dynamic call "$g()" -- has no signature, whatever
+// its own static type, and its arguments navigate. Of the VarRef forms only
+// the declared type is read; a variable without "as" that is bound to a
+// function reference is left to the fallback, which refuses more than the
+// rule does but never accepts what it refuses.
 func (a *analyzer) dynamicCallUsages(x *xpath.DynamicCall) []usage {
-	v, ok := x.Target.(*xpath.VarRef)
-	if !ok || a.decl == nil {
+	switch t := x.Target.(type) {
+	case *xpath.NamedFunctionRef:
+		// The signature is the function's declaration: a stylesheet
+		// function's xsl:param types (an override must keep them),
+		// or the F&O signature a built-in carries.
+		if f := a.funcs[keyOf(t.Name, t.Arity)]; f != nil && !builtinFunctionNS(t.Name.URI) {
+			return paramUsages(f.params)
+		}
+		if fn, ok := xpath.Builtins().Lookup(t.Name, t.Arity); ok && builtinFunctionNS(t.Name.URI) &&
+			len(fn.Signature) == t.Arity+1 {
+			return paramUsages(fn.Signature[1:])
+		}
+		return nil
+	case *xpath.InlineFunctionExpr:
+		// "function($a as A, $b) {...}": an omitted type is item()*.
+		ts := make([]string, len(t.Params))
+		for i, p := range t.Params {
+			if p.Type != nil {
+				ts[i] = p.Type.String()
+			}
+		}
+		return paramUsages(ts)
+	case *xpath.MapConstructor:
+		// The note: a map's argument type is xs:anyAtomicType.
+		return []usage{usageAbsorption}
+	case *xpath.FuncCall:
+		// A call whose declared result type is a function type: the
+		// signature is that type's. Only a stylesheet function's "as" is
+		// read here; a built-in result goes to the fallback.
+		f := a.funcs[keyOf(t.Name, len(t.Args))]
+		if f == nil || builtinFunctionNS(t.Name.URI) {
+			return nil
+		}
+		return signatureUsages(f.asType, newNSResolver(f.body, ""))
+	case *xpath.VarRef:
+		return a.varSignatureUsages(t)
+	}
+	return nil
+}
+
+// paramUsages is the type-determined usage of each parameter type.
+func paramUsages(types []string) []usage {
+	us := make([]usage, len(types))
+	for i, t := range types {
+		us[i] = instrTypeDeterminedUsage(t)
+	}
+	return us
+}
+
+// varSignatureUsages reads the signature of a function variable from the
+// "as" of the xsl:variable or xsl:param that binds it.
+func (a *analyzer) varSignatureUsages(v *xpath.VarRef) []usage {
+	if a.decl == nil {
 		return nil
 	}
 	if _, bound := a.vars[v.Name]; bound {
@@ -725,6 +791,12 @@ func (a *analyzer) dynamicCallUsages(x *xpath.DynamicCall) []usage {
 	if !ok {
 		return nil
 	}
+	return signatureUsages(as, newNSResolver(a.decl, ""))
+}
+
+// signatureUsages reads the argument usages from a declared function, map or
+// array type, or returns nil for any other type and for function(*).
+func signatureUsages(as string, ns *nsResolver) []usage {
 	as = strings.TrimSpace(as)
 	if n := len(as); n > 0 {
 		switch as[n-1] {
@@ -737,16 +809,12 @@ func (a *analyzer) dynamicCallUsages(x *xpath.DynamicCall) []usage {
 		// The note: the argument type is xs:anyAtomicType, so absorption.
 		return []usage{usageAbsorption}
 	case strings.HasPrefix(as, "function"):
-		params, ok := functionParamTypes(as, newNSResolver(a.decl, ""))
+		params, ok := functionParamTypes(as, ns)
 		if !ok {
 			// function(*): no signature.
 			return nil
 		}
-		us := make([]usage, len(params))
-		for i, t := range params {
-			us[i] = instrTypeDeterminedUsage(t)
-		}
-		return us
+		return paramUsages(params)
 	}
 	return nil
 }
