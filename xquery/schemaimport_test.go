@@ -495,6 +495,11 @@ func TestValidateTypeNotInScopeIsStaticXQST0104(t *testing.T) {
 	if err != nil || got != "8" {
 		t.Errorf("a built-in type needs no import: got %q, %v", got, err)
 	}
+	// xs:anyType is a built-in complex type, and in scope just the same.
+	if _, err := run(t, `validate type xs:anyType { <a><b/></a> }`,
+		xquery.Options{}); err != nil {
+		t.Errorf("validate type xs:anyType: %v", err)
+	}
 }
 
 // TestValidatedCopyKeepsAnnotationUnderPreserve is §3.9.1.3 with §4.6:

@@ -601,13 +601,11 @@ func annotateBuiltinXSIType(n *xdm.Node) {
 
 // typeNameInScope reports whether name is a type in the in-scope schema
 // definitions: one the imported schema defines, or a built-in xs: type, which
-// xsd.Schema.ValidateAgainstTypeCopy resolves the same way.
+// every xsd.Schema holds from NewSchema on. With no import the built-ins are
+// still in scope, so they are looked up in an empty schema.
 func typeNameInScope(schema *xsd.Schema, name xdm.QName) bool {
-	if name.URI == xdm.NSXS && xsd.BuiltinType(name.Local) != nil {
-		return true
-	}
 	if schema == nil {
-		return false
+		schema = xsd.NewSchema()
 	}
 	_, ok := schema.Types[xdm.QName{URI: name.URI, Local: name.Local}]
 	return ok
