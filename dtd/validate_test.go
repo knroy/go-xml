@@ -131,7 +131,7 @@ func TestUndeclaredAndPrefixedAttributes(t *testing.T) {
 	for _, c := range []struct{ doc, want string }{
 		{`<order id="1"/>`, ""},
 		{`<order id="1" xml:lang="en"/>`, ""},
-		{`<order xmlns="urn:other" id="1"/>`, ""}, // xmlns stays exempt
+		{`<order xmlns="urn:other" id="1"/>`, "attribute xmlns is not declared"},
 		{`<order/>`, "required attribute id is missing"},
 		{`<order id="1" admin="true"/>`, "attribute admin is not declared"},
 		{`<order id="1" xml:lang="zz"/>`, `attribute xml:lang = "zz" is not one of en`},
@@ -156,6 +156,31 @@ func TestUndeclaredAndPrefixedAttributes(t *testing.T) {
 	}
 	if err := Validate(tree.Root, d, Options{AllowUndeclared: true}); err != nil {
 		t.Errorf("AllowUndeclared should skip an undeclared attribute: %v", err)
+	}
+}
+
+// XML 1.0 §3.3.1 VC Attribute Value Type covers namespace declarations too:
+// to XML 1.0 xmlns and xmlns:p are attributes, and Namespaces in XML makes no
+// exception for validity, so a valid document declares them. Each want is
+// what xmllint --valid (libxml2 2.9.13) reports for the same document.
+func TestNamespaceDeclarationsAreAttributes(t *testing.T) {
+	const dt = `<!DOCTYPE r [<!ELEMENT r (c)><!ELEMENT c EMPTY>` +
+		`<!ATTLIST r xmlns CDATA #FIXED "urn:r" xmlns:p CDATA #REQUIRED>]>`
+	for _, c := range []struct{ doc, want string }{
+		{`<r xmlns="urn:r" xmlns:p="urn:p"><c/></r>`, ""},
+		{`<r xmlns:p="urn:p"><c/></r>`, ""}, // #FIXED xmlns may be omitted
+		{`<r xmlns="urn:x" xmlns:p="urn:p"><c/></r>`, `attribute xmlns is #FIXED "urn:r" but is "urn:x"`},
+		{`<r xmlns="urn:r"><c/></r>`, "required attribute xmlns:p is missing"},
+		// c redeclares p with the same URI; it is still an attribute of c.
+		{`<r xmlns="urn:r" xmlns:p="urn:p"><c xmlns:p="urn:p"/></r>`, "attribute xmlns:p is not declared"},
+	} {
+		err := check(t, dt+c.doc)
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: %v", c.doc, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: got %v, want %q", c.doc, err, c.want)
+		}
 	}
 }
 
