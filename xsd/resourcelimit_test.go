@@ -43,10 +43,10 @@ func nestedDoc(t *testing.T, n int) *xdm.Node {
 // A MaxDepth refusal was reported as cvc-elt.1, which means "the element is
 // not valid against its declaration" -- and nothing here was assessed against
 // any declaration. The document may be perfectly valid; this processor
-// declined to find out. The code is kept, because callers and the conformance
-// suites read it, and xdm.ErrResourceLimit is carried alongside so a caller
-// can tell a verdict from a refusal.
-func TestValidateDepthRefusalCarriesSentinelAndKeepsItsCode(t *testing.T) {
+// declined to find out. A cvc- code is a validity verdict, so the refusal
+// carries none: it has an empty Code, like the package's other processor-side
+// failures, and xdm.ErrResourceLimit says what it is.
+func TestValidateDepthRefusalIsNotAValidityVerdict(t *testing.T) {
 	s := mustLoadSchema(t, recursiveSchema)
 	root := nestedDoc(t, 40)
 
@@ -62,9 +62,9 @@ func TestValidateDepthRefusalCarriesSentinelAndKeepsItsCode(t *testing.T) {
 	if !errors.As(err, &ve) || len(ve.Errors) == 0 {
 		t.Fatalf("expected ValidationErrors, got %T", err)
 	}
-	if ve.Errors[0].Code != "cvc-elt.1" {
-		t.Errorf("code = %q, want cvc-elt.1; the sentinel must be ADDED, "+
-			"never substituted for the code", ve.Errors[0].Code)
+	if c := ve.Errors[0].Code; c != "" {
+		t.Errorf("code = %q, want none; a cvc- code asserts the document "+
+			"is invalid, and it was never assessed", c)
 	}
 	if !strings.Contains(err.Error(), "element nesting exceeds 10 levels") {
 		t.Errorf("message %q lost its text", err)

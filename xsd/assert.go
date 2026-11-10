@@ -242,7 +242,7 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 	}
 	scoped, err := v.scopeForAssertion(el)
 	if err != nil {
-		v.failLimit(el, "cvc-assertion.3",
+		v.failLimit(el,
 			"the assertions could not be evaluated: %v", err)
 		v.stopped = true
 		return
@@ -286,7 +286,7 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 			// walk carry on spending against a budget already gone.
 			// Stopping matches what the depth and error limits do.
 			if errors.Is(err, xdm.ErrResourceLimit) {
-				v.failLimit(el, "cvc-assertion.3",
+				v.failLimit(el,
 					"assertion %q could not be evaluated: %v",
 					a.Source, err)
 				v.stopped = true

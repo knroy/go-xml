@@ -130,7 +130,7 @@ syntax error does *not* carry the sentinel.
 | `MaxModules` / `MaxModuleBytes` | `xquery/module.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the module is not there |
 | `MaxSchemaBytes` | `xquery/schemaimport.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the schema is not there |
 | `MaxSchemaBytes` | `xslt/importschema.go` | *(none)* | as above for `xsl:import-schema`; deliberately **not** `XTSE0220`, which would claim the schema is invalid; wraps `xdm.ErrResourceLimit` |
-| `ValidateOptions.MaxDepth` | `xsd/validate.go` | `cvc-elt.1` | the element is invalid against its declaration |
+| `ValidateOptions.MaxDepth` | `xsd/validate.go` | *(none)* | (no misdescription) the `ValidationError` has an empty `Code` and wraps `xdm.ErrResourceLimit`; it reported `cvc-elt.1`, a validity verdict, until round SK. An assertion the processor declined to evaluate is the same: no `cvc-assertion.3` |
 | `maxSchemaFetches` (10,000) | `relaxng/resolve.go` | *(none)* | include/externalRef fetches per RELAX NG compilation, all routes; the refusal names the budget |
 | fetched-document budget | `relaxng/compile.go` | *(none)* | the nodes and text bytes of every fetched include/externalRef document per compilation, at xdm's single-document `DefaultMaxNodes` and `DefaultMaxBytes`; wraps `xdm.ErrResourceLimit` |
 | `maxSequenceMatcherEdges` (1<<20) | `xsd/automaton.go` | *(none)* | follow representation one DTD content model may store in `dtd.Validate`: one per piece plus its unshared members, so a repeated choice of n costs ~2n and a dense `(a?,a?,…)` still stops at ~1450 positions; XSD models keep the `maxUPAStateWidth` (256) cap |
