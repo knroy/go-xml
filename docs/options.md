@@ -153,7 +153,7 @@ about the input. A document refused for depth may be perfectly valid, and a
 pattern refused for its backtracking budget may well match. Reporting either
 as a fault tells the user something untrue.
 
-#### Limits that decline without an error at all
+#### Limits that decline before the conservative table answers
 
 `xsd/subsume.go` and `xsd/restrict.go` do not raise anything when their budgets
 run out. They return "declined", and the caller falls back to the conservative
@@ -163,7 +163,14 @@ fallback never accepts what the exact answer rejects — but it is silent: a
 schema refused because a budget ran out looked exactly like one the table
 genuinely forbids.
 
-Those declines are now **counted** rather than raised, through the
+Since round SK a rejection that follows a **budget** decline is no longer
+silent: the schema is still refused (the limits themselves are unchanged), but
+the error wraps `xdm.ErrResourceLimit` and says the restriction is
+*undecided, not known to be invalid*, carrying no constraint code, the same
+form as the UPA refusal. A rejection after a *structural* decline, or with no
+decline at all, is an ordinary verdict and does not carry the sentinel.
+
+The declines are also **counted**, through the
 `budgetStats` hook in `xsd/subsume.go`, on the model of `icStats` in
 `xsd/identity.go`. Budget declines (fixable by raising `subsumeMaxStates`,
 `subsumeMaxProduct` or `branchLimit`) are counted separately from structural
