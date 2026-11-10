@@ -850,15 +850,17 @@ func (t *entityTable) entityMap() map[string]string {
 //
 // wfc says whether WFC: Entity Declared governs the document (see
 // entityDeclaredIsWFC). When it does not, declaration order is not checked,
-// and a reference to an entity with no declaration is still an error, as it
-// is in content: see undeclaredNote.
-func normalizeAttDefaults(defs []attDefault, t *entityTable, v11, wfc bool) ([]attDefault, error) {
+// and a reference to an entity with no declaration is handled as it is in
+// content: with every external entity read it is declared nowhere, so drop,
+// when non-nil, is told its name and the reference stands for no text;
+// otherwise it is an error (see undeclaredNote).
+func normalizeAttDefaults(defs []attDefault, t *entityTable, v11, wfc bool, drop func(name string)) ([]attDefault, error) {
 	if t == nil {
 		t = newEntityTable("", nil)
 		t.version11 = v11
 	}
 	for k, d := range defs {
-		v, err := t.normalizeDefault(d, wfc)
+		v, err := t.normalizeDefault(d, wfc, drop)
 		if err != nil {
 			return nil, fmt.Errorf("default for attribute %s of %s: %w", d.name, d.element, err)
 		}
@@ -867,7 +869,7 @@ func normalizeAttDefaults(defs []attDefault, t *entityTable, v11, wfc bool) ([]a
 	return defs, nil
 }
 
-func (t *entityTable) normalizeDefault(d attDefault, wfc bool) (string, error) {
+func (t *entityTable) normalizeDefault(d attDefault, wfc bool, drop func(string)) (string, error) {
 	v := d.value
 	if strings.IndexByte(v, '<') >= 0 {
 		return "", fmt.Errorf("%q contains <", v)
@@ -905,6 +907,10 @@ func (t *entityTable) normalizeDefault(d attDefault, wfc bool) (string, error) {
 			continue
 		}
 		if !wfc && !t.declares(name) {
+			if drop != nil {
+				drop(name)
+				continue
+			}
 			return "", fmt.Errorf("entity %q is not declared (%s)", name, undeclaredNote(name, t.resolver != nil))
 		}
 		if at, ok := d.entities[name]; wfc && (!ok || at > d.at) {

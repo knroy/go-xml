@@ -3,6 +3,7 @@ package xdm
 import (
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -414,6 +415,45 @@ func TestUndeclaredEntityWFCOrVC(t *testing.T) {
 		if n := tree.source.dtdNotes; len(n) != 2 || !strings.Contains(n[0].msg, "VC: Entity Declared") {
 			t.Errorf("%s: recorded %v, want the VC twice", prolog, n)
 		}
+	}
+
+	// So is one in a default, and the default keeps the rest of its text.
+	tree, err = ParseString(`<!DOCTYPE r SYSTEM "r.dtd" [<!ATTLIST r d CDATA "1&u;2">]><r/>`, ParseOptions{
+		AllowDOCTYPE: true, ExternalEntities: &dirResolver{root: dir},
+		BaseURI: fileuri.Of(filepath.Join(dir, "doc.xml")),
+	})
+	if err != nil {
+		t.Fatalf("an undeclared entity in a default, every entity read: %v", err)
+	}
+	if got := tree.Root.ChildElements()[0].Attr("", "d").Value(); got != "12" {
+		t.Errorf("default = %q, want 12", got)
+	}
+	if n := tree.source.dtdNotes; len(n) != 1 || !strings.Contains(n[0].msg, "VC: Entity Declared") {
+		t.Errorf("default: recorded %v, want the VC", n)
+	}
+
+	// A source rewritten for an entity holding markup is parsed a second
+	// time, and that parse decides from the same declarations as the first:
+	// the external subset's entities, defaults and element declarations.
+	dir = writeFiles(t, map[string]string{
+		"r.dtd": `<!ENTITY m "<b/>"><!ELEMENT r (b)*><!ELEMENT b EMPTY><!ATTLIST r d CDATA "1&u;2">`,
+	})
+	tree, err = ParseString(`<!DOCTYPE r SYSTEM "r.dtd"><r> &m;&u; </r>`, ParseOptions{
+		AllowDOCTYPE: true, ExternalEntities: &dirResolver{root: dir},
+		BaseURI: fileuri.Of(filepath.Join(dir, "doc.xml")),
+	})
+	if err != nil {
+		t.Fatalf("rewritten source, every entity read: %v", err)
+	}
+	r := tree.Root.ChildElements()[0]
+	if got := r.Attr("", "d"); got == nil || got.Value() != "12" {
+		t.Errorf("rewritten source: default d = %v, want 12 from the external subset", got)
+	}
+	if k := slices.Collect(r.Children()); len(k) != 1 || k[0].Name().Local != "b" {
+		t.Errorf("rewritten source: %d children, want only b (element content's white space is ignorable)", len(k))
+	}
+	if n := tree.source.dtdNotes; len(n) != 2 {
+		t.Errorf("rewritten source: recorded %v, want the VC for the default and the content", n)
 	}
 
 	// Declared but external, with no resolver: still refused.
