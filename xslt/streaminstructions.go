@@ -40,6 +40,11 @@ type instrAnalyzer struct {
 	// which decides whether absorbing "." reads from the stream (§19.8.1).
 	ctxAllowsChildren bool
 
+	// ctxType is the context item type (§19.2) where it is known, passed to
+	// every expression assessed with this analyzer's own focus. sub does not
+	// copy it, so a nested construct's is unknown.
+	ctxType itemType
+
 	// known is cleared when anything below is not modelled. Its meaning is
 	// exactly that of analyzer.known, and the two are merged wherever an
 	// instruction operand is an XPath expression.
@@ -175,6 +180,7 @@ func sequenceConstructorVerdict(
 	// stylesheet with a striding select -- is rejected by the general rules
 	// on the path itself, not by this clause.
 	a.groupOutOfReach = !a.groupInScope && !outerStreamed && hasForEachGroupAncestor(el)
+	a.ctxType = containerItemType(el)
 	p := a.body(el)
 	return p, a.known, a.unverified
 }
@@ -357,6 +363,7 @@ func (a *instrAnalyzer) exprOperandIn(src string, el *xdm.Node, ctx posture, all
 	an := &analyzer{
 		ctxPosture:        ctx,
 		ctxAllowsChildren: allowsChildren,
+		ctxType:           a.ctxType,
 		known:             a.known,
 		unverified:        a.unverified,
 		trust:             a.trust,
@@ -385,6 +392,16 @@ func (a *instrAnalyzer) exprOperandIn(src string, el *xdm.Node, ctx posture, all
 	a.known = a.known && an.known
 	a.unverified = a.unverified || an.unverified
 	return p, kids
+}
+
+// groupKeyOperand is exprOperandIn for a group-by or group-adjacent key,
+// which is evaluated with each item the select returns as its focus, so the
+// instruction's own context item type (§19.2) does not apply to it.
+func (a *instrAnalyzer) groupKeyOperand(src string, el *xdm.Node, ctx posture, allowsChildren bool) (props, bool) {
+	t := a.ctxType
+	a.ctxType = itemType{}
+	defer func() { a.ctxType = t }()
+	return a.exprOperandIn(src, el, ctx, allowsChildren)
 }
 
 // avtProps applies §19.8.7 to an attribute value template: the construct's
@@ -2162,7 +2179,7 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 			if gat == nil {
 				continue
 			}
-			p, kids := a.exprOperandIn(gat.Value(), el, postureGrounded, true)
+			p, kids := a.groupKeyOperand(gat.Value(), el, postureGrounded, true)
 			ops = append(ops, operand{props: p, usage: usageAbsorption, allowsChildren: kids})
 		}
 		for _, o := range a.sortOperands(el, postureGrounded) {
@@ -2228,7 +2245,7 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 		if gat == nil {
 			continue
 		}
-		p := a.exprPropsIn(gat.Value(), el, sel.posture, selKids)
+		p, _ := a.groupKeyOperand(gat.Value(), el, sel.posture, selKids)
 		if p.sweep != sweepMotionless {
 			a.noteGroupBodyModelled(el, sel)
 			return roamingFreeRanging

@@ -94,13 +94,55 @@ var l7Analysis = []struct {
 	// root() of a grounded node: the node's posture and sweep (§19.8.9.18).
 	{`<xsl:for-each select="copy-of(a)"><xsl:value-of select="count(root()//b)"/></xsl:for-each>`, props{postureGrounded, sweepConsuming}, true},
 	{`<xsl:value-of select="count(root(copy-of(a))//b)"/>`, props{postureGrounded, sweepConsuming}, true},
-	// root() of a streamed node stays unmodelled.
+	// root() of a streamed node whose static type is not known stays
+	// unmodelled: the for-each body's context item type is not inferred.
 	{`<xsl:for-each select="a"><xsl:value-of select="count(root()//b)"/></xsl:for-each>`, props{}, false},
 	// fold-right: the general rules, the first argument navigation
 	// (§19.8.9.9), so a streamed first argument roams (§19.8.1).
 	{`<xsl:value-of select="fold-right(a/b/string(), '', concat#2)"/>`, props{postureGrounded, sweepConsuming}, true},
 	{`<xsl:value-of select="fold-right((), 'd', concat#2)"/>`, props{postureGrounded, sweepMotionless}, true},
 	{`<xsl:value-of select="fold-right(a/b, '', concat#2)"/>`, roamingFreeRanging, true},
+}
+
+// l7Containers are §19.8.9.18 verdicts on a whole xsl:source-document body,
+// whose context item type is U{document-node()} (§19.2): root(X) of a
+// striding X of that static type is rewritten as X (§19.9's worked example;
+// sx-path-001's shapes), and of a striding X typed otherwise takes the head()
+// form, climbing, from which a child step roams (§19.8.8.9).
+var l7Containers = []struct {
+	src   string
+	want  props
+	known bool
+}{
+	{`<xsl:copy-of select="root()"/>`, props{postureGrounded, sweepConsuming}, true},
+	{`<xsl:copy-of select="root(.)/*"/>`, props{postureGrounded, sweepConsuming}, true},
+	{`<xsl:copy-of select="(root(self::node()) treat as document-node())/*"/>`, props{postureGrounded, sweepConsuming}, true},
+	{`<xsl:value-of select="count(root()//b)"/>`, props{postureGrounded, sweepConsuming}, true},
+	{`<xsl:copy-of select="root(self::element())/*"/>`, roamingFreeRanging, true},
+	// A for-each body's context item type is not inferred: unmodelled.
+	{`<xsl:for-each select="."><xsl:copy-of select="root()/*"/></xsl:for-each>`, props{}, false},
+}
+
+func TestStreamL7RootStaticType(t *testing.T) {
+	for _, c := range l7Containers {
+		tree, err := xdm.ParseString(`<xsl:transform version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">`+
+			`<xsl:template name="main"><xsl:source-document streamable="yes" href="in.xml">`+c.src+
+			`</xsl:source-document></xsl:template></xsl:transform>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sd *xdm.Node
+		walkElements(firstElement(tree.Root), func(el *xdm.Node) bool {
+			if isXSL(el, "source-document") {
+				sd = el
+			}
+			return sd == nil
+		})
+		p, known := analyzeSequenceConstructor(sd, postureStriding, nil, nil)
+		if known != c.known || known && p != c.want {
+			t.Errorf("%s: %v/%v known %v, want %v/%v known %v", c.src, p.posture, p.sweep, known, c.want.posture, c.want.sweep, c.known)
+		}
+	}
 }
 
 // TestStreamL7MatchesTree runs l7Rows on every core document and
