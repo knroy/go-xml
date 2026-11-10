@@ -521,7 +521,7 @@ func (a *assembler) checkRedefinedGroup(el *xdm.Node, q xdm.QName, repl, orig *M
 	}
 	r := &Particle{MinOccurs: 1, MaxOccurs: 1, Term: repl.Group}
 	b := &Particle{MinOccurs: 1, MaxOccurs: 1, Term: orig.Group}
-	if err := particleValidRestrictionVersion(r, b, a.schema.Version); err != nil {
+	if err := particleValidRestrictionIn(r, b, a.schema.Version, a.schema.budgets); err != nil {
 		a.p.errs = append(a.p.errs, errorAt(el, "src-redefine.6.2.2",
 			"the redefinition of group %q does not refer to itself, so it "+
 				"must be a valid restriction of the group it replaces: %s",

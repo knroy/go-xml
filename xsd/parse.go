@@ -351,6 +351,10 @@ type Schema struct {
 	// never reads as an accept.
 	maxPositions int
 
+	// budgets are the Options UPA and restriction budgets, retained for the
+	// reason maxPositions is and resolved at use the same way.
+	budgets loadBudgets
+
 	// sourcePaths records the documents this schema was loaded from, so
 	// that WithInstanceLocations can assemble them again alongside the ones
 	// an instance names. A schema is not the union of its documents — a

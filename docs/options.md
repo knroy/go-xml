@@ -30,6 +30,12 @@ Two sets of exceptions, both verified by the boundary tests described in
   other than "the caller set nothing". Elsewhere — `xsd.ValidateOptions`,
   `relaxng.ValidateOptions`, `xslt.TransformOptions` — a negative `MaxDepth`
   really does mean no limit.
+* **`xsd.Options` budgets have no unlimited setting**: `MaxContentModelPositions`,
+  `MaxUPAStateWidth`, `MaxUPAPairTests`, `MaxSubsumptionStates`,
+  `MaxSubsumptionProduct` and `MaxRestrictionBranches` read zero *or* a
+  negative value as the default. Each bounds work that grows exponentially
+  or quadratically in the schema text, and `Load` cannot be cancelled, so a
+  host that needs more names a number.
 * **A negative `MaxItems` really is no bound** (`xpath.Env`,
   `xslt.TransformOptions`, CLI `-max-items`). With it removed, an expression
   such as `1 to 1000000000000` can exhaust memory and end the process rather
@@ -165,8 +171,10 @@ genuinely forbids.
 
 Those declines are now **counted** rather than raised, through the
 `budgetStats` hook in `xsd/subsume.go`, on the model of `icStats` in
-`xsd/identity.go`. Budget declines (fixable by raising `subsumeMaxStates`,
-`subsumeMaxProduct` or `branchLimit`) are counted separately from structural
+`xsd/identity.go`. Budget declines (fixable by raising
+`xsd.Options.MaxSubsumptionStates`, `MaxSubsumptionProduct` or
+`MaxRestrictionBranches`, which seed `subsumeMaxStates`, `subsumeMaxProduct`
+and `branchLimit`) are counted separately from structural
 ones (a recursive model group, an all group, a wildcard — no budget affects
 these). The counters are a measurement tool for the package rather than API
 surface, and nothing reads them to make a decision: the verdicts are exactly
@@ -274,6 +282,11 @@ schema, err := xsd.LoadFile("main.xsd", xsd.Options{
 | `Version` | `Version` | `Version10` | Selects XSD 1.0 or 1.1. The zero value is 1.0 so that a schema written for 1.0 does not silently acquire 1.1's relaxations — 1.1 changes which *schemas* are legal, not only which documents. |
 | `MaxDocuments` | `int` | `DefaultMaxDocuments` = 512 | How many documents one assembly may read, following `import`, `include` and `redefine`. |
 | `MaxContentModelPositions` | `int` | `DefaultMaxContentModelPositions` = 8192 | Positions in any one compiled content model — the **memory** bound on a model, at ~400 bytes per position, so ~3.3 MB by default. A model over the limit is not compiled and the schema is refused with `xdm.ErrResourceLimit`; its constraints are undecided, never assumed to hold. Raising it authorises proportional memory. See [security](security.md). |
+| `MaxUPAStateWidth` | `int` | `DefaultMaxUPAStateWidth` = 256 | Competing positions one content-model state may hold for the Unique Particle Attribution check, which compares them pairwise. A wider state refuses the schema with `xdm.ErrResourceLimit` (undecided, not ambiguous). Validation compiles under the same width. The widest real state measured is 72; raising it grants CPU, quadratic in the width per state. Negative means the default. |
+| `MaxUPAPairTests` | `int` | `DefaultMaxUPAPairTests` = 4,194,304 | Pair comparisons the UPA check makes across all states of one model; past it the schema is refused as above. Negative means the default. |
+| `MaxSubsumptionStates` | `int` | `DefaultMaxSubsumptionStates` = 4096 | XSD 1.1 only: states of the automaton unrolled for each side of a restriction when §3.4.6.4 is decided by language inclusion. Past it the exact check **declines without an error** and the 1.0 table decides, which may reject a derivation the exact check admits, never the reverse. Unrolling is exponential in the schema text. Negative means the default. |
+| `MaxSubsumptionProduct` | `int` | `DefaultMaxSubsumptionProduct` = 20000 | XSD 1.1 only: pairs the same inclusion check explores; past it the check declines as above. Negative means the default. |
+| `MaxRestrictionBranches` | `int` | `DefaultMaxRestrictionBranches` = 4096 | XSD 1.1 only: branches enumerated through a model restricting an all group (the product of its choice arities); past it the check declines as above. Negative means the default. |
 | `Resolver` | `Resolver` | none configured | How a `schemaLocation` becomes bytes. Nothing is fetched unless you supply one; the nil default follows the grant the entry point already made — `Load` refuses a named location, `LoadFile` and `LoadFiles` root a `FileResolver` at the directories they were handed. See below. |
 | `ParseOptions` | `xdm.ParseOptions` | zero | Applied to every document the assembly reads. |
 | `LaxUPA` | `bool` | enforce | Relaxes Unique Particle Attribution. Some published schemas violate it; this loads them anyway. |
@@ -344,6 +357,7 @@ typed, err := schema.ValidateCopy(doc.Root, xsd.ValidateOptions{
 |---|---|---|---|
 | `MaxErrors` | `int` | `DefaultMaxErrors` = 100 | Stops after this many failures. A document wrong in every element would otherwise produce an error per element, which helps nobody and costs memory proportional to the document. A negative value means no limit. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Recursion limit for validation. A negative value means no limit. |
+| `MaxMatchStates` | `int` | `DefaultMaxMatchStates` = 4096 | Simultaneous count readings carried while matching one element's children against a model with nested occurrence bounds; past it the element fails with "content model needs more simultaneous states than the limit allows" (undecided, not invalid). Real schemas stay at one or two. A negative value means no limit: the set is finite, but a hostile schema can make it exponential in its nesting, and only `ValidateContext` cancellation stops it. XSLT and XQuery validation, tree and streamed, use the default. |
 
 > **A negative value means no limit throughout.** `xsd.ValidateOptions`
 > `MaxErrors` and `MaxDepth`, `dtd.Options.MaxErrors` and `xdm.ParseOptions`
