@@ -94,8 +94,11 @@ func TestStreamTrustReproducers(t *testing.T) {
 			hdr + mode + `<xsl:template match="rec[@k = 3]" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
 		{"M4 rule pattern unknown", "unverified", nil,
 			hdr + mode + `<xsl:template match="rec[(root(.), ` + sib + `)[2] = '3']" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
+		// root(.) itself is modelled since round SJ (the rule's context item
+		// type is U{element()}, §19.2), and is then climbing; root(head(.))
+		// stays unmodelled, a function call's static type not being inferred.
 		{"M5 rule body unknown", "unverified", nil,
-			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="(root(.), string(` + sib + `))[2]"/></v></xsl:template>` + apply + end, ""},
+			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="(root(head(.)), string(` + sib + `))[2]"/></v></xsl:template>` + apply + end, ""},
 		// M8: a rule pattern may read a streamable accumulator
 		// (§19.8.9.2), and "." is a motionless pattern (§19.8.10).
 		{"M8 rule pattern reads a verified accumulator", "verified", nil,

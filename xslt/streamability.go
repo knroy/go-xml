@@ -34,6 +34,11 @@ type analyzer struct {
 	// so "@code[. = 'x']" is motionless rather than consuming (§19.8.1).
 	ctxAllowsChildren bool
 
+	// ctxType is the context item type (§19.2) where it is known: the zero
+	// value, which every analyzer built for a changed focus starts from, is
+	// unknown. Only the §19.8.9.18 root rule and a leading "/" read it.
+	ctxType itemType
+
 	// known is cleared when the analysis meets a construct it does not
 	// model. The properties it returns in that case are roaming and
 	// free-ranging, which is what the rules require, but the caller must
@@ -360,6 +365,7 @@ func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
 	inner := &analyzer{
 		ctxPosture:            a.ctxPosture,
 		ctxAllowsChildren:     a.ctxAllowsChildren,
+		ctxType:               a.ctxType,
 		known:                 a.known,
 		unverified:            a.unverified,
 		trust:                 a.trust,
@@ -635,8 +641,17 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 	cur := props{a.ctxPosture, sweepMotionless}
 	if x.Root {
 		// A leading "/" is rewritten to a call on fn:root (§19.8.8.8),
-		// which from a striding posture in a streamed document yields the
-		// document node -- striding and motionless (§19.8.9.18).
+		// "(root(self::node()) treat as document-node())", and §19.8.9.18
+		// rewrites root(X) of a striding X as X -- striding and motionless
+		// -- when "the static type of X is U{document-node()}". X is
+		// self::node(), whose static type is the context item type: so
+		// "//a is streamable only if the statically-determined context item
+		// type is document-node()" (§19.8.8.8's note). Where that type is
+		// known not to be U{document-node()} the head() form below applies.
+		// ponytail: where the context item type is not known (a container
+		// whose type this analysis does not establish) the striding answer
+		// is kept, as before static types were inferred; the ceiling is
+		// §19.2's instruction-level focus changes, which do not set ctxType.
 		//
 		// From a crawling or climbing posture the rewrite to X does not
 		// apply, since §19.8.9.18 asks that "its posture is striding", so
@@ -650,6 +665,9 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 			cur = groundedMotionless
 		case postureStriding:
 			cur = props{postureStriding, sweepMotionless}
+			if a.rootRewrite(stepType(&xpath.Step{Axis: xpath.AxisSelf, Test: &xpath.KindTest{Any: true}}, a.ctxType)) == rootAsHead {
+				cur = props{postureClimbing, sweepMotionless}
+			}
 		case postureCrawling, postureClimbing:
 			cur = props{postureClimbing, sweepMotionless}
 		default:
@@ -674,16 +692,24 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 	// Whether the context item each step sees can have children. It starts as
 	// the analyzer's own context and is narrowed by every axis step, so that
 	// a non-step operand later in the path is assessed against the node the
-	// steps before it actually deliver.
+	// steps before it actually deliver; cit is the context item type each
+	// step sees (§19.2), narrowed the same way (§19.1.1).
+	//
+	// A root that took the head() form is climbing, and a scan never starts
+	// from it: its left operand is not a scanning expression.
+	rootClimbs := x.Root && cur.posture == postureClimbing
 	curAllowsChildren := a.ctxAllowsChildren
+	cit := a.ctxType
 	if x.Root {
 		curAllowsChildren = true
+		cit = docType
 	}
 	for i, e := range x.Steps {
 		var next props
 		if st, ok := e.(*xpath.Step); ok {
 			next = a.step(st, cur.posture, curAllowsChildren)
 			curAllowsChildren = stepAllowsChildren(st)
+			cit = stepType(st, cit)
 		} else {
 			// A non-step operand in a path, as in "(a|b)/c". Assessed in
 			// the current posture like any other expression, and with the
@@ -697,6 +723,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 			inner := &analyzer{
 				ctxPosture:            cur.posture,
 				ctxAllowsChildren:     curAllowsChildren,
+				ctxType:               cit,
 				known:                 a.known,
 				unverified:            a.unverified,
 				trust:                 a.trust,
@@ -717,6 +744,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 			}
 			next = inner.expr(e)
 			curAllowsChildren = inner.allowsChildren(e)
+			cit = inner.staticType(e)
 			a.known = a.known && inner.known
 			a.unverified = a.unverified || inner.unverified
 		}
@@ -733,7 +761,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 			// "for-each select='..'" with a "count(*)" body came out
 			// grounded and consuming, accepting streamable-126, while the
 			// same navigation written as "count(../*)" was correctly refused.
-			if !a.scanMayStart(prefix) || !a.isScanningSteps(prefix) {
+			if rootClimbs || !a.scanMayStart(prefix) || !a.isScanningSteps(prefix) {
 				return roamingFreeRanging
 			}
 			// A scanning prefix is crawling if it can select an element,
@@ -792,6 +820,18 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 	case *xpath.ContextItem:
 		// "." is the self axis with no predicate.
 		return true
+	case *xpath.FuncCall:
+		// §19.8.9.18 rewrites root(X) as X when X's static type is
+		// U{document-node()} (rootAsX), before the path rule sees it: so
+		// "root()//b" scans as ".//b" does.
+		if s.Name.URI != fnNS || s.Name.Local != "root" || len(s.Args) > 1 {
+			return false
+		}
+		var x xpath.Expr = &xpath.ContextItem{}
+		if len(s.Args) == 1 {
+			x = s.Args[0]
+		}
+		return a.rootRewrite(a.staticType(x)) == rootAsX && a.isScanningStep(x)
 	case *xpath.VarRef:
 		// A reference to the streaming parameter of a declared-streamable
 		// stylesheet function (§19.8.5) plays the same role at the head of a
