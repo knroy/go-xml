@@ -874,10 +874,16 @@ plan:
   harness uses `FileResolver`): closed at round SG. A resolver that implements
   `xslt.StreamingDocumentResolver` streams (the bullet below); one that does
   not keeps the tree, by its own choice.
-- *An unverified or unknown §19.8 verdict* (static, the analysis's figure:
-  56 unverified and 100 unknown containers in the W3C streaming stylesheets,
-  §19.8 below). A case counts as streamed when any of its containers streams,
-  so these do not show in the runtime census; they belong to the analysis.
+- *An unverified or unknown §19.8 verdict*: none that the spec calls
+  guaranteed-streamable (round SJ, measured on the compile path of a
+  `TestXSLT30Suite` run at a7c7753d). Of 2,431 compiled streamable containers
+  2,430 are trusted and stream; the one unknown, `si-group-051`, is the kept T5
+  divergence. Of 424 streamable modes 420 are verified: `si-group-055`'s
+  (roaming, free-ranging body, the kept T6) is not, and `streamable-100`–`102`
+  get no plan (the catalog: "not guaranteed-streamable according to W3C
+  rules"; their input is a `document()` tree). The per-file figure of 56
+  unverified and 100 unknown (§19.8 below) reads each module alone, without
+  its imported schema or the modules it imports or uses.
 - *A merge of more than 64 inputs* (0 W3C cases): kept, a resource limit (above).
 - *No `TransformOptions.Output`* (every case the harness runs without it): the
   result tree is the output, so it is built; inherent. With `Output` the
@@ -1097,7 +1103,10 @@ cases are skipped), 6 calls on `fn:root`, 1 on `fn:fold-right`, 3 others.
 Trusted containers went 2,079 → 2,355 and streamable modes not verified 90 →
 46. The figures before M8 read only files containing `streamable="yes"`, those
 after every `streamable="` spelling (+16 containers, +11 modes), so the
-two are not on exactly the same file set.
+two are not on exactly the same file set. Those are per-file figures: each module is read
+alone, without its imported schema (the 90 schema-aware shapes) or the
+modules it imports or uses. Compiled as the suite compiles them, 1 container
+is unknown and none unverified (round SJ, above).
 
 `simpleMap` in `xslt/streamfunctions.go` took a simple map's sweep from its
 right operand only, against its own comment; since 973790f6 it is the wider of
