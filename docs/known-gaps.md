@@ -1133,10 +1133,19 @@ argument navigation), `fn:function-lookup` (§19.8.9.12, both arguments
 absorption), a leading `/` and `fn:root` (§19.8.9.18) from a crawling or
 climbing posture and of a crawling, climbing or never-document striding X,
 and §19.8.8.9's empty-axis rule, from the kinds each axis reaches against a
-kind test and from a context item that cannot have children. Still
-unmodelled: `root(X)` of a striding X that may be a document node, which
-needs the static type this analysis does not infer (rewriting it as X would
-refuse `root()//x` at a document node). Before round SG the empty-axis rule
+kind test and from a context item that cannot have children. Since round SJ
+(f201db3e) `root(X)` of a striding X is rewritten by its §19.1 static type
+(§19.8.9.18: X when it is U{document-node()}, else
+`head((X)/ancestor-or-self::node())`), and a leading `/` strides only when
+the §19.2 context item type is `document-node()` (§19.8.8.8 note): the body
+of `xsl:source-document`, or a rule whose match type is a document node. A
+rule whose match type is not, using `root()//x` or `//x`, now gets XTSE3430;
+no W3C case moved (11,505; streamdiff 2,661 streamed, 0 fallbacks, 0
+re-runs). Still approximated: an instruction-level focus change
+(`xsl:for-each`, `xsl:iterate`, `xsl:copy select`) leaves the context item
+type unknown, so `root(X)` there stays unmodelled; function-call and variable
+static types are not inferred; and `checkStreamableMergeSources` uses fresh
+analysers. Before round SG the empty-axis rule
 was most of the analysis's disagreements with the optional posture-and-sweep
 assessments (`tests/sandp`, 919 cases): 437 agreed, 482 disagreed; that lane
 was not re-measured in the round.
@@ -1193,8 +1202,10 @@ split and a leading `/` in a crawling predicate were closed at round SG; the
   navigation". The bases §19.1 does list (`f#n`, an inline function, a map
   constructor, a call on a function returning a function type) were read and
   stream since round SH (900ce700, c3ff080a).
-- Static types are approximated syntactically, so `root(X)` of a striding X
-  that may be a document node stays unmodelled (above).
+- Static types are inferred for `fn:root` and a leading `/` since round SJ
+  (f201db3e), but only from `xsl:source-document` and template-rule bodies;
+  under an instruction-level focus change, and for function-call and variable
+  types, `root(X)` of a striding X stays unmodelled (above).
 
 ### XQuery schema awareness: a tail of features `import schema` made reachable (XQuery 3.1)
 
@@ -1602,18 +1613,22 @@ wrong language's rules. The version now reaches the tokeniser, and [2] `Char`,
 is in the external-entity and DTD layers, and is described in
 [todo.md](todo.md#11-xml-11-documents--character-rules-done-dtd-side-rules-outstanding).
 
-### An undeclared entity in a rewritten source is still refused (XML 1.0)
+### An undeclared entity in a rewritten source (XML 1.0): closed at round SJ
 
 With a resolver every external entity is read, so an entity declared in
 neither subset is declared nowhere and, where the document has an external
 subset or a parameter-entity reference, VC: Entity Declared applies (XML 1.0
 §4.1, erratum E13): the parse drops the reference and `dtd.Validate` reports
 it (dbe610d7). A document that goes down the rewrite path (an external entity
-referenced in content is substituted and the result parsed again) still
-refuses such a reference, because the second parse (`parseExpandedSteps`)
-knows only the internal subset's declarations: a false reject, marked
-`ponytail:` in `xdm/parse.go`. Handing it the first parse's table would lift
-it. No xmlconf case reaches it: the lane passes all 1,965.
+referenced in content is substituted and the result parsed again) refused such
+a reference, and lost the external subset's ATTLIST defaults and element
+declarations, because the second parse (`parseExpandedSteps`) re-read only the
+internal subset. Since 2d60dddb the first parse hands the second its entity
+table, normalized defaults, declared types, element declarations, external
+subset text and validity notes, so both parses apply the same rules. A
+reference in an ATTLIST default, refused on the first parse too, is now
+dropped and recorded where every declaration was read. No xmlconf case reaches
+it: the lane passes all 1,965, unchanged.
 
 ### The tokeniser keeps one leniency
 

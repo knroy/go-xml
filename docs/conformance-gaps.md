@@ -49,7 +49,7 @@ W3C disagreements: 0 + 0 + 0 + 1 + 8 + 17 + 29 + 30 + 0 = 85. Measured 2026-09-1
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 3,461 tests.
+The unit-test suite is 3,462 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -418,9 +418,14 @@ which is what this was.
   Since round SG (b0428d0) `fn:fold-right` (§19.8.9.9) and
   `fn:function-lookup` (§19.8.9.12) are modelled, and so is `fn:root`
   (§19.8.9.18) of a crawling or climbing X, or of a striding X that is never a
-  document node; `root(X)` of a striding X that may be a document node needs
-  the argument's static type and stays unmodelled.
-- **Static type inference.** §19.2's U-types are approximated syntactically.
+  document node. Since round SJ (f201db3e) `root(X)` of any striding X is
+  rewritten by X's §19.1 static type (§19.8.9.18), and a leading `/` strides
+  only when the context item type is `document-node()` (§19.8.8.8).
+- **Static type inference.** §19.2's U-types are approximated syntactically,
+  except the §19.1 static type round SJ (f201db3e) infers over the seven node
+  kinds for `fn:root` and a leading `/`, with the context item type set for
+  `xsl:source-document` and template-rule bodies. An instruction-level focus
+  change, a function call and a variable reference still give an unknown type.
   Where the approximation is uncertain it answers in the direction that widens
   the sweep, which loses precision and never gains a false rejection. §19.8.8.9's
   empty-axis rule (an axis that can never select is grounded and motionless)

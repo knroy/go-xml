@@ -349,6 +349,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A streamed input invalid against `type=` or `validation="strict"` re-ran on the tree | It is final with the tree's code and its first failure as the text (§2.14). | [`ac7af57`][ac7af57] |
 | An error in a `GroundLater` copy stopped the parse, forcing a re-run | The cursor returns it from the call that met it and reads on: re-runs 9 → 0. | [`ac7af57`][ac7af57] |
 | Under `Output` or `SecondaryOutput` an HTML5 result was held to its end | Prefix normalisation is decided per element and the bare doctype waits only for the first element, so HTML5 streams. | [`b888d21`][b888d21] |
+| The §19.8 analysis judged root(X) of a striding X, and a leading /, without a static type, leaving valid stylesheets unknown and missing XTSE3430s | §19.1/§19.2 context item types decide §19.8.9.18's rewrite: root() in xsl:source-document streams, //x in a match="*" rule is refused. | [`f201db3`][f201db3] |
 
 
 ### Fixed
@@ -512,6 +513,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Entity text could balance tags outside it, put `<` or a bare `&` in an attribute, or stand outside the root | Each entity's text must match content alone (§4.3.2); a reference at depth 0 is refused. | [`43ca8b3`][43ca8b3], [`9753ec8`][9753ec8] |
 | An external entity referenced in an attribute value was fetched and spliced in, and PEs in IGNORE were fetched | Refused (§3.1 WFC: No External Entity References); an IGNORE section is copied through unread. | [`dabed51`][dabed51] |
 | Standalone and element-content validity facts the tree loses were never checked (xmlconf I4, I5) | xdm records them as it parses, at most 100, and `dtd.Validate` reports them (§2.9, §3 VC). | [`ca0d7be`][ca0d7be] |
+| A source rewritten for markup entities was parsed again against the internal subset only, losing external defaults and refusing undeclared entities | The second parse reuses the first parse's DTD; an undeclared entity in an ATTLIST default is dropped and recorded where every declaration was read. | [`2d60ddd`][2d60ddd] |
+| The PrivateFunctionsVisibleToEvaluate comment still said private visibility applied only inside a real xsl:package | It now says the field is a no-op and the rule applies to every stylesheet (§3.5, §10.4.1). | [`7e6845f`][7e6845f] |
 
 ### Changed — behaviour
 
@@ -2904,6 +2907,9 @@ here so every entry in this file sits under a release.
 [cb762f7]: https://github.com/knroy/go-xml/commit/cb762f7
 [af26eb4]: https://github.com/knroy/go-xml/commit/af26eb4
 [ca0d7be]: https://github.com/knroy/go-xml/commit/ca0d7be
+[2d60ddd]: https://github.com/knroy/go-xml/commit/2d60ddd
+[7e6845f]: https://github.com/knroy/go-xml/commit/7e6845f
+[f201db3]: https://github.com/knroy/go-xml/commit/f201db3
 [337c660]: https://github.com/knroy/go-xml/commit/337c660
 [243a7af]: https://github.com/knroy/go-xml/commit/243a7af
 [43ca8b3]: https://github.com/knroy/go-xml/commit/43ca8b3

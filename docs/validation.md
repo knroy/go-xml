@@ -90,7 +90,8 @@ VC: Standalone Document Declaration); white space written as a character
 reference, or a CDATA section, in element content, and an empty reference in
 an `EMPTY` element (§3 VC: Element Valid, erratum E15); and, with a resolver
 that read every declaration, a reference to an entity declared in neither
-subset, which is dropped from the tree (§4.1 VC: Entity Declared, erratum
+subset, in content, an attribute value or an ATTLIST default, which is dropped
+from the tree (on both parses of a source rewritten for markup entities) (§4.1 VC: Entity Declared, erratum
 E13).
 Element and attribute names are matched as written, prefix included
 (`xml:lang`, `o:order`), because a DTD declares them that way.
