@@ -1175,11 +1175,13 @@ type Compatibility struct {
 	// fails against a processor that applies the rule.
 	DropAttributesOnDocumentNode bool
 
-	// PrivateFunctionsVisibleToEvaluate is retained for symmetry and is a
-	// no-op: the private-visibility default is already confined to a real
-	// xsl:package, which is where visibility is a meaningful property. It is
-	// named here so that the behaviour is discoverable alongside the other
-	// divergences rather than only in the changelog.
+	// PrivateFunctionsVisibleToEvaluate is a no-op, retained so that code
+	// setting it keeps compiling. Nothing reads it: the target expression of
+	// xsl:evaluate cannot call a private or hidden stylesheet function in any
+	// stylesheet, a plain xsl:stylesheet included, because 3.5 makes such a
+	// stylesheet an implicit package whose functions default to private
+	// (10.4.1, XTDE3160; see Stylesheet.evaluateMayCall). A public function
+	// named in the expression may still call a private one from its body.
 	PrivateFunctionsVisibleToEvaluate bool
 }
 
