@@ -1104,6 +1104,15 @@ takes its pattern from the stylesheet, and `matches($s, $node/@pattern)` takes
 one from document data. See
 [security.md](security.md#regular-expressions-cannot-backtrack-catastrophically).
 
+Both of the backtracking matcher's bounds can be changed, process-wide like the
+switch itself. Each refusal is `XPDY0130` wrapping `xdm.ErrResourceLimit`, and
+nothing is cached on either value, so the next match uses the new one.
+
+| Function | Zero | Negative | What it does |
+|---|---|---|---|
+| `xpath.SetBacktrackBudget(steps int)` | 40,000,000 steps | no step bound | Match steps one call may take: about a fifth of a second on the pathological `(a*)*\1b`. Unbounded is for trusted patterns only: the matcher has no cancellation, so an exponential pattern then runs until it finishes. |
+| `xpath.SetBacktrackMaxDepth(depth int)` | 50,000 levels | the default | Matcher levels active at once, which bounds the subject: about 25,000 characters under `.*`, 12,500 under a repeated group. There is no unlimited setting, because each level is Go stack and a stack overflow is fatal. Values over 500,000 are clamped to it; at that ceiling the deepest shapes measured ran within a 256 MB maximum stack and overflowed a 128 MB one, a quarter of Go's default 1 GB at most. A host that lowers `debug.SetMaxStack` keeps this under that maximum / 512 bytes. |
+
 The XML Schema pattern facet has no backreference at all — Appendix F's grammar
 has no form for one — so `xsd` rejects them outright under both versions.
 
