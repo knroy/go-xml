@@ -17,6 +17,11 @@ func (t *Tree) CopyDTDFrom(src *Tree) {
 		return
 	}
 	t.DocType = src.DocType
+	if src.source != nil && src.source.maxEntities != 0 {
+		t.ownSource().maxEntities = src.source.maxEntities
+	} else if t.source != nil {
+		t.source.maxEntities = 0
+	}
 	if e := src.extSubset(); e != "" {
 		t.ownSource().externalSubset = e
 	} else if t.source != nil {

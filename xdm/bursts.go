@@ -1124,6 +1124,7 @@ func (b *burster) finish(bt *burstBatch) {
 	}
 	if s := t.source; s != nil {
 		c.ownSource().externalSubset = s.externalSubset
+		c.source.maxEntities = s.maxEntities
 	}
 	c.names = t.names[:len(t.names):len(t.names)]
 	c.text.blocks = c.text.blocks[:0]

@@ -175,6 +175,10 @@ type treeSource struct {
 	//
 	// Empty unless ParseOptions.ExternalEntities permitted the read.
 	externalSubset string
+	// maxEntities is ParseOptions.MaxEntities as the parse resolved it, or
+	// zero for the default, so that UnparsedEntity reads the declarations
+	// back under the same cap the parse read them under.
+	maxEntities int
 	// lines is where the document's lines start, kept only when the caller
 	// asks for positions. It is what makes Position able to count lines; the
 	// text itself was kept for that once, at a byte per input byte.
@@ -243,6 +247,16 @@ func (t *Tree) extSubset() string {
 		return ""
 	}
 	return t.source.externalSubset
+}
+
+// entityLimits is the entity limits a re-read of the declarations applies:
+// the defaults, with the declaration count the parse used.
+func (t *Tree) entityLimits() entityLimits {
+	lim := defaultEntityLimits
+	if t.source != nil && t.source.maxEntities != 0 {
+		lim.count = t.source.maxEntities
+	}
+	return lim
 }
 
 // foreign is the position a copy was given from another document, if any.

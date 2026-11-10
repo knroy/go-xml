@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"math"
 	"strconv"
 	"strings"
 
@@ -120,10 +121,10 @@ func (t *entityTable) total() int { return t.budget.spent }
 // expanded past the ceiling.
 func (t *entityTable) charge(n int) error {
 	t.budget.spent += n
-	if t.budget.spent > maxTotalEntityBytes {
+	if t.budget.spent > t.lim.total {
 		return fmt.Errorf(
 			"entity expansion exceeds %d bytes in total: %w",
-			maxTotalEntityBytes, ErrResourceLimit)
+			t.lim.total, ErrResourceLimit)
 	}
 	return nil
 }
@@ -147,6 +148,9 @@ type entityTable struct {
 	// boundary because the proc is one object. The byte budget has no such
 	// object to live on, so it is threaded explicitly instead.
 	budget *entityBudget
+	// lim holds the expansion and fetch limits this table enforces,
+	// resolved from ParseOptions; see ParseOptions.entityLimits.
+	lim entityLimits
 	// resolver, when non-nil, permits external entities to be read. It is
 	// nil by default and is NOT implied by AllowDOCTYPE — see dtd_external.go
 	// for why those two are separate gates.
@@ -228,26 +232,26 @@ type entityTable struct {
 // A parameter entity — "<!ENTITY % name ...>" — is skipped. Parameter entities
 // are expanded inside the DTD itself rather than in content, and reading one
 // would mean interpreting the subset as a grammar rather than scanning it.
-func parseInternalEntities(subset string) *entityTable {
-	return parseEntityDecls(subset, "", nil)
+func parseInternalEntities(subset string, lim entityLimits) *entityTable {
+	return parseEntityDecls(subset, "", nil, lim)
 }
 
 // parseEntityDecls reads entity declarations, recording base as the URI that
 // external system identifiers in them resolve against. Declarations read from
 // an external subset carry that subset's URI, per XML section 4.4.3.
-func parseEntityDecls(subset, base string, b *entityBudget) *entityTable {
-	t := newEntityTable(base, b)
+func parseEntityDecls(subset, base string, b *entityBudget, lim entityLimits) *entityTable {
+	t := newEntityTable(base, b, lim)
 	t.subsetText = subset
 	return t.parseDecls(subset, base)
 }
 
 // newEntityTable returns an empty table whose external system identifiers
-// resolve against base, sharing the expansion budget b.
+// resolve against base, sharing the expansion budget b and bounded by lim.
 //
 // A nil b mints a fresh budget, which is right for a parse that is nobody's
 // nested document. A caller that IS parsing on behalf of an outer document —
 // XInclude, above all — passes the outer budget so the ceiling spans both.
-func newEntityTable(base string, b *entityBudget) *entityTable {
+func newEntityTable(base string, b *entityBudget, lim entityLimits) *entityTable {
 	if b == nil {
 		b = &entityBudget{}
 	}
@@ -258,6 +262,7 @@ func newEntityTable(base string, b *entityBudget) *entityTable {
 		externalBase: map[string]string{},
 		docBase:      base,
 		budget:       b,
+		lim:          lim,
 	}
 }
 
@@ -266,7 +271,7 @@ func (t *entityTable) parseDecls(subset, base string) *entityTable {
 		if kw != "ENTITY" {
 			continue
 		}
-		if len(t.raw)+len(t.external) >= maxEntityCount {
+		if len(t.raw)+len(t.external) >= t.lim.count {
 			break
 		}
 		body = strings.TrimSpace(body)
@@ -550,9 +555,9 @@ func (t *entityTable) resolve(name string) (string, error) {
 // replacement text recursively: its literal TAB, LF and CR become spaces,
 // while a character written as a reference inside it is kept.
 func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr bool) (string, error) {
-	if depth > maxEntityDepth {
+	if depth > t.lim.depth {
 		return "", fmt.Errorf("entity expansion exceeds %d levels: %w",
-			maxEntityDepth, ErrResourceLimit)
+			t.lim.depth, ErrResourceLimit)
 	}
 	var sb strings.Builder
 	semis := semiFinder{s: s, at: -1}
@@ -659,10 +664,10 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 				return "", err
 			}
 			sb.WriteString(sub)
-			if sb.Len() > maxEntityBytes {
+			if sb.Len() > t.lim.bytes {
 				return "", fmt.Errorf(
 					"entity expansion exceeds %d bytes: %w",
-					maxEntityBytes, ErrResourceLimit)
+					t.lim.bytes, ErrResourceLimit)
 			}
 			i += j + 1
 			continue
@@ -683,10 +688,10 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 			return "", err
 		}
 		sb.WriteString(sub)
-		if sb.Len() > maxEntityBytes {
+		if sb.Len() > t.lim.bytes {
 			return "", fmt.Errorf(
 				"entity expansion exceeds %d bytes: %w",
-				maxEntityBytes, ErrResourceLimit)
+				t.lim.bytes, ErrResourceLimit)
 		}
 		i += j + 1
 	}
@@ -856,7 +861,7 @@ func (t *entityTable) entityMap() map[string]string {
 // otherwise it is an error (see undeclaredNote).
 func normalizeAttDefaults(defs []attDefault, t *entityTable, v11, wfc bool, drop func(name string)) ([]attDefault, error) {
 	if t == nil {
-		t = newEntityTable("", nil)
+		t = newEntityTable("", nil, defaultEntityLimits)
 		t.version11 = v11
 	}
 	for k, d := range defs {
@@ -1072,7 +1077,7 @@ func (t *entityTable) spaceByCharRef(name string, depth int, seen map[string]boo
 	}
 	seen[name] = true
 	s := replacementText(t.raw[name])
-	for i := strings.IndexByte(s, '&'); i >= 0 && depth < maxEntityDepth; i = strings.IndexByte(s, '&') {
+	for i := strings.IndexByte(s, '&'); i >= 0 && depth < t.lim.depth; i = strings.IndexByte(s, '&') {
 		s = s[i+1:]
 		j := strings.IndexByte(s, ';')
 		if j < 0 {
@@ -1423,16 +1428,16 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 			rep = escapeAttrLiteral(rep)
 		}
 		count++
-		if count > maxEntityCount {
+		if count > t.lim.count {
 			return "", fmt.Errorf(
 				"document references more than %d entities: %w",
-				maxEntityCount, ErrResourceLimit)
+				t.lim.count, ErrResourceLimit)
 		}
 		written += len(rep)
-		if written > maxTotalEntityBytes {
+		if written > t.lim.total {
 			return "", fmt.Errorf(
 				"entity expansion exceeds %d bytes: %w",
-				maxTotalEntityBytes, ErrResourceLimit)
+				t.lim.total, ErrResourceLimit)
 		}
 		// Where this replacement lands is recorded so the second parse can
 		// give the nodes it produces the base URI of the entity they were
@@ -1668,7 +1673,7 @@ func (t *Tree) UnparsedEntity(name string) (systemID, publicID, notation string,
 	if subset == "" {
 		return "", "", "", false
 	}
-	tbl := parseInternalEntities(subset)
+	tbl := parseInternalEntities(subset, t.entityLimits())
 	if tbl == nil {
 		return "", "", "", false
 	}
@@ -1700,7 +1705,7 @@ func (t *Tree) HasUnparsedEntities() bool {
 	if subset == "" {
 		return false
 	}
-	tbl := parseInternalEntities(subset)
+	tbl := parseInternalEntities(subset, t.entityLimits())
 	return tbl != nil && len(tbl.unparsed) > 0
 }
 
@@ -1801,10 +1806,10 @@ func (t *entityTable) chargeReferences(src string) error {
 			continue
 		}
 		total += len(rep)
-		if total > maxTotalEntityBytes {
+		if total > t.lim.total {
 			return fmt.Errorf(
 				"entity expansion exceeds %d bytes in total: %w",
-				maxTotalEntityBytes, ErrResourceLimit)
+				t.lim.total, ErrResourceLimit)
 		}
 	}
 	return nil
@@ -1977,3 +1982,58 @@ func (c *entityChargeReader) charge(b []byte) error {
 // this is not a name any real document uses, and holding an unbounded run of
 // bytes that merely began with "&" would be its own small leak.
 const maxEntityNameLen = 1024
+
+// entityLimits holds the entity limits one entityTable enforces, resolved
+// from ParseOptions. A budget that is off is math.MaxInt, so every check
+// reads the same way whatever was configured.
+type entityLimits struct {
+	depth, bytes, total, count, fetches, fetchBytes, extDepth int
+}
+
+// Ceilings of the recursive limits, which have no unlimited setting. Each
+// level is a level of Go recursion, and a Go stack overflow is fatal, not an
+// error. An expansion level costs under 2 KB of stack
+// (TestEntityDepthCeilingStack runs 1,000 levels under a 2 MB stack), so
+// entityDepthCeiling levels need under 20 MB and externalDepthCeiling²
+// parameter-in-external levels about as much, against Go's 1 GB maximum.
+const (
+	entityDepthCeiling   = 10000
+	externalDepthCeiling = 100
+)
+
+// defaultEntityLimits is what the zero ParseOptions resolves to.
+var defaultEntityLimits = ParseOptions{}.entityLimits()
+
+// entityLimits resolves the entity fields of o: zero is the default, a
+// negative budget is off, and a depth is clamped to its ceiling.
+func (o ParseOptions) entityLimits() entityLimits {
+	return entityLimits{
+		depth:      depthLimit(o.MaxEntityDepth, maxEntityDepth, entityDepthCeiling),
+		bytes:      budgetLimit(o.MaxEntityBytes, maxEntityBytes),
+		total:      budgetLimit(o.MaxTotalEntityBytes, maxTotalEntityBytes),
+		count:      budgetLimit(int64(o.MaxEntities), maxEntityCount),
+		fetches:    budgetLimit(int64(o.MaxExternalFetches), maxExternalFetches),
+		fetchBytes: budgetLimit(o.MaxExternalFetchBytes, maxExternalFetchBytes),
+		extDepth:   depthLimit(o.MaxExternalDepth, maxExternalDepth, externalDepthCeiling),
+	}
+}
+
+// budgetLimit resolves a count or byte budget: zero is def, negative is off.
+func budgetLimit(v int64, def int) int {
+	switch {
+	case v == 0:
+		return def
+	case v < 0 || v > math.MaxInt:
+		return math.MaxInt
+	}
+	return int(v)
+}
+
+// depthLimit resolves a recursion bound: zero or negative is def, and a
+// value above ceiling is ceiling.
+func depthLimit(v, def, ceiling int) int {
+	if v <= 0 {
+		return def
+	}
+	return min(v, ceiling)
+}

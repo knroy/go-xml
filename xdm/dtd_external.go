@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"unicode/utf8"
 
@@ -114,10 +115,10 @@ func (t *entityTable) fetchExternal(systemID, publicID, base string) (string, st
 				"never resolved (set ParseOptions.ExternalEntities to permit)",
 			systemID)
 	}
-	if t.fetches >= maxExternalFetches {
+	if t.fetches >= t.lim.fetches {
 		return "", "", fmt.Errorf(
 			"document fetches more than %d external entities: %w",
-			maxExternalFetches, ErrResourceLimit)
+			t.lim.fetches, ErrResourceLimit)
 	}
 	t.fetches++
 	rc, resolved, err := t.resolver.ResolveEntity(systemID, publicID, base)
@@ -131,14 +132,16 @@ func (t *entityTable) fetchExternal(systemID, publicID, base string) (string, st
 	// at the limit is distinguishable from one over it — without it a file
 	// of precisely the remaining budget would be truncated silently, which
 	// is worse than refusing it.
-	room := maxTotalEntityBytes - t.total()
-	if room > maxExternalFetchBytes {
-		room = maxExternalFetchBytes
+	room := t.lim.total - t.total()
+	if room > t.lim.fetchBytes {
+		room = t.lim.fetchBytes
 	}
 	if room < 0 {
 		room = 0
 	}
-	data, err := io.ReadAll(io.LimitReader(rc, int64(room)+1))
+	// room is math.MaxInt only when both byte limits are off, and +1 would
+	// overflow to a negative bound that reads nothing.
+	data, err := io.ReadAll(io.LimitReader(rc, int64(min(room, math.MaxInt-1))+1))
 	if err != nil {
 		return "", "", fmt.Errorf("reading external entity %q: %w", systemID, err)
 	}
@@ -188,10 +191,10 @@ func (t *entityTable) resolveExternalText(name string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("entity %q is not declared", name)
 	}
-	if t.externalDepth >= maxExternalDepth {
+	if t.externalDepth >= t.lim.extDepth {
 		return "", fmt.Errorf(
 			"external entities nested more than %d deep: %w",
-			maxExternalDepth, ErrResourceLimit)
+			t.lim.extDepth, ErrResourceLimit)
 	}
 	// A placeholder guards a cycle the same way resolve does for internal
 	// entities: an external entity whose text references itself would
@@ -451,7 +454,7 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 	// reached through an external subset are still this document's expansion,
 	// and a fresh budget here would be the same per-parse reset that XInclude
 	// had.
-	sub := parseEntityDecls(text, resolved, t.budget)
+	sub := parseEntityDecls(text, resolved, t.budget, t.lim)
 	if sub == nil {
 		return nil
 	}
@@ -557,10 +560,10 @@ func (t *entityTable) markPEDeclared(subset string) {
 // internal parameter entity, which costs no fetch, is bounded by the byte
 // budget alone, charged here at substitution time for exactly that reason.
 func (t *entityTable) expandParameterEntities(subset, base string, depth int) (string, error) {
-	if depth > maxExternalDepth {
+	if depth > t.lim.extDepth {
 		return "", fmt.Errorf(
 			"parameter entities nested more than %d deep: %w",
-			maxExternalDepth, ErrResourceLimit)
+			t.lim.extDepth, ErrResourceLimit)
 	}
 	params, err := t.parseParameterDecls(subset, base)
 	if err != nil {
@@ -659,10 +662,10 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 			t.peSpans = append(t.peSpans, [2]int{sb.Len(), sb.Len() + len(text)})
 		}
 		sb.WriteString(text)
-		if sb.Len() > maxTotalEntityBytes {
+		if sb.Len() > t.lim.total {
 			return "", fmt.Errorf(
 				"entity expansion exceeds %d bytes in total: %w",
-				maxTotalEntityBytes, ErrResourceLimit)
+				t.lim.total, ErrResourceLimit)
 		}
 		i += j + 1
 	}
@@ -756,7 +759,7 @@ func (t *entityTable) parseParameterDecls(subset, base string) (map[string]param
 		if kw != "ENTITY" {
 			continue
 		}
-		if len(out) >= maxEntityCount {
+		if len(out) >= t.lim.count {
 			break
 		}
 		body = strings.TrimSpace(body)
@@ -870,7 +873,7 @@ func baseAt(spans []entityBaseSpan, off int) string {
 // memoised: the same entity expanded twice must produce spans at both places,
 // which a cache on the string cannot express.
 func (t *entityTable) externalSpansIn(raw string, at int, depth int) []entityBaseSpan {
-	if depth > maxEntityDepth {
+	if depth > t.lim.depth {
 		return nil
 	}
 	var out []entityBaseSpan
