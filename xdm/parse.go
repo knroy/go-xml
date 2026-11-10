@@ -127,6 +127,12 @@ type ParseOptions struct {
 	// the source this parse was handed, not a choice a caller makes.
 	entityBases []entityBaseSpan
 
+	// firstParse is what the first parse of a rewritten source read from its
+	// DTD, handed to the second (see parseExpandedSteps) so that both decide
+	// from the same declarations without reading the external subset again.
+	// Unexported like entitiesExpanded, which it accompanies.
+	firstParse *firstParseDecls
+
 	// entityBudget is the expansion spend this parse shares with the document
 	// it is part of. Nil means this parse is a document in its own right and
 	// starts with the full maxTotalEntityBytes.
@@ -727,10 +733,20 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 					if ps.opts.ExternalEntities == nil && !ps.standalone {
 						declText = declsBeforeUnreadPE(d)
 					}
-					defs, types := parseAttList(declText, nil)
-					ps.attDefaults = append(ps.attDefaults, defs...)
-					ps.attTypes = append(ps.attTypes, types...)
-					ps.elemDecls = parseElementDecls(d, nil)
+					// The second parse of a rewritten source decides from the
+					// declarations the first one read, external subset and
+					// parameter entities included, rather than from the
+					// internal subset alone. They are taken as they are:
+					// the defaults are already normalized.
+					first := ps.opts.firstParse
+					if first != nil {
+						ps.attDefaults, ps.attTypes, ps.elemDecls = first.attDefaults, first.attTypes, first.elemDecls
+					} else {
+						defs, types := parseAttList(declText, nil)
+						ps.attDefaults = append(ps.attDefaults, defs...)
+						ps.attTypes = append(ps.attTypes, types...)
+						ps.elemDecls = parseElementDecls(d, nil)
+					}
 					// Internal general entities are declared here and referenced
 					// in content, so the table has to be installed before the
 					// decoder reads any. encoding/xml consults dec.Entity lazily,
@@ -820,6 +836,11 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 							ps.attTypes = types
 							ps.elemDecls = parseElementDecls(text, origin)
 						}
+					} else if first != nil {
+						ents = first.ents
+						src := tree.ownSource()
+						src.externalSubset = first.externalSubset
+						src.dtdNotes = append(src.dtdNotes, first.notes...)
 					} else {
 						ents = parseEntityDecls(declText, ps.opts.BaseURI, ps.opts.entityBudget)
 					}
@@ -830,8 +851,24 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 						return nil, fmt.Errorf("parse XML: %w", err)
 					}
 					wfc := entityDeclaredIsWFC(d, ps.standalone)
-					if ps.attDefaults, err = normalizeAttDefaults(ps.attDefaults, ents, dec.IsVersion11(), wfc); err != nil {
-						return nil, fmt.Errorf("parse XML: %w", err)
+					// With every external entity read, an undeclared name is
+					// declared nowhere: the document is well formed and
+					// invalid (VC: Entity Declared; erratum E13 makes an
+					// internal parameter-entity reference enough for that).
+					// The reference, which the XDM has no node for, is
+					// dropped and the fault recorded for dtd.Validate.
+					read := ps.opts.ExternalEntities != nil
+					if first == nil {
+						var drop func(string)
+						if !wfc && read {
+							drop = func(name string) {
+								ps.note(tree, tree.Root, "entity %s is referenced in an attribute default but declared in "+
+									"neither subset, and the reference was dropped (XML 1.0 §4.1, VC: Entity Declared)", name)
+							}
+						}
+						if ps.attDefaults, err = normalizeAttDefaults(ps.attDefaults, ents, dec.IsVersion11(), wfc, drop); err != nil {
+							return nil, fmt.Errorf("parse XML: %w", err)
+						}
 					}
 					// Each default lands in every matching element; store its
 					// value once so that they all alias it.
@@ -839,24 +876,15 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 						tree.text.share(d.value)
 					}
 					if !wfc {
-						declared, read := ents, ps.opts.ExternalEntities != nil
-						// With every external entity read, an undeclared name
-						// is declared nowhere: the document is well formed and
-						// invalid (VC: Entity Declared; erratum E13 makes an
-						// internal parameter-entity reference enough for that).
-						// The reference, which the XDM has no node for, is
-						// dropped and the fault recorded for dtd.Validate.
-						//
-						// ponytail: the second parse of a rewritten source
-						// (parseExpandedSteps) knows only the internal subset's
-						// declarations, so it still refuses; handing it the
-						// first parse's table would lift that.
-						drop := read && !ps.opts.entitiesExpanded
+						// The same rule in content and attribute values. A
+						// second parse has the first one's table, so it
+						// knows every declaration that was read.
+						declared := ents
 						dec.Undeclared = func(name string) (string, bool) {
 							if declared.declares(name) {
 								return "", false
 							}
-							if drop {
+							if read {
 								ps.note(tree, ps.cur, "entity %s is referenced but declared in neither subset, "+
 									"and the reference was dropped (XML 1.0 §4.1, VC: Entity Declared)", name)
 								return "", true
@@ -894,11 +922,16 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 							if _, err := io.Copy(io.Discard, r); err != nil {
 								return nil, fmt.Errorf("parse XML: %w", err)
 							}
+							decls := &firstParseDecls{
+								ents: ents, attDefaults: ps.attDefaults, attTypes: ps.attTypes,
+								elemDecls: ps.elemDecls, externalSubset: tree.ownSource().externalSubset,
+								notes: tree.ownSource().dtdNotes,
+							}
 							if whole != "" {
-								ps.inner, ps.innerDone = parseExpandedSteps(whole, ents, ps.opts)
+								ps.inner, ps.innerDone = parseExpandedSteps(whole, decls, ps.opts)
 								return ps.inner()
 							}
-							ps.inner, ps.innerDone = parseExpandedSteps(ps.srcBuf.String(), ents, ps.opts)
+							ps.inner, ps.innerDone = parseExpandedSteps(ps.srcBuf.String(), decls, ps.opts)
 							return ps.inner()
 						}
 						// Arm the charge reader now that the declarations are
@@ -1481,6 +1514,20 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// firstParseDecls is the DTD as the first parse of a rewritten source read it:
+// the entity table, the normalized attribute defaults, the declared types and
+// element declarations, the external subset's text, and the validity faults
+// recorded while reading them, all of which the second parse cannot rebuild
+// from the internal subset alone.
+type firstParseDecls struct {
+	ents           *entityTable
+	attDefaults    []attDefault
+	attTypes       []attDeclaredType
+	elemDecls      map[string]uint8
+	externalSubset string
+	notes          []dtdNote
+}
+
 // parseExpandedSteps re-parses a document whose entities hold markup, as
 // parseSteps parses one.
 //
@@ -1492,10 +1539,12 @@ func (c *countingReader) Read(p []byte) (int, error) {
 //
 // The substitution is done on the source and the document parsed again. The
 // second parse declares no entities — they are already substituted — so it
-// cannot recurse back into here, and a document that references an entity the
-// subset does not declare still fails in the decoder, where the error names
-// the reference.
-func parseExpandedSteps(src string, ents *entityTable, opts ParseOptions) (func() (*Tree, error), func()) {
+// cannot recurse back into here. It decides from the first parse's
+// declarations (first), so a reference to an entity declared nowhere is
+// handled as the first parse would: dropped and recorded where every
+// declaration was read, refused in the decoder, which names it, otherwise.
+func parseExpandedSteps(src string, first *firstParseDecls, opts ParseOptions) (func() (*Tree, error), func()) {
+	ents := first.ents
 	expanded, err := ents.substituteMarkupEntities(src)
 	if err != nil {
 		return func() (*Tree, error) { return nil, fmt.Errorf("parse XML: %w", err) }, func() {}
@@ -1505,6 +1554,7 @@ func parseExpandedSteps(src string, ents *entityTable, opts ParseOptions) (func(
 	sub := opts
 	sub.entitiesExpanded = true
 	sub.entityBases = ents.baseSpans
+	sub.firstParse = first
 	return parseSteps(strings.NewReader(expanded), "", sub)
 }
 

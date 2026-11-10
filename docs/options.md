@@ -246,8 +246,11 @@ Reasonable for schemas you ship. Leave it off for instance documents.
 With `ExternalEntities` set as well, every declaration is read, so a reference
 to an entity declared in neither subset of a document with an external subset
 or a parameter-entity reference is only invalid (XML 1.0 §4.1, VC: Entity
-Declared): the parse drops the reference and records the fault, which
-`dtd.Validate` reports. Without a resolver it is refused, since the declaration
+Declared): the parse drops the reference, in content, an attribute value or
+an ATTLIST default, and records the fault, which `dtd.Validate` reports. A
+document whose entities hold markup is rewritten and parsed twice; both parses
+use the same declarations, so the rule, and the external subset's defaults and
+element declarations, apply to it alike. Without a resolver it is refused, since the declaration
 may be in what was not read. Validity faults the tree cannot show, such as
 white space written as a character reference in element content, are recorded
 the same way.
