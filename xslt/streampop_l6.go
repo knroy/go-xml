@@ -31,21 +31,37 @@ func (run *streamRun) splitOf(op *streamOp) *streamSplit {
 	return op.split
 }
 
-// choiceOfStreams builds if (c) then P else Q, both reading the stream, as
-// a choice of two plain populations with a split each; nil when it is not
-// one (pop then takes the shapes it took).
-func (pb *popBuilder) choiceOfStreams(x *xpath.IfExpr) *streamPop {
-	if pb.split != nil {
+// ifPop builds if (c) then P else Q: a choice of two plain populations with
+// a split each when both branches read the stream (the choice of streams),
+// else a population per branch, the else branch's built after the then
+// branch's, as the tree evaluates them.
+//
+// Each branch is built once from each state it is asked of. The then
+// branch's population serves both readings; the else branch is built
+// apart for the choice only when it could be a plain population, which a
+// nested if never is. Building both branches for the choice and again for
+// the reading it fell back to made nested ifs cost two to the power of
+// their depth.
+func (pb *popBuilder) ifPop(x *xpath.IfExpr) *streamPop {
+	if !pb.motionless(x.Cond) {
 		return nil
 	}
-	tb, eb := *pb, *pb
-	t, e := tb.pop(x.Then), eb.pop(x.Else)
-	if t == nil || e == nil || tb.split == nil || eb.split == nil || !plainPop(t) || !plainPop(e) {
+	s0 := *pb
+	t := pb.pop(x.Then)
+	if _, nested := x.Else.(*xpath.IfExpr); s0.split == nil && t != nil && pb.split != nil && plainPop(t) && !nested {
+		eb := s0
+		if e := eb.pop(x.Else); e != nil && eb.split != nil && plainPop(e) {
+			ts := pb.split
+			*pb = s0
+			t.split, e.split, pb.split = ts, eb.split, ts
+			return &streamPop{cond: pb.part(x.Cond), then: t, els: e}
+		}
+	}
+	f := pb.pop(x.Else)
+	if t == nil || f == nil {
 		return nil
 	}
-	t.split, e.split = tb.split, eb.split
-	pb.split = tb.split
-	return &streamPop{cond: pb.part(x.Cond), then: t, els: e}
+	return &streamPop{cond: pb.part(x.Cond), then: t, els: f, off: t.off || f.off}
 }
 
 // plainPop reports whether p hands the matches themselves, with the views
