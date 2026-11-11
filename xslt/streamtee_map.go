@@ -48,6 +48,12 @@ func teeVar(j int) xdm.QName {
 	return xdm.QName{URI: "urn:x-go-xml:split", Local: "tee" + strconv.Itoa(j)}
 }
 
+// maxTeeParts bounds the consumers one tee runs, each a parse and a
+// goroutine live for the whole document (xdmstream.Cursor.Tee). A map or fork
+// with more consuming parts is not teed: it runs as it would unplanned, on
+// the tree, with the same result.
+const maxTeeParts = 64
+
 // teeFor plans sel, the select of op, a variable at the document node whose
 // split was refused, as a tee of its map's entries; nil when it is not one.
 func (c *compiler) teeFor(op *streamOp, sel *xpath.Compiled, ns xpath.NamespaceResolver) *streamTee {
@@ -87,7 +93,7 @@ func (c *compiler) teeFor(op *streamOp, sel *xpath.Compiled, ns xpath.NamespaceR
 		out.Values[i] = &xpath.VarRef{Name: teeVar(len(t.parts))}
 		t.parts = append(t.parts, s)
 	}
-	if len(t.parts) < 2 {
+	if len(t.parts) < 2 || len(t.parts) > maxTeeParts {
 		return nil
 	}
 	t.outer = xpathleaf.WithExpr(sel, out).(*xpath.Compiled)
