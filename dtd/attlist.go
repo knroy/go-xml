@@ -65,14 +65,14 @@ func parseAttList(body string) []*Attribute {
 }
 
 // attributeDeclFaults applies the validity constraints XML 1.0 §3.3 places on
-// an attribute definition itself, given the definitions already bound for its
-// element, and describes each one broken.
+// an attribute definition itself, given the name of the ID attribute already
+// bound for its element ("" when none is), and describes each one broken.
 //
 // A default is checked whether or not any element uses it (rmt-e2e-9b), but
 // only lexically: that an ENTITY default names an unparsed entity, or an
 // IDREF default an ID, matters only once it is applied, and the value check
 // in Validate sees it then (rmt-e3e-06i).
-func attributeDeclFaults(a *Attribute, bound []*Attribute) []string {
+func attributeDeclFaults(a *Attribute, boundID string) []string {
 	var out []string
 	add := func(format string, args ...any) {
 		out = append(out, fmt.Sprintf("attribute %s of %s ", a.Name, a.Element)+fmt.Sprintf(format, args...))
@@ -80,21 +80,20 @@ func attributeDeclFaults(a *Attribute, bound []*Attribute) []string {
 	// §3.3.1 VC No Duplicate Tokens: "The notation names in a single
 	// NotationType attribute declaration, as well as the NmTokens in a
 	// single Enumeration attribute declaration, MUST all be distinct."
-	for i, t := range a.Enum {
-		if containsString(a.Enum[:i], t) {
+	// A set, not a scan of the prefix: that cost the square of the tokens,
+	// 1.35 s for one 40,000-token enumeration.
+	seen := make(map[string]struct{}, len(a.Enum))
+	for _, t := range a.Enum {
+		if _, dup := seen[t]; dup {
 			add("lists %s more than once (XML §3.3.1 No Duplicate Tokens)", t)
 			break
 		}
+		seen[t] = struct{}{}
 	}
-	if a.Type == "ID" {
+	if a.Type == "ID" && boundID != "" {
 		// §3.3.1 VC One ID per Element Type: "An element type MUST NOT
 		// have more than one ID attribute specified."
-		for _, b := range bound {
-			if b.Type == "ID" {
-				add("is a second ID attribute, after %s (XML §3.3.1 One ID per Element Type)", b.Name)
-				break
-			}
-		}
+		add("is a second ID attribute, after %s (XML §3.3.1 One ID per Element Type)", boundID)
 	}
 	if a.Default != AttrFixed && a.Default != AttrDefaulted {
 		return out

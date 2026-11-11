@@ -145,10 +145,12 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 		max = DefaultMaxErrors
 	}
 	v := &validator{
-		dtd:        d,
-		max:        max,
-		allowUndec: opts.AllowUndeclared,
-		matchers:   map[string]*xsd.SequenceMatcher{},
+		dtd:         d,
+		max:         max,
+		allowUndec:  opts.AllowUndeclared,
+		matchers:    map[string]*xsd.SequenceMatcher{},
+		matcherErrs: map[string]error{},
+		attrIdx:     map[string]*attrIndex{},
 		matcherOpts: xsd.SequenceMatcherOptions{
 			MaxPositions:   opts.MaxContentModelPositions,
 			MaxEdges:       opts.MaxContentModelEdges,
@@ -248,6 +250,13 @@ type validator struct {
 	allowUndec bool
 	errs       []*Error
 	matchers   map[string]*xsd.SequenceMatcher
+	// matcherErrs holds the models that failed to compile, so a refused
+	// model is compiled once per Validate like a good one. Uncached, every
+	// <r/> rebuilt a model the edge budget refuses: 28 ms and 97 MB each.
+	matcherErrs map[string]error
+	// attrIdx holds, per element name, what checkAttributes looks up in
+	// that element's ATTLIST; see attrIndexFor.
+	attrIdx map[string]*attrIndex
 	// matcherOpts bounds every matcher compiled into matchers.
 	matcherOpts xsd.SequenceMatcherOptions
 	names       []xdm.QName // child-name buffer reused across elements
@@ -400,8 +409,12 @@ func (v *validator) matcherFor(decl *Element) (*xsd.SequenceMatcher, error) {
 	if m, ok := v.matchers[decl.Name]; ok {
 		return m, nil
 	}
+	if err, ok := v.matcherErrs[decl.Name]; ok {
+		return nil, err
+	}
 	m, err := xsd.NewSequenceMatcherWith(decl.Particle, v.matcherOpts)
 	if err != nil {
+		v.matcherErrs[decl.Name] = err
 		return nil, err
 	}
 	v.matchers[decl.Name] = m
@@ -421,6 +434,7 @@ func (v *validator) matcherFor(decl *Element) (*xsd.SequenceMatcher, error) {
 // back here.
 func (v *validator) checkAttributes(el *xdm.Node) {
 	decls := v.dtd.Attributes[el.Name().Lexical()]
+	idx := v.attrIndexFor(el.Name().Lexical(), decls)
 	type attr struct{ name, value string }
 	var attrs []attr
 	for p, uri := range el.DeclaredNamespaces() {
@@ -435,7 +449,7 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 	}
 	if !v.allowUndec {
 		for _, a := range attrs {
-			if !slices.ContainsFunc(decls, func(d *Attribute) bool { return d.Name == a.name }) {
+			if _, ok := idx.pos[a.name]; !ok {
 				v.fail(el, "attribute %s is not declared", a.name)
 			}
 		}
@@ -444,11 +458,21 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 		return
 	}
 	present := make(map[string]string, len(attrs))
+	// The declarations to visit, in declaration order: those present, and
+	// those that report when absent. Walking every declaration for every
+	// element cost elements times declarations.
+	visit := slices.Clone(idx.always)
 	for _, a := range attrs {
 		present[a.name] = a.value
+		if i, ok := idx.pos[a.name]; ok {
+			visit = append(visit, i)
+		}
 	}
+	slices.Sort(visit)
+	visit = slices.Compact(visit)
 
-	for _, d := range decls {
+	for _, i := range visit {
+		d, c := decls[i], &idx.attrs[i]
 		val, have := present[d.Name]
 		switch d.Default {
 		case AttrRequired:
@@ -457,7 +481,7 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 				continue
 			}
 		case AttrFixed:
-			if have && val != normalizedDefault(d.Value) {
+			if have && val != c.fixed {
 				v.fail(el, "attribute %s is #FIXED %q but is %q",
 					d.Name, d.Value, val)
 			}
@@ -469,9 +493,9 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 		if !have {
 			continue
 		}
-		if len(d.Enum) > 0 && !containsString(d.Enum, val) {
+		if _, ok := c.enum[val]; len(d.Enum) > 0 && !ok {
 			v.fail(el, "attribute %s = %q is not one of %s",
-				d.Name, val, strings.Join(d.Enum, ", "))
+				d.Name, val, c.enumText)
 		}
 		if f := lexicalFault(d.Type, val); f != "" {
 			v.fail(el, "attribute %s = %q %s", d.Name, val, f)
@@ -520,6 +544,56 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 				"type %s, so its value was not checked", d.Name, d.Type)
 		}
 	}
+}
+
+// attrIndex is an element's ATTLIST prepared for lookup, built once per
+// element name per Validate.
+type attrIndex struct {
+	// pos maps an attribute name to its declaration's index. Duplicates
+	// were dropped when the DTD was read; for one assembled by a caller
+	// the first still binds, as a scan would have found it.
+	pos map[string]int
+	// always lists, in order, the declarations checked even when the
+	// attribute is absent: #REQUIRED and an unrecognised default.
+	always []int
+	// attrs parallels the declarations.
+	attrs []attrPrep
+}
+
+// attrPrep is what one declaration is compared against, computed once
+// rather than once per element carrying it.
+type attrPrep struct {
+	fixed    string              // normalizedDefault(Value), for #FIXED
+	enum     map[string]struct{} // the set of Enum
+	enumText string              // Enum joined for a message, clipped
+}
+
+func (v *validator) attrIndexFor(name string, decls []*Attribute) *attrIndex {
+	if idx, ok := v.attrIdx[name]; ok {
+		return idx
+	}
+	idx := &attrIndex{pos: make(map[string]int, len(decls)), attrs: make([]attrPrep, len(decls))}
+	for i, d := range decls {
+		if _, dup := idx.pos[d.Name]; !dup {
+			idx.pos[d.Name] = i
+		}
+		if d.Default == AttrRequired || d.Default == AttrInvalid {
+			idx.always = append(idx.always, i)
+		}
+		c := &idx.attrs[i]
+		if d.Default == AttrFixed {
+			c.fixed = normalizedDefault(d.Value)
+		}
+		if len(d.Enum) > 0 {
+			c.enum = make(map[string]struct{}, len(d.Enum))
+			for _, t := range d.Enum {
+				c.enum[t] = struct{}{}
+			}
+			c.enumText = clip(strings.Join(d.Enum, ", "))
+		}
+	}
+	v.attrIdx[name] = idx
+	return idx
 }
 
 // lexicalFault applies the lexical half of XML 1.0 §3.3.1's VCs ID, IDREF,
@@ -644,14 +718,26 @@ func normalizedDefault(v string) string {
 		return v
 	}
 	var sb strings.Builder
+	// semi is the first ';' at or after the last search, len(v) when there
+	// is none. Searching afresh at every byte, or at every '&', cost the
+	// square of the default; reusing it until it is passed keeps the
+	// searches disjoint, so the whole loop is linear.
+	semi := -1
 	for i := 0; i < len(v); i++ {
 		c := v[i]
 		if c == '\t' || c == '\n' || c == '\r' {
 			sb.WriteByte(' ')
 			continue
 		}
-		j := strings.IndexByte(v[i:], ';')
-		if c != '&' || j < 0 {
+		if c == '&' && semi < i {
+			if semi = strings.IndexByte(v[i:], ';'); semi < 0 {
+				semi = len(v)
+			} else {
+				semi += i
+			}
+		}
+		j := semi - i
+		if c != '&' || semi == len(v) {
 			sb.WriteByte(c)
 			continue
 		}
