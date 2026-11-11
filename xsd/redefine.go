@@ -381,27 +381,31 @@ func (a *assembler) applyRedefine(el *xdm.Node, doc *schemaDoc, hold *redefineHo
 
 	// src-redefine 6.2.2 and 7.2.2: a group or attribute group redefined
 	// *without* a self-reference must be a valid restriction of the
-	// component it replaces. This is the only moment both exist — the
-	// original is in hold, the replacement is in results, and neither is
-	// installed under the name yet.
+	// component it replaces. This is where both are in hand — the
+	// original in hold, the replacement in results — before either is
+	// installed under the name.
+	//
+	// Both checks are deferred: the original's declarations are bound
+	// by fixups that have not run yet at this point in assembly, so a
+	// check here would see every base element and attribute as untyped
+	// and pass a replacement that retypes one. postFixups runs after the
+	// whole fixup drain, and the components are captured by value, so
+	// the displaced original stays reachable even though the map no
+	// longer holds it.
 	for _, b := range results {
 		switch {
 		case b.g != nil:
 			if orig, ok := hold.groups[b.q]; ok &&
 				len(selfGroupRefs(b.el, doc, a.p, b.q, "group")) == 0 {
-				a.checkRedefinedGroup(b.el, b.q, b.g, orig)
+				el, q, repl, orig := b.el, b.q, b.g, orig
+				a.p.postFixups = append(a.p.postFixups, func() error {
+					a.checkRedefinedGroup(el, q, repl, orig)
+					return nil
+				})
 			}
 		case b.a != nil:
 			if orig, ok := hold.attrGroups[b.q]; ok &&
 				len(selfGroupRefs(b.el, doc, a.p, b.q, "attributeGroup")) == 0 {
-				// Deferred: an attribute declaration's type is
-				// bound by a fixup that has not run yet at this
-				// point in assembly, so a check here would see
-				// every base attribute as untyped. postFixups
-				// runs after the whole fixup drain, and the two
-				// components are captured by value, so the
-				// displaced original stays reachable even
-				// though the map no longer holds it.
 				el, q, repl, orig := b.el, b.q, b.a, orig
 				a.p.postFixups = append(a.p.postFixups, func() error {
 					a.checkRedefinedAttrGroup(el, q, repl, orig)
@@ -545,6 +549,8 @@ func (a *assembler) checkRedefinedGroup(el *xdm.Node, q xdm.QName, repl, orig *M
 // groups' attribute uses: the redefinition may narrow a use or drop an optional
 // one, but may not introduce an attribute the original did not admit, may not
 // make a required attribute optional, and may not change a fixed value.
+// Clause 4 governs the attribute wildcards: the redefinition's, if it has one,
+// must be a subset of the original's and no weaker in processContents.
 func (a *assembler) checkRedefinedAttrGroup(el *xdm.Node, q xdm.QName, repl, orig *AttributeGroupDef) {
 	if repl == nil || orig == nil {
 		return
@@ -563,6 +569,19 @@ func (a *assembler) checkRedefinedAttrGroup(el *xdm.Node, q xdm.QName, repl, ori
 				"itself, so it must be a valid restriction of the "+
 				"attribute group it replaces: %s",
 			q.Local, fmt.Sprintf(format, args...)))
+	}
+
+	// Clause 4: a wildcard admits names as surely as a declared use does.
+	if rw := groupWildcard(repl, nil); rw != nil {
+		switch {
+		case baseWild == nil:
+			bad("it adds an attribute wildcard")
+		case !wildcardSubset(rw, baseWild):
+			bad("its attribute wildcard is not a subset of the replaced group's")
+		case processStrength(rw.ProcessContents) < processStrength(baseWild.ProcessContents):
+			bad("its attribute wildcard has processContents %s, weaker than "+
+				"the replaced group's %s", rw.ProcessContents, baseWild.ProcessContents)
+		}
 	}
 
 	present := map[xdm.QName]bool{}
