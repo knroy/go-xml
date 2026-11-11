@@ -156,3 +156,40 @@ func TestOrdinaryConstructorsStillCompile(t *testing.T) {
 		}
 	}
 }
+
+// A well-formed constructor nested in its own operand was parsed about 3^d
+// times for d levels.
+//
+// "<a>{X}</a> = 1" is parsed as an item, then re-read from its start as the
+// left operand of "=" (retryAsOperandSubst): the scan that finds the
+// operand's extent stepped over the constructor by parsing it, and the
+// substitution parsed it a third time. Each parse compiled the enclosed body
+// with a fresh parser, which did the same three reads one level down. The
+// same multiplication ran through a let clause, a parenthesis and a call
+// argument. Measured on the base: 232 MB at d=10 and 2.1 GB at d=12, from
+// about 130 bytes of query; with the constructor memo every form here stays
+// under 100 KB at d=10.
+func TestNestedConstructorOperandIsParsedOnce(t *testing.T) {
+	forms := map[string]func(string) string{
+		"operand":     func(x string) string { return "<a>{" + x + "}</a> = 1" },
+		"right":       func(x string) string { return "1 = <a>{" + x + "}</a>" },
+		"paren":       func(x string) string { return "(<a>{" + x + "}</a>) = 1" },
+		"let":         func(x string) string { return "let $v := <a>{" + x + "}</a> return $v" },
+		"argument":    func(x string) string { return "f(<a>{" + x + "}</a>) = 1" },
+		"interpolate": func(x string) string { return "``[`{<a>{" + x + "}</a> = 1}`]`` = 1" },
+	}
+	for name, wrap := range forms {
+		src := "1"
+		for i := 0; i < 10; i++ {
+			src = wrap(src)
+		}
+		var err error
+		if b := allocated(func() { _, err = Compile(src, Options{}) }); b > 1<<20 {
+			t.Fatalf("%s: %d bytes of query allocated %d bytes; a nested "+
+				"constructor is re-parsed per level again", name, len(src), b)
+		}
+		if err != nil {
+			t.Errorf("%s: %q: %v", name, src, err)
+		}
+	}
+}

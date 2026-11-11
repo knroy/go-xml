@@ -118,6 +118,7 @@ func (p *parser) parseInlineFunc() (node, bool, error) {
 		return nil, false, nil
 	}
 	src := p.src[p.pos+1 : end]
+	bodyMemo, bodyBase := p.memoAt(p.pos + 1)
 	if !needsXQueryParser(src) && !n.schemaTypedSignature() {
 		// Ordinary XPath. Hand the whole construct back so that the
 		// expression parser reads it, signature and all.
@@ -134,7 +135,7 @@ func (p *parser) parseInlineFunc() (node, bool, error) {
 	}
 	sub := &parser{src: src, sc: p.sc, version: p.version,
 		declaredNS: p.declaredNS, funcs: p.funcs, vars: p.vars,
-		depth: p.depth + 1}
+		depth: p.depth + 1, memo: bodyMemo, base: bodyBase}
 	if n.body, err = sub.parseBodyItems(); err != nil {
 		return nil, true, err
 	}

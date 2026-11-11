@@ -133,6 +133,12 @@ type parser struct {
 	// its own imports could not be counted, and the count is what bounds a
 	// cyclic or fanning import graph. See moduleLoader.
 	moduleImports []moduleImport
+
+	// memo and base let every parser reading a substring of the module
+	// source share one record of the direct constructors already parsed:
+	// base is the offset of src[0] in that source. See ctorMemo.
+	memo *ctorMemo
+	base int
 }
 
 // compiledExpr is an expression compiled by xpath, kept with the source it
@@ -640,7 +646,7 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		// Substituting those and recompiling is the same split applied once
 		// more, so it is tried before the error is reported. Failing that,
 		// xpath's own error stands, because it names the construct.
-		ops, rewritten, serr := p.substituteOperands(expanded)
+		ops, rewritten, serr := p.substituteOperands(expanded, -1)
 		if serr != nil || len(ops) == 0 {
 			return nil, err
 		}

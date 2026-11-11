@@ -224,6 +224,7 @@ func (p *parser) parseStringConstructor() (node, error) {
 				return nil, err
 			}
 			body := p.src[p.pos+1 : end]
+			bodyMemo, bodyBase := p.memoAt(p.pos + 1)
 			p.pos = end + 1
 			// [180] StringConstructorInterpolation closes with "}`", so the
 			// backtick after the brace is part of the delimiter.
@@ -235,7 +236,8 @@ func (p *parser) parseStringConstructor() (node, error) {
 				sc.parts = append(sc.parts, &enclosed{})
 				continue
 			}
-			inner := &parser{src: body, sc: p.sc, version: p.version}
+			inner := &parser{src: body, sc: p.sc, version: p.version,
+				memo: bodyMemo, base: bodyBase}
 			items, err := inner.parseQueryBody()
 			if err != nil {
 				return nil, err

@@ -1,8 +1,10 @@
 package xquery
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -131,6 +133,99 @@ type namespaceNode struct {
 // context, and only then is anything resolved. BaseX does the same thing by
 // rewinding and re-parsing; the shape here is the same discipline written out.
 func (p *parser) parseDirElement() (node, error) {
+	if p.memo == nil {
+		p.memo = &ctorMemo{}
+	}
+	key := p.base + p.pos
+	if r, ok := p.memo.dir[key]; ok && strings.HasPrefix(p.src[p.pos:], r.text) {
+		p.pos += len(r.text)
+		for k, v := range r.prefixes {
+			if p.ctorPrefixes == nil {
+				p.ctorPrefixes = map[string]string{}
+			}
+			p.ctorPrefixes[k] = v
+		}
+		return r.n, r.err
+	}
+	start := p.pos
+	outer := p.ctorPrefixes
+	p.ctorPrefixes = nil
+	n, err := p.parseDirElementOnce()
+	recorded := p.ctorPrefixes
+	p.ctorPrefixes = outer
+	for k, v := range recorded {
+		if p.ctorPrefixes == nil {
+			p.ctorPrefixes = map[string]string{}
+		}
+		p.ctorPrefixes[k] = v
+	}
+	// A nesting refusal depends on the route that reached this offset, not on
+	// the source, so it is the one answer that is not remembered.
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		if p.memo.dir == nil {
+			p.memo.dir = map[int]ctorResult{}
+		}
+		p.memo.dir[key] = ctorResult{text: p.src[start:p.pos], n: n, err: err,
+			prefixes: recorded}
+	}
+	return n, err
+}
+
+// ctorMemo remembers the parse of every direct element constructor by its
+// absolute offset in the module source, shared by every parser reading a
+// substring of that source.
+//
+// The compiler reads a constructor more than once by design: an item is
+// parsed, then re-read as the operand of an operator after it
+// (retryAsOperandSubst); a clause scan steps over a constructor by parsing it
+// (skipDirConstructor); substituteOperands parses each operand it lifts. Each
+// of those reads parsed the enclosed bodies again through a fresh parser, so
+// a constructor nested d deep was parsed about 3^d times -- 260 bytes of
+// "<a>{<a>{...}</a> = 1}</a> = 1" pinned a core for hours inside Compile.
+// The result at an offset is a pure function of the source there and of the
+// static context, which is itself decided by the enclosing source, so the
+// first answer is the answer and every later read is a lookup.
+//
+// The text check on a hit is what keeps a wrongly computed base from
+// returning another constructor's parse: a parser over a string that is not
+// a substring of the module source -- a rewritten expression -- gets a memo
+// of its own (memoAt), and a mismatch is a miss. When the base is right the
+// two strings share their bytes and the comparison is a pointer test.
+type ctorMemo struct {
+	dir map[int]ctorResult
+}
+
+// ctorResult is one remembered parse: the source it consumed, the result and
+// error, and the prefixes it recorded in parser.ctorPrefixes, replayed on a
+// hit so that the module-wide union is the same however often it is read.
+type ctorResult struct {
+	text     string
+	n        node
+	err      error
+	prefixes map[string]string
+}
+
+// memoAt returns the memo and base for a sub-parser over a string beginning
+// at p.src[off:], or a fresh memo for a string that is not a substring of
+// p.src (off < 0).
+func (p *parser) memoAt(off int) (*ctorMemo, int) {
+	if off < 0 {
+		return &ctorMemo{}, 0
+	}
+	if p.memo == nil {
+		p.memo = &ctorMemo{}
+	}
+	return p.memo, p.base + off
+}
+
+// leadingSpace is the number of bytes strings.TrimSpace removes from the
+// front of s, so that a trimmed substring's offset can be recovered.
+func leadingSpace(s string) int {
+	return len(s) - len(strings.TrimLeftFunc(s, unicode.IsSpace))
+}
+
+// parseDirElementOnce is parseDirElement without the memo.
+func (p *parser) parseDirElementOnce() (node, error) {
 	if !p.consume("<") {
 		return nil, p.errorf("XPST0003: expected %q", "<")
 	}
@@ -588,6 +683,7 @@ func (p *parser) parseEnclosed() (node, error) {
 		return nil, err
 	}
 	body := p.src[p.pos+1 : end]
+	m, base := p.memoAt(p.pos + 1)
 	p.pos = end + 1
 	if blankEnclosedBody(body) {
 		// "{}" is an empty sequence, which contributes nothing.
@@ -595,7 +691,8 @@ func (p *parser) parseEnclosed() (node, error) {
 	}
 	// The body is a query body rather than a bare expression: it may itself
 	// hold constructors, as in <a>{<b/>}</a>.
-	inner := &parser{src: body, sc: p.sc, version: p.version}
+	inner := &parser{src: body, sc: p.sc, version: p.version, memo: m,
+		base: base}
 	items, err := inner.parseQueryBody()
 	if err != nil {
 		return nil, err

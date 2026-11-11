@@ -713,6 +713,7 @@ func (p *parser) retryAsOperandSubst(start int) (node, bool, error) {
 	}
 	end := p.pos
 	sub := &parser{src: src, sc: p.sc, version: p.version, depth: p.depth}
+	sub.memo, sub.base = p.memoAt(start + leadingSpace(p.src[start:end]))
 	items, ok, err := sub.parseOperandSubst()
 	if err != nil || !ok {
 		p.pos = save
@@ -800,6 +801,7 @@ func (p *parser) parseExprItem() (node, error) {
 			}
 			sub := &parser{src: p.src, pos: p.pos, sc: p.sc,
 				version: p.version, depth: p.depth + 1}
+			sub.memo, sub.base = p.memoAt(0)
 			if _, err := sub.parseConstructorHere(); err != nil {
 				break
 			}
@@ -834,7 +836,7 @@ done:
 		// than at its start: "(<a/>, <b/>)" and "count(for $x in E group by
 		// $k return $x)" are both expressions xpath cannot read whole, and
 		// neither begins with the construct that makes it so.
-		c, err := p.parseFromSource(src)
+		c, err := p.parseFromSource(src, start+leadingSpace(p.src[start:]))
 		if err != nil {
 			return nil, err
 		}
