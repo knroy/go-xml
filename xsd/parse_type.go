@@ -2542,46 +2542,52 @@ func (p *parser) checkUnionMemberCycles() {
 		return names[i].Local < names[j].Local
 	})
 
+	// One walk over the whole graph, not one search per union: a union is
+	// circular exactly when one of its members lies in its own strongly
+	// connected component, since the member edge leads out and the
+	// component supplies the way back. A long chain of unions each naming
+	// the next was quadratic as a search per union.
+	//
+	// The edges are a type's members and its base. A member may be a
+	// *restriction* of a union rather than a union itself, and the members
+	// it inherits are reached only through its base. simple015 is that
+	// shape: dt restricts an inline union.
+	var roots []*SimpleType
+	var rootNames []string
 	for _, name := range names {
-		st, ok := p.schema.Types[name].(*SimpleType)
-		if !ok || st == nil || len(st.MemberTypes) == 0 {
-			continue
+		if st, ok := p.schema.Types[name].(*SimpleType); ok && st != nil &&
+			len(st.MemberTypes) > 0 {
+			roots = append(roots, st)
+			rootNames = append(rootNames, name.Local)
 		}
-		// Breadth-first over the membership graph. `seen` is a visited
-		// set rather than a descent path: unlike cycleFrom above, a
-		// member legitimately reached twice is not interesting here,
-		// because the only question asked is whether st is reachable
-		// from st, and any route back to it will be found from
-		// whichever visit came first.
-		seen := map[*SimpleType]bool{}
-		queue := append([]*SimpleType(nil), st.MemberTypes...)
-		for len(queue) > 0 {
-			m := queue[0]
-			queue = queue[1:]
-			if m == nil {
-				continue
+	}
+	comp := map[*SimpleType]int{}
+	tarjanSCC(roots,
+		func(m *SimpleType) []*SimpleType {
+			out := m.MemberTypes
+			if b, ok := m.Base.(*SimpleType); ok && b != m {
+				out = append(out[:len(out):len(out)], b)
 			}
-			if m == st {
+			return out
+		},
+		func(m *SimpleType) bool { return m == nil },
+		func(scc []*SimpleType) {
+			id := len(comp)
+			for _, m := range scc {
+				comp[m] = id
+			}
+		})
+	for i, st := range roots {
+		for _, m := range st.MemberTypes {
+			if m != nil && comp[m] == comp[st] {
 				p.errs = append(p.errs, &ParseError{
 					Code: "st-props-correct.2",
 					Message: fmt.Sprintf(
 						"union type %q is circular: it is a member "+
 							"of itself, directly or through "+
-							"another union", name.Local),
+							"another union", rootNames[i]),
 				})
 				break
-			}
-			if seen[m] {
-				continue
-			}
-			seen[m] = true
-			queue = append(queue, m.MemberTypes...)
-			// A member may be a *restriction* of a union rather
-			// than a union itself, and the members it inherits are
-			// reached only through its base. simple015 is that
-			// shape: dt restricts an inline union.
-			if b, ok := m.Base.(*SimpleType); ok && b != m {
-				queue = append(queue, b)
 			}
 		}
 	}
