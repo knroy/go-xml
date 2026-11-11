@@ -1770,7 +1770,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	entry := xpath.Function{
 		Name:      qn,
 		Arity:     len(params),
-		Call:      fn.call,
+		Call:      fn.charged(el), // functions_depth.go
 		Signature: declaredSignature(fn.returns, params),
 	}
 	c.sheet.funcs.Add(entry)
