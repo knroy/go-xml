@@ -158,8 +158,13 @@ func readableRoots(sheetPath, allowDirs string) []string {
 	if dir := filepath.Dir(sheetPath); dir != "" {
 		roots = append(roots, dir)
 	}
-	if allowDirs != "" {
-		roots = append(roots, strings.Split(allowDirs, ",")...)
+	// An empty segment (a trailing or doubled comma, an unset variable) names
+	// no directory, and must not reach filepath.Abs, which would turn it into
+	// the working directory.
+	for _, d := range strings.Split(allowDirs, ",") {
+		if strings.TrimSpace(d) != "" {
+			roots = append(roots, d)
+		}
 	}
 	return roots
 }
