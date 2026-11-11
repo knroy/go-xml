@@ -177,6 +177,26 @@ func TestDriveViewsShareTheSpine(t *testing.T) {
 	}
 }
 
+// A new batch copies the open ancestors again, attribute values included, but
+// the batch was replaced by its record count alone: one 64 KB root attribute
+// counted as one record, so 20,000 empty children made a batch every 4096
+// views and copied the attribute into each. The batch is now sized by the
+// bytes its copies hold as well, so the copy is paid for by what it serves.
+func TestDriveViewsChargeAncestorAttributeBytes(t *testing.T) {
+	const attr, n = 1 << 16, 20000
+	src := "<r a='" + strings.Repeat("x", attr) + "'>" + strings.Repeat("<c/>", n) + "</r>"
+	trees := map[*Tree]bool{}
+	c := &viewAll{fn: func(v *Node, _ int) { trees[v.tree] = true }}
+	bs := driver(c)
+	if _, err := parse(strings.NewReader(src), "", ParseOptions{bursts: bs}); err != nil {
+		t.Fatal(err)
+	}
+	// Each batch holds one copy of the root attribute.
+	if copied := len(trees) * attr; copied > attr+(attr+n)/3 {
+		t.Fatalf("%d batches copied %d attribute bytes for %d views", len(trees), copied, n+1)
+	}
+}
+
 // A view batch is replaced at a bounded size when the views' ancestors are
 // themselves never viewed, each one new: views of x under rec after rec
 // (the C4 split's view of a match whose parent it only reads past).
