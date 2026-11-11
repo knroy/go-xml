@@ -342,7 +342,7 @@ func (p *parser) parseNamespaceDecl(once map[string]*seenDecl, inSecond *bool) e
 			"prolog", prefix)
 	}
 	if uri == "" {
-		delete(p.sc.ns, prefix)
+		p.sc.ns.set(prefix, "")
 		p.declaredNS[prefix] = true
 		return nil
 	}
@@ -1086,7 +1086,7 @@ func (p *parser) resolveDeclaredName(prefix, local string, isFunction bool) (xdm
 		}
 		return xdm.QName{Local: local}, nil
 	}
-	uri, ok := p.sc.ns[prefix]
+	uri, ok := p.sc.ns.lookup(prefix)
 	if !ok {
 		return xdm.QName{}, p.errorf(
 			"XPST0081: the prefix %q is not bound to a namespace", prefix)

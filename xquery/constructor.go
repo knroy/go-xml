@@ -63,7 +63,7 @@ type element struct {
 	// element's own name or attributes use them, so they are carried here and
 	// applied at evaluation to whichever of them an ancestor does not already
 	// supply.
-	inherited map[string]string
+	inherited *nsScope
 
 	attrs   []attribute
 	content []node
@@ -242,8 +242,16 @@ func (p *parser) parseDirElementOnce() (node, error) {
 	}
 
 	// Apply the namespace declarations among them to a child context. Only
-	// now can any QName on this element be resolved.
-	inner := p.sc.child()
+	// now can any QName on this element be resolved. An element that
+	// declares nothing reads its parent's context, which nothing changes
+	// after this point.
+	inner := p.sc
+	for _, a := range raw {
+		if isDecl, _ := namespaceDecl(a.prefix, a.local); isDecl {
+			inner = p.sc.child()
+			break
+		}
+	}
 	var bindings []nsBinding
 	seenNS := map[string]bool{}
 	for _, a := range raw {
@@ -295,10 +303,8 @@ func (p *parser) parseDirElementOnce() (node, error) {
 		} else if err := inner.bind(pfx, uri); err != nil {
 			return nil, p.errorAt(startPos, "%v", err)
 		}
-		if uri == "" {
-			delete(inner.ctorNS, pfx)
-		} else {
-			inner.ctorNS[pfx] = uri
+		inner.ctorNS.set(pfx, uri)
+		if uri != "" {
 			// Also recorded module-wide, for the one name resolved after the
 			// constructor's context has gone out of scope. See
 			// parser.ctorPrefixes.

@@ -594,9 +594,10 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	//
 	// Bindings an ancestor already carries are left alone, so an element that
 	// *is* nested in the tree does not repeat its parent's declarations.
+	inherited := n.inherited.flatten()
 	if el := sub.b.Open(); el != nil {
-		for _, prefix := range sortedPrefixes(n.inherited) {
-			uri := n.inherited[prefix]
+		for _, prefix := range sortedPrefixes(inherited) {
+			uri := inherited[prefix]
 			if cur, ok := el.LookupPrefix(prefix); ok && cur == uri {
 				continue
 			}
@@ -617,7 +618,7 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	// what this element genuinely needs is finally known. Anything its parent
 	// supplies beyond that and beyond the declaration attributes has to be
 	// undeclared here -- see limitInherited.
-	limitInherited(sub.b.Open(), n.inherited)
+	limitInherited(sub.b.Open(), inherited)
 	// §3.9.1.3: the base URI of a constructed element is the static base URI
 	// of the constructor *unless* the element carries an xml:base attribute,
 	// in which case it is that attribute resolved against the base URI in
