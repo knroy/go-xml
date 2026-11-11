@@ -1188,10 +1188,8 @@ func wildcardSubset(sub, super *Wildcard) bool {
 		if super.Kind != NSNot {
 			return false
 		}
-		for _, ns := range super.Namespace {
-			if !containsNamespace(sub.Namespace, ns) {
-				return false
-			}
+		if !namespacesSubset(super.Namespace, sub.Namespace) {
+			return false
 		}
 		// Excluding the absent namespace narrows in the same
 		// direction: sub may exclude it where super does not, but not
@@ -1201,17 +1199,19 @@ func wildcardSubset(sub, super *Wildcard) bool {
 		// Clause 3: an enumerated set is a subset of a superset of
 		// itself, or of a negation excluding nothing the set contains.
 		if super.Kind == NSEnumerated {
-			for _, ns := range sub.Namespace {
-				if !containsNamespace(super.Namespace, ns) {
-					return false
-				}
-			}
-			return true
+			return namespacesSubset(sub.Namespace, super.Namespace)
 		}
 		// super is a negation: clause 3.2.2 requires that neither the
 		// negated value nor the absent namespace appear in sub's set.
+		excluded := namespaceSet(super.Namespace)
 		for _, ns := range sub.Namespace {
-			if !super.Allows(ns) {
+			if ns == "" {
+				if super.ExcludesAbsent {
+					return false
+				}
+				continue
+			}
+			if _, ok := excluded[ns]; ok {
 				return false
 			}
 		}
@@ -1219,13 +1219,30 @@ func wildcardSubset(sub, super *Wildcard) bool {
 	}
 }
 
-func containsNamespace(set []string, ns string) bool {
-	for _, s := range set {
-		if s == ns {
-			return true
+// namespacesSubset reports whether every namespace in sub is in super.
+//
+// The lists are an author's namespace= words, kept as written with no cap, so
+// membership goes through a set: a nested scan was |sub| x |super| per check,
+// 14 s for a 64000-word pair in an 885 KB schema.
+func namespacesSubset(sub, super []string) bool {
+	if len(sub) == 0 {
+		return true
+	}
+	set := namespaceSet(super)
+	for _, ns := range sub {
+		if _, ok := set[ns]; !ok {
+			return false
 		}
 	}
-	return false
+	return true
+}
+
+func namespaceSet(list []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(list))
+	for _, ns := range list {
+		set[ns] = struct{}{}
+	}
+	return set
 }
 
 // disallowedNamesSubset is the {disallowed names} half of Wildcard Subset
@@ -1264,24 +1281,39 @@ func disallowedNamesSubset(sub, super *Wildcard) bool {
 	if super.DisallowDefinedSibling && !sub.DisallowDefinedSibling {
 		return false
 	}
+	if len(super.DisallowedNames) == 0 {
+		return true
+	}
+	// Sets, not scans: both lists are as long as the author wrote them.
+	subNS := namespaceSet(sub.Namespace)
+	allows := func(ns string) bool {
+		_, in := subNS[ns]
+		switch sub.Kind {
+		case NSAny:
+			return true
+		case NSNot:
+			if ns == "" {
+				return !sub.ExcludesAbsent
+			}
+			return !in
+		case NSEnumerated:
+			return in
+		}
+		return false
+	}
+	refused := make(map[xdm.QName]struct{}, len(sub.DisallowedNames))
+	for _, name := range sub.DisallowedNames {
+		refused[name] = struct{}{}
+	}
 	for _, name := range super.DisallowedNames {
-		if !sub.Allows(name.URI) {
+		if !allows(name.URI) {
 			continue
 		}
-		if !containsQName(sub.DisallowedNames, name) {
+		if _, ok := refused[name]; !ok {
 			return false
 		}
 	}
 	return true
-}
-
-func containsQName(set []xdm.QName, name xdm.QName) bool {
-	for _, n := range set {
-		if n == name {
-			return true
-		}
-	}
-	return false
 }
 
 // nsRecurseCheckCardinality is Particle Derivation OK (All/Choice/Sequence:Any)
