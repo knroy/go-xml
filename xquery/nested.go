@@ -298,7 +298,7 @@ func (n *nestedCall) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 // pathOver rewrites "E S" — a value this parser had to read, followed by a
@@ -409,5 +409,5 @@ func (n *parenPath) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }

@@ -60,7 +60,7 @@ func (q *quantified) evalNode(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 // parseQuantified parses a quantified expression.

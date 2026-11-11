@@ -133,7 +133,7 @@ func (n *switchExpr) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 func (n *switchExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {

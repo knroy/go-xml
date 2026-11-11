@@ -529,7 +529,7 @@ func (n *operandExpr) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 // constructorFollows reports whether what stands after a constructor keyword

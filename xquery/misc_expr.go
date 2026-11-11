@@ -256,7 +256,7 @@ func (n *stringConstructor) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 func (n *stringConstructor) sequence(ctx *evalContext) (xdm.Sequence, error) {
@@ -389,7 +389,7 @@ func (n *validateExpr) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
