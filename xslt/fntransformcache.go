@@ -55,6 +55,12 @@ type nestedKey struct {
 	opts       string
 	node       *xdm.Node
 	docs, pkgs weak.Pointer[byte]
+	// docsT and pkgsT are the resolvers' dynamic types. The address alone
+	// does not identify a resolver: every zero-size value shares one, and a
+	// struct shares its first field's, so a sheet compiled through one
+	// resolver was handed to a transform using another that refuses its
+	// modules.
+	docsT, pkgsT reflect.Type
 }
 
 // dead reports whether a resolver the key names has been collected, so the
@@ -148,7 +154,8 @@ func nestedCacheKey(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem) (
 	if !keyable(mr) || !keyable(rt.pkgs) {
 		return nestedKey{}, false
 	}
-	k := nestedKey{docs: weakResolver(mr), pkgs: weakResolver(rt.pkgs)}
+	k := nestedKey{docs: weakResolver(mr), pkgs: weakResolver(rt.pkgs),
+		docsT: reflect.TypeOf(mr), pkgsT: reflect.TypeOf(rt.pkgs)}
 	var b strings.Builder
 	field := func(s string) { fmt.Fprintf(&b, "%d:%s;", len(s), s) }
 	field(ctx.StaticBaseURI())
