@@ -76,7 +76,7 @@ type canon struct {
 	excl     bool
 	comments bool
 	v11      bool
-	prefixes []string
+	listed   map[string]bool // the PrefixList as a set; nil unless exclusive
 	maxDepth int
 
 	scope    bindings // declarations in scope
@@ -98,7 +98,8 @@ type canon struct {
 
 	// differ is, when track is set, every prefix whose binding in scope
 	// differs from the one rendered: the prefixes consider would render at
-	// an apex now. differAt indexes it. It is kept current on every change
+	// an apex now (under Exclusive C14N, only the PrefixList's, which are
+	// considered at every element in the set). differAt indexes it. It is kept current on every change
 	// to scope and rendered, so an apex considers what it will render rather
 	// than scanning the whole scope; a node set with an apex at every
 	// element otherwise cost (apexes × bindings) with no output to show for
@@ -148,11 +149,19 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 		c.maxDepth = DefaultMaxDepth
 	}
 	if c.excl {
-		c.prefixes = opts.InclusiveNamespacePrefixes
+		c.listed = make(map[string]bool, len(opts.InclusiveNamespacePrefixes))
+		for _, p := range opts.InclusiveNamespacePrefixes {
+			c.listed[p] = true
+		}
 	}
 	c.nsSet, _ = ns.(NamespaceSet)
 	c.util = bindings{m: map[string]string{}}
-	if _, excl := ns.(excludeSet); !all && !excl && !c.excl && c.nsSet == nil {
+	_, excl := ns.(excludeSet)
+	// Exclusive C14N considers the PrefixList at every element in the set,
+	// so it tracks the listed prefixes that would render whatever the set:
+	// scanning the list instead cost (elements × PrefixList) with nothing
+	// written for a prefix that is not in scope or already rendered.
+	if (!all && !excl && !c.excl && c.nsSet == nil) || (c.excl && c.nsSet == nil && len(c.listed) > 0) {
 		c.track = true
 		c.differAt = map[string]int{}
 	}
@@ -396,7 +405,7 @@ func (c *canon) namespaces(e *xdm.Node, parentIn bool) {
 				c.consider(a.Name().Prefix)
 			}
 		}
-		for _, p := range c.prefixes {
+		for _, p := range c.differ {
 			c.consider(p)
 		}
 	} else if parentIn {
@@ -423,7 +432,8 @@ func (c *canon) trackPrefix(prefix string) {
 		return
 	}
 	uri := c.scope.m[prefix]
-	want := prefix != "xml" && (prefix == "" || uri != "") && c.rendered.m[prefix] != uri
+	want := prefix != "xml" && (prefix == "" || uri != "") && c.rendered.m[prefix] != uri &&
+		(!c.excl || c.listed[prefix])
 	i, has := c.differAt[prefix]
 	switch {
 	case want && !has:
@@ -490,7 +500,7 @@ func (c *canon) writeNamespaces() {
 // the set never renders, "even if its parent node is included" (§1.1).
 func (c *canon) namespaceNodes(e *xdm.Node, in bool) {
 	c.nsOut = c.nsOut[:0]
-	listed := func(prefix string) bool { return !c.excl || slices.Contains(c.prefixes, prefix) }
+	listed := func(prefix string) bool { return !c.excl || c.listed[prefix] }
 	var anc map[string]string
 	if n := len(c.axes); n > 0 {
 		anc = c.axes[n-1]
@@ -548,7 +558,7 @@ func (c *canon) namespaceNodes(e *xdm.Node, in bool) {
 func (c *canon) exclusiveUtilised(e *xdm.Node, axis map[string]string) {
 	var used []string
 	add := func(p string) {
-		if p != "xml" && !slices.Contains(c.prefixes, p) && !slices.Contains(used, p) {
+		if p != "xml" && !c.listed[p] {
 			used = append(used, p)
 		}
 	}
@@ -558,6 +568,10 @@ func (c *canon) exclusiveUtilised(e *xdm.Node, axis map[string]string) {
 			add(a.Name().Prefix)
 		}
 	}
+	// Repeats are dropped by sorting rather than a scan per prefix, which
+	// was quadratic in the element's attributes.
+	slices.Sort(used)
+	used = slices.Compact(used)
 	for _, p := range used {
 		uri := c.scope.m[p]
 		node, inSet := axis[p]

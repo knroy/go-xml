@@ -627,6 +627,35 @@ func TestNamespaceScopeNotQuadratic(t *testing.T) {
 	}
 }
 
+// TestExclusivePrefixListNotPerElement bounds the work an Exclusive C14N
+// PrefixList costs. Every in-set element used to consider every listed
+// prefix, though a prefix not in scope, or already rendered with its value,
+// renders nothing: (elements × PrefixList) with no output for it. Now an
+// element considers only the listed prefixes whose binding differs from what
+// is rendered.
+func TestExclusivePrefixListNotPerElement(t *testing.T) {
+	const elements, listed = 2000, 2000
+	prefixes := make([]string, listed)
+	for i := range prefixes {
+		prefixes[i] = fmt.Sprintf("q%d", i)
+	}
+	// One listed prefix is in scope, so it renders once, at r.
+	prefixes[0] = "p"
+	doc := parse(t, `<r xmlns:p="urn:p">`+strings.Repeat("<a/>", elements)+`</r>`)
+	var out strings.Builder
+	c, err := run(&out, Document(doc), Options{Algorithm: Exclusive10, InclusiveNamespacePrefixes: prefixes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound := 2*(elements+1) + listed; c.considered > bound {
+		t.Errorf("%d listed prefixes over %d elements considered %d, bound %d",
+			listed, elements, c.considered, bound)
+	}
+	if want := `<r xmlns:p="urn:p">` + strings.Repeat("<a></a>", elements) + `</r>`; out.String() != want {
+		t.Errorf("output changed: %.80s", out.String())
+	}
+}
+
 // TestApexesDoNotRescanScope bounds the work at apexes: elements in the set
 // whose parent is not. Under '/r | //b' every b is one. Each used to scan
 // every binding in scope and every attribute of every ancestor, though r had
