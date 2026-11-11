@@ -60,9 +60,11 @@ type planRec struct {
 	// ctx and ctxAllowsChildren are the focus the construct was assessed
 	// under (§19.6), which is what a strategy is chosen against (DESIGN
 	// §2.3): a predicate's construct has its step's posture, a for-each
-	// body's members the select's.
+	// body's members the select's. ctxType is the context item type of that
+	// focus (§19.2), which §19.8.9.18's root rule and a leading "/" read.
 	ctx               posture
 	ctxAllowsChildren bool
+	ctxType           itemType
 	// ops are the operands of the general-rules combination (§19.8.1)
 	// that produced props, in the order the rule listed them; nil when the
 	// construct's own cascade produced them (a path, a for-each select, a
@@ -106,6 +108,7 @@ type planRoot struct {
 	root              xpath.Expr
 	ctx               posture
 	ctxAllowsChildren bool
+	ctxType           itemType
 }
 
 type planFrame struct {
@@ -151,7 +154,7 @@ func (pl *streamPlan) root(s planSite) xpath.Expr {
 		return nil
 	}
 	for _, r := range rs[1:] {
-		if r.ctx != rs[0].ctx || r.ctxAllowsChildren != rs[0].ctxAllowsChildren {
+		if r.ctx != rs[0].ctx || r.ctxAllowsChildren != rs[0].ctxAllowsChildren || r.ctxType != rs[0].ctxType {
 			return nil
 		}
 	}
@@ -188,10 +191,10 @@ func (t *declTrust) planOf() *streamPlan {
 func (pl *streamPlan) enter() { pl.frames = append(pl.frames, planFrame{}) }
 
 // leave records the construct whose rule just returned p.
-func (pl *streamPlan) leave(key any, p props, ctx posture, kids, known, unverified bool) {
+func (pl *streamPlan) leave(key any, p props, ctx posture, kids bool, ctxType itemType, known, unverified bool) {
 	f := pl.frames[len(pl.frames)-1]
 	pl.frames = pl.frames[:len(pl.frames)-1]
-	r := planRec{props: p, known: known, unverified: unverified, ctx: ctx, ctxAllowsChildren: kids}
+	r := planRec{props: p, known: known, unverified: unverified, ctx: ctx, ctxAllowsChildren: kids, ctxType: ctxType}
 	if f.set && f.p == p {
 		r.ops = f.ops
 	}
@@ -207,7 +210,7 @@ func (pl *streamPlan) leave(key any, p props, ctx posture, kids, known, unverifi
 
 func (r *planRec) same(o *planRec) bool {
 	if r.props != o.props || r.known != o.known || r.unverified != o.unverified ||
-		r.ctx != o.ctx || r.ctxAllowsChildren != o.ctxAllowsChildren ||
+		r.ctx != o.ctx || r.ctxAllowsChildren != o.ctxAllowsChildren || r.ctxType != o.ctxType ||
 		len(r.ops) != len(o.ops) || (r.ops == nil) != (o.ops == nil) {
 		return false
 	}
@@ -234,9 +237,9 @@ func (pl *streamPlan) combined(ops []operand, p props) {
 	f.p, f.set = p, true
 }
 
-func (pl *streamPlan) site(el *xdm.Node, src string, root xpath.Expr, ctx posture, kids bool) {
+func (pl *streamPlan) site(el *xdm.Node, src string, root xpath.Expr, ctx posture, kids bool, ctxType itemType) {
 	s := planSite{el, src}
-	pl.sites[s] = append(pl.sites[s], planRoot{root, ctx, kids})
+	pl.sites[s] = append(pl.sites[s], planRoot{root, ctx, kids, ctxType})
 }
 
 // The recording wrappers. Each rule function is the one the analysis always
@@ -249,7 +252,7 @@ func (a *analyzer) expr(e xpath.Expr) props {
 	}
 	pl.enter()
 	p := a.exprRule(e)
-	pl.leave(e, p, a.ctxPosture, a.ctxAllowsChildren, a.known, a.unverified)
+	pl.leave(e, p, a.ctxPosture, a.ctxAllowsChildren, a.ctxType, a.known, a.unverified)
 	return p
 }
 
@@ -281,7 +284,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 	}
 	pl.enter()
 	p := a.instructionRule(el)
-	pl.leave(el, p, a.ctxPosture, a.ctxAllowsChildren, a.known, a.unverified)
+	pl.leave(el, p, a.ctxPosture, a.ctxAllowsChildren, a.ctxType, a.known, a.unverified)
 	return p
 }
 
@@ -292,7 +295,7 @@ func (a *instrAnalyzer) body(el *xdm.Node) props {
 	}
 	pl.enter()
 	p := a.bodyRule(el)
-	pl.leave(planBody{el}, p, a.ctxPosture, a.ctxAllowsChildren, a.known, a.unverified)
+	pl.leave(planBody{el}, p, a.ctxPosture, a.ctxAllowsChildren, a.ctxType, a.known, a.unverified)
 	return p
 }
 
@@ -303,7 +306,7 @@ func (a *instrAnalyzer) avtPropsOf(src string, el *xdm.Node) props {
 	}
 	pl.enter()
 	p := a.avtRule(src, el)
-	pl.leave(planAVT{el, src}, p, a.ctxPosture, a.ctxAllowsChildren, a.known, a.unverified)
+	pl.leave(planAVT{el, src}, p, a.ctxPosture, a.ctxAllowsChildren, a.ctxType, a.known, a.unverified)
 	return p
 }
 
