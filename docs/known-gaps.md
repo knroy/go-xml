@@ -1644,15 +1644,39 @@ by the parse work recorded in [CHANGELOG.md](../CHANGELOG.md).
 
 ### c14n XPath filters and the XPath 1.0 number model (XML-DSig)
 
-c14n evaluates XML-DSig XPath filters in XPath 2.0 1.0-compatibility mode,
-and `c14n/c14n_test.go` pins seventeen behaviours where that agrees with
-XPath 1.0 ([`c58c9c5`](https://github.com/knroy/go-xml/commit/c58c9c5)).
-Two number-model differences remain, listed in that test and not asserted:
-`number("+1")`, `number("1e3")` and `number("INF")` are numbers where XPath
-1.0 §4.4 gives NaN, and `string()` of a double gives `1.0E7`, `INF` and `-0`
-where §4.2 gives `10000000`, `Infinity` and `0`. Closing them needs an XPath
-1.0 number model that 2.0 compatibility mode must not use, so a new exported
-`xpath` switch; it is in progress (round SK, lane SK3).
+Closed in round SK ([`1df119d`](https://github.com/knroy/go-xml/commit/1df119d)).
+c14n's `FromXPath*` and `FromXPathFilter*` compile with
+`xpath.CompileOptions.XPath10`, which adds XPath 1.0's number model and
+comparison grammar to 1.0 compatibility mode: `number("+1")`, `number("1e3")`
+and `number("INF")` are NaN, `string()` writes `10000000`, `Infinity` and `0`
+where 2.0 writes `1.0E7`, `INF` and `-0`, `sum()` of a non-number is NaN,
+`1 < 2 < 3` is `(1 < 2) < 3`, and exponent literals are refused. The seventeen
+agreements pinned earlier ([`c58c9c5`](https://github.com/knroy/go-xml/commit/c58c9c5))
+still hold. Two things remain:
+
+* XPath 2.0 syntax is still accepted under `XPath10` (`if`, `for`, sequence
+  types, 2.0 functions): a filter a 1.0 processor refuses can compile here.
+* An integer past 2⁵³ is written as the double's exact decimal value, so
+  `string(12345678901234567890)` is `12345678901234567168`. XPath 1.0 §4.2
+  says an integer is written "with no decimal point and no leading zeros" and
+  does not say which digits; this reads it as the double's own value.
+
+### Entity limits a transform does not reach (xslt.FileResolver)
+
+Since round SK ([`9df608b`](https://github.com/knroy/go-xml/commit/9df608b))
+`xslt.FileResolver` carries xdm's seven entity limits (`MaxEntityDepth`,
+`MaxEntityBytes`, `MaxTotalEntityBytes`, `MaxEntities`, `MaxExternalFetches`,
+`MaxExternalFetchBytes`, `MaxExternalDepth`), and they bind its parses,
+`fn:parse-xml` in a transform whose `Documents` it is, and a nested
+`fn:transform` `stylesheet-text` (which now takes all of the caller resolver's
+settings, so under `AllowDOCTYPE` it accepts a DOCTYPE as
+`stylesheet-location` already did). Not reached, so these parse with the xdm
+defaults:
+
+* `fn:parse-xml` under `xquery` or plain `xpath`: needs a new
+  `xquery.Options` field.
+* A `Documents` resolver that is not a `FileResolver`.
+* The CLI: no flags set them.
 
 ---
 

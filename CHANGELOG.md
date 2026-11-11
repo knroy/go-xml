@@ -355,6 +355,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Where c14n's 1.0-compatibility XPath agrees with XPath 1.0 for DSig filters was untested | Seventeen agreements are pinned; the number-model differences left are listed in the test and known-gaps. | [`c58c9c5`][c58c9c5] |
 | Entity, external-DTD and XInclude limits were fixed constants | They are ParseOptions/XIncludeOptions fields; defaults unchanged, recursion depths clamp to a ceiling. | [`1c789ca`][1c789ca] |
 | The dtd, relaxng, xsd and xslt compile/merge budgets could not be configured | They are option fields with zero = today's default; externalRef and nested fn:transform compiles inherit the caller's settings. | [`7dd3159`][7dd3159], [`ae41e4c`][ae41e4c], [`2188003`][2188003], [`80e124e`][80e124e], [`58415b6`][58415b6] |
+| FileResolver had no entity limits, and fn:parse-xml and nested stylesheet-text ignored xdm's entity limits | FileResolver gains the seven xdm entity-limit fields; they bind its parses, fn:parse-xml and nested stylesheet-text. | [`9df608b`][9df608b] |
 
 
 ### Fixed
@@ -525,6 +526,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it means | Commit |
 |---|---|---|
+| XML-DSig XPath filters used XPath 2.0 numbers: number('1e3') was 1000, string(1 div 0) was 'INF', 1 < 2 < 3 was refused | New `xpath.CompileOptions.XPath10` applies the XPath 1.0 number model and comparison grammar; c14n's FromXPath*/FromXPathFilter* use it, so some filters select different nodes and an exponent literal is refused. | [`1df119d`][1df119d] |
 | An XSD validation refused at `MaxDepth`, or an assertion declined, has no validity code | Its `ValidationError.Code` is "" (was `cvc-elt.1` / `cvc-assertion.3`) and `Err` wraps `xdm.ErrResourceLimit`; the document is still refused. | [`de6e686`][de6e686] |
 | A 1.1 restriction rejected after a subsumption budget decline wraps `xdm.ErrResourceLimit` | Still refused, now as undecided with no constraint code; raising the `xsd.Options` budgets may admit it. | [`5203922`][5203922] |
 | `dtd.Validate` reports undeclared attributes | A document that validated before may now fail; `Options.AllowUndeclared` skips them, as it skips undeclared elements. | [`915eb63`][915eb63] |
@@ -2928,6 +2930,8 @@ here so every entry in this file sits under a release.
 [58415b6]: https://github.com/knroy/go-xml/commit/58415b6
 [de6e686]: https://github.com/knroy/go-xml/commit/de6e686
 [5203922]: https://github.com/knroy/go-xml/commit/5203922
+[9df608b]: https://github.com/knroy/go-xml/commit/9df608b
+[1df119d]: https://github.com/knroy/go-xml/commit/1df119d
 [337c660]: https://github.com/knroy/go-xml/commit/337c660
 [243a7af]: https://github.com/knroy/go-xml/commit/243a7af
 [43ca8b3]: https://github.com/knroy/go-xml/commit/43ca8b3

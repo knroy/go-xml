@@ -160,6 +160,11 @@ value as the default, since `Load` cannot be cancelled. `relaxng`
 `externalRef` compilations and nested `fn:transform` compiles inherit the
 caller's settings. `docs/options.md` documents each field
 ([`4986fa7`](https://github.com/knroy/go-xml/commit/4986fa7)).
+`xslt.FileResolver` carries the seven entity limits too, and they bind its
+parses, `fn:parse-xml` in a transform and a nested `fn:transform`
+`stylesheet-text` ([`9df608b`](https://github.com/knroy/go-xml/commit/9df608b));
+`fn:parse-xml` under XQuery or plain XPath, another `Documents` resolver and
+the CLI still use the xdm defaults ([known-gaps](known-gaps.md)).
 
 "Refused loudly" needed qualifying, and now it holds in both halves. Most
 limits that raise an error have to borrow a *semantic* error code, because
