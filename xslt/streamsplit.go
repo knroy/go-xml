@@ -1353,6 +1353,9 @@ type viewCheck struct {
 	peek bool
 	// inlined says the expression is a call's inlined body (streamview_leafcall.go).
 	inlined bool
+	// pl, set with globals, keeps the module's function table for
+	// leafInlinedSafe (streamview_leafcall.go).
+	pl *streamPlan
 	// whole are variables holding a built copy of the document or its
 	// element (streamexec_whole.go, wholeRead).
 	whole map[xdm.QName]*streamOp

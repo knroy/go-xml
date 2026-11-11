@@ -41,7 +41,7 @@ func (c *compiler) wholeDocSplit(sel *xpath.Compiled, ns xpath.NamespaceResolver
 	if n == 0 || wholeCopies(&probe, items, false) != n {
 		return nil
 	}
-	markSheetCalls(e, c.pkgStreamFuncs()) // streamsplit_calls.go
+	markSheetCallsBy(e, c.sheetJudge(true)) // streamsplit_calls.go
 	ok := true
 	bound := map[xdm.QName]bool{splitItems: true}
 	walkExprNodes(e, func(v any) {
@@ -87,7 +87,7 @@ func (c *compiler) wholeDocSplit(sel *xpath.Compiled, ns xpath.NamespaceResolver
 	// document and the snapshot (audit A2-7: 1.26-1.32x the tree's live
 	// heap when it held the built document and a snapshot of it).
 	if sole := reparse(sel, ns); n == 1 && sole != nil && wholeCopies(&sole, items, true) == 1 {
-		markSheetCalls(sole, c.pkgStreamFuncs())
+		markSheetCallsBy(sole, c.sheetJudge(true))
 		s.wholeSole = xpathleaf.WithExpr(sel, sole).(*xpath.Compiled)
 	}
 	return s

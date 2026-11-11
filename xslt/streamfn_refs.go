@@ -29,14 +29,14 @@ var sheetRefs sync.Map // weak.Pointer[xpath.NamedFunctionRef] -> sheetCall
 
 // markSheetRefs marks the references in e to stylesheet functions of fns a
 // call on which judgeSheetCall marks values, or burst without climbing.
-func markSheetRefs(e xpath.Expr, fns map[funcKey]*streamFunc) {
+func markSheetRefs(e xpath.Expr, j *sheetJudge) {
 	walkExprNodes(e, func(v any) {
 		x, ok := v.(*xpath.NamedFunctionRef)
 		if !ok || !stylesheetFn(x.Name) || x.Cast != nil {
 			return
 		}
 		probe := &xpath.FuncCall{Name: x.Name, Args: make([]xpath.Expr, x.Arity)}
-		if sc, ok := judgeSheetCall(probe, fns); ok && (sc.values || sc.burst && !sc.climb && !sc.up) {
+		if sc, ok := j.judge(probe); ok && (sc.values || sc.burst && !sc.climb && !sc.up) {
 			k := weak.Make(x)
 			if _, loaded := sheetRefs.Swap(k, sc); !loaded {
 				goruntime.AddCleanup(x, func(k weak.Pointer[xpath.NamedFunctionRef]) { sheetRefs.Delete(k) }, k)
