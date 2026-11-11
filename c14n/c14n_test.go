@@ -624,6 +624,58 @@ func TestXPathFilterXPath10Semantics(t *testing.T) {
 	}
 }
 
+// P1. XPath 2.0 Appendix I lists where 1.0 compatibility mode still differs
+// from XPath 1.0 (from memory; the appendix is not vendored). Each row is an
+// expression a filter can reach whose value under FromXPathFilter is the XPath
+// 1.0 value: the compatibility rules for comparisons (§3.5.2, boolean and
+// relational operands), arithmetic as xs:double, and the 1.0 rounding,
+// substring and mod rules. The rows that still differ are listed after the
+// table; they are not asserted, because fixing them needs an XPath 1.0 number
+// model that 2.0 compatibility mode must not use.
+func TestXPathFilterCompatModeAgreesWithXPath10(t *testing.T) {
+	doc := parse(t, `<r n="abc"/>`)
+	r := doc.ChildElements()[0]
+	for _, ex := range []string{
+		`@n = true()`,                            // node-set vs boolean is boolean(node-set)
+		`@zz = false()`,                          // an empty node-set is false
+		`"5" < "10"`,                             // < compares numbers, not strings
+		`"abc" != 0`,                             // NaN against a number
+		`"a" != "A"`,                             // codepoint equality
+		`string(7 div 2) = "3.5"`,                // div is double division
+		`string(1 div 3) = "0.3333333333333333"`, // shortest round-trip digits
+		`string(0.1 + 0.2) = "0.30000000000000004"`,  // arithmetic as double
+		`substring("12345", 1.5, 2.6) = "234"`,       // round() on the bounds
+		`substring("12345", 0 div 0, 3) = ""`,        // NaN start selects nothing
+		`substring("12345", -1 div 0, 1 div 0) = ""`, // -INF + INF is NaN
+		`string(round(-2.5)) = "-2"`,                 // round half towards +INF
+		`string(-5 mod 3) = "-2"`,                    // mod takes the dividend's sign
+		`number(" 12 ") = 12 and number("12.") = 12`, // the 1.0 Number production
+		`string(number("abc")) = "NaN"`,              // NaN's string value
+		`boolean(0 div 0) = false()`,                 // NaN is false
+		`string(4 div 2) = "2"`,                      // an integral double has no ".0"
+	} {
+		set, err := FromXPathFilter(doc, `self::r and (`+ex+`)`, nil)
+		if err != nil {
+			t.Errorf("%s: %v", ex, err)
+			continue
+		}
+		if !set.Contains(r) {
+			t.Errorf("%s is false; XPath 1.0 says true", ex)
+		}
+	}
+	// Not asserted: where compatibility mode still gives a value XPath 1.0
+	// does not. Each changes a filter's node-set silently:
+	//   number("+1") = 1, number("1e3") = 1000, number("INF") = INF; 1.0 gives
+	//     NaN for all three (§4.4 Number production; libxml2 agrees except
+	//     that it reads 1e3 as 1000), and @a > 5 follows the same conversion
+	//   string(10000 * 1000) = "1.0E7", string(1 div 0) = "INF",
+	//     string(0 * -1) = "-0"; 1.0 gives "10000000", "Infinity", "0" (§4.2)
+	//   string(12345678901234567890) keeps the integer; 1.0 has only doubles
+	// These fail closed instead, with an error rather than a node-set:
+	//   sum() over a non-numeric string is FORG0001 (1.0: NaN), and
+	//   "1 < 2 < 3" and "10div 2" are XPST0003 (1.0 parses both).
+}
+
 func TestFromXPathErrors(t *testing.T) {
 	doc := parse(t, `<a xml:lang="en"><b/></a>`)
 	if _, err := FromXPath(doc, "((", nil); err == nil {

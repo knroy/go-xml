@@ -28,13 +28,11 @@ type ValidationError struct {
 	// Err is a sentinel this failure also is, for callers that need to
 	// branch on the KIND of failure rather than on its code.
 	//
-	// It exists for xdm.ErrResourceLimit. A depth refusal is reported with
-	// a cvc- code because that is the only vocabulary a validation result
-	// has, and cvc-elt.1 then says "this document is invalid" about a
-	// document that was never assessed. The code is kept -- callers and
-	// the conformance suites read it -- and the sentinel carried here
-	// alongside, so errors.Is can tell a refusal from a verdict. Nil on
-	// every ordinary failure, which is all of them but this one.
+	// It exists for xdm.ErrResourceLimit: a run the processor refused --
+	// MaxDepth, or an assertion it declined to evaluate -- assessed nothing,
+	// so it carries no cvc- code (a cvc- code says "invalid") and this
+	// sentinel instead, and errors.Is tells a refusal from a verdict. Nil on
+	// every ordinary failure.
 	Err error
 }
 
@@ -584,12 +582,18 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 // failLimit records a failure that is the processor refusing to do the work
 // rather than a fault in the document, marking it with xdm.ErrResourceLimit.
 //
+// It records no code. Every cvc- code is a validity verdict (XSD 1.1 Part 1
+// §3.3.4.3 and §3.13.4.1, from memory), and a refusal assessed nothing: the
+// element's [validity] is notKnown, which no cvc- code expresses. An empty
+// Code is the package's form for a processor-side failure, as in the
+// streaming validator's own refusals.
+//
 // It records through fail so the MaxErrors accounting, the path and the
 // position are identical; the only difference is the sentinel, and a refusal
 // that MaxErrors dropped is not observable because it was not recorded at all.
-func (v *validator) failLimit(n *xdm.Node, code, format string, args ...any) {
+func (v *validator) failLimit(n *xdm.Node, format string, args ...any) {
 	before := len(v.errs)
-	v.fail(n, code, format, args...)
+	v.fail(n, "", format, args...)
 	if len(v.errs) > before {
 		v.errs[len(v.errs)-1].Err = xdm.ErrResourceLimit
 	}
@@ -628,13 +632,11 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 	// a separate knob on a separate call, and a caller who raises it to
 	// accept a legitimately deep document should not thereby arm a crash.
 	if maxDepth := v.opts.MaxDepth; maxDepth > 0 && len(v.path) >= maxDepth {
-		// cvc-elt.1 is kept because callers and the conformance suites read
-		// the code, but it means "the element is not valid against its
-		// declaration" and nothing here was assessed against anything: the
-		// document may well be perfectly valid, and this processor declined
-		// to find out. The sentinel says which of the two it is.
-		v.failLimit(el, "cvc-elt.1",
-			"element nesting exceeds %d levels", maxDepth)
+		// No cvc-elt.1: that code means "the element is not valid against
+		// its declaration", and nothing here was assessed against anything.
+		// The document may well be perfectly valid; this processor declined
+		// to find out, and failLimit's sentinel says so.
+		v.failLimit(el, "element nesting exceeds %d levels", maxDepth)
 		v.stopped = true
 		return nil
 	}

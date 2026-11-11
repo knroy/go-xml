@@ -39,6 +39,14 @@ import (
 
 // withBudgets runs fn with the four budgets set to the given values, restoring
 // them afterwards. A value of -1 leaves that budget alone.
+// branchCountsOK is allBranchCounts with its decline read as a bool, the form
+// these tests were written against; which decline it was is
+// TestBranchCountDeclinesAreCounted's business.
+func branchCountsOK(p *Particle) ([]branchCount, bool) {
+	brs, err := allBranchCounts(p)
+	return brs, err == nil
+}
+
 func withBudgets(positions, branches, states, product int, fn func()) {
 	op, ob, os, opr := maxPositions, branchLimit, subsumeMaxStates, subsumeMaxProduct
 	defer func() {
@@ -409,11 +417,11 @@ func TestBranchCountsDeclineIsNotAcceptance(t *testing.T) {
 			{MinOccurs: 1, MaxOccurs: 1, Term: &ElementDecl{Name: xdm.QName{Local: "b"}}},
 		},
 	}}
-	if brs, ok := allBranchCounts(p); !ok || len(brs) != 2 {
+	if brs, ok := branchCountsOK(p); !ok || len(brs) != 2 {
 		t.Fatalf("at the normal budget want two branches, got %d (ok=%v)", len(brs), ok)
 	}
 	withBudgets(-1, 0, -1, -1, func() {
-		brs, ok := allBranchCounts(p)
+		brs, ok := branchCountsOK(p)
 		if ok {
 			t.Errorf("UNSOUND: with branchLimit=0 allBranchCounts reported success with %d branches; "+
 				"an exceeded budget must decline (ok=false), because the caller reads "+
@@ -673,7 +681,7 @@ func TestBranchLimitBoundary(t *testing.T) {
 			}
 			p := &Particle{MinOccurs: 1, MaxOccurs: 1,
 				Term: &ModelGroup{Compositor: CompositorChoice, Particles: ps}}
-			brs, ok := allBranchCounts(p)
+			brs, ok := branchCountsOK(p)
 			// The check is len(out) > branchLimit *after* appending,
 			// so n up to and including the limit succeeds.
 			if n <= branchLimit {

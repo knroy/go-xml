@@ -889,9 +889,11 @@ func (e *BinaryOp) evalRange(ctx *Context) (xdm.Sequence, error) {
 
 // bigInteger evaluates e to a single xs:integer without narrowing it to int64.
 //
-// It shares the operand type rules with singleInteger — only xs:integer and
-// xs:untypedAtomic convert — and differs only in keeping the arbitrary
-// precision that xs:integer is defined to have.
+// Only xs:integer and xs:untypedAtomic convert, and the arbitrary precision
+// that xs:integer is defined to have is kept. A range too long to enumerate
+// is refused by evalRange as XPDY0130 on its item count, never on the size of
+// a bound: XPath 3.1 §2.3.1 names XPDY0130 for an exceeded implementation
+// limit, and FOAR0002 covers only limited-precision integer arithmetic.
 func bigInteger(ctx *Context, e Expr) (*big.Int, error) {
 	v, err := e.Eval(ctx)
 	if err != nil {
@@ -932,68 +934,6 @@ func bigInteger(ctx *Context, e Expr) (*big.Int, error) {
 		return nil, xdm.ErrType("the operands of \"to\" must be integers")
 	}
 	return new(big.Int).Set(r.Num()), nil
-}
-
-func singleInteger(ctx *Context, e Expr) (*int64, error) {
-	v, err := e.Eval(ctx)
-	if err != nil {
-		return nil, err
-	}
-	atoms, err := xdm.AtomizeChecked(v)
-	if err != nil {
-		return nil, err
-	}
-	if len(atoms) == 0 {
-		return nil, nil
-	}
-	it, err := atoms.Single()
-	if err != nil {
-		return nil, err
-	}
-	// The operands of "to" are declared xs:integer, so a decimal or double is
-	// a type error rather than something to truncate: "1.1 to 3" has no
-	// meaning, and silently reading it as "1 to 3" invents a range the author
-	// did not write. Only untypedAtomic converts, which is the usual rule for
-	// values coming from an untyped document.
-	src := it.(*xdm.Atomic)
-	if src.Type != xdm.TypeInteger && src.Type != xdm.TypeUntypedAtomic {
-		return nil, xdm.ErrType(
-			"the operands of \"to\" must be xs:integer, got %s", src.TypeName())
-	}
-	a, err := CastAtomic(src, xdm.TypeInteger)
-	if err != nil {
-		return nil, err
-	}
-	// xs:integer is arbitrary-precision here, so a bound can legitimately
-	// exceed int64 — "1000000000000000000000 to ..." is a valid expression.
-	// Int64() wraps silently, which turned that bound into 3875820019684212736
-	// and produced a range of the wrong numbers rather than an error.
-	//
-	// A bound outside int64 cannot produce a materialisable range anyway: the
-	// item budget stops far below it. Reporting that is both correct and more
-	// useful than a wrapped value.
-	if r := a.Rat(); r != nil && !r.IsInt() {
-		return nil, xdm.ErrType("the operands of \"to\" must be integers")
-	}
-	if !a.FitsInt64() {
-		// FOAR0002 is "numeric operation overflow/underflow", which is not
-		// quite what happened: nothing overflowed, the processor declined
-		// to enumerate a range this large. The code is kept because callers
-		// and the conformance suites read it, and xdm.ErrResourceLimit is
-		// wrapped in alongside so a refusal is distinguishable from an
-		// arithmetic fault. xdm.Errorf cannot carry the sentinel -- it
-		// Sprintf's its arguments -- so the Error is built directly, which
-		// renders identically and unwraps.
-		return nil, &xdm.Error{
-			Code: "FOAR0002",
-			Message: fmt.Sprintf(
-				"range bound %s is too large to enumerate: %s",
-				a.String(), xdm.ErrResourceLimit),
-			Err: xdm.ErrResourceLimit,
-		}
-	}
-	n := a.Int64()
-	return &n, nil
 }
 
 // --- Arithmetic -------------------------------------------------------------

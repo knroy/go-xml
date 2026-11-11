@@ -124,13 +124,13 @@ syntax error does *not* carry the sentinel.
 | `backtrackMaxDepth` (50,000) | `xpath/regex_backtrack.go` | `XPDY0130` | as above; nested matcher calls of the opt-in backtracking engine, so a long subject is an error, not a stack overflow |
 | `MaxRegexpProgram` (100,000 instructions) | `xpath/regex_size.go` | `XPDY0130` | as above; a valid pattern whose compiled program would be larger, from `fn:matches` and the other regex functions. `xpath.CompileBounded` itself returns the bare refusal wrapping `xdm.ErrResourceLimit`, and `xsd` facets report it under their own `pattern %q:` prefix |
 | `maxFlattenSteps` (1<<24) | `xdm/maparray.go` | `XPDY0130` | items and arrays one `xdm.Flatten` visits inside arrays; `array:flatten` and `fn:data` also charge `MaxItems`. `xdm.FlattenContext(ctx, seq)` returns this refusal as an error rather than an `internal/xdmlimit` panic, and checks `ctx` every 1024 items (`flattenCheckEvery`); `array:flatten`, `fn:data`, `xsl:copy-of`, `xsl:value-of` and `xsl:attribute` flatten under the evaluation's context, so a host deadline stops a large flatten |
-| range bound | `xpath/operators.go` | `FOAR0002` | a numeric operation overflowed |
+| range length | `xpath/operators.go` | `XPDY0130` | (the code §2.3.1 names for a limit) a range longer than `MaxItems`; a bound outside int64 is an ordinary `xs:integer` and is enumerated, so `1e21 to 1e21+3` is four items. The dead `FOAR0002` bound check was removed in round SK |
 | `maxNestDepth` | `xquery/nested.go` | `XPDY0130` | as the XPath caps; it borrowed `XPST0003` until 2026-09-14 |
 | `maxConstructorDepth` | `xquery/enclosed.go` | `XPDY0130` | as above |
 | `MaxModules` / `MaxModuleBytes` | `xquery/module.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the module is not there |
 | `MaxSchemaBytes` | `xquery/schemaimport.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the schema is not there |
 | `MaxSchemaBytes` | `xslt/importschema.go` | *(none)* | as above for `xsl:import-schema`; deliberately **not** `XTSE0220`, which would claim the schema is invalid; wraps `xdm.ErrResourceLimit` |
-| `ValidateOptions.MaxDepth` | `xsd/validate.go` | `cvc-elt.1` | the element is invalid against its declaration |
+| `ValidateOptions.MaxDepth` | `xsd/validate.go` | *(none)* | (no misdescription) the `ValidationError` has an empty `Code` and wraps `xdm.ErrResourceLimit`; it reported `cvc-elt.1`, a validity verdict, until round SK. An assertion the processor declined to evaluate is the same: no `cvc-assertion.3` |
 | `maxSchemaFetches` (10,000) | `relaxng/resolve.go` | *(none)* | include/externalRef fetches per RELAX NG compilation, all routes; the refusal names the budget |
 | fetched-document budget | `relaxng/compile.go` | *(none)* | the nodes and text bytes of every fetched include/externalRef document per compilation, at xdm's single-document `DefaultMaxNodes` and `DefaultMaxBytes`; wraps `xdm.ErrResourceLimit` |
 | `maxSequenceMatcherEdges` (1<<20) | `xsd/automaton.go` | *(none)* | follow representation one DTD content model may store in `dtd.Validate`: one per piece plus its unshared members, so a repeated choice of n costs ~2n and a dense `(a?,a?,…)` still stops at ~1450 positions; XSD models keep the `maxUPAStateWidth` (256) cap |
@@ -153,7 +153,7 @@ about the input. A document refused for depth may be perfectly valid, and a
 pattern refused for its backtracking budget may well match. Reporting either
 as a fault tells the user something untrue.
 
-#### Limits that decline without an error at all
+#### Limits that decline before the conservative table answers
 
 `xsd/subsume.go` and `xsd/restrict.go` do not raise anything when their budgets
 run out. They return "declined", and the caller falls back to the conservative
@@ -163,7 +163,14 @@ fallback never accepts what the exact answer rejects — but it is silent: a
 schema refused because a budget ran out looked exactly like one the table
 genuinely forbids.
 
-Those declines are now **counted** rather than raised, through the
+Since round SK a rejection that follows a **budget** decline is no longer
+silent: the schema is still refused (the limits themselves are unchanged), but
+the error wraps `xdm.ErrResourceLimit` and says the restriction is
+*undecided, not known to be invalid*, carrying no constraint code, the same
+form as the UPA refusal. A rejection after a *structural* decline, or with no
+decline at all, is an ordinary verdict and does not carry the sentinel.
+
+The declines are also **counted**, through the
 `budgetStats` hook in `xsd/subsume.go`, on the model of `icStats` in
 `xsd/identity.go`. Budget declines (fixable by raising `subsumeMaxStates`,
 `subsumeMaxProduct` or `branchLimit`) are counted separately from structural

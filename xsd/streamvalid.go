@@ -404,7 +404,7 @@ func (s *streamV) startChild(pi int, f *svFrame, el *xdm.Node) {
 func (s *streamV) startElement(f *svFrame, el *xdm.Node, decl *ElementDecl) {
 	v := s.v
 	if maxDepth := v.opts.MaxDepth; maxDepth > 0 && len(v.path) >= maxDepth {
-		v.failLimit(el, "cvc-elt.1", "element nesting exceeds %d levels", maxDepth)
+		v.failLimit(el, "element nesting exceeds %d levels", maxDepth)
 		v.stopped = true
 		return
 	}

@@ -94,6 +94,18 @@ func TestResourceLimitsCarrySentinelAndKeepTheirCode(t *testing.T) {
 			},
 			"XPDY0130", "backtracking step budget",
 		},
+		{
+			// xpath/operators.go, evalRange. A bound outside int64 is an
+			// ordinary xs:integer; what is refused is the item count, and
+			// XPath 3.1 2.3.1 names XPDY0130 for that, not FOAR0002.
+			"range length", func() error {
+				ctx := NewContext(nil, Builtins())
+				ctx = ctx.WithVersion(XPath31)
+				_, err := Eval(`count(1 to 100000000000000000000000000)`, ctx, nil)
+				return err
+			},
+			"XPDY0130", "exceeds the",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -114,35 +126,6 @@ func TestResourceLimitsCarrySentinelAndKeepTheirCode(t *testing.T) {
 					"match on message text would break", err, tt.wantText)
 			}
 		})
-	}
-}
-
-// The FOAR0002 range-bound refusal is exercised through its own function
-// rather than through an expression, because singleInteger currently has no
-// caller: "to" reads its bounds through bigInteger, which keeps the arbitrary
-// precision rather than narrowing. The site is wrapped anyway -- it is
-// reachable the moment anything calls it again, and a limit that reports
-// FOAR0002 without the sentinel is exactly the defect this contract exists to
-// prevent from recurring.
-func TestRangeBoundRefusalCarriesSentinel(t *testing.T) {
-	ctx := NewContext(nil, Builtins())
-	ctx = ctx.WithVersion(XPath31)
-	huge, err := Parse("100000000000000000000000000", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = singleInteger(ctx, huge)
-	if err == nil {
-		t.Fatal("expected a refusal for a bound outside int64")
-	}
-	if !errors.Is(err, xdm.ErrResourceLimit) {
-		t.Errorf("errors.Is(%v, ErrResourceLimit) = false", err)
-	}
-	if code := xdm.ErrorCode(err); code != "FOAR0002" {
-		t.Errorf("code = %q, want FOAR0002", code)
-	}
-	if !strings.Contains(err.Error(), "is too large to enumerate") {
-		t.Errorf("message %q lost its leading text", err)
 	}
 }
 

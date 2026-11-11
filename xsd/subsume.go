@@ -44,6 +44,9 @@ import (
 // no way to find out, and neither did a maintainer wondering whether a budget
 // is set anywhere near where real schemas need it.
 //
+// A budget decline is now also returned, as errBudgetDeclined, and a rejection
+// that follows one is reported as undecided (particleValidRestrictionVersion).
+//
 // So the counters exist to report the decline, not to change it. Nothing reads
 // them to make a decision; raising or lowering a budget is the only thing that
 // changes an answer.
@@ -179,19 +182,27 @@ func (n *nfa) addState() int {
 //
 // It returns ok=false for a model that is recursive, unbounded in a way that
 // unrolling cannot represent, or larger than the cap. Every such answer sends
-// the caller back to the 1.0 table.
-func buildNFA(p *Particle) (*nfa, bool) {
+// the caller back to the 1.0 table; the error is errBudgetDeclined when the cap
+// was the reason and nil when the shape was.
+//
+// The cap is told from the shape by the state count alone: every addState is
+// checked against subsumeMaxStates at once and the build stops there, so a
+// failed build that ended above the cap ended because of it.
+func buildNFA(p *Particle) (*nfa, error, bool) {
 	n := &nfa{}
 	n.start = n.addState()
 	active := map[*ModelGroup]bool{}
 	end, ok := nfaParticle(n, p, n.start, active)
 	if !ok {
-		return nil, false
+		if len(n.trans) > subsumeMaxStates {
+			return nil, errBudgetDeclined, false
+		}
+		return nil, nil, false
 	}
 	for _, e := range end {
 		n.accept[e] = true
 	}
-	return n, true
+	return n, nil, true
 }
 
 // nfaParticle threads the particle's occurrence range, returning the states at
@@ -401,7 +412,8 @@ func (n *nfa) accepts(set map[int]bool) bool {
 }
 
 // particleSubsumes decides XSD 1.1 §3.4.6.4 for r against b by language
-// inclusion, returning ok=false when it declines.
+// inclusion, returning ok=false when it declines: with errBudgetDeclined when a
+// budget stopped it, with nil when the shape did.
 //
 // It declines rather than guesses whenever the construction cannot be exact.
 // Two of those are shape-driven and deterministic: an all group, which
@@ -422,13 +434,13 @@ func (n *nfa) accepts(set map[int]bool) bool {
 // and TestSubsumeDeclineIsNotAcceptance, which run the comparison with both
 // budgets forced to zero so only the table answers.
 func particleSubsumes(r, b *Particle) (error, bool) {
-	rn, ok := buildNFA(r)
+	rn, err, ok := buildNFA(r)
 	if !ok {
-		return nil, false
+		return err, false
 	}
-	bn, ok := buildNFA(b)
+	bn, err, ok := buildNFA(b)
 	if !ok {
-		return nil, false
+		return err, false
 	}
 
 	// The alphabet is the set of name-equivalence classes the two models
@@ -465,7 +477,7 @@ func particleSubsumes(r, b *Particle) (error, bool) {
 	for len(queue) > 0 {
 		if len(seen) > subsumeMaxProduct {
 			declineSubsumeBudget()
-			return nil, false
+			return errBudgetDeclined, false
 		}
 		p := queue[0]
 		queue = queue[1:]
@@ -686,6 +698,15 @@ func sortInts(xs []int) { slices.Sort(xs) }
 // would be.
 var errSubsumeCounterexample = errorString(
 	"the restriction admits content the base does not allow")
+
+// errBudgetDeclined is what particleSubsumes and allBranchCounts return, with
+// ok=false, when a budget -- subsumeMaxStates, subsumeMaxProduct or
+// branchLimit -- stopped them, as distinct from a shape they cannot decide.
+// It is not a verdict: the caller still falls back to the 1.0 table, and only
+// records that the exact answer was not computed, so that a rejection the
+// table then gives can be reported as undecided rather than invalid.
+var errBudgetDeclined = errorString(
+	"the exact XSD 1.1 restriction check exceeded its budget")
 
 type errorString string
 
