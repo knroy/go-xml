@@ -1156,7 +1156,10 @@ func (s *serializer) openTag(n *xdm.Node, depth, base int, nonEmpty bool) (elemS
 	// XML, where those elements hold ordinary parsed character data — the
 	// suite's expected output escapes "<" and "&" inside a script there, and
 	// a document that did not would not parse as XML at all.
-	if s.html && !s.xhtml && isRawTextElement(n.Name().Local) {
+	// And only for an element serialized as an HTML element (Serialization
+	// 3.1 §7.1): an svg:style or an island's x:script is foreign content,
+	// which an HTML parser reads as ordinary text, so its "<" must be escaped.
+	if s.htmlNativeElement(n) && isRawTextElement(n.Name().Local) {
 		st.rawElem, st.raw, st.rawName, st.rawLT = true, s.rawText, s.rawTextName, s.rawTextLT
 		s.rawText, s.rawTextName, s.rawTextLT = true, n.Name().Local, false
 	}

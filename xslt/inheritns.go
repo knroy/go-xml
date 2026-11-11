@@ -45,9 +45,17 @@ func noAttr(el *xdm.Node, name string) bool {
 	return a != nil && !yesAttr(el, name)
 }
 
-func blockNamespaceInheritance(el *xdm.Node) {
+// blockNamespaceInheritance: see the comment above noAttr.
+//
+// Each child's undeclarations are added in one AddNamespaces call, so its
+// frame is built once and interned, and children left with the same bindings
+// share one frame. Children whose own declarations differ cannot share, so K
+// prefixes over M children still write up to K x M bindings: they are charged
+// to the byte budget as the copy paths charge inherited bindings
+// (chargeInherited), and the context is checked per child.
+func blockNamespaceInheritance(ctx *xpath.Context, el *xdm.Node) error {
 	if el == nil || el.Kind() != xdm.KindElement {
-		return
+		return nil
 	}
 	scope := map[string]string{}
 	prefixes := make([]string, 0, el.NumNamespaceDecls())
@@ -66,14 +74,23 @@ func blockNamespaceInheritance(el *xdm.Node) {
 	// A stable order, for the same reason copyNamespacesTo sorts.
 	sort.Strings(prefixes)
 
+	if len(prefixes) == 0 {
+		return nil
+	}
+	declared := map[string]bool{}
+	var pairs []string
 	for child := range el.Children() {
 		if child.Kind() != xdm.KindElement {
 			continue
 		}
-		declared := map[string]bool{}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		clear(declared)
 		for prefix := range child.DeclaredNamespaces() {
 			declared[prefix] = true
 		}
+		pairs = pairs[:0]
 		for _, p := range prefixes {
 			if declared[p] {
 				continue
@@ -84,9 +101,14 @@ func blockNamespaceInheritance(el *xdm.Node) {
 			if usedByNames(child, p, scope[p]) {
 				continue
 			}
-			child.AddNamespace(p, "")
+			pairs = append(pairs, p, "")
 		}
+		if err := chargeInherited(ctx, len(pairs)/2); err != nil {
+			return err
+		}
+		child.AddNamespaces(pairs...)
 	}
+	return nil
 }
 
 // usedByNames reports whether the prefix/URI pair is the binding that el's own

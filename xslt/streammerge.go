@@ -658,6 +658,11 @@ func (in *mergeInput) advance(rt *runtime, keys []*sortKey, colls []xpath.Collat
 		if !ok {
 			return in.err
 		}
+		// The snapshot is a copy, charged before it is made as collect and
+		// fn:snapshot charge theirs (copyfuncs.go).
+		if err := chargeCopies(rt.ctx, []xdm.Sequence{{it}}, true); err != nil {
+			return err
+		}
 		var err error
 		snap := snapshotItem(it)
 		if in.acc != nil {
@@ -759,6 +764,10 @@ func (i *mergeInstr) merge(rt *runtime, out *outputBuilder, inputs []*mergeInput
 		}
 	}
 	var held []heldMergeGroup
+	// heldItems counts the items held groups keep; with the group being
+	// formed, it is what the streamed merge holds at once, checked against
+	// the item bound as collect checks what the tree holds.
+	var heldItems int64
 	for g := 0; ; g++ {
 		var m *mergeInput
 		for _, in := range inputs {
@@ -782,15 +791,27 @@ func (i *mergeInstr) merge(rt *runtime, out *outputBuilder, inputs []*mergeInput
 		}
 		first := *m.head
 		binding := &mergeGroupBinding{names: names, named: named, items: make([]xdm.Sequence, len(i.sources))}
+		var n int64
 		for _, in := range inputs {
 			for in.head != nil && mergeKeysEqual(first.keys, in.head.keys) {
+				// take copies a streamed head again: charged as advance's.
+				if in.next != nil {
+					if err := chargeCopies(rt.ctx, []xdm.Sequence{{in.head.item}}, true); err != nil {
+						return err
+					}
+				}
 				binding.items[in.src] = append(binding.items[in.src], in.take())
+				n++
+				if err := rt.ctx.ItemsRefused(heldItems + n); err != nil {
+					return err
+				}
 				if err := in.advance(rt, resolved[in.src], colls[in.src]); err != nil {
 					return err
 				}
 			}
 		}
 		if i.groupsFirst { // streammerge_l4.go: last() is the number of groups
+			heldItems += n
 			held = append(held, heldMergeGroup{binding, first.keys})
 			continue
 		}
