@@ -65,7 +65,7 @@ func choiceWidthCost(t *testing.T, k int) time.Duration {
 // every one before it, so compiling a K-way choice and deriving it cost
 // O(K²): 0.47 s and 2.7 s at K=8000. Indexed, 8x the width costs about 8x.
 func TestSM10ChoiceWidthIsLinear(t *testing.T) {
-	small, large := choiceWidthCost(t, 500), choiceWidthCost(t, 4000)
+	small, large := choiceWidthCost(t, 2000), choiceWidthCost(t, 16000)
 	if r := float64(large) / float64(small); r > 24 {
 		t.Fatalf("8x the alternatives cost %.0fx the time (%v vs %v); choice is quadratic again", r, large, small)
 	}

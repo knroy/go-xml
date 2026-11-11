@@ -17,6 +17,8 @@ import (
 // sm02Growth times run(n) and run(4n), each the best of three, after
 // setup, and fails when the larger took more than ratio times as long: a
 // cost linear in n grows about fourfold, a quadratic one sixteenfold.
+// Each timing repeats run until 2ms have passed and takes the mean, so a
+// scheduler or timer tick (about 1ms on Windows) cannot decide the ratio.
 func sm02Growth(t *testing.T, n int, ratio float64, setup func(n int) func()) {
 	t.Helper()
 	best := func(n int) time.Duration {
@@ -25,15 +27,17 @@ func sm02Growth(t *testing.T, n int, ratio float64, setup func(n int) func()) {
 		for range 3 {
 			goruntime.GC()
 			t0 := time.Now()
-			run()
-			d = min(d, time.Since(t0))
+			for k := 1; ; k++ {
+				run()
+				if el := time.Since(t0); el >= 2*time.Millisecond {
+					d = min(d, el/time.Duration(k))
+					break
+				}
+			}
 		}
 		return d
 	}
 	small, large := best(n), best(4*n)
-	if small < 50*time.Microsecond {
-		small = 50 * time.Microsecond // below the clock's noise
-	}
 	if r := float64(large) / float64(small); r > ratio {
 		t.Fatalf("n=%d took %v, 4n took %v: %.1fx, want at most %.0fx", n, small, large, r, ratio)
 	}
