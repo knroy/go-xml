@@ -1427,7 +1427,8 @@ available behind `xpath.SetBacktrackingRegex(true)` (`-backtracking-regex` on
 the command line). It is off by default because it has no linear-time
 guarantee and patterns can come from document data; even enabled, a step
 budget bounds every match and exhausting it is an error rather than a silent
-"no match".
+"no match". `xpath.SetBacktrackBudget` and `xpath.SetBacktrackMaxDepth` change
+the step budget and the depth bound (see [options.md](docs/options.md)).
 
 Everything else about the XML Schema regex flavour *is* implemented, and most
 of it had to be, because RE2 silently disagrees rather than refusing: XML
