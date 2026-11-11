@@ -275,3 +275,35 @@ func TestEntityLimitsLargestValues(t *testing.T) {
 		o.MaxEntityBytes, o.MaxTotalEntityBytes, o.MaxExternalFetchBytes = 1, 1, 1
 	}))
 }
+
+// TestEmptyEntityLadderIsCharged: <!ENTITY a0 ”> and aN = &aN-1;&aN-1;
+// expands nothing across 2^N references, so charging only expanded bytes
+// never refused it: forty rungs, 790 bytes, ran for days (run-4,
+// entityTable.expand). Each reference now costs its length.
+func TestEmptyEntityLadderIsCharged(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString(`<!DOCTYPE r [<!ENTITY a0 "">`)
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&sb, `<!ENTITY a%d "&a%d;&a%d;">`, i, i-1, i-1)
+	}
+	sb.WriteString(`]>`)
+	subset := sb.String()
+	if _, err := ParseString(subset+`<r>&a40;</r>`, ParseOptions{AllowDOCTYPE: true}); err == nil {
+		t.Errorf("a 40-rung empty ladder referenced in content was accepted")
+	}
+	// Unreferenced, it is no error, only no longer an unbounded one.
+	if _, err := ParseString(subset+`<r/>`, ParseOptions{AllowDOCTYPE: true}); err != nil {
+		t.Errorf("an unreferenced ladder: %v", err)
+	}
+	// A short ladder is a legitimate use and still expands.
+	tr, err := ParseString(`<!DOCTYPE r [<!ENTITY a0 "x"><!ENTITY a1 "&a0;&a0;"><!ENTITY a2 "&a1;&a1;">]><r>&a2;</r>`,
+		ParseOptions{AllowDOCTYPE: true})
+	if err != nil || tr.Root.StringValue() != "xxxx" {
+		t.Errorf("a short ladder: %v", err)
+	}
+	// WFC: No Recursion is still reported, not read as empty.
+	if _, err := ParseString(`<!DOCTYPE r [<!ENTITY a "&b;"><!ENTITY b "&a;">]><r>&a;</r>`,
+		ParseOptions{AllowDOCTYPE: true}); err == nil {
+		t.Errorf("a cycle was accepted")
+	}
+}
