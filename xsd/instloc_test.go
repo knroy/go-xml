@@ -297,7 +297,11 @@ func TestInstanceLocationConfinedWhateverResolver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, loc := range []string{evil, rel, fileuri.Of(evil)} {
+	// The scheme is case-insensitive (RFC 3986 §3.1). An upper-case one
+	// was checked as a relative path under the schema directory and then
+	// opened, by the unrooted resolver, as the absolute file it names.
+	u := fileuri.Of(evil)
+	for _, loc := range []string{evil, rel, u, "FILE" + u[4:], "File" + u[4:]} {
 		doc := `<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"` +
 			` xsi:noNamespaceSchemaLocation="` + loc + `"><x>1</x></doc>`
 		tree, err := xdm.ParseString(doc, xdm.ParseOptions{})
@@ -369,6 +373,16 @@ func TestInstanceLocalPathRefusesNetworkPaths(t *testing.T) {
 	if got, err := instanceLocalPath("a.xsd", dirs[0], dirs); err != nil ||
 		got != filepath.Join(dirs[0], "a.xsd") {
 		t.Errorf("instanceLocalPath(a.xsd) = %q, %v", got, err)
+	}
+	// The path checked is the path returned, whatever the scheme's case.
+	in := filepath.Join(dirs[0], "a.xsd")
+	for _, loc := range []string{fileuri.Of(in), "FILE" + fileuri.Of(in)[4:]} {
+		if got, err := instanceLocalPath(loc, dirs[0], dirs); err != nil || got != in {
+			t.Errorf("instanceLocalPath(%q) = %q, %v, want %q", loc, got, err, in)
+		}
+	}
+	if _, err := instanceLocalPath("FILE://host/share/x.xsd", dirs[0], dirs); err == nil {
+		t.Error("instanceLocalPath(FILE://host/...) was admitted")
 	}
 	if got, err := instanceLocalPath("https://e.example/a.xsd", dirs[0], dirs); err != nil ||
 		got != "https://e.example/a.xsd" {
