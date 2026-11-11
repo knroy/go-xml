@@ -1239,7 +1239,7 @@ func (c *compiler) compileData(n *xdm.Node) (pattern, error) {
 			if pn == "" {
 				return nil, fmt.Errorf("relaxng: <param> has no name")
 			}
-			d.Params = append(d.Params, param{Name: pn, Value: kid.StringValue()})
+			d.Params = append(d.Params, newParam(pn, kid.StringValue()))
 		case "except":
 			// Several patterns inside one <except> mean their choice: a data
 			// excepting x, y and z admits nothing that matches any of them.

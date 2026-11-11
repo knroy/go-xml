@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // pattern is a RELAX NG pattern.
@@ -282,6 +283,20 @@ func (r *refPat) get() (pattern, error) {
 type param struct {
 	Name  string
 	Value string
+	// re and reErr are a pattern param's compiled form, set once when the
+	// <data> is compiled so that checking a value does not compile the
+	// regular expression again. Both are zero for any other param.
+	re    *xsd.Pattern
+	reErr error
+}
+
+// newParam builds a param, compiling a pattern param's expression once.
+func newParam(name, value string) param {
+	p := param{Name: name, Value: value}
+	if name == "pattern" {
+		p.re, p.reErr = xsd.CompilePattern(value)
+	}
+	return p
 }
 
 func (notAllowedPat) nullable() bool    { return false }

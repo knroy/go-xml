@@ -66,7 +66,10 @@ func (t xsdType) checkParams(value string, params []param) error {
 				}
 			}
 		case "pattern":
-			re, err := xsd.CompilePattern(p.Value)
+			re, err := p.re, p.reErr
+			if re == nil && err == nil {
+				re, err = xsd.CompilePattern(p.Value)
+			}
 			if err != nil {
 				return err
 			}
