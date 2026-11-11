@@ -975,6 +975,16 @@ func blockSet(s DerivationSet) DerivationSet {
 // the base chain, plus the union-member case that lets a restriction name one
 // member of the base's union.
 func typeRestricts(t, want Type) bool {
+	return typeRestrictsSeen(t, want, nil)
+}
+
+// typeRestrictsSeen is typeRestricts remembering the union members already
+// tried against t. With t fixed the answer depends on want alone, so a member
+// reached a second time has already failed: a ladder of pure unions each
+// listing the previous one twice is reached by 2^n paths and costs one visit
+// per union. It also ends a union whose members lead back to itself, which
+// checkUnionMemberCycles reports only after the postFixups that call this.
+func typeRestrictsSeen(t, want Type, seen map[Type]bool) bool {
 	if want == nil || t == want {
 		return true
 	}
@@ -997,10 +1007,18 @@ func typeRestricts(t, want Type) bool {
 	// than the restricted union was.
 	if st, ok := want.(*SimpleType); ok && st.Variety == VarietyUnion &&
 		unionIsPure(st) {
+		if seen == nil {
+			seen = map[Type]bool{}
+		}
+		seen[want] = true
 		for _, m := range st.MemberTypes {
-			if m != nil && typeRestricts(t, m) {
+			if m == nil || seen[m] {
+				continue
+			}
+			if typeRestrictsSeen(t, m, seen) {
 				return true
 			}
+			seen[m] = true
 		}
 	}
 	// The walk stops on self as well as nil: the ur-type is its own base
