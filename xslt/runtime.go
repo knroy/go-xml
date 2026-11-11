@@ -829,14 +829,17 @@ func mergeOpenOf(ctx *xpath.Context) *int {
 }
 
 // compileBudgetOf is the nested-compile budget of the transform whose
-// evaluation ctx is, or a fresh one.
-func compileBudgetOf(ctx *xpath.Context) *compileBudget {
+// evaluation ctx is, or a fresh one under the bounds s was compiled with.
+func compileBudgetOf(ctx *xpath.Context, s *Stylesheet) *compileBudget {
 	if ctx != nil {
 		if p := runtimeOf(ctx); p != nil && p.compileBudget != nil {
 			return p.compileBudget
 		}
 	}
-	return &compileBudget{maxSchemaBytes: DefaultMaxSchemaBytes}
+	if s != nil && s.budgetLimits != nil {
+		return s.budgetLimits.limits()
+	}
+	return newCompileBudget(&CompileOptions{})
 }
 
 // newRuntime builds a runtime for one transform.
@@ -852,7 +855,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 			noGlobal:  opts.noGlobalItem,
 			mergeOpen: mergeOpenOf(opts.nestedBudget),
 			// compileBudget is the caller's when fn:transform started this.
-			compileBudget: compileBudgetOf(opts.nestedBudget),
+			compileBudget: compileBudgetOf(opts.nestedBudget, s),
 			maxDepth:      maxDepth,
 			keyIndex:      map[keyCacheKey]map[string]xdm.Sequence{},
 			keyBuilding:   map[keyCacheKey]bool{},

@@ -2102,6 +2102,8 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 // outer compilation or transform (see compileBudget), and is charged one visit
 // for its principal module, so a stylesheet that transforms itself B times
 // per level cannot multiply the bound by B^K.
+//
+// It is the default of CompileOptions.MaxModuleVisits.
 const maxModuleVisits = 10_000
 
 // maxModuleNodes bounds the tree nodes of the modules one compilation
@@ -2112,8 +2114,19 @@ const maxModuleVisits = 10_000
 // nodes in total (xslTNG docbook.xsl and epub.xsl; XSpec's compiler about
 // 7,000), and the bound leaves more than tenfold headroom above that. A
 // compilation's principal module is the host's own input and is not charged;
-// a nested one's is.
+// a nested one's is. It is the default of CompileOptions.MaxModuleNodes.
 const maxModuleNodes = 500_000
+
+// maxModuleVisitsCeiling is the most CompileOptions.MaxModuleVisits may raise
+// the visit bound to, since the visits are also all that bounds how deep an
+// xsl:use-package, xsl:import or xsl:include chain recurses in Go, and a Go
+// stack overflow is fatal rather than an error. A larger value, or a negative
+// one, is read as this ceiling. Measured on a chain of packages each using the
+// next, which costs one or two visits per level (an import or include chain
+// costs about the square of its depth, so it is far shallower): about 3.8 KB
+// of stack per level, 17,500 levels in a 64 MB stack. 50,000 levels is about
+// 190 MB, a fifth of Go's default 1 GB maximum stack.
+const maxModuleVisitsCeiling = 50_000
 
 // compileBudget is what one top-level compilation may spend on modules: the
 // visits maxModuleVisits bounds and the nodes maxModuleNodes bounds. It is
@@ -2129,19 +2142,51 @@ const maxModuleNodes = 500_000
 // rather than starting a fresh allowance per fn:transform call.
 type compileBudget struct {
 	visits, nodes int
+	// maxVisits and maxNodes are maxModuleVisits and maxModuleNodes as
+	// CompileOptions.MaxModuleVisits and MaxModuleNodes resolve them; a
+	// negative maxNodes is no limit. See newCompileBudget.
+	maxVisits, maxNodes int
 	// schemaBytes is the schema source text read so far, against
 	// maxSchemaBytes (CompileOptions.MaxSchemaBytes, defaulted).
 	schemaBytes, maxSchemaBytes int64
 }
 
+// newCompileBudget is a fresh budget under the bounds opts names, each
+// defaulted when zero.
+func newCompileBudget(opts *CompileOptions) *compileBudget {
+	b := &compileBudget{
+		maxSchemaBytes: opts.MaxSchemaBytes,
+		maxVisits:      opts.MaxModuleVisits,
+		maxNodes:       opts.MaxModuleNodes,
+	}
+	if b.maxSchemaBytes == 0 {
+		b.maxSchemaBytes = DefaultMaxSchemaBytes
+	}
+	switch {
+	case b.maxVisits == 0:
+		b.maxVisits = maxModuleVisits
+	case b.maxVisits < 0 || b.maxVisits > maxModuleVisitsCeiling:
+		b.maxVisits = maxModuleVisitsCeiling
+	}
+	if b.maxNodes == 0 {
+		b.maxNodes = maxModuleNodes
+	}
+	return b
+}
+
+// limits is a fresh budget under b's bounds, with nothing spent.
+func (b *compileBudget) limits() *compileBudget {
+	return &compileBudget{maxSchemaBytes: b.maxSchemaBytes, maxVisits: b.maxVisits, maxNodes: b.maxNodes}
+}
+
 // visitModule charges one module visit against maxModuleVisits.
 func (c *compiler) visitModule(el *xdm.Node, href string) error {
 	b := c.opts.budget
-	if b.visits >= maxModuleVisits {
+	if b.visits >= b.maxVisits {
 		return fmt.Errorf(
 			"%s %q: resource limit exceeded: compiling this stylesheet "+
 				"needs more than %d xsl:include/xsl:import/xsl:use-package module visits: %w",
-			el.Name().Lexical(), href, maxModuleVisits, xdm.ErrResourceLimit)
+			el.Name().Lexical(), href, b.maxVisits, xdm.ErrResourceLimit)
 	}
 	b.visits++
 	return nil
@@ -2157,11 +2202,11 @@ func (c *compiler) compileModuleNodes(el *xdm.Node, href string, doc *xdm.Node) 
 	if n := doc.SubtreeEnd() - doc.Index(); n > 0 {
 		b.nodes += n
 	}
-	if b.nodes > maxModuleNodes {
+	if b.maxNodes >= 0 && b.nodes > b.maxNodes {
 		return fmt.Errorf(
 			"%s %q: resource limit exceeded: compiling this stylesheet "+
 				"needs more than %d module nodes: %w",
-			el.Name().Lexical(), href, maxModuleNodes, xdm.ErrResourceLimit)
+			el.Name().Lexical(), href, b.maxNodes, xdm.ErrResourceLimit)
 	}
 	return nil
 }

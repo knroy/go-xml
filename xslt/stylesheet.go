@@ -24,6 +24,13 @@ import (
 // runtime context. That is what makes a compiled EN 16931 rule set — tens of
 // megabytes — shareable rather than per-worker.
 type Stylesheet struct {
+	// budgetLimits holds the module and schema bounds this stylesheet was
+	// compiled under (CompileOptions.MaxModuleVisits, MaxModuleNodes,
+	// MaxSchemaBytes, resolved), with nothing spent: the compilations its
+	// transforms start through fn:transform spend a budget under the same
+	// bounds rather than the defaults. Nil means the defaults.
+	budgetLimits *compileBudget
+
 	// rtLib is the runtime function library, built once by runtimeLibrary.
 	rtLib     *xpath.Library
 	rtLibOnce sync.Once
@@ -978,10 +985,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// no xsl:import reached; see compileBudget.
 	nested := opts.budget != nil
 	if !nested {
-		opts.budget = &compileBudget{maxSchemaBytes: opts.MaxSchemaBytes}
-		if opts.MaxSchemaBytes == 0 {
-			opts.budget.maxSchemaBytes = DefaultMaxSchemaBytes
-		}
+		opts.budget = newCompileBudget(&opts)
 	}
 	c := &compiler{
 		env:  newCompileEnv(),
@@ -1000,6 +1004,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 			compat:           opts.Compat,
 			pkgResolver:      opts.PackageResolver,
 			maxVersion:       opts.MaxVersion,
+			budgetLimits:     opts.budget.limits(),
 			// Method is deliberately left empty. Its default is not "xml"
 			// but a choice made from the result tree — a document whose
 			// first element is <html> defaults to the html or xhtml method
@@ -1250,6 +1255,41 @@ type CompileOptions struct {
 	// schema whose components are partly missing, and the stylesheet is never
 	// compiled against one.
 	MaxSchemaBytes int64
+
+	// MaxModuleVisits bounds the xsl:include, xsl:import and xsl:use-package
+	// module visits one compilation makes, counted over every route: a
+	// module reached on several paths is visited once per path, the static
+	// phase and the compile both count, and the compilations fn:transform
+	// starts, from the static phase or from a transform of this stylesheet,
+	// spend the same allowance. Zero means 10,000, about eighty times what
+	// the largest real stylesheets measured need (DocBook XSL, xslTNG,
+	// XSpec: about 120). Exceeding it fails the compilation with an error
+	// wrapping xdm.ErrResourceLimit.
+	//
+	// There is no unlimited setting. The visits are also what bounds how
+	// deep a chain of packages, imports or includes recurses, and a Go stack
+	// overflow ends the process rather than returning an error, so a
+	// negative value, or one above 50,000, is read as 50,000: a chain that
+	// deep needs about 190 MB of stack, a fifth of Go's default 1 GB
+	// maximum (a host that lowers it with debug.SetMaxStack should keep
+	// this bound to match). Raising it lets a
+	// stylesheet that imports one module along many paths cost that many
+	// compilations: each occurrence has its own import precedence, so the
+	// work cannot be shared, and an import diamond doubles it per level.
+	MaxModuleVisits int
+
+	// MaxModuleNodes bounds the tree nodes of the modules one compilation
+	// compiles, counted once per compile of each module, so that a module
+	// imported many times is charged its size each time. The principal
+	// module is the caller's own input and is not charged; the principal
+	// module of a compilation fn:transform starts is. Zero means 500,000,
+	// more than ten times what the largest real stylesheets measured need
+	// (xslTNG: about 40,000). A negative value means no limit, for
+	// stylesheets the caller trusts: compile time and memory then grow with
+	// whatever the modules add up to, MaxModuleVisits still bounding how
+	// many there are. Exceeding it fails the compilation with an error
+	// wrapping xdm.ErrResourceLimit.
+	MaxModuleNodes int
 
 	// PackageResolver loads the packages named by xsl:use-package. Nil
 	// disables package composition, for the same reason a nil Resolver
