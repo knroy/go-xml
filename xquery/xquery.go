@@ -300,7 +300,7 @@ func Compile(src string, opts Options) (*Query, error) {
 		contextItem: p.contextItem, formats: p.formats,
 		serialization: p.serialization, modules: mods}
 	if len(opts.Modules) > 0 || opts.ModuleResolver != nil {
-		q.modSrc = queryModules{opts}
+		q.modSrc = queryModules{opts: opts}
 	}
 	// §4.12 adds the imported declarations to this module's static context,
 	// so a clash between an import and this module -- or between two imports
@@ -406,6 +406,10 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 			// unless the caller said otherwise.
 			if e.Modules == nil {
 				e.Modules = q.modSrc
+				if m, ok := q.modSrc.(queryModules); ok {
+					m.cache = &moduleCache{}
+					e.Modules = m
+				}
 			}
 		})
 	}
