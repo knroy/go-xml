@@ -506,11 +506,16 @@ func fmix64(h uint64) uint64 {
 // data, whose fields hold maps and slices, always compare unequal, and a
 // refPat is equal only to itself.
 func patEq(a, b pattern) bool {
-	// A static wrapper (memo.go) is compared as the subtree it holds. The
-	// same wrapper on both sides is that subtree twice, whose answer was
-	// worked out once when the wrapper was made.
-	if x, ok := a.(*refPat); ok && x.static != nil && a == b {
-		return x.static.selfEq
+	// patHash is consistent with patEq, and is zero exactly where patEq
+	// equates nothing, so it settles most comparisons at once -- and the
+	// same pattern on both sides, which a derivative sharing subpatterns
+	// meets at every level, without walking it once per path.
+	ha := patHash(a)
+	if ha != patHash(b) || ha == 0 {
+		return false
+	}
+	if a == b {
+		return true
 	}
 	a, b = unstatic(a), unstatic(b)
 	switch x := a.(type) {
@@ -707,6 +712,12 @@ type attr struct {
 }
 
 func (pb *patBuilder) attDeriv(p pattern, a attr, ctx nsContext) pattern {
+	var m refMemo
+	return pb.attDerivM(p, a, ctx, &m)
+}
+
+// attDerivM is attDeriv with the references derived so far in this call.
+func (pb *patBuilder) attDerivM(p pattern, a attr, ctx nsContext, m *refMemo) pattern {
 	// A definition known to hold no attribute pattern (learnt by
 	// startTagCloseDerivCh, which stops at the same element boundary)
 	// derives to notAllowed for every attribute: every leaf does.
@@ -718,33 +729,34 @@ func (pb *patBuilder) attDeriv(p pattern, a attr, ctx nsContext) pattern {
 			if d, ok := s.att.load(a.name); ok && d != nil {
 				return d
 			} else if ok {
-				return pb.attDeriv(r.cached, a, ctx)
+				return pb.attDerivM(r.cached, a, ctx, m)
 			}
-			d := pb.attDeriv(r.cached, a, ctx)
+			d := pb.attDerivM(r.cached, a, ctx, m)
 			keep := d
-			if !anyValueFor(r.cached, a.name, nil) {
+			if !anyValueFor(r.cached, a.name, map[*refPat]bool{}) {
 				keep = nil
 			}
 			s.att.store(a.name, keep)
 			return d
 		}
+		return m.derive(r, func(q pattern) pattern { return pb.attDerivM(q, a, ctx, m) })
 	}
 	switch t := expand(p).(type) {
 	case *afterPat:
-		return pb.after(pb.attDeriv(t.Left, a, ctx), t.Right)
+		return pb.after(pb.attDerivM(t.Left, a, ctx, m), t.Right)
 	case *choicePat:
-		d, _ := pb.choiceMap(t, func(q pattern) (pattern, bool) { return pb.attDeriv(q, a, ctx), true })
+		d, _ := pb.choiceMap(t, func(q pattern) (pattern, bool) { return pb.attDerivM(q, a, ctx, m), true })
 		return d
 	case *groupPat:
 		return pb.choice(
-			pb.group(pb.attDeriv(t.Left, a, ctx), t.Right),
-			pb.group(t.Left, pb.attDeriv(t.Right, a, ctx)))
+			pb.group(pb.attDerivM(t.Left, a, ctx, m), t.Right),
+			pb.group(t.Left, pb.attDerivM(t.Right, a, ctx, m)))
 	case *interleavePat:
 		return pb.choice(
-			pb.interleave(pb.attDeriv(t.Left, a, ctx), t.Right),
-			pb.interleave(t.Left, pb.attDeriv(t.Right, a, ctx)))
+			pb.interleave(pb.attDerivM(t.Left, a, ctx, m), t.Right),
+			pb.interleave(t.Left, pb.attDerivM(t.Right, a, ctx, m)))
 	case *oneOrMorePat:
-		return pb.group(pb.attDeriv(t.Pattern, a, ctx),
+		return pb.group(pb.attDerivM(t.Pattern, a, ctx, m),
 			pb.choice(pb.oneOrMore(t.Pattern), emptyPat{}))
 	case *attributePat:
 		if !t.Name.contains(a.name) || !pb.valueMatch(t.Pattern, a.value, ctx) {
@@ -758,8 +770,10 @@ func (pb *patBuilder) attDeriv(p pattern, a attr, ctx nsContext) pattern {
 // anyValueFor reports whether every attribute pattern in p that admits name,
 // up to an element boundary, takes any value (its content is text), so that
 // attDeriv of p for that name does not depend on the value or its context.
-// A reference not yet resolved, or one being visited, answers false.
-func anyValueFor(p pattern, name xdm.QName, visiting map[*refPat]bool) bool {
+// A reference not yet resolved, or one being visited, answers false. seen,
+// which must not be nil, holds each reference's answer for this walk, so a
+// definition shared along many paths is walked once.
+func anyValueFor(p pattern, name xdm.QName, seen map[*refPat]bool) bool {
 	switch t := p.(type) {
 	case *attributePat:
 		if !t.Name.contains(name) {
@@ -768,26 +782,26 @@ func anyValueFor(p pattern, name xdm.QName, visiting map[*refPat]bool) bool {
 		_, ok := t.Pattern.(textPat)
 		return ok
 	case *choicePat:
-		return anyValueFor(t.Left, name, visiting) && anyValueFor(t.Right, name, visiting)
+		return anyValueFor(t.Left, name, seen) && anyValueFor(t.Right, name, seen)
 	case *groupPat:
-		return anyValueFor(t.Left, name, visiting) && anyValueFor(t.Right, name, visiting)
+		return anyValueFor(t.Left, name, seen) && anyValueFor(t.Right, name, seen)
 	case *interleavePat:
-		return anyValueFor(t.Left, name, visiting) && anyValueFor(t.Right, name, visiting)
+		return anyValueFor(t.Left, name, seen) && anyValueFor(t.Right, name, seen)
 	case *oneOrMorePat:
-		return anyValueFor(t.Pattern, name, visiting)
+		return anyValueFor(t.Pattern, name, seen)
 	case *refPat:
 		if t.attrFree.Load() {
 			return true
 		}
-		if !t.done || t.err != nil || visiting[t] {
+		if !t.done || t.err != nil {
 			return false
 		}
-		if visiting == nil {
-			visiting = map[*refPat]bool{}
+		if ok, done := seen[t]; done {
+			return ok
 		}
-		visiting[t] = true
-		ok := anyValueFor(t.cached, name, visiting)
-		delete(visiting, t)
+		seen[t] = false // being visited
+		ok := anyValueFor(t.cached, name, seen)
+		seen[t] = ok
 		return ok
 	}
 	// Elements, values, data, lists, text, empty and notAllowed hold no
@@ -814,32 +828,66 @@ func isNotAllowed(p pattern) bool {
 
 // textDeriv is the derivative with respect to a string of character data.
 func (pb *patBuilder) textDeriv(p pattern, s string, ctx nsContext) pattern {
+	var m refMemo
+	return pb.textDerivM(p, s, ctx, &m)
+}
+
+// refMemo holds, for one derivative call, the derivative of each definition
+// reference met: the input is the same throughout the call, so a definition
+// the compiler shares along many paths is derived once. Without it a ladder
+// of definitions d_i = d_{i-1} d_{i-1} was derived once per path, 2^N times.
+type refMemo struct{ m map[*refPat]pattern }
+
+// derive returns f of r's expansion, computing it once per call. It steps
+// through r alone, so the static wrapper on the definition's body (memo.go)
+// answers from its own memo.
+func (rm *refMemo) derive(r *refPat, f func(pattern) pattern) pattern {
+	if d, ok := rm.m[r]; ok {
+		return d
+	}
+	q, err := r.get()
+	if err != nil {
+		q = notAllowedPat{}
+	}
+	d := f(q)
+	if rm.m == nil {
+		rm.m = map[*refPat]pattern{}
+	}
+	rm.m[r] = d
+	return d
+}
+
+// textDerivM is textDeriv with the references derived so far in this call.
+func (pb *patBuilder) textDerivM(p pattern, s string, ctx nsContext, m *refMemo) pattern {
 	if r, ok := p.(*refPat); ok && r.static != nil && r.static.dataFree {
 		if b := r.static.text.Load(); b != nil {
 			return b.p
 		}
-		d := pb.textDeriv(r.cached, s, ctx)
+		d := pb.textDerivM(r.cached, s, ctx, m)
 		r.static.text.Store(&patBox{p: d})
 		return d
 	}
+	if r, ok := p.(*refPat); ok && r.static == nil {
+		return m.derive(r, func(q pattern) pattern { return pb.textDerivM(q, s, ctx, m) })
+	}
 	switch t := expand(p).(type) {
 	case *choicePat:
-		d, _ := pb.choiceMap(t, func(q pattern) (pattern, bool) { return pb.textDeriv(q, s, ctx), true })
+		d, _ := pb.choiceMap(t, func(q pattern) (pattern, bool) { return pb.textDerivM(q, s, ctx, m), true })
 		return d
 	case *interleavePat:
 		return pb.choice(
-			pb.interleave(pb.textDeriv(t.Left, s, ctx), t.Right),
-			pb.interleave(t.Left, pb.textDeriv(t.Right, s, ctx)))
+			pb.interleave(pb.textDerivM(t.Left, s, ctx, m), t.Right),
+			pb.interleave(t.Left, pb.textDerivM(t.Right, s, ctx, m)))
 	case *groupPat:
-		d := pb.group(pb.textDeriv(t.Left, s, ctx), t.Right)
+		d := pb.group(pb.textDerivM(t.Left, s, ctx, m), t.Right)
 		if t.Left.nullable() {
-			return pb.choice(d, pb.textDeriv(t.Right, s, ctx))
+			return pb.choice(d, pb.textDerivM(t.Right, s, ctx, m))
 		}
 		return d
 	case *afterPat:
-		return pb.after(pb.textDeriv(t.Left, s, ctx), t.Right)
+		return pb.after(pb.textDerivM(t.Left, s, ctx, m), t.Right)
 	case *oneOrMorePat:
-		return pb.group(pb.textDeriv(t.Pattern, s, ctx),
+		return pb.group(pb.textDerivM(t.Pattern, s, ctx, m),
 			pb.choice(pb.oneOrMore(t.Pattern), emptyPat{}))
 	case textPat:
 		// textPat consumes any amount of character data and remains itself,
@@ -934,7 +982,13 @@ func (pb *patBuilder) startTagCloseDerivCh(p pattern) (pattern, bool) {
 			r.static.close.Store(&patBox{p: q, ch: ch})
 			return q, ch
 		}
-		q, ch := pb.startTagCloseDerivCh(expand(r))
+		// One step, not expand: the definition's body is a static wrapper
+		// (memo.go) whose memo answers for every path that shares it.
+		q, err := r.get()
+		if err != nil {
+			q = notAllowedPat{}
+		}
+		q, ch := pb.startTagCloseDerivCh(q)
 		if !ch {
 			r.attrFree.Store(true)
 			return p, false

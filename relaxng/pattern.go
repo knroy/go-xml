@@ -153,6 +153,10 @@ type refPat struct {
 	// unchanged. It depends only on the schema, so it is learnt once and
 	// shared by every validation.
 	attrFree atomic.Bool
+	// null memoises nullable of the expansion: 0 not yet known, 1 false, 2
+	// true. A definition the compiler shares is reached along many paths,
+	// 2^N of them in a ladder d_i = d_{i-1} d_{i-1}, and was asked on each.
+	null atomic.Uint32
 	// open memoises startTagOpenDeriv of the expansion by element name.
 	// The derivative of a schema pattern depends only on the pattern and
 	// the name, and patterns are immutable values, so the result is shared
@@ -168,7 +172,6 @@ type staticInfo struct {
 	size     int32 // patternSize of the subtree
 	null     bool  // nullable
 	dataFree bool  // no valuePat, dataPat or listPat before an element
-	selfEq   bool  // patEq of the subtree with itself (false if it holds data)
 	// text memoises textDeriv when dataFree: with no datatype to consult the
 	// derivative does not depend on the string.
 	text atomic.Pointer[patBox]
@@ -329,11 +332,17 @@ func (r *refPat) nullable() bool {
 	if r.static != nil {
 		return r.static.null
 	}
-	p, err := r.get()
-	if err != nil {
-		return false
+	if n := r.null.Load(); n != 0 {
+		return n == 2
 	}
-	return p.nullable()
+	p, err := r.get()
+	ok := err == nil && p.nullable()
+	if ok {
+		r.null.Store(2)
+	} else {
+		r.null.Store(1)
+	}
+	return ok
 }
 
 // nameClass decides which names a pattern admits.
