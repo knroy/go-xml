@@ -102,15 +102,75 @@ func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
 //
 // Expansion is depth-first through "use-attribute-sets" so that a set's own
 // attributes are written after the ones it inherits and therefore replace
-// them. A cycle would recurse forever, so the chain being expanded is tracked.
+// them. Expanded literally, a set reached down several branches -- the legal
+// diamond -- runs once per path, which is exponential in the depth of a
+// shared DAG. Only the last run of each set can decide any attribute's final
+// value (a set run again later writes the same attributes again), so each
+// set's bodies run once, at the position of its last occurrence in the
+// literal expansion; see attributeSetPlan.
 func applyAttributeSets(rt *runtime, names []attrSetRef, out *outputBuilder) error {
-	return expandAttributeSets(rt, names, out, map[string]bool{})
+	var rev []*attributeSet
+	if err := attributeSetPlan(rt.sheet, names, map[string]bool{},
+		map[attrSetID]bool{}, &rev); err != nil {
+		return err
+	}
+	if len(rev) == 0 {
+		return nil
+	}
+	// Only top-level variables and parameters are in scope inside an
+	// attribute set: it is a declaration in its own right, so a local
+	// variable live at the point of use must not be visible to it. The
+	// focus is kept, because the set's body is still evaluated with the
+	// context item the instruction that used it had.
+	setRT := rt
+	if rt.globalCtx != nil {
+		r := *rt
+		r.ctx = rt.globalCtx.WithFocus(rt.ctx.Item, int(rt.ctx.Position), int(rt.ctx.Size))
+		r.absent = 0
+		setRT = &r
+	}
+	// The locals bound on the stack are hidden from it the same way.
+	mark, base := rt.enterFrame()
+	defer rt.leaveFrame(mark, base)
+	for i := len(rev) - 1; i >= 0; i-- {
+		if err := rt.ctx.Err(); err != nil {
+			return err
+		}
+		if err := execSequence(rev[i].body, setRT, out); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func expandAttributeSets(rt *runtime, names []attrSetRef, out *outputBuilder,
-	active map[string]bool) error {
+// attrSetID is the identity of one resolved set: the declarations
+// attributeSetsFor answered. Those are either every declaration of the name
+// or a filtered subsequence of them, so the first one and the count fix the
+// slice.
+type attrSetID struct {
+	first *attributeSet
+	n     int
+}
 
-	for _, r := range names {
+// attributeSetPlan appends to rev, in reverse, the set declarations whose
+// bodies applyAttributeSets runs for names.
+//
+// The literal expansion of a set is, per declaration, its uses expanded and
+// then its body. Read backwards that is a pre-order walk -- body first, then
+// the uses in reverse -- and keeping only the first occurrence of each set in
+// that walk is exactly keeping the last occurrence in the forward one. In a
+// pre-order walk a set seen again was already walked to completion, so
+// skipping it drops nothing that is not already in rev: each set is walked
+// once, and the plan is linear in sets plus use-attribute-sets references.
+//
+// active holds the names on the path being walked, by name as the literal
+// expansion tracked them, and is checked before done so that a cycle is still
+// reported.
+func attributeSetPlan(s *Stylesheet, names []attrSetRef, active map[string]bool,
+	done map[attrSetID]bool, rev *[]*attributeSet) error {
+
+	for i := len(names) - 1; i >= 0; i-- {
+		r := names[i]
 		n := r.name
 		key := n.Clark()
 		if active[key] {
@@ -127,39 +187,21 @@ func expandAttributeSets(rt *runtime, names []attrSetRef, out *outputBuilder,
 				"XTDE0640: circular reference in xsl:attribute-set %q",
 				n.Lexical())
 		}
-		sets, ok := attributeSetsFor(rt.sheet, key, r.pkg)
+		sets, ok := attributeSetsFor(s, key, r.pkg)
 		if !ok {
 			return fmt.Errorf("XTSE0710: no xsl:attribute-set named %q", n.Lexical())
 		}
-		active[key] = true
-		// Only top-level variables and parameters are in scope inside an
-		// attribute set: it is a declaration in its own right, so a local
-		// variable live at the point of use must not be visible to it. The
-		// focus is kept, because the set's body is still evaluated with the
-		// context item the instruction that used it had.
-		setRT := rt
-		if rt.globalCtx != nil {
-			r := *rt
-			r.ctx = rt.globalCtx.WithFocus(rt.ctx.Item, int(rt.ctx.Position), int(rt.ctx.Size))
-			r.absent = 0
-			setRT = &r
+		id := attrSetID{sets[0], len(sets)}
+		if done[id] {
+			continue
 		}
-		// The locals bound on the stack are hidden from it the same way.
-		mark, base := rt.enterFrame()
-		err := func() error {
-			for _, as := range sets {
-				if err := expandAttributeSets(setRT, as.uses, out, active); err != nil {
-					return err
-				}
-				if err := execSequence(as.body, setRT, out); err != nil {
-					return err
-				}
+		done[id] = true
+		active[key] = true
+		for d := len(sets) - 1; d >= 0; d-- {
+			*rev = append(*rev, sets[d])
+			if err := attributeSetPlan(s, sets[d].uses, active, done, rev); err != nil {
+				return err
 			}
-			return nil
-		}()
-		rt.leaveFrame(mark, base)
-		if err != nil {
-			return err
 		}
 		delete(active, key)
 	}
