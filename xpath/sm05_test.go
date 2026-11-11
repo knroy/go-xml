@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -108,5 +109,49 @@ func TestSM05ImplicitCastsBoundDigits(t *testing.T) {
 	}
 	if err := run(q, "5", 100); err != nil {
 		t.Errorf("function conversion control: %v", err)
+	}
+}
+
+// TestSM05ClosureSpendsTheCallersBudget: a function item made in one
+// evaluation and called in another runs under the caller's item bound and
+// node budget, not the defaults of the evaluation that made it.
+func TestSM05ClosureSpendsTheCallersBudget(t *testing.T) {
+	compile := func(src string) *Compiled {
+		c, err := CompileWith(src, CompileOptions{Version: XPath31})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	mk := func(src string) xdm.Sequence {
+		f, err := compile(src).Eval(NewContext(nil, Builtins()).
+			WithEnv(func(e *Env) { e.LibraryVersion = XPath31 }))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	call := func(f xdm.Sequence, arg string, set func(*Context) *Context) error {
+		ctx := set(NewContext(nil, Builtins()).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 }))
+		_, err := compile("$f($a)").Eval(ctx.
+			WithVar(xdm.QName{Local: "f"}, f).WithVar(xdm.QName{Local: "a"}, strSeq(arg)))
+		return err
+	}
+	tok := mk("function($s) { count(tokenize($s)) }")
+	items := func(c *Context) *Context { return c.WithEnv(func(e *Env) { e.MaxItems = 10 }) }
+	wantRefused(t, call(tok, strings.Repeat("a ", 64), items), wantItems)
+	if err := call(tok, "a b", items); err != nil {
+		t.Fatalf("items control: %v", err)
+	}
+	parse := mk("function($s) { count(parse-xml($s)//*) }")
+	nodes := func(c *Context) *Context {
+		xpathleaf.SetLimits(c, xpathleaf.Limits{Nodes: 10})
+		return c
+	}
+	if err := call(parse, "<r>"+strings.Repeat("<a/>", 50)+"</r>", nodes); !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Fatalf("parse-xml through a foreign closure under MaxNodes 10: %v, want a resource limit", err)
+	}
+	if err := call(parse, "<r/>", nodes); err != nil {
+		t.Fatalf("nodes control: %v", err)
 	}
 }
