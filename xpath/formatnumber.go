@@ -774,9 +774,18 @@ func scaleByPowerOfTen(r *big.Rat, n int) *big.Rat {
 // F&O 3.1 §4.7.5 defines the rounding of fn:format-number by calling
 // fn:round-half-to-even with maximum-fractional-part-size as the precision, so
 // an exact tie goes to the even quotient rather than away from zero.
+//
+// A value that already has no more than n places is returned as it is. n is
+// the picture's count of fractional digit signs, which the picture's length
+// alone bounds, so working at 10^n for a value like 0.1 made the cost grow
+// with the picture rather than the number; the exact decimal length keeps it
+// to the digits the value has.
 func roundToPlaces(r *big.Rat, n int) *big.Rat {
 	if n < 0 {
 		n = 0
+	}
+	if e := decimalPlaces(r); e >= 0 && e <= n {
+		return r
 	}
 	scale := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil))
 	scaled := new(big.Rat).Mul(r, scale)
@@ -803,14 +812,47 @@ func roundToPlaces(r *big.Rat, n int) *big.Rat {
 
 // splitRat separates a non-negative rational into integer and fractional
 // digit strings, the fraction padded to n places.
+//
+// The digits come from the value's own decimal length and the padding is
+// appended as zeros, so a wide picture costs its width once rather than a
+// FloatString at 10^n.
 func splitRat(r *big.Rat, n int) (string, string) {
 	if n < 0 {
 		n = 0
 	}
-	s := r.FloatString(n)
+	places := n
+	if e := decimalPlaces(r); e >= 0 && e < n {
+		places = e
+	}
+	s := r.FloatString(places)
 	s = strings.TrimPrefix(s, "-")
 	intPart, fracPart, _ := strings.Cut(s, ".")
+	if pad := n - places; pad > 0 {
+		fracPart += strings.Repeat("0", pad)
+	}
 	return intPart, fracPart
+}
+
+// decimalPlaces returns how many decimal places r needs to be written
+// exactly, or -1 when its decimal expansion does not terminate: the larger of
+// the powers of 2 and of 5 in its reduced denominator, which must have no
+// other factor.
+func decimalPlaces(r *big.Rat) int {
+	d := new(big.Int).Set(r.Denom())
+	twos := int(d.TrailingZeroBits())
+	d.Rsh(d, uint(twos))
+	if d.BitLen() <= 1 {
+		return twos
+	}
+	// What is left must be 5^k, and 5^k has floor(k*log2(5))+1 bits, so k is
+	// fixed by the bit length to within one either way of this estimate.
+	k := int(float64(d.BitLen()-1) / math.Log2(5))
+	for c := max(k-1, 1); c <= k+1; c++ {
+		if new(big.Int).Exp(big.NewInt(5), big.NewInt(int64(c)), nil).Cmp(d) == 0 {
+			return max(twos, c)
+		}
+	}
+	return -1
 }
 
 // isDigitOfFamily reports whether r is one of the ten digits of the family
