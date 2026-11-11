@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The tests in this file are the round SM lane-01 regressions: compile-time
@@ -61,5 +63,29 @@ func TestSM01AttrSetLadderMemoised(t *testing.T) {
 	</xsl:stylesheet>`
 	if got := run(t, sheet, `<a/>`); got != `<r x="C"/>` {
 		t.Errorf("got %q, want <r x=\"C\"/>", got)
+	}
+}
+
+// TestSM01DeferChainLinear: v0 -> v1 -> ... -> vN, declared so that each pass
+// of a fixed point moves the deferred mark one link, with only vN deferred.
+// Every global must end up deferred, and the propagation must follow each
+// edge once: 50,000 links would be 1.25e9 reference rescans as a fixed point.
+func TestSM01DeferChainLinear(t *testing.T) {
+	const n = 50000
+	c := &compiler{sheet: &Stylesheet{}}
+	for i := 0; i <= n; i++ {
+		g := &Variable{Name: xdm.QName{Local: fmt.Sprintf("v%d", i)}}
+		if i < n {
+			g.bodyRefs = []string{fmt.Sprintf("v%d", i+1)}
+		} else {
+			g.deferred = true
+		}
+		c.sheet.globals = append(c.sheet.globals, g)
+	}
+	c.deferDependentGlobals()
+	for _, g := range c.sheet.globals {
+		if !g.deferred {
+			t.Fatalf("%s not deferred", g.Name.Local)
+		}
 	}
 }

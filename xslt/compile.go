@@ -2493,26 +2493,32 @@ func (c *compiler) deferDependentGlobals() {
 			byName[g.Name.Clark()] = g
 		}
 	}
-	// Repeated to a fixed point: a chain of proxies defers from the far end
-	// back, and one pass would only move the mark one link. The loop is
-	// bounded by the number of globals, since each pass that changes
-	// anything defers at least one more.
-	for range c.sheet.globals {
-		changed := false
-		for _, g := range c.sheet.globals {
-			if g.deferred {
-				continue
-			}
-			for _, dep := range globalRefs(g) {
-				if d, ok := byName[dep]; ok && d.deferred && d != g {
-					g.deferred = true
-					changed = true
-					break
-				}
+	// A chain of proxies defers from the far end back. Each global's
+	// references are read once into reverse edges -- dependency to the
+	// globals naming it -- and the mark is pushed along them from the
+	// globals already deferred, so each edge is followed at most once rather
+	// than every reference being rescanned on every pass of a fixed point.
+	dependents := make(map[*Variable][]*Variable)
+	var work []*Variable
+	for _, g := range c.sheet.globals {
+		if g.deferred {
+			work = append(work, g)
+			continue
+		}
+		for _, dep := range globalRefs(g) {
+			if d, ok := byName[dep]; ok && d != g {
+				dependents[d] = append(dependents[d], g)
 			}
 		}
-		if !changed {
-			break
+	}
+	for len(work) > 0 {
+		d := work[len(work)-1]
+		work = work[:len(work)-1]
+		for _, g := range dependents[d] {
+			if !g.deferred {
+				g.deferred = true
+				work = append(work, g)
+			}
 		}
 	}
 }
