@@ -38,7 +38,10 @@ func (e *dynamicQName) Eval(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	atoms := xdm.Atomize(v)
+	atoms, err := ctx.atomize(v)
+	if err != nil {
+		return nil, err
+	}
 	if len(atoms) == 0 {
 		return xdm.Empty(), nil
 	}

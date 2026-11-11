@@ -100,7 +100,10 @@ func registerStringFuncs(l *Library) {
 		// where the spec wants XPTY0004. stringArgValue applies the same
 		// conversion rule as every other xs:string parameter — the
 		// string-like types and untypedAtomic, nothing else.
-		atoms := xdm.Atomize(args[0])
+		atoms, err := ctx.atomize(args[0])
+		if err != nil {
+			return nil, err
+		}
 		parts := make([]string, 0, len(atoms))
 		for _, it := range atoms {
 			a := it.(*xdm.Atomic)
@@ -316,7 +319,11 @@ func registerStringFuncs(l *Library) {
 
 	l.registerFn("codepoints-to-string", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		var sb strings.Builder
-		for _, it := range xdm.Atomize(args[0]) {
+		atoms, err := ctx.atomize(args[0])
+		if err != nil {
+			return nil, err
+		}
+		for _, it := range atoms {
 			// The parameter is xs:integer*, so a string is a type error
 			// rather than a lexical form to parse: casting first reported
 			// FORG0001 for codepoints-to-string('hello'), which says the

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -427,7 +428,11 @@ func lookupByID(ctx *Context, args []xdm.Sequence, mode idLookup) (xdm.Sequence,
 	// valid xs:IDREF and therefore matches nothing, where id('a c') looks for
 	// "a" and "c". Splitting both made idref find the union of the tokens.
 	want := map[string]bool{}
-	for _, it := range xdm.Atomize(args[0]) {
+	atoms, err := ctx.atomize(args[0])
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range atoms {
 		v := it.(*xdm.Atomic).String()
 		if !wantID {
 			want[v] = true
@@ -560,16 +565,80 @@ func lookupByID(ctx *Context, args []xdm.Sequence, mode idLookup) (xdm.Sequence,
 // instructions are ignored when comparing element content, which is why this
 // cannot simply compare serialised forms.
 func deepEqual(ctx *Context, a, b xdm.Sequence) (bool, error) {
-	return deepEqualAt(ctx, a, b, 0)
+	return deepEqualAt(ctx, &deepWalk{}, a, b, 0)
+}
+
+// deepWalk is what one fn:deep-equal call carries down its recursion.
+//
+// An array or map keeps its members by reference, so k charged doublings
+// ("[$a, $a]" in a fold) describe 2^k leaves, and a walk that compares every
+// leaf pair is exponential in what the value cost to build. equal remembers
+// the pairs of member sequences already found deep-equal, by the identity of
+// their backing arrays, so a pair met again is answered without walking it:
+// the comparison is a pure function of the two values under the call's one
+// collation, and a pair that raised or compared unequal ended the walk. The
+// walk is then linear in the distinct structure. visits counts member pairs
+// compared, so the evaluation's context is checked every
+// deepEqualCheckEvery of them and a host deadline stops what remains.
+type deepWalk struct {
+	equal  map[deepPair]bool
+	visits int
+}
+
+// deepPair identifies a pair of non-empty member sequences by their first
+// elements' addresses and their lengths.
+type deepPair struct {
+	a, b   *xdm.Item
+	na, nb int
+}
+
+// deepEqualCheckEvery is how many member pairs a deepWalk compares between
+// two checks of the evaluation's context, as xdm.FlattenContext checks its.
+const deepEqualCheckEvery = 1024
+
+// members compares two member sequences of maps or arrays being compared.
+func (w *deepWalk) members(ctx *Context, a, b xdm.Sequence, depth int) (bool, error) {
+	w.visits++
+	if w.visits%deepEqualCheckEvery == 0 {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+	}
+	// Only a member holding a map or an array can describe more than it
+	// holds; any other is compared in time linear in its length, and
+	// remembering it would cost more than comparing it again.
+	if len(a) == 0 || len(a) != len(b) || !slices.ContainsFunc(a, isMapOrArray) {
+		return deepEqualAt(ctx, w, a, b, depth)
+	}
+	k := deepPair{&a[0], &b[0], len(a), len(b)}
+	if w.equal[k] {
+		return true, nil
+	}
+	eq, err := deepEqualAt(ctx, w, a, b, depth)
+	if eq && err == nil {
+		if w.equal == nil {
+			w.equal = map[deepPair]bool{}
+		}
+		w.equal[k] = true
+	}
+	return eq, err
+}
+
+func isMapOrArray(it xdm.Item) bool {
+	switch it.(type) {
+	case *xdm.MapItem, *xdm.ArrayItem:
+		return true
+	}
+	return false
 }
 
 // deepEqualAt is deepEqual for values nested depth maps or arrays down.
-func deepEqualAt(ctx *Context, a, b xdm.Sequence, depth int) (bool, error) {
+func deepEqualAt(ctx *Context, w *deepWalk, a, b xdm.Sequence, depth int) (bool, error) {
 	if len(a) != len(b) {
 		return false, nil
 	}
 	for i := range a {
-		eq, err := deepEqualItem(ctx, a[i], b[i], depth)
+		eq, err := deepEqualItem(ctx, w, a[i], b[i], depth)
 		if err != nil || !eq {
 			return false, err
 		}
@@ -577,7 +646,7 @@ func deepEqualAt(ctx *Context, a, b xdm.Sequence, depth int) (bool, error) {
 	return true, nil
 }
 
-func deepEqualItem(ctx *Context, x, y xdm.Item, depth int) (bool, error) {
+func deepEqualItem(ctx *Context, w *deepWalk, x, y xdm.Item, depth int) (bool, error) {
 	// An Opaque is engine-internal state, not a value the data model defines
 	// equality over. A stylesheet naming the internal namespace can put one
 	// here, so it is compared by identity rather than asserted to be atomic.
@@ -603,7 +672,7 @@ func deepEqualItem(ctx *Context, x, y xdm.Item, depth int) (bool, error) {
 	// before the node and atomic branches because neither is either one: the
 	// fallback below compares unrecognised items by identity, so two equal
 	// arrays built separately were answering false.
-	if eq, handled, err := deepEqualMapArray(ctx, x, y, depth); handled {
+	if eq, handled, err := deepEqualMapArray(ctx, w, x, y, depth); handled {
 		return eq, err
 	}
 

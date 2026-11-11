@@ -109,7 +109,11 @@ func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			}
 			reqs = append(reqs, request{v.StringValue(), b})
 		default:
-			for _, a := range xdm.Atomize(xdm.Sequence{it}) {
+			atoms, err := ctx.atomize(xdm.Sequence{it})
+			if err != nil {
+				return nil, err
+			}
+			for _, a := range atoms {
 				reqs = append(reqs, request{a.(*xdm.Atomic).String(), base})
 			}
 		}

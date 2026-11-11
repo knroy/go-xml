@@ -14,7 +14,9 @@ import (
 // place a second pass would help (static typing) is not implemented, and the
 // spec permits a dynamically-typed implementation.
 type Expr interface {
-	// Eval evaluates the expression in ctx and returns a sequence.
+	// Eval evaluates the expression in ctx and returns a sequence. A
+	// resource-limit refusal is returned as an error wrapping
+	// xdm.ErrResourceLimit, as Compiled.Eval returns it.
 	Eval(ctx *Context) (xdm.Sequence, error)
 	// String returns a source-like rendering, used in error messages and to
 	// make test failures readable.

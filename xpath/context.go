@@ -1499,6 +1499,46 @@ func (c *Context) countItems(n int) error {
 	return nil
 }
 
+// flattenCharged flattens the arrays in seq under the evaluation's context
+// and charges the items flattening adds beyond seq to the item budget.
+//
+// An array keeps its members by reference, so k charged doublings ("[$a, $a]"
+// in a fold) describe 2^k leaves. Every implicit atomization in this package
+// goes through here, by way of atomize and atomizeChecked, so the host's
+// MaxItems and deadline bound that expansion wherever it happens, as they do
+// for fn:data and array:flatten; and the refusal comes back as an error, never
+// as the panic xdm.Atomize raises, which no Expr.Eval caller would recover.
+// A sequence holding no array costs one scan and is returned as it stands.
+func (c *Context) flattenCharged(seq xdm.Sequence) (xdm.Sequence, error) {
+	flat, err := xdm.FlattenContext(c.ev().Ctx, seq)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.countItems(len(flat) - len(seq)); err != nil {
+		return nil, err
+	}
+	return flat, nil
+}
+
+// atomize is xdm.Atomize with the arrays flattened by flattenCharged.
+func (c *Context) atomize(seq xdm.Sequence) (xdm.Sequence, error) {
+	flat, err := c.flattenCharged(seq)
+	if err != nil {
+		return nil, err
+	}
+	return xdm.Atomize(flat), nil
+}
+
+// atomizeChecked is xdm.AtomizeChecked with the arrays flattened by
+// flattenCharged.
+func (c *Context) atomizeChecked(seq xdm.Sequence) (xdm.Sequence, error) {
+	flat, err := c.flattenCharged(seq)
+	if err != nil {
+		return nil, err
+	}
+	return xdm.AtomizeChecked(flat)
+}
+
 // itemsRefusal is the XPDY0130 the item budget raises.
 func itemsRefusal(lim int64) error {
 	// The code is kept -- the suites and callers read it -- and the

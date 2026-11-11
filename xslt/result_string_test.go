@@ -3,6 +3,7 @@ package xslt
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -169,5 +170,39 @@ func TestSecondaryResultStringDiscardsSerializationError(t *testing.T) {
 	if got := sr.String(); got != "" {
 		t.Errorf("String() = %q, want %q; this encodes the discard so that a "+
 			"change to it is a deliberate one", got, "")
+	}
+}
+
+// A result holding a shared-member array transforms without flattening it:
+// the array is kept as an item of the raw result. Serializing it flattens it
+// after Transform's own recovery has returned, so a walk past
+// xdm.FlattenContext's bound must come back from Serialize as XPDY0130, and
+// from String as "", rather than as a panic in the host.
+func TestResultSerializeReturnsTheFlattenRefusal(t *testing.T) {
+	const sheet = `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <xsl:template name="main"><xsl:sequence select="fold-left(1 to 25, [], function($a, $i) { [$a, $a] })"/></xsl:template>
+</xsl:stylesheet>`
+	compiled, err := Compile(mustParse(t, sheet), CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	src, err := xdm.ParseString(`<r/>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := compiled.Transform(context.Background(), src.Root, TransformOptions{InitialTemplate: "main"})
+	if err != nil {
+		t.Fatalf("Transform: %v", err)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			t.Fatalf("serialization panicked: %v", p)
+		}
+	}()
+	if err := res.Serialize(&bytes.Buffer{}); xdm.ErrorCode(err) != "XPDY0130" || !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("Serialize: got %v, want XPDY0130", err)
+	}
+	if s := res.String(); s != "" {
+		t.Errorf("String: got %q, want \"\"", s)
 	}
 }

@@ -90,8 +90,11 @@ func registerDateFuncs(l *Library) {
 	// argument, which is what makes them safe to apply to an optional element.
 	dateComponent := func(name string, get func(*xdm.DateTime) xdm.Item) {
 		want := dateAccessorType(name)
-		l.registerFn(name, []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+		l.registerFn(name, []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
 			}
@@ -126,8 +129,11 @@ func registerDateFuncs(l *Library) {
 	// for one.
 	tzAccessor := func(name string) {
 		want := dateAccessorType(name)
-		l.registerFn(name, []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+		l.registerFn(name, []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
 			}
@@ -157,8 +163,11 @@ func registerDateFuncs(l *Library) {
 
 	// Duration component accessors.
 	durComponent := func(name string, get func(*xdm.Duration) xdm.Item) {
-		l.registerFn(name, []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+		l.registerFn(name, []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
 			}
@@ -245,7 +254,10 @@ func bigMod(n *big.Int, unit int64) int64 {
 func registerTimezoneAdjust(l *Library) {
 	adjust := func(name string, t xdm.TypeCode) {
 		l.registerFn(name, []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
 			}
@@ -272,7 +284,10 @@ func registerTimezoneAdjust(l *Library) {
 			targetTZ := ctx.ev().ImplicitTimezone
 			removeTZ := false
 			if len(args) > 1 {
-				tzAtoms := xdm.Atomize(args[1])
+				tzAtoms, err := ctx.atomize(args[1])
+				if err != nil {
+					return nil, err
+				}
 				if len(tzAtoms) == 0 {
 					removeTZ = true
 				} else {

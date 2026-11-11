@@ -105,12 +105,12 @@ func registerMapFuncs(l *Library) {
 	// The second argument is a *sequence* of keys, and a key that is not
 	// present is ignored rather than being an error: map:remove($m, ()) is the
 	// map unchanged, and so is removing a key it never had.
-	l.registerMap("remove", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerMap("remove", []int{2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		m, err := argMap(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		atoms, err := xdm.AtomizeChecked(args[1])
+		atoms, err := ctx.atomizeChecked(args[1])
 		if err != nil {
 			return nil, err
 		}

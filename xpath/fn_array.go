@@ -209,13 +209,22 @@ func registerArrayFuncs(l *Library) {
 	//
 	// Concatenation of members, not of arrays: joining ([1,2],[3,4]) gives a
 	// four-member array, and joining nothing gives the empty array.
-	l.registerArray("join", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	//
+	// An input can name one array many times, so the members are charged as
+	// they are added, before they are copied: a thousand references to a
+	// thousand-member array would otherwise build a million members from two
+	// thousand charged items. Each array is one item of the input, already
+	// charged, so it is charged for its members beyond that one.
+	l.registerArray("join", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		var members []xdm.Sequence
 		for _, it := range seqArg(args, 0) {
 			a, ok := it.(*xdm.ArrayItem)
 			if !ok {
 				return nil, xdm.ErrType(
 					"array:join: expected an array, got %s", it.TypeName())
+			}
+			if err := ctx.countItems(a.Len() - 1); err != nil {
+				return nil, err
 			}
 			members = a.AppendMembers(members)
 		}
@@ -233,15 +242,7 @@ func registerArrayFuncs(l *Library) {
 	// charged here, so the host's MaxItems bounds them and not only
 	// xdm.Flatten's own fixed ceiling. fn:data charges the same way.
 	l.registerArray("flatten", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		in := seqArg(args, 0)
-		out, err := xdm.FlattenContext(ctx.ev().Ctx, in)
-		if err != nil {
-			return nil, err
-		}
-		if err := ctx.countItems(len(out) - len(in)); err != nil {
-			return nil, err
-		}
-		return out, nil
+		return ctx.flattenCharged(seqArg(args, 0))
 	})
 
 	// array:for-each($array, $action as function(item()*) as item()*) as array(*)
@@ -462,7 +463,7 @@ func sortByKey(ctx *Context, units []xdm.Sequence, args []xdm.Sequence, fname st
 		// AtomizeChecked rather than Atomize so that a map in the input is
 		// FOTY0013 rather than silently vanishing: array:sort([map{},1]) is an
 		// error the suite asserts, and a dropped key would have sorted it.
-		atoms, err := xdm.AtomizeChecked(v)
+		atoms, err := ctx.atomizeChecked(v)
 		if err != nil {
 			return nil, err
 		}

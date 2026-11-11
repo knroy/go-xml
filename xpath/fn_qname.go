@@ -143,7 +143,10 @@ func registerQNameFuncs(l *Library) {
 
 	qnamePart := func(name string, get func(xdm.QName) (xdm.Item, bool)) {
 		l.registerFn(name, []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
 			}

@@ -280,7 +280,10 @@ func rangeContains(ctx *Context, op *BinaryOp, valueOp string) (bool, bool, erro
 	if err != nil {
 		return false, false, err
 	}
-	atoms := xdm.Atomize(lv)
+	atoms, err := ctx.atomize(lv)
+	if err != nil {
+		return false, false, err
+	}
 	if len(atoms) != 1 {
 		return false, false, nil
 	}

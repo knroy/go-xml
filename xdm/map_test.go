@@ -343,6 +343,33 @@ func TestFlattenRefusesSharedExpansion(t *testing.T) {
 	}
 }
 
+// Atomize and AtomizeChecked flatten the whole sequence in one walk, so
+// Flatten's step bound covers the sequence and not each array in it: three
+// references to a 2^23-leaf array are past the bound together though each is
+// under it alone. AtomizeChecked returns the refusal rather than panicking.
+func TestAtomizeFlattensTheSequenceOnce(t *testing.T) {
+	a := NewArray(Sequence{NewArray()})
+	for i := 0; i < 23; i++ {
+		a = NewArray(Sequence{a}, Sequence{a})
+	}
+	seq := Sequence{a, a, a}
+	if _, err := AtomizeChecked(seq); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("AtomizeChecked of three 2^23-leaf references: err=%v, want ErrResourceLimit", err)
+	}
+	err := func() (err error) {
+		defer xdmlimit.Recover(&err)
+		Atomize(seq)
+		return nil
+	}()
+	if !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("Atomize of three 2^23-leaf references: err=%v, want ErrResourceLimit", err)
+	}
+	b := NewArray(Sequence{NewInteger(1)}, Sequence{NewArray(Sequence{NewInteger(2)})})
+	if got, err := AtomizeChecked(Sequence{b, NewInteger(3), b}); err != nil || len(got) != 5 {
+		t.Fatalf("AtomizeChecked([1,[2]], 3, [1,[2]]): %v, %v", got, err)
+	}
+}
+
 // FlattenContext stops a shared-member expansion when its context is done,
 // and returns the step ceiling as an error, neither by panicking.
 func TestFlattenContextStopsOnCancel(t *testing.T) {

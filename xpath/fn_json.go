@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xdmbuild"
 )
@@ -1048,7 +1049,7 @@ func jsonFallback(ctx *Context, opts jsonOptions) func(string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		atoms, err := xdm.AtomizeChecked(out)
+		atoms, err := ctx.atomizeChecked(out)
 		if err != nil {
 			return "", err
 		}
@@ -1278,7 +1279,8 @@ func (b *jsonXMLBuilder) boolean(v bool) error {
 func (b *jsonXMLBuilder) null() error { return b.attach(jsonElement("null")) }
 
 // jsonToXML builds the document node fn:json-to-xml returns.
-func jsonToXML(ctx *Context, text string, opts jsonOptions) (xdm.Sequence, error) {
+func jsonToXML(ctx *Context, text string, opts jsonOptions) (_ xdm.Sequence, err error) {
+	defer xdmlimit.Recover(&err) // a tree past its text store's blocks
 	b := &jsonXMLBuilder{ctx: ctx, opts: opts}
 	if err := scanJSON(text, opts, b, jsonFallback(ctx, opts)); err != nil {
 		return nil, err

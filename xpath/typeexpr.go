@@ -348,7 +348,10 @@ func (e *CastExpr) evalCast(ctx *Context) (xdm.Sequence, error) {
 			"a value cannot be cast to xs:error, which has no instances")
 	}
 
-	atoms := xdm.Atomize(v)
+	atoms, err := ctx.atomize(v)
+	if err != nil {
+		return nil, err
+	}
 	switch len(atoms) {
 	case 0:
 		// Only "type?" permits an empty operand.

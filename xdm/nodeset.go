@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -168,7 +169,15 @@ func Except(a, b Sequence) Sequence {
 // triggered by stylesheet text. An Opaque has no typed value, so dropping it
 // is also what the data model implies: it is not a node and not an atomic
 // value, so fn:data has nothing to return for it.
+//
+// Atomizing an array is the atomization of its members, flattened: XDM 3.1
+// defines data([[1,2],[3,4]]) as (1,2,3,4), not as two items. The whole
+// sequence is flattened once, so Flatten's step bound covers the sequence: a
+// hundred references to one shared-member array are one walk, not a hundred
+// walks each under a fresh bound. A walk past that bound panics as Flatten
+// does; AtomizeChecked returns it as an error instead.
 func Atomize(seq Sequence) Sequence {
+	seq = Flatten(seq)
 	out := make(Sequence, 0, len(seq))
 	for _, it := range seq {
 		switch v := it.(type) {
@@ -189,13 +198,6 @@ func Atomize(seq Sequence) Sequence {
 				continue
 			}
 			out = append(out, v.Atomize())
-		case *ArrayItem:
-			// Atomizing an array is the atomization of its members, flattened:
-			// XDM 3.1 defines data([[1,2],[3,4]]) as (1,2,3,4), not as two
-			// items. Falling into the default case instead passed the array
-			// through as though it were an atomic value, which is what made
-			// fn:data on an array answer one item.
-			out = append(out, Atomize(Flatten(One(v)))...)
 		case *MapItem:
 			// Atomizing a map is FOTY0013, like a function item, and for the
 			// same reason: it has no typed value. It is dropped here and the
@@ -226,7 +228,16 @@ func Atomize(seq Sequence) Sequence {
 // and "string(f#1)" both fail, and a function item reaching an arithmetic or
 // comparison operator fails there too. Atomize cannot report it, so a caller
 // that is about to demand a typed value uses this instead.
+//
+// An array *can* be atomized, but only if its members can: an array holding a
+// map is FOTY0013 through the array. The sequence is flattened first, once,
+// and the flat result checked; a flatten past Flatten's step bound is returned
+// as its ErrResourceLimit error rather than raised.
 func AtomizeChecked(seq Sequence) (Sequence, error) {
+	seq, err := FlattenContext(context.Background(), seq)
+	if err != nil {
+		return nil, err
+	}
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *Node:
@@ -252,17 +263,6 @@ func AtomizeChecked(seq Sequence) (Sequence, error) {
 			// rather than the XPTY0004 a missing key would have produced.
 			return nil, Errorf("FOTY0013",
 				"a %s cannot be atomized", mapArrayString(v))
-		case *ArrayItem:
-			// An array *can* be atomized, but only if its members can: an
-			// array holding a map is FOTY0013 through the array. Flatten
-			// reduces it to the sequence its members hold, which is then
-			// checked the same way.
-			flat := Flatten(One(v))
-			if len(flat) != 1 || flat[0] != Item(v) {
-				if _, err := AtomizeChecked(flat); err != nil {
-					return nil, err
-				}
-			}
 		}
 	}
 	return Atomize(seq), nil
