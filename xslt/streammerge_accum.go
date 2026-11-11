@@ -18,7 +18,9 @@ package xslt
 // (attach), and the values are kept for the snapshot's nodes in a table
 // fnAccumulator consults (transformState.accumHeld). Lists of elements no
 // match came from are dropped as the next match is delivered: what is held
-// is the gap between two matches, and the snapshots' values.
+// is the gap between two matches, and the snapshots' values. Each node
+// recorded is charged a slot per accumulator against the item budget, as
+// the tree's tables charge each node of the document (holdSlots).
 //
 // Errors: the tree fails a read when the accumulator's walk fails anywhere.
 // So a read of a failed accumulator, or a merge that read an accumulator
@@ -76,6 +78,7 @@ type mergeAccums struct {
 	minD  int
 	lists []mergeAccumList
 	open  []int // per depth below minD, the index in the last list of the open element
+	err   error // the item budget's refusal (holdSlots): nothing more is recorded
 }
 
 type mergeAccumList struct {
@@ -97,6 +100,15 @@ type heldAccum struct {
 	beforeAt, afterAt uint64
 }
 
+// holdSlots charges the values of n nodes a recorder keeps, a slot per
+// accumulator each, to the item budget as accumulatorValuesFor charges the
+// tree's tables: they are kept while a snapshot, a copy or the merge holds
+// them.
+func (sa *streamAccums) holdSlots(n int) error {
+	sa.rt.accumSlots += int64(n) * int64(len(sa.defs))
+	return sa.ctx.ItemsRefused(sa.rt.accumSlots)
+}
+
 // observeMergeAccums starts computing the accumulators of src's document on
 // run's cursor, recording below depth minD, or returns nil when src
 // declares none.
@@ -115,7 +127,7 @@ func observeMergeAccums(rt *runtime, run *streamRun, src *mergeSource, minD int)
 
 // note is the observer's onStep.
 func (m *mergeAccums) note(n *xdm.Node, d int, post bool, ord uint64, cur []xdm.Sequence) {
-	if n == nil || d < m.minD {
+	if n == nil || d < m.minD || m.err != nil {
 		return
 	}
 	isEl := n.Kind() == xdm.KindElement
@@ -125,6 +137,11 @@ func (m *mergeAccums) note(n *xdm.Node, d int, post bool, ord uint64, cur []xdm.
 	}
 	if len(m.lists) == 0 {
 		return
+	}
+	if !post {
+		if m.err = m.sa.holdSlots(1); m.err != nil {
+			return
+		}
 	}
 	l := &m.lists[len(m.lists)-1]
 	vals, at := slices.Clone(cur), m.sa.rd.phase
@@ -154,6 +171,9 @@ func (m *mergeAccums) note(n *xdm.Node, d int, post bool, ord uint64, cur []xdm.
 // attach pairs snap, the snapshot of it (a match grounded off m's cursor),
 // with the values recorded for it, and drops the lists before its own.
 func (m *mergeAccums) attach(rt *runtime, it, snap xdm.Item) error {
+	if m.err != nil {
+		return m.err
+	}
 	g, ok := it.(*xdm.Node)
 	s, ok2 := snap.(*xdm.Node)
 	if !ok || !ok2 {
@@ -227,6 +247,9 @@ func (h *heldAccum) value(def *accumulatorDef, lex string, post bool) (xdm.Seque
 // accumulators the merge read, every document read to its end.
 func mergeAccumsPending(ms []*mergeAccums) error {
 	for _, m := range ms {
+		if m.err != nil {
+			return m.err
+		}
 		if err := m.sa.pending(); err != nil {
 			return err
 		}
