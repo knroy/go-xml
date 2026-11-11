@@ -23,24 +23,37 @@ func (c *Compiled) FreeVariables() []xdm.QName {
 	}
 	var out []xdm.QName
 	seen := map[string]bool{}
-	walkFreeVars(c.expr, nil, &out, seen)
+	walkFreeVars(c.expr, bound{}, &out, seen)
 	return out
 }
 
-// bound is the set of names in scope at a point in the walk.
+// bound is the set of names in scope at a point in the walk, as a count of the
+// bindings of each name now open. One map serves the whole walk: a binding
+// form pushes its names on entry and pops them before it returns.
 //
-// It is a slice rather than a map because it is small — the binding depth of
-// an expression, not the size of the expression — and because a slice is
-// copied for a nested scope by appending, which a map would need cloning for.
-type bound []xdm.QName
+// It was a slice copied for every nested scope, which made k bindings in one
+// expression cost O(k^2) copies and every lookup a scan of them; the parser
+// does not bound k, and the walk runs uncancellably at compile time and on an
+// inline function's first evaluation.
+type bound map[varKey]int
 
-func (b bound) has(n xdm.QName) bool {
-	for _, x := range b {
-		if x.URI == n.URI && x.Local == n.Local {
-			return true
-		}
+func (b bound) has(n xdm.QName) bool { return b[varKey{n.URI, n.Local}] > 0 }
+
+func (b bound) push(n xdm.QName) { b[varKey{n.URI, n.Local}]++ }
+
+func (b bound) pop(n xdm.QName) {
+	k := varKey{n.URI, n.Local}
+	if b[k]--; b[k] == 0 {
+		delete(b, k)
 	}
-	return false
+}
+
+// popBindings pops the variables of bindings, which a for, let or quantified
+// expression pushed.
+func (b bound) popBindings(bindings []Binding) {
+	for _, x := range bindings {
+		b.pop(x.Var)
+	}
 }
 
 // walkFreeVars appends the free variables of e to out.
@@ -92,32 +105,34 @@ func walkFreeVars(e Expr, in bound, out *[]xdm.QName, seen map[string]bool) {
 			walkFreeVars(p, in, out, seen)
 		}
 	case *ForExpr:
-		inner := in
 		for _, b := range v.Bindings {
-			walkFreeVars(b.Seq, inner, out, seen)
-			inner = append(inner[:len(inner):len(inner)], b.Var)
+			walkFreeVars(b.Seq, in, out, seen)
+			in.push(b.Var)
 		}
-		walkFreeVars(v.Return, inner, out, seen)
+		walkFreeVars(v.Return, in, out, seen)
+		in.popBindings(v.Bindings)
 	case *LetExpr:
-		inner := in
 		for _, b := range v.Bindings {
-			walkFreeVars(b.Seq, inner, out, seen)
-			inner = append(inner[:len(inner):len(inner)], b.Var)
+			walkFreeVars(b.Seq, in, out, seen)
+			in.push(b.Var)
 		}
-		walkFreeVars(v.Return, inner, out, seen)
+		walkFreeVars(v.Return, in, out, seen)
+		in.popBindings(v.Bindings)
 	case *QuantifiedExpr:
-		inner := in
 		for _, b := range v.Bindings {
-			walkFreeVars(b.Seq, inner, out, seen)
-			inner = append(inner[:len(inner):len(inner)], b.Var)
+			walkFreeVars(b.Seq, in, out, seen)
+			in.push(b.Var)
 		}
-		walkFreeVars(v.Test, inner, out, seen)
+		walkFreeVars(v.Test, in, out, seen)
+		in.popBindings(v.Bindings)
 	case *InlineFunctionExpr:
-		inner := in
 		for _, p := range v.Params {
-			inner = append(inner[:len(inner):len(inner)], p.Name)
+			in.push(p.Name)
 		}
-		walkFreeVars(v.Body, inner, out, seen)
+		walkFreeVars(v.Body, in, out, seen)
+		for _, p := range v.Params {
+			in.pop(p.Name)
+		}
 	case *InstanceOfExpr:
 		walkFreeVars(v.Operand, in, out, seen)
 	case *CastExpr:
@@ -171,9 +186,9 @@ const unknownExpr = "\x00unknown"
 // does not know and the closure must capture the whole scope.
 func closureNeeds(e *InlineFunctionExpr) (names []xdm.QName, ok bool) {
 	seen := map[string]bool{}
-	inner := bound(nil)
+	inner := bound{}
 	for _, p := range e.Params {
-		inner = append(inner, p.Name)
+		inner.push(p.Name)
 	}
 	walkFreeVars(e.Body, inner, &names, seen)
 	return names, !seen[unknownExpr]

@@ -1025,51 +1025,71 @@ type varBinding struct {
 // local bindings on its chain replaced by a copy of what is visible now, so
 // that the stack moving on does not change what the closure sees.
 func frozenLocals(c *Context) *Context {
-	if c == nil {
-		return nil
+	var buf [16]*Context
+	chain, p := scopeChain(c, buf[:0], func(b *varBinding) *varBinding {
+		return &varBinding{locals: b.locals.Frozen()}
+	})
+	for i := len(chain) - 1; i >= 0; i-- {
+		p = withParent(chain[i], p)
 	}
-	if b := c.bind; b != nil && b.locals != nil {
-		n := *c
-		n.bind = &varBinding{locals: b.locals.Frozen()}
-		return &n
-	}
-	p := frozenLocals(c.Parent)
-	if p == c.Parent {
-		return c
-	}
-	n := *c
-	n.Parent = p
-	return &n
+	return p
 }
 
 // capturedFor is frozenLocals for a closure that reads only the variables keep
 // accepts: a scope that binds one name and is not accepted is left out of the
 // chain, and a host stack of locals is cut down to the accepted names. Scopes
 // binding several names, lazily or by the Vars map stay whole.
+//
+// Both walk the Parent chain in a loop. A let with many bindings makes the
+// chain that long, and recursing once per scope let it overflow the stack.
 func capturedFor(c *Context, keep func(uri, local string) bool, leaf bool) *Context {
-	if c == nil {
-		return nil
-	}
-	if b := c.bind; b != nil && b.locals != nil {
-		n := *c
-		n.bind = &varBinding{locals: b.locals.FrozenOnly(keep)}
-		return &n
-	}
-	p := capturedFor(c.Parent, keep, false)
-	if b := c.bind; b != nil && b.names == nil && b.lazy == nil && b.local != "" &&
-		len(c.Vars) == 0 && !keep(b.uri, b.local) {
-		if !leaf {
-			return p
+	var buf [16]*Context
+	chain, p := scopeChain(c, buf[:0], func(b *varBinding) *varBinding {
+		return &varBinding{locals: b.locals.FrozenOnly(keep)}
+	})
+	// Outermost first, which is the order keep was asked in when this
+	// recursed.
+	for i := len(chain) - 1; i >= 0; i-- {
+		s := chain[i]
+		if b := s.bind; b != nil && b.names == nil && b.lazy == nil && b.local != "" &&
+			len(s.Vars) == 0 && !keep(b.uri, b.local) {
+			if i > 0 || !leaf {
+				continue
+			}
+			// The innermost scope also carries the environment the body runs in.
+			n := *s
+			n.bind, n.Parent = nil, p
+			p = &n
+			continue
 		}
-		// The innermost scope also carries the environment the body runs in.
-		n := *c
-		n.bind, n.Parent = nil, p
-		return &n
+		p = withParent(s, p)
 	}
-	if p == c.Parent {
-		return c
+	return p
+}
+
+// scopeChain collects c's Parent chain, innermost first, onto chain, stopping
+// at the first scope holding a host stack of locals. That scope is not
+// collected: it is returned copied, its binding replaced by freeze's, as the
+// base the collected scopes are rebuilt on. With no such scope the base is
+// nil.
+func scopeChain(c *Context, chain []*Context, freeze func(*varBinding) *varBinding) ([]*Context, *Context) {
+	for s := c; s != nil; s = s.Parent {
+		if b := s.bind; b != nil && b.locals != nil {
+			n := *s
+			n.bind = freeze(b)
+			return chain, &n
+		}
+		chain = append(chain, s)
 	}
-	n := *c
+	return chain, nil
+}
+
+// withParent is s with p as its Parent: s itself when that is already so.
+func withParent(s, p *Context) *Context {
+	if p == s.Parent {
+		return s
+	}
+	n := *s
 	n.Parent = p
 	return &n
 }

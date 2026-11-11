@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -35,5 +36,23 @@ func TestOrdinarySchemaPatternsStillValidate(t *testing.T) {
 		if err := validateSchemaRegexp(pat, false); err != nil {
 			t.Errorf("%q: %v", pat, err)
 		}
+	}
+}
+
+// A class subtraction recursed charClassExpr -> charGroupBody -> charClassExpr
+// once per "-[" without touching the group counter, so a deep enough
+// subtraction overflowed the stack. It now counts against the same bound.
+func TestDeepClassSubtractionIsRefusedNotFatal(t *testing.T) {
+	old := debug.SetMaxStack(4 << 20)
+	defer debug.SetMaxStack(old)
+	for _, depth := range []int{maxSchemaRegexpDepth + 1, 200000} {
+		pat := strings.Repeat("[a-", depth) + "[a]" + strings.Repeat("]", depth)
+		err := validateSchemaRegexp(pat, false)
+		if err == nil || !strings.Contains(err.Error(), "nesting exceeds") {
+			t.Fatalf("depth %d: want a nesting refusal, got %.200v", depth, err)
+		}
+	}
+	if err := validateSchemaRegexp("[a-z-[aeiou-[e]]]", false); err != nil {
+		t.Fatalf("a shallow subtraction was refused: %v", err)
 	}
 }

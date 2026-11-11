@@ -63,14 +63,18 @@ type schemaRegexpParser struct {
 
 	// Groups nest, and a group's body is a full regExp, so "((((a))))"
 	// recurses regExp -> branch -> piece -> atom -> regExp once per level.
-	// Nothing else in this grammar recurses, so counting group entry alone
-	// bounds the whole parser. Without it a pattern facet deep enough
-	// exhausts the goroutine stack, and a stack overflow is fatal to the
-	// process rather than catchable by the caller.
+	// A class subtraction nests too: "[a-[b-[c]]]" recurses charClassExpr ->
+	// charGroupBody -> charClassExpr once per "-[". Those are the grammar's
+	// only cycles, and depth counts entry to both, which bounds the whole
+	// parser. Without it a pattern facet deep enough exhausts the goroutine
+	// stack, and a stack overflow is fatal to the process rather than
+	// catchable by the caller.
 	depth int
 }
 
-// maxSchemaRegexpDepth bounds group nesting in a pattern facet. Appendix F
+// maxSchemaRegexpDepth bounds group and class-subtraction nesting in a pattern
+// facet, and group nesting in a pattern the backtracking matcher parses (which
+// is in the same language). Appendix F
 // puts no limit on it, but a real pattern is nowhere near this deep, and the
 // alternative to a limit is a crash rather than an error.
 const maxSchemaRegexpDepth = 1000
@@ -388,6 +392,12 @@ func (p *schemaRegexpParser) charClassExpr() error {
 		return p.errorf("expected %q", "[")
 	}
 	p.pos++
+	p.depth++
+	defer func() { p.depth-- }()
+	if p.depth > maxSchemaRegexpDepth {
+		return p.errorf("character class nesting exceeds %d levels",
+			maxSchemaRegexpDepth)
+	}
 	if p.peek() == '^' {
 		// [15] negCharGroup ::= '^' posCharGroup.
 		p.pos++

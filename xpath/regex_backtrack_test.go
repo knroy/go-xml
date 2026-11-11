@@ -1,10 +1,14 @@
 package xpath
 
 import (
+	"errors"
 	"math"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // withBacktracking runs f with the switch on and restores it afterwards.
@@ -497,4 +501,26 @@ func TestBacktrackLimitsTakeEffect(t *testing.T) {
 			}
 		})
 	})
+}
+
+// btParser recursed once per group and counted only capturing ones, so "(?:"
+// nested deep enough overflowed the goroutine stack while parsing: fatal, not
+// an error. RE2, which never parses a pattern routed here, stops at 1000
+// levels; the backtracker now refuses past the same depth. The stack is
+// lowered so a small pattern reaches what Go's default stack needs MBs for.
+func TestBacktrackDeepNonCapturingNestingIsRefused(t *testing.T) {
+	old := debug.SetMaxStack(4 << 20)
+	defer debug.SetMaxStack(old)
+	nest := func(n int) string {
+		return `(['"])` + strings.Repeat("(?:", n) + "a" + strings.Repeat(")", n) + `\1`
+	}
+	if _, err := compileBacktrack(nest(100), "", XPath31); err != nil {
+		t.Fatalf("100 levels: %v", err)
+	}
+	for _, n := range []int{maxSchemaRegexpDepth + 1, 100000} {
+		_, err := compileBacktrack(nest(n), "", XPath31)
+		if !errors.Is(err, xdm.ErrResourceLimit) || xdm.ErrorCode(err) != "FORX0002" {
+			t.Fatalf("%d levels: want FORX0002 + ErrResourceLimit, got %.200v", n, err)
+		}
+	}
 }
