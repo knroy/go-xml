@@ -411,10 +411,10 @@ func (e *CastExpr) evalCast(ctx *Context) (xdm.Sequence, error) {
 			}
 			return nil, err
 		}
-		out, err := castToListType(a, e.Type.ListItemFacet)
 		if e.Castable {
-			return xdm.One(boolItem(err == nil)), nil
+			return xdm.One(boolItem(listTypeCastable(a, e.Type.ListItemFacet))), nil
 		}
+		out, err := castToListType(ctx, a, e.Type.ListItemFacet)
 		if err != nil {
 			return nil, err
 		}
@@ -852,9 +852,16 @@ func schemaTypeNameMatches(env *xdm.TypeEnvironment, annotation, want string) bo
 // known, which is all that can be said about it without the schema's own
 // value constructor.
 func castListTokens(ctx *Context, a *xdm.Atomic, list SequenceType) (xdm.Sequence, error) {
-	toks := collapseXMLSpaceFields(a.String())
-	out := make(xdm.Sequence, 0, len(toks))
-	for _, tok := range toks {
+	s := a.String()
+	n := 0
+	for range xmlSpaceFields(s) {
+		n++
+	}
+	out, err := makeSequence(ctx, n)
+	if err != nil {
+		return nil, err
+	}
+	for tok := range xmlSpaceFields(s) {
 		switch {
 		case list.SchemaListItem != nil:
 			item := &CastExpr{Operand: newLiteral(xdm.NewString(tok)),
@@ -893,7 +900,7 @@ func castToListMember(ctx *Context, a *xdm.Atomic, members []SequenceType) (xdm.
 		var out xdm.Sequence
 		var err error
 		if m.ListItemFacet != "" {
-			out, err = castToListType(a, m.ListItemFacet)
+			out, err = castToListType(ctx, a, m.ListItemFacet)
 		} else {
 			if m.SchemaValueValid != nil {
 				err = m.SchemaValueValid(a.String())

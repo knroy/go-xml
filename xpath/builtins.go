@@ -119,7 +119,7 @@ func registerListTypes(l *Library) {
 			if _, err := listSourceValue(a); err != nil {
 				return nil, err
 			}
-			return castToListType(a, facet)
+			return castToListType(ctx, a, facet)
 		}
 		l.Add(Function{
 			Name:  xdm.QName{URI: xdm.NSXS, Local: name},
