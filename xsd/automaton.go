@@ -88,6 +88,15 @@ type contentModel struct {
 	// active is the set of model groups on the path currently being built,
 	// used to detect a group that reaches itself.
 	active map[*ModelGroup]bool
+
+	// emptyGroup holds the fragment of each group whose expansion added no
+	// position. Group references share their definition's *ModelGroup, so
+	// a DAG of n groups each referencing the next twice is reached by
+	// 2^(n-1) paths; a group with positions pays maxPositions on every
+	// visit, but one without them would be expanded once per path for
+	// free. Its fragment has empty first and last sets and depends only on
+	// the group, so the first expansion answers every later visit.
+	emptyGroup map[*ModelGroup]frag
 }
 
 // A piece is one run of a position's follow set: positions that may follow it,
@@ -370,11 +379,28 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 				"content model is recursive: a model group reaches itself, " +
 					"which no finite automaton can describe")
 		}
+		if f, ok := m.emptyGroup[t]; ok {
+			inner = f
+			break
+		}
+		posBefore, ctrBefore := len(m.positions), len(m.counters)
 		m.active[t] = true
 		inner, err = m.buildGroup(t, scope)
 		delete(m.active, t)
 		if err != nil {
 			return frag{}, err
+		}
+		if len(m.positions) == posBefore {
+			// No position refers to a counter created in this
+			// subtree and no edge was laid in it, so its counters
+			// are dropped rather than retained once per path.
+			m.counters = m.counters[:ctrBefore]
+			m.scopeFirst = m.scopeFirst[:ctrBefore]
+			m.scopeLast = m.scopeLast[:ctrBefore]
+			if m.emptyGroup == nil {
+				m.emptyGroup = map[*ModelGroup]frag{}
+			}
+			m.emptyGroup[t] = inner
 		}
 
 	case nil:
