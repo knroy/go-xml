@@ -194,11 +194,11 @@ type compiler struct {
 	// once every template is known.
 	calls []*callTemplateInstr
 	// staticVars holds the value of every static variable and parameter in
-	// the stylesheet, in tree order, as computed by the static phase; see
+	// the stylesheet, by Clark name, as computed by the static phase; see
 	// static.go. staticDone records the module trees that phase already
 	// walked, so that compileModule does not repeat conditional inclusion
 	// over one and evaluate its use-when expressions a second time.
-	staticVars []staticVar
+	staticVars map[string]*staticVar
 	staticDone map[*xdm.Node]*xdm.Node
 	// l7Alias caches the scan streamMayAlias reads, made over l7AliasN modules (streamalias_l7.go).
 	l7Alias  *aliasScan

@@ -61,7 +61,7 @@ type pkgFrameState struct {
 	root       *xdm.Node // the package's rebuilt module root
 	top        *xdm.Node // the top-level module root that uses it
 	serial     int       // compilePackage while it compiled
-	staticVars []staticVar
+	staticVars map[string]*staticVar
 	fns        map[funcKey]*streamFunc // the package's own functions
 	frames     map[funcKey]*streamFunc // accepted frame functions and wrappers
 	rp         *rulesPlan

@@ -1,9 +1,11 @@
 package xslt
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -172,5 +174,95 @@ func TestStaticTransformFanoutIsBounded(t *testing.T) {
 	shallow := strings.Replace(fanoutSheet, "$d lt 7", "$d lt 2", 1)
 	if err := compileFrom(t, memModules{"main.xsl": shallow}, nil); err != nil {
 		t.Fatalf("20 nested compilations: %v", err)
+	}
+}
+
+// staticParams is a module of n static parameters, each selecting the one
+// before it, or with no select when bare.
+func staticParams(n int, bare bool, tail string) string {
+	var b strings.Builder
+	b.WriteString(`<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">`)
+	for i := range n {
+		switch {
+		case bare:
+			fmt.Fprintf(&b, `<xsl:param name="p%d" static="yes"/>`, i)
+		case i == 0:
+			b.WriteString(`<xsl:param name="p0" static="yes" select="0"/>`)
+		default:
+			fmt.Fprintf(&b, `<xsl:param name="p%d" static="yes" select="$p%d + 1"/>`, i, i-1)
+		}
+	}
+	b.WriteString(tail + `</xsl:stylesheet>`)
+	return b.String()
+}
+
+// A module imported N times has its static declarations re-declared once per
+// import, each at its own precedence (3.11.3). That walk is charged against
+// MaxModuleNodes before the work is done, not only by the compile walk after
+// it: 30 imports of 50 declarations re-declare 1,450 under a 1,000 bound.
+func TestStaticRedeclareIsCharged(t *testing.T) {
+	main := func(n int) string {
+		return `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">` +
+			strings.Repeat(`<xsl:import href="L.xsl"/>`, n) +
+			`<xsl:template name="xsl:initial-template"/></xsl:stylesheet>`
+	}
+	m := memModules{"L.xsl": staticParams(50, true, ""), "main.xsl": main(30)}
+	err := compileWith(t, m, CompileOptions{MaxModuleNodes: 1000})
+	if !errors.Is(err, xdm.ErrResourceLimit) || !strings.Contains(err.Error(), "static phase") {
+		t.Fatalf("got %v, want the static phase refused at 1000 nodes", err)
+	}
+	m["main.xsl"] = main(3)
+	if err := compileWith(t, m, CompileOptions{MaxModuleNodes: 1000}); err != nil {
+		t.Fatalf("3 imports: %v", err)
+	}
+}
+
+// countdownCtx is cancelled once its Err has been asked n times.
+type countdownCtx struct {
+	context.Context
+	n int
+}
+
+func (c *countdownCtx) Err() error {
+	if c.n--; c.n < 0 {
+		return context.Canceled
+	}
+	return nil
+}
+
+// CompileContext stops the static phase on cancellation even where no static
+// expression is evaluated: static parameters without a select once ran to the
+// end of the phase, and the compilation succeeded.
+func TestStaticPhaseHonoursCancellation(t *testing.T) {
+	tree, err := xdm.ParseString(staticParams(200, true,
+		`<xsl:template name="xsl:initial-template"/>`), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &countdownCtx{Context: context.Background(), n: 20}
+	if _, err := CompileContext(ctx, tree.Root, CompileOptions{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want context.Canceled", err)
+	}
+}
+
+// Each static expression once rebound every static variable declared before
+// it, one context per variable: O(V^2) for V declarations. The scope is now
+// built once per declaration and read by every expression after it.
+func TestStaticScopeIsNotRebuiltPerExpression(t *testing.T) {
+	const v = 3000
+	tree, err := xdm.ParseString(staticParams(v, false,
+		`<xsl:template name="xsl:initial-template"/>`), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after goruntime.MemStats
+	goruntime.ReadMemStats(&before)
+	_, err = Compile(tree.Root, CompileOptions{})
+	goruntime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := after.TotalAlloc - before.TotalAlloc; got > 256<<20 {
+		t.Errorf("compiling %d static parameters allocated %d MB; want under 256 MB", v, got>>20)
 	}
 }

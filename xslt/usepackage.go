@@ -651,7 +651,7 @@ type usePackageDecl struct {
 	// staticVars are the static variables the used package's own static phase
 	// evaluated. They belong to that package and not to the using one, so
 	// they are reinstated only while it compiles; see compileUsedPackage.
-	staticVars []staticVar
+	staticVars map[string]*staticVar
 	// assignedVis records which of those an xsl:accept actually named, as
 	// against inheriting the used package's own answer. XTSE3080 turns on the
 	// difference; see compileUsePackages.
