@@ -656,6 +656,42 @@ func TestExclusivePrefixListNotPerElement(t *testing.T) {
 	}
 }
 
+// TestInheritedXMLAttrsNotQuadratic bounds the work of inheriting K xml:*
+// attributes, every one of which C14N 1.0 carries onto an apex. Each was
+// deduplicated by scanning the list built so far, and again against the apex's
+// own attributes, so the cost grew as K^2 per apex; it now uses a set, and the
+// work counted in inspected is the attributes read, once each.
+func TestInheritedXMLAttrsNotQuadratic(t *testing.T) {
+	const k, apexes = 4000, 4
+	var b strings.Builder
+	b.WriteString("<r")
+	for i := range k {
+		fmt.Fprintf(&b, ` xml:a%d=""`, i)
+	}
+	b.WriteString("><s>")
+	b.WriteString(strings.Repeat(`<b xml:a0="own"/>`, apexes))
+	b.WriteString("</s></r>")
+	ns, err := FromXPath(parse(t, b.String()), "//b | //b/@*", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	c, err := run(&out, ns, Options{Algorithm: Inclusive10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound := 2*k + 2*apexes; c.inspected > bound {
+		t.Errorf("%d inherited attributes over %d apexes inspected %d, bound %d", k, apexes, c.inspected, bound)
+	}
+	// Each apex keeps its own xml:a0 and inherits the other k-1.
+	if got := strings.Count(out.String(), `xml:a0="own"`); got != apexes {
+		t.Errorf("%d apexes kept their own xml:a0, want %d", got, apexes)
+	}
+	if got := strings.Count(out.String(), `xml:a1=""`); got != apexes {
+		t.Errorf("%d apexes inherited xml:a1, want %d", got, apexes)
+	}
+}
+
 // TestApexesDoNotRescanScope bounds the work at apexes: elements in the set
 // whose parent is not. Under '/r | //b' every b is one. Each used to scan
 // every binding in scope and every attribute of every ancestor, though r had

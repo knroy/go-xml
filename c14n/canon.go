@@ -687,9 +687,26 @@ func (c *canon) inherit(e *xdm.Node) {
 			}
 		}
 	}
-	for _, at := range c.inherited(len(c.path) - 2) {
-		if e.Attr(xdm.NSXML, at.Name().Local) == nil && !hasXMLAttr(c.attrs, at.Name().Local) {
-			c.attrs = append(c.attrs, at)
+	// e's own xml:* names, gathered once: looking each inherited attribute up
+	// in e's attributes and in c.attrs was O(K^2) per apex for K inherited
+	// names, and C14N 1.0 inherits every xml:* name. The inherited list holds
+	// one attribute per name and c.attrs holds only e's own besides, so a
+	// name e does not carry is not yet in c.attrs.
+	if inh := c.inherited(len(c.path) - 2); len(inh) > 0 {
+		var own map[string]bool
+		for at := range e.Attrs() {
+			c.inspected++
+			if at.Name().URI == xdm.NSXML {
+				if own == nil {
+					own = map[string]bool{}
+				}
+				own[at.Name().Local] = true
+			}
+		}
+		for _, at := range inh {
+			if !own[at.Name().Local] {
+				c.attrs = append(c.attrs, at)
+			}
 		}
 	}
 	if c.v11 {
@@ -711,19 +728,20 @@ func (c *canon) inherited(i int) []*xdm.Node {
 		// Above the root, once: the root is the only apex with no parent
 		// on the path.
 		if len(c.path) > 0 {
+			var names map[string]bool
 			for a := c.path[0].n.Parent(); a != nil && a.Kind() == xdm.KindElement; a = a.Parent() {
-				own = c.xmlAttrsOf(a, own)
+				own, names = c.xmlAttrsOf(a, own, names)
 			}
 		}
 		return own
 	}
-	own = c.xmlAttrsOf(c.path[i].n, nil)
+	own, names := c.xmlAttrsOf(c.path[i].n, nil, nil)
 	outer = c.inherited(i - 1)
 	list := outer
 	if len(own) > 0 {
 		list = own
 		for _, at := range outer {
-			if !hasXMLAttr(own, at.Name().Local) {
+			if !names[at.Name().Local] {
 				list = append(list, at)
 			}
 		}
@@ -733,15 +751,25 @@ func (c *canon) inherited(i int) []*xdm.Node {
 }
 
 // xmlAttrsOf appends to list a's inheritable xml:* attributes whose local
-// name list does not already hold.
-func (c *canon) xmlAttrsOf(a *xdm.Node, list []*xdm.Node) []*xdm.Node {
+// name list does not already hold, and returns names, the set of the
+// result's local names, which the caller passes back with list (nil for an
+// empty list). The set replaces a scan of list per attribute, which was
+// O(K^2) for K xml:* attributes.
+func (c *canon) xmlAttrsOf(a *xdm.Node, list []*xdm.Node, names map[string]bool) ([]*xdm.Node, map[string]bool) {
 	for at := range a.Attrs() {
 		c.inspected++
-		if at.Name().URI == xdm.NSXML && c.inheritable(at.Name().Local) && !hasXMLAttr(list, at.Name().Local) {
+		if at.Name().URI != xdm.NSXML || !c.inheritable(at.Name().Local) {
+			continue
+		}
+		if names == nil {
+			names = map[string]bool{}
+		}
+		if !names[at.Name().Local] {
+			names[at.Name().Local] = true
 			list = append(list, at)
 		}
 	}
-	return list
+	return list, names
 }
 
 // inheritable reports whether xml:local is copied from an ancestor. C14N 1.0
