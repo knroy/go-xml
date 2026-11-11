@@ -1,8 +1,12 @@
 package xpath
 
 import (
+	"errors"
+	"math/big"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // TestSM06BackrefNoWrongAnswer: a variable-width head before the referenced
@@ -86,5 +90,77 @@ func TestSM06BackrefLinear(t *testing.T) {
 	}
 	if br.MatchString(strings.Repeat("abc", 1<<17)) {
 		t.Error("matched without a trailing a")
+	}
+}
+
+// TestSM06UCASubstringNotCubic: a needle of m characters no longer keys every
+// span up to m at each start. Keyed bytes stay within a constant times n*m
+// (the old scan was about n*m*m/2) and are charged to the byte budget.
+func TestSM06UCASubstringNotCubic(t *testing.T) {
+	c, err := parseUCACollation(UCACollation + "?lang=en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := c.(*ucaCollation)
+	const m = 200
+	s := strings.Repeat("a", 2*m)
+	sub := strings.Repeat("a", m) + "b"
+	keyed := 0
+	if i, _ := u.indexOf(s, sub, func(n int) error { keyed += n; return nil }); i != -1 {
+		t.Fatalf("indexOf = %d, want -1", i)
+	}
+	if limit := 40 * len(s) * m; keyed > limit {
+		t.Errorf("keyed %d bytes, want at most %d", keyed, limit)
+	}
+	if i, _ := u.indexOf(s+"b", sub, nil); i != m {
+		t.Errorf("indexOf with a match = %d, want %d", i, m)
+	}
+	ctx := nearlyExhausted(t, 1<<16, 1<<20)
+	if _, err := collationContains(ctx, c, s, sub); !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("contains under a spent byte budget: err = %v, want ErrResourceLimit", err)
+	}
+}
+
+// TestSM06FracPatternBounded: an [f] digit pattern wider than the picture
+// width bound is refused, at every version, before any digit is rendered.
+func TestSM06FracPatternBounded(t *testing.T) {
+	if _, err := parseFracPattern(strings.Repeat("0", maxPictureWidth+1)); !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("err = %v, want ErrResourceLimit", err)
+	}
+	// The left pad is one Repeat, not one prepend per missing digit.
+	if got := roundHalfToEvenFrac(big.NewRat(1, 20), 5); got != ".05000" {
+		t.Errorf("roundHalfToEvenFrac = %q, want .05000", got)
+	}
+}
+
+// TestSM06ExponentPictureBounded: an exponent picture with more integer or
+// fraction digits than the bound is refused with the picture code and the
+// resource sentinel, at 3.0+ as well (the code rewrite kept the sentinel).
+func TestSM06ExponentPictureBounded(t *testing.T) {
+	wide := strings.Repeat("0", maxPictureWidth+1)
+	for _, pic := range []string{wide + "e0", "0." + wide + "e0"} {
+		_, err := FormatNumberVersion(xdm.NewInteger(1), pic, DefaultDecimalFormat(), XPath31)
+		if !errors.Is(err, xdm.ErrResourceLimit) || xdm.ErrorCode(err) != "FODF1310" {
+			t.Errorf("%.12s...: err = %v, want FODF1310 resource refusal", pic, err)
+		}
+	}
+	if _, err := FormatNumberVersion(xdm.NewInteger(1), wide, DefaultDecimalFormat(), XPath31); err != nil {
+		t.Errorf("wide picture without exponent: %v", err)
+	}
+}
+
+// TestSM06SerializeHTMLCommentBreakout: fn:serialize refuses a comment that an
+// HTML parser would close at once, as the tree serializer does.
+func TestSM06SerializeHTMLCommentBreakout(t *testing.T) {
+	for _, m := range []string{"html", "xhtml"} {
+		for _, doc := range []string{`<r><!--><img/>--></r>`, `<r><!---><img/>--></r>`} {
+			err := evalErrVersion(t, doc, `serialize(/r, map{'method':'`+m+`'})`, XPath31)
+			if err == nil || !strings.Contains(err.Error(), "SERE0003") {
+				t.Errorf("%s %s: err = %v, want SERE0003", m, doc, err)
+			}
+		}
+	}
+	if got := evalStrVersion(t, `<r><!--><img/>--></r>`, `serialize(/r, map{'method':'xml'})`, XPath31); !strings.Contains(got, "<!--><img/>-->") {
+		t.Errorf("xml method = %q", got)
 	}
 }
