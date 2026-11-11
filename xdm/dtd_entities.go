@@ -639,6 +639,13 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 		if seen[name] {
 			return "", fmt.Errorf("entity %q refers to itself", name)
 		}
+		// Every nested reference costs at least its own length, so a ladder
+		// whose leaves are empty still spends the budget: resolve charges
+		// only the expanded length, which for <!ENTITY a0 ''> and each
+		// <!ENTITY aN '&aN-1;&aN-1;'> is zero across 2^N expansions.
+		if err := t.charge(j + 1); err != nil {
+			return "", err
+		}
 		if t.external[name] && attr {
 			return "", fmt.Errorf("external entity %q is referenced in an attribute value", name)
 		}
@@ -1278,6 +1285,7 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 	sb.WriteString(src[:start])
 
 	var count, written int
+	spanMemo := map[string][]entityBaseSpan{}
 	// inTag and attrQuote track whether the scanner is inside a start-tag and,
 	// within one, inside a quoted attribute value. That context changes what a
 	// substitution may write, not merely where it happens: see the escaping
@@ -1433,6 +1441,13 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 				"document references more than %d entities: %w",
 				t.lim.count, ErrResourceLimit)
 		}
+		// Each substitution is charged to the shared budget, as the dec.Entity
+		// path's entityChargeReader charges it: written bounds this one
+		// rewrite, and resolve charges an entity once however often it is
+		// referenced, so neither alone bounds the parses that share a budget.
+		if err := t.charge(len(rep)); err != nil {
+			return "", err
+		}
 		written += len(rep)
 		if written > t.lim.total {
 			return "", fmt.Errorf(
@@ -1442,19 +1457,22 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 		// Where this replacement lands is recorded so the second parse can
 		// give the nodes it produces the base URI of the entity they were
 		// written in rather than of the including document. See
-		// entityBaseSpan.
-		at := sb.Len()
-		if t.external[name] {
-			t.baseSpans = append(t.baseSpans, entityBaseSpan{
-				start: at, end: at + len(rep), base: t.externalBase[name],
-			})
-			if inner, ok := t.externalText[name]; ok {
-				t.baseSpans = append(t.baseSpans,
-					t.externalSpansIn(inner, at, 1)...)
+		// entityBaseSpan. An entity's spans relative to its own text are the
+		// same at every reference, so they are found once per entity rather
+		// than by re-walking its text for each.
+		rel, ok := spanMemo[name]
+		if !ok {
+			if t.external[name] {
+				rel = []entityBaseSpan{{end: len(rep), base: t.externalBase[name]}}
+				if inner, ok := t.externalText[name]; ok {
+					rel = append(rel, t.externalSpansIn(inner, 0, 1)...)
+				}
+			} else if src, ok := t.raw[name]; ok {
+				rel = t.externalSpansIn(src, 0, 1)
 			}
-		} else if src, ok := t.raw[name]; ok {
-			t.baseSpans = append(t.baseSpans, t.externalSpansIn(src, at, 1)...)
+			spanMemo[name] = rel
 		}
+		t.addBaseSpans(rel, sb.Len())
 		sb.WriteString(rep)
 		i += j + 1
 	}
@@ -1745,74 +1763,6 @@ func escapeAttrLiteral(s string) string {
 		}
 	}
 	return sb.String()
-}
-
-// chargeReferences charges every entity reference in src against the shared
-// expansion budget, and reports an error when the document's references add up
-// to more than maxTotalEntityBytes.
-//
-// This exists because the budget is otherwise charged in the wrong unit. The
-// t.total accounting in resolve runs once per DISTINCT ENTITY, at the point
-// the entity is first expanded and memoised — so a document declaring one
-// 64 KB entity and referencing it a hundred thousand times charges the budget
-// 64 KB while the decoder substitutes 6.5 GB into the tree. Neither MaxBytes
-// nor MaxNodes catches that: the input stays small (a reference is three
-// bytes) and the result is one text node however long it is. Measured before
-// this check existed, 356 KB of input expanded to 6.5 GB in 19 seconds.
-//
-// substituteMarkupEntities has always charged per reference — it accumulates
-// "written" as it splices — which is why the same document was refused on the
-// rewrite path and accepted on the plain one. This gives the plain path the
-// same accounting, so which path a document takes no longer decides whether
-// its expansion is bounded.
-//
-// Only the document's own bytes are scanned, with the internal subset skipped
-// and the three regions XML does not recognise a reference in passed over, for
-// the same reasons substituteMarkupEntities does it: a reference inside a
-// CDATA section, comment or PI is not a reference and must not be charged.
-func (t *entityTable) chargeReferences(src string) error {
-	total := t.total()
-	semis := semiFinder{s: src, at: -1}
-	for i := endOfInternalSubset(src); i < len(src); {
-		if skip := unscannedRegion(src, i); skip > i {
-			i = skip
-			continue
-		}
-		if src[i] != '&' {
-			i++
-			continue
-		}
-		j := semis.from(i)
-		if j < 0 {
-			i++
-			continue
-		}
-		name := src[i+1 : i+j]
-		i += j + 1
-		// A character reference and the five predefined entities expand to a
-		// single character each and are the decoder's business, not the
-		// table's.
-		if name == "" || name[0] == '#' {
-			continue
-		}
-		if _, ok := predefinedRune(name); ok {
-			continue
-		}
-		// An entity that does not resolve is not charged: the decoder reports
-		// the reference as an error, and charging it here would replace that
-		// specific message with a budget one.
-		rep, err := t.resolve(name)
-		if err != nil {
-			continue
-		}
-		total += len(rep)
-		if total > t.lim.total {
-			return fmt.Errorf(
-				"entity expansion exceeds %d bytes in total: %w",
-				t.lim.total, ErrResourceLimit)
-		}
-	}
-	return nil
 }
 
 // entityChargeReader charges entity references against the shared expansion

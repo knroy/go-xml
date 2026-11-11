@@ -97,13 +97,26 @@ func errIsShort(err error) bool {
 // bytes it is given and would otherwise see encoding="UTF-16" on text that is
 // now UTF-8 and hand it to a CharsetReader that does not exist. Rewriting the
 // declaration is what lets the decoder proceed without one.
+//
+// Only the declaration needs looking ahead at, so only it is held: decoded
+// text is kept back until it is known not to begin "<?xml", or up to the
+// first ">" that ends the declaration, and everything after streams through
+// a chunk at a time. Memory is the declaration plus one chunk, not the
+// document.
 type utf16Reader struct {
 	src       *bufio.Reader
 	bigEndian bool
-	buf       bytes.Buffer
-	started   bool
-	err       error
+	raw       []byte       // the chunk being read; a carried odd byte or high surrogate first
+	units     []uint16     // raw's complete code units, reused
+	out       bytes.Buffer // decoded UTF-8 not yet returned
+	declDone  bool         // the declaration has been checked and rewritten
+	err       error        // returned once out is drained
 }
+
+// utf16Chunk is how many bytes of UTF-16 one fill reads: large enough that
+// the per-call overhead vanishes, small enough that a streamed document's
+// decoding costs a fixed buffer rather than a copy of itself.
+const utf16Chunk = 32 << 10
 
 func newUTF16Reader(src *bufio.Reader, bigEndian bool) *utf16Reader {
 	return &utf16Reader{src: src, bigEndian: bigEndian}
@@ -111,63 +124,91 @@ func newUTF16Reader(src *bufio.Reader, bigEndian bool) *utf16Reader {
 
 // Read implements io.Reader.
 func (u *utf16Reader) Read(p []byte) (int, error) {
-	if !u.started {
-		u.started = true
-		if err := u.fill(); err != nil && err != io.EOF {
-			return 0, err
+	for !u.declDone {
+		if u.err == nil && declOpen(u.out.Bytes()) {
+			u.fill()
+			continue
 		}
+		u.declDone = true
+		if u.err != nil && u.err != io.EOF {
+			u.out.Reset()
+			return 0, u.err
+		}
+		text := u.out.String()
+		u.out.Reset()
+		if enc := declaredEncoding(text); enc != "" && !strings.HasPrefix(strings.ToUpper(enc), "UTF-16") {
+			u.err = fmt.Errorf("UTF-16 input contradicts encoding=%q", enc)
+			return 0, u.err
+		}
+		// Only the ENCODING declaration is rewritten: the text really is
+		// UTF-8 now, so a declaration naming UTF-16 has become false. The
+		// VERSION is left exactly as written — the tokeniser reads it, and a
+		// 1.1 document that arrived as UTF-16 is still a 1.1 document.
+		u.out.WriteString(rewriteEncodingDecl(text))
 	}
-	if u.buf.Len() == 0 {
+	for u.out.Len() == 0 {
 		if u.err != nil {
 			return 0, u.err
 		}
-		return 0, io.EOF
+		u.fill()
 	}
-	return u.buf.Read(p)
+	return u.out.Read(p)
 }
 
-// fill decodes the whole input.
-//
-// A document is decoded in one pass rather than streamed because the encoding
-// declaration has to be rewritten, and finding it means looking at the start of
-// the text — which a streaming decoder would have already handed on. Schema and
-// instance documents are small enough that this is not the cost it would be for
-// arbitrary data.
-func (u *utf16Reader) fill() error {
-	raw, err := io.ReadAll(u.src)
-	if err != nil {
-		u.err = err
-		return err
+// declOpen reports whether the decoded text so far may still be the start of
+// an XML declaration that has not ended: it begins "<?xml", or could, and
+// holds no ">". A ">" before the "?>" leaves the declaration malformed, which
+// the tokeniser reports, so it ends the look-ahead either way.
+func declOpen(text []byte) bool {
+	const open = "<?xml"
+	if len(text) < len(open) {
+		return strings.HasPrefix(open, string(text))
 	}
-	if len(raw)%2 != 0 {
-		// An odd byte count cannot be UTF-16. Truncating the last byte
-		// would decode most of the document and lose the end silently.
-		u.err = fmt.Errorf("UTF-16 input has an odd number of bytes")
-		return u.err
-	}
+	return bytes.HasPrefix(text, []byte(open)) && bytes.IndexByte(text, '>') < 0
+}
 
-	units := make([]uint16, len(raw)/2)
-	for i := range units {
-		hi, lo := raw[2*i], raw[2*i+1]
+// fill decodes the next chunk onto out, carrying an odd trailing byte or a
+// high surrogate whose pair may be in the next chunk. At the end of input it
+// sets err: io.EOF, or an error for an odd byte count, which cannot be UTF-16
+// and whose truncation would lose the end of the document silently.
+func (u *utf16Reader) fill() {
+	carry := len(u.raw)
+	if cap(u.raw) < carry+utf16Chunk {
+		u.raw = append(make([]byte, 0, carry+utf16Chunk), u.raw...)
+	}
+	n, err := io.ReadFull(u.src, u.raw[carry:carry+utf16Chunk])
+	u.raw = u.raw[:carry+n]
+	eof := err == io.EOF || err == io.ErrUnexpectedEOF
+	if err != nil && !eof {
+		u.err = err
+		return
+	}
+	u.units = u.units[:0]
+	for i := 0; i+1 < len(u.raw); i += 2 {
+		hi, lo := u.raw[i], u.raw[i+1]
 		if u.bigEndian {
-			units[i] = uint16(hi)<<8 | uint16(lo)
+			u.units = append(u.units, uint16(hi)<<8|uint16(lo))
 		} else {
-			units[i] = uint16(lo)<<8 | uint16(hi)
+			u.units = append(u.units, uint16(lo)<<8|uint16(hi))
 		}
 	}
-
-	text := string(utf16.Decode(units))
-	if enc := declaredEncoding(text); enc != "" && !strings.HasPrefix(strings.ToUpper(enc), "UTF-16") {
-		u.err = fmt.Errorf("UTF-16 input contradicts encoding=%q", enc)
-		return u.err
+	keep := len(u.raw) % 2
+	if !eof && len(u.units) > 0 && utf16.IsSurrogate(rune(u.units[len(u.units)-1])) &&
+		u.units[len(u.units)-1] < 0xDC00 {
+		u.units = u.units[:len(u.units)-1]
+		keep += 2
 	}
-	// Only the ENCODING declaration is rewritten: the text really is UTF-8
-	// now, so a declaration naming UTF-16 has become false. The VERSION is
-	// left exactly as written — the tokeniser reads it, and a 1.1 document
-	// that arrived as UTF-16 is still a 1.1 document.
-	u.buf.WriteString(rewriteEncodingDecl(text))
-	u.err = io.EOF
-	return nil
+	for _, r := range utf16.Decode(u.units) {
+		u.out.WriteRune(r)
+	}
+	u.raw = append(u.raw[:0], u.raw[len(u.raw)-keep:]...)
+	if eof {
+		if keep != 0 {
+			u.err = fmt.Errorf("UTF-16 input has an odd number of bytes")
+			return
+		}
+		u.err = io.EOF
+	}
 }
 
 // encodingDecl finds [80] EncodingDecl in an XML declaration at the start of s.

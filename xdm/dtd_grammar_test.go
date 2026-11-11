@@ -2,6 +2,7 @@ package xdm
 
 import (
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -121,5 +122,53 @@ func TestExternalSubsetGrammar(t *testing.T) {
 		if (err == nil) != c.ok {
 			t.Errorf("%s: err = %v, want ok %v", name, err, c.ok)
 		}
+	}
+}
+
+// TestDeepContentModelIsNotRecursion: a content model nested a million
+// groups deep is read on the heap. The recogniser recursed group -> cp ->
+// group per "(", and a goroutine stack overflow is fatal, not an error: an
+// 8 MB DOCTYPE through fn:parse-xml killed the host (run-4, dtdScan.group).
+// The stack is held to 16 MiB so that the old recursion dies here quickly.
+func TestDeepContentModelIsNotRecursion(t *testing.T) {
+	defer debug.SetMaxStack(debug.SetMaxStack(16 << 20))
+	const n = 1 << 20
+	model := strings.Repeat("(", n) + "a" + strings.Repeat(")", n)
+	doc := "<!DOCTYPE a [<!ELEMENT a " + model + "*>]><a/>"
+	if _, err := ParseString(doc, ParseOptions{AllowDOCTYPE: true}); err != nil {
+		t.Errorf("a deep, well-formed model: %v", err)
+	}
+	bad := "<!DOCTYPE a [<!ELEMENT a " + strings.Repeat("(", n) + "a|b,c" + strings.Repeat(")", n) + ">]><a/>"
+	if _, err := ParseString(bad, ParseOptions{AllowDOCTYPE: true}); err == nil || !strings.Contains(err.Error(), "mixes | and ,") {
+		t.Errorf("a deep model mixing separators: err = %v", err)
+	}
+	// INCLUDE sections nest by the same loop.
+	inc := strings.Repeat("<![INCLUDE[", 1<<16) + "<!ELEMENT r EMPTY>" + strings.Repeat("]]>", 1<<16)
+	if err := checkExtSubsetGrammar(inc); err != nil {
+		t.Errorf("deep INCLUDE sections: %v", err)
+	}
+	if err := checkExtSubsetGrammar(inc[:len(inc)-3]); err == nil {
+		t.Errorf("an unclosed INCLUDE was accepted")
+	}
+}
+
+// TestIgnoreSectionScan: an IGNORE section's nested "<![" and "]]>" pair
+// up, read in one forward pass (run-4, dtdScan.conditional).
+func TestIgnoreSectionScan(t *testing.T) {
+	for s, want := range map[string]int{
+		"]]>":                 3,
+		"a<![b]]>c]]>d":       12,
+		"<![<![]]>]]>]]>tail": 15,
+		"<![ ]]>":             -1,
+		"":                    -1,
+	} {
+		if got := ignoreSectEnd(s, 0); got != want {
+			t.Errorf("ignoreSectEnd(%q) = %d, want %d", s, got, want)
+		}
+	}
+	k := 1 << 14
+	deep := "<![IGNORE[" + strings.Repeat("<![", k) + strings.Repeat("]]>", k+1) + "<!ELEMENT r EMPTY>"
+	if err := checkExtSubsetGrammar(deep); err != nil {
+		t.Errorf("nested IGNORE: %v", err)
 	}
 }
