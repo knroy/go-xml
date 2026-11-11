@@ -96,7 +96,11 @@ const (
 // accumCacheKey identifies one accumulator over one tree.
 type accumCacheKey struct {
 	name string
-	tree *xdm.Tree
+	// root is the identity of the tree's root rather than the *xdm.Tree:
+	// Node.Tree is nil for every constructed fragment, so keying on it gave
+	// all of them one table, and a read over the second fragment answered
+	// from the first's at the same index.
+	root xdm.IdentityKey
 	// pkg is the package whose declaration produced these values, for the
 	// reason keyCacheKey carries one: two packages declaring an accumulator
 	// of the same name compute different values over the same tree, and a
@@ -354,7 +358,7 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	// The package comes from the declaration, which is already the one the
 	// calling package's lookup chose, so an index built from one package's
 	// declaration is never handed to another's call of the same name.
-	key := accumCacheKey{name: def.name.Clark(), tree: root.Tree(), pkg: def.pkg}
+	key := accumCacheKey{name: def.name.Clark(), root: root.Identity(), pkg: def.pkg}
 	if v, ok := rt.accumValues[key]; ok {
 		return v, nil
 	}
@@ -373,6 +377,13 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 		return v, nil
 	}
 	size := root.SubtreeEnd() - root.Index()
+	// The tables hold a value per node for the rest of the transform, so
+	// their slots are retained items, totalled across accumulators and trees
+	// as keyItems totals the key index, and refused before they are made.
+	rt.accumSlots += int64(size)
+	if err := ctx.ItemsRefused(rt.accumSlots); err != nil {
+		return nil, err
+	}
 	vals := &accumulatorValues{
 		base:   root.Index(),
 		before: make([]xdm.Sequence, size),
