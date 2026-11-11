@@ -194,7 +194,11 @@ func registerStringFuncs(l *Library) {
 			return nil, err
 		}
 		// Every string contains the empty string, including the empty string.
-		return boolSeq(coll.Contains(a, b)), nil
+		ok, err := collationContains(ctx, coll, a, b)
+		if err != nil {
+			return nil, err
+		}
+		return boolSeq(ok), nil
 	})
 
 	l.registerFn("starts-with", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -210,7 +214,11 @@ func registerStringFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return boolSeq(coll.StartsWith(a, b)), nil
+		ok, err := collationStartsWith(ctx, coll, a, b)
+		if err != nil {
+			return nil, err
+		}
+		return boolSeq(ok), nil
 	})
 
 	l.registerFn("ends-with", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -226,7 +234,11 @@ func registerStringFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return boolSeq(coll.EndsWith(a, b)), nil
+		ok, err := collationEndsWith(ctx, coll, a, b)
+		if err != nil {
+			return nil, err
+		}
+		return boolSeq(ok), nil
 	})
 
 	l.registerFn("substring-before", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -242,7 +254,10 @@ func registerStringFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		start, _, ok := collationMatchRange(coll, a, b)
+		start, _, ok, err := collationMatchRange(ctx, coll, a, b)
+		if err != nil {
+			return nil, err
+		}
 		if !ok {
 			return strSeq(""), nil
 		}
@@ -264,7 +279,10 @@ func registerStringFuncs(l *Library) {
 		}
 		// The end of the match, not start+len(b): under a collation the
 		// matched span can be longer or shorter than the needle.
-		_, end, ok := collationMatchRange(coll, a, b)
+		_, end, ok, err := collationMatchRange(ctx, coll, a, b)
+		if err != nil {
+			return nil, err
+		}
 		if !ok {
 			return strSeq(""), nil
 		}
