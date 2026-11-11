@@ -23,6 +23,9 @@ type SequenceMatcher struct {
 	// maxStates is SequenceMatcherOptions.MaxMatchStates as given, resolved
 	// by matcherBound when Match runs.
 	maxStates int
+	// classes is positionClasses(model), which lets Match walk the live
+	// states that step alike once per child.
+	classes []int
 }
 
 // NewSequenceMatcher compiles p for repeated matching, under the default
@@ -77,7 +80,8 @@ func NewSequenceMatcherWith(p *Particle, opts SequenceMatcherOptions) (*Sequence
 	if err != nil {
 		return nil, err
 	}
-	return &SequenceMatcher{model: m, maxStates: opts.MaxMatchStates}, nil
+	return &SequenceMatcher{model: m, maxStates: opts.MaxMatchStates,
+		classes: positionClasses(m)}, nil
 }
 
 // matcherBound resolves a SequenceMatcherOptions field: zero is def, negative
@@ -102,7 +106,7 @@ func matcherBound(v, def int) int {
 func (s *SequenceMatcher) Match(names []xdm.QName) (bool, int) {
 	ok, at, err := matchNames(s.model, func(i, pos int) bool {
 		return s.model.positions[pos].matches(names[i], nil)
-	}, len(names), matcherBound(s.maxStates, DefaultMaxMatchStates))
+	}, len(names), matcherBound(s.maxStates, DefaultMaxMatchStates), s.classes)
 	if err != nil {
 		// The caller wants a yes-or-no and has nowhere to put an error.
 		// A model too tangled to decide is not one this can call a

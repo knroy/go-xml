@@ -1,6 +1,9 @@
 package xsd
 
-import "errors"
+import (
+	"encoding/binary"
+	"errors"
+)
 
 // The content-model runtime: a subset construction over the counter state.
 //
@@ -424,7 +427,9 @@ func candidates(m *contentModel, st matchState, start []piece) []piece {
 // The validator does not go through here: it has to report which position
 // matched each child, and it interleaves open content and child validation into
 // the same walk, so it carries its own copy of this loop over in validate.go.
-func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int) (ok bool, at int, err error) {
+//
+// classes is positionClasses(m), or nil to walk every state.
+func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int, classes []int) (ok bool, at int, err error) {
 	if len(m.positions) == 0 {
 		return n == 0, 0, nil
 	}
@@ -438,12 +443,33 @@ func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int) (ok
 	// Two sets, swapped each step: a fresh map per child was three quarters
 	// of the DTD validator's allocation.
 	spare := newStateSet()
+	// A state whose position is of a class another live state's is, with
+	// the same counts, steps exactly as that one does (positionClasses),
+	// so it is walked once per child. Without this the N live states of
+	// (a|a|...|a)* each walked the same N-wide follow run, N² per child.
+	type stepKey struct {
+		class  int
+		counts string
+	}
+	var walked map[stepKey]bool
+	if classes != nil {
+		walked = map[stepKey]bool{}
+	}
 	for i := 0; i < n; i++ {
 		next := spare
 		clear(next.seen)
 		next.order = next.order[:0]
+		clear(walked)
 		for _, st := range states.order {
+			if walked != nil && st.pos >= 0 {
+				k := stepKey{classes[st.pos], st.counts}
+				if walked[k] {
+					continue
+				}
+				walked[k] = true
+			}
 			for _, run := range candidates(m, st, start) {
+				countMatchStep(len(run.to))
 				for _, pos := range run.to {
 					if !match(i, pos) {
 						continue
@@ -476,6 +502,54 @@ func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int) (ok
 		}
 	}
 	return false, n, nil
+}
+
+// positionClasses numbers m's positions so that two share a number only when
+// stepping from them is the same computation: the same enclosing counters,
+// the same scopeLast membership in each, and the same follow runs (the same
+// stored slices, so the same targets and the same innerEdge answers). Those
+// are everything stepCounts reads of the position it steps from, so two live
+// states of one class with equal counts reach the same next states and only
+// one need be walked. Matching still decides per position: a class is a
+// shortcut through the step, not a merged state, so accepting reads each
+// position's own last membership.
+func positionClasses(m *contentModel) []int {
+	runs := map[*int]int{}
+	ids := map[string]int{}
+	out := make([]int, len(m.positions))
+	var b []byte
+	for p, pos := range m.positions {
+		b = binary.AppendUvarint(b[:0], uint64(len(pos.counters)))
+		for _, c := range pos.counters {
+			b = binary.AppendUvarint(b, uint64(c))
+			if m.scopeLast[c][p] {
+				b = append(b, 1)
+			} else {
+				b = append(b, 0)
+			}
+		}
+		for _, r := range m.pieces[p] {
+			id := -1
+			if len(r.to) > 0 {
+				var ok bool
+				if id, ok = runs[&r.to[0]]; !ok {
+					id = len(runs)
+					runs[&r.to[0]] = id
+				}
+			}
+			b = binary.AppendVarint(b, int64(id))
+			b = binary.AppendUvarint(b, uint64(len(r.to)))
+			b = binary.AppendVarint(b, int64(r.scope))
+		}
+		k := string(b)
+		id, ok := ids[k]
+		if !ok {
+			id = len(ids)
+			ids[k] = id
+		}
+		out[p] = id
+	}
+	return out
 }
 
 // intsEqual compares two count vectors, which are always the same length.
