@@ -37,10 +37,18 @@ func (p *compactParser) parseDatatypeName() (*cnode, error) {
 			return nil, err
 		}
 	}
-	// "- pattern" after a data excludes values the pattern matches.
+	// "- pattern" after a data excludes values the pattern matches. The
+	// operand recurses back here without passing parsePattern, so the
+	// depth bound is charged here: "string - string - ..." was a fatal
+	// stack overflow otherwise.
 	if p.at("-") {
 		if err := p.advance(); err != nil {
 			return nil, err
+		}
+		p.depth++
+		defer func() { p.depth-- }()
+		if p.depth > maxCompactDepth {
+			return nil, p.errorf("patterns nest more than %d deep", maxCompactDepth)
 		}
 		inner, err := p.parseRepeated()
 		if err != nil {
