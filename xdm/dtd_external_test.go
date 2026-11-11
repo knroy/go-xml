@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -968,5 +969,64 @@ func TestParameterEntityStrayPercentAndEmptyLadder(t *testing.T) {
 		BaseURI: fileuri.Of(filepath.Join(dir, "doc.xml"))}
 	if _, err := ParseString(`<!DOCTYPE r SYSTEM "l.dtd"><r/>`, opts); !errors.Is(err, ErrResourceLimit) {
 		t.Fatalf("10^9 empty references: err = %v, want ErrResourceLimit", err)
+	}
+}
+
+// TestResolveConditionals: INCLUDE unwrapped, IGNORE dropped, an unknown
+// keyword copied through with its "]]>", in one pass whose allocation is
+// linear: the old unwrap re-copied the tail per INCLUDE, 7.4 GB for 32,000
+// sections (run-4, resolveConditionals).
+func TestResolveConditionals(t *testing.T) {
+	for in, want := range map[string]string{
+		"a<![INCLUDE[b]]>c":                              "abc",
+		"a<![ IGNORE [b<![x]]>]]>c":                      "ac",
+		"<![INCLUDE[x<![IGNORE[y]]>z<![INCLUDE[w]]>]]>v": "xzwv",
+		"<![%k;[d]]>e":                                   "<![%k;[d]]>e",
+		"<![INCLUDE[<![%k;[d]]>]]>e":                     "<![%k;[d]]>e",
+		"]]>":                                            "]]>",
+		"a<![IGNORE[b":                                   "a<![IGNORE[b",
+	} {
+		if got := resolveConditionals(in); got != want {
+			t.Errorf("resolveConditionals(%q) = %q, want %q", in, got, want)
+		}
+	}
+	s := strings.Repeat("<![INCLUDE[ ]]>", 8000)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	out := resolveConditionals(s)
+	runtime.ReadMemStats(&after)
+	if out != strings.Repeat(" ", 8000) {
+		t.Errorf("8000 INCLUDEs resolved to %d bytes", len(out))
+	}
+	if got := after.TotalAlloc - before.TotalAlloc; got > uint64(8*len(s)) {
+		t.Errorf("resolving %d bytes allocated %d", len(s), got)
+	}
+}
+
+// TestBaseSpans: zero-length spans are dropped, each span links to its
+// innermost enclosing one, and baseAt agrees with a scan for the last span
+// containing the offset (run-4, baseAt: one full scan per node).
+func TestBaseSpans(t *testing.T) {
+	tb := &entityTable{}
+	tb.addBaseSpans([]entityBaseSpan{{start: 0, end: 10, base: "A"}, {start: 2, end: 2, base: "Z"},
+		{start: 2, end: 5, base: "B"}, {start: 3, end: 4, base: "C"}, {start: 6, end: 8, base: "D"}}, 10)
+	tb.addBaseSpans([]entityBaseSpan{{start: 0, end: 0, base: "Z"}}, 20)
+	tb.addBaseSpans([]entityBaseSpan{{start: 0, end: 3, base: "E"}, {start: 0, end: 3, base: "F"}}, 20)
+	if len(tb.baseSpans) != 6 {
+		t.Fatalf("%d spans kept, want 6 (zero-length dropped)", len(tb.baseSpans))
+	}
+	scan := func(off int) string {
+		base := ""
+		for _, s := range tb.baseSpans {
+			if off >= s.start && off < s.end {
+				base = s.base
+			}
+		}
+		return base
+	}
+	for off := 0; off < 30; off++ {
+		if got, want := baseAt(tb.baseSpans, off), scan(off); got != want {
+			t.Errorf("baseAt(%d) = %q, want %q", off, got, want)
+		}
 	}
 }

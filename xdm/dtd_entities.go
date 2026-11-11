@@ -1278,6 +1278,7 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 	sb.WriteString(src[:start])
 
 	var count, written int
+	spanMemo := map[string][]entityBaseSpan{}
 	// inTag and attrQuote track whether the scanner is inside a start-tag and,
 	// within one, inside a quoted attribute value. That context changes what a
 	// substitution may write, not merely where it happens: see the escaping
@@ -1442,19 +1443,22 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 		// Where this replacement lands is recorded so the second parse can
 		// give the nodes it produces the base URI of the entity they were
 		// written in rather than of the including document. See
-		// entityBaseSpan.
-		at := sb.Len()
-		if t.external[name] {
-			t.baseSpans = append(t.baseSpans, entityBaseSpan{
-				start: at, end: at + len(rep), base: t.externalBase[name],
-			})
-			if inner, ok := t.externalText[name]; ok {
-				t.baseSpans = append(t.baseSpans,
-					t.externalSpansIn(inner, at, 1)...)
+		// entityBaseSpan. An entity's spans relative to its own text are the
+		// same at every reference, so they are found once per entity rather
+		// than by re-walking its text for each.
+		rel, ok := spanMemo[name]
+		if !ok {
+			if t.external[name] {
+				rel = []entityBaseSpan{{end: len(rep), base: t.externalBase[name]}}
+				if inner, ok := t.externalText[name]; ok {
+					rel = append(rel, t.externalSpansIn(inner, 0, 1)...)
+				}
+			} else if src, ok := t.raw[name]; ok {
+				rel = t.externalSpansIn(src, 0, 1)
 			}
-		} else if src, ok := t.raw[name]; ok {
-			t.baseSpans = append(t.baseSpans, t.externalSpansIn(src, at, 1)...)
+			spanMemo[name] = rel
 		}
+		t.addBaseSpans(rel, sb.Len())
 		sb.WriteString(rep)
 		i += j + 1
 	}

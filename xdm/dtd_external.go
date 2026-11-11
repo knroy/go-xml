@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -846,23 +847,47 @@ func endOfDTDConstruct(s string, i int) int {
 // a byte came from is its position — hence a span.
 //
 // Spans nest: an external entity may itself reference another. They are
-// recorded outermost first, so the LAST span containing an offset is the
-// innermost entity, and that is the one whose URI applies.
+// recorded in order of start, outermost first, and each links to the
+// innermost span enclosing it, so the innermost entity at an offset, the one
+// whose URI applies, is found without scanning the list.
 type entityBaseSpan struct {
 	start, end int
 	base       string
+	parent     int // index of the innermost enclosing span, or -1
+}
+
+// addBaseSpans appends spans, given relative to a replacement text, for that
+// text landing at offset at. A span that holds no byte can hold no node and is
+// dropped, so the list grows with the text substituted rather than with the
+// references made. Each span's parent is found by walking up from the last
+// span appended; a span passed over ends before this one starts and so
+// before any later one, which keeps the walk amortised O(1).
+func (t *entityTable) addBaseSpans(rel []entityBaseSpan, at int) {
+	for _, r := range rel {
+		if r.end <= r.start {
+			continue
+		}
+		s := entityBaseSpan{start: at + r.start, end: at + r.end, base: r.base, parent: len(t.baseSpans) - 1}
+		for s.parent >= 0 && t.baseSpans[s.parent].end < s.end {
+			s.parent = t.baseSpans[s.parent].parent
+		}
+		t.baseSpans = append(t.baseSpans, s)
+	}
 }
 
 // baseAt returns the base URI in force at a byte offset of the substituted
-// source, or "" when the offset is in the document's own text.
+// source, or "" when the offset is in the document's own text: a binary
+// search for the last span starting at or before off, then up its enclosing
+// spans to the first that still contains off.
 func baseAt(spans []entityBaseSpan, off int) string {
-	base := ""
-	for _, s := range spans {
-		if off >= s.start && off < s.end {
-			base = s.base
-		}
+	k := sort.Search(len(spans), func(i int) bool { return spans[i].start > off }) - 1
+	for k >= 0 && off >= spans[k].end {
+		k = spans[k].parent
 	}
-	return base
+	if k < 0 {
+		return ""
+	}
+	return spans[k].base
 }
 
 // externalSpansIn locates the external entity references inside already
@@ -941,46 +966,50 @@ func (t *entityTable) externalSpansIn(raw string, at int, depth int) []entityBas
 // subset and drops its IGNORE sections, counting nested "<![" and "]]>" as
 // §3.4 requires. checkExtSubsetGrammar has already held the text to [61]-[65];
 // a "<![" whose keyword is not INCLUDE or IGNORE (an undeclared "%kw;") is
-// copied through, as dtd's loader does.
+// copied through with its "]]>", as dtd's loader does.
+//
+// One forward pass: each open section is a stack entry, so the text is read
+// and copied once however many sections it holds or how deep they nest.
 func resolveConditionals(s string) string {
 	var sb strings.Builder
-	for {
-		i := strings.Index(s, "<![")
-		if i < 0 {
-			sb.WriteString(s)
-			return sb.String()
-		}
-		sb.WriteString(s[:i])
-		rest := strings.TrimLeft(s[i+len("<!["):], " \t\r\n")
-		include := strings.HasPrefix(rest, "INCLUDE")
-		if !include && !strings.HasPrefix(rest, "IGNORE") {
-			sb.WriteString("<![")
-			s = s[i+len("<!["):]
-			continue
-		}
-		rest = strings.TrimLeft(strings.TrimPrefix(strings.TrimPrefix(rest, "INCLUDE"), "IGNORE"), " \t\r\n")
-		body := strings.TrimPrefix(rest, "[")
-		end, depth := -1, 0
-		for j := 0; j+3 <= len(body) && end < 0; j++ {
-			switch {
-			case strings.HasPrefix(body[j:], "<!["):
-				depth++
-			case strings.HasPrefix(body[j:], "]]>") && depth == 0:
-				end = j
-			case strings.HasPrefix(body[j:], "]]>"):
-				depth--
+	sb.Grow(len(s))
+	var open []bool // per open section: true for an INCLUDE, whose "]]>" is dropped
+	from := 0       // s[from:i] is text not yet copied
+	for i := 0; i < len(s); {
+		switch {
+		case strings.HasPrefix(s[i:], "<!["):
+			rest := strings.TrimLeft(s[i+len("<!["):], " \t\r\n")
+			include := strings.HasPrefix(rest, "INCLUDE")
+			if !include && !strings.HasPrefix(rest, "IGNORE") {
+				open = append(open, false)
+				i += len("<![")
+				continue
 			}
-		}
-		if end < 0 { // unclosed: the grammar check refuses this first
-			sb.WriteString(s[i:])
-			return sb.String()
-		}
-		if include {
-			// An INCLUDE's own sections are resolved when the loop reaches
-			// them, so its contents go back in front of the rest.
-			s = body[:end] + body[end+len("]]>"):]
-		} else {
-			s = body[end+len("]]>"):]
+			rest = strings.TrimLeft(strings.TrimPrefix(strings.TrimPrefix(rest, "INCLUDE"), "IGNORE"), " \t\r\n")
+			body := len(s) - len(strings.TrimPrefix(rest, "["))
+			sb.WriteString(s[from:i])
+			if include {
+				open = append(open, true)
+				i, from = body, body
+				continue
+			}
+			end := ignoreSectEnd(s, body)
+			if end < 0 { // unclosed: the grammar check refuses this first
+				i, from = len(s), i
+				break
+			}
+			i, from = end, end
+		case len(open) > 0 && strings.HasPrefix(s[i:], "]]>"):
+			if open[len(open)-1] {
+				sb.WriteString(s[from:i])
+				from = i + len("]]>")
+			}
+			open = open[:len(open)-1]
+			i += len("]]>")
+		default:
+			i++
 		}
 	}
+	sb.WriteString(s[from:])
+	return sb.String()
 }
