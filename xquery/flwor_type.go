@@ -44,24 +44,35 @@ func (p *parser) parseOptionalType() error {
 //
 // The one case a bracket count alone gets wrong is "empty-sequence()", whose
 // parentheses are empty, and it is not a special case: the count handles it.
+//
+// "function() as function() as ..." chains a further type after each function
+// test. The chain is walked in a loop rather than by recursion: its length is
+// the query's to choose, and a Go frame per link overflowed the stack, which
+// no recover catches, before xpath's own depth bound could read the text.
 func (p *parser) scanSequenceType() (string, error) {
 	p.skipSpaceAndComments()
 	start := p.pos
-	if p.consume("(") {
-		// A parenthesised type, which the grammar admits only in 4.0 but
-		// which costs nothing to accept the extent of; xpath decides whether
-		// it is legal.
-		depth := 1
-		for !p.eof() && depth > 0 {
-			switch p.src[p.pos] {
-			case '(':
-				depth++
-			case ')':
-				depth--
+	// links counts the "as" continuations walked, each of whose types may
+	// carry an occurrence indicator of its own.
+	links := 0
+	for {
+		p.skipSpaceAndComments()
+		if p.consume("(") {
+			// A parenthesised type, which the grammar admits only in 4.0 but
+			// which costs nothing to accept the extent of; xpath decides
+			// whether it is legal.
+			depth := 1
+			for !p.eof() && depth > 0 {
+				switch p.src[p.pos] {
+				case '(':
+					depth++
+				case ')':
+					depth--
+				}
+				p.pos++
 			}
-			p.pos++
+			break
 		}
-	} else {
 		if p.scanNCName() == "" {
 			return "", p.errorf("XPST0003: expected a sequence type")
 		}
@@ -76,54 +87,54 @@ func (p *parser) scanSequenceType() (string, error) {
 		// parentheses, which may hold a nested type.
 		save := p.pos
 		p.skipSpaceAndComments()
-		if p.consume("(") {
-			depth := 1
-			for !p.eof() && depth > 0 {
-				// A literal inside the test holds no parenthesis this depth
-				// count should see, and a comment stands wherever whitespace
-				// does -- "element(: c :)(a)" is a kind test with a comment
-				// in it, and the "(" inside the comment is not the test's.
-				// Going through skipNonSyntax is what gives this scan the
-				// comment case it lacked.
-				if end, ok, err := skipNonSyntax(p.src, p.pos); ok {
-					if err != nil {
-						return "", err
-					}
-					p.pos = end + 1
-					continue
-				}
-				switch p.src[p.pos] {
-				case '(':
-					depth++
-				case ')':
-					depth--
-				}
-				p.pos++
-			}
-			// "function(...) as T" and "element(a, T)" continue past the
-			// parentheses, and only "as" does so with a further type.
-			if p.consumeWord("as") {
-				if _, err := p.scanSequenceType(); err != nil {
+		if !p.consume("(") {
+			p.pos = save
+			break
+		}
+		depth := 1
+		for !p.eof() && depth > 0 {
+			// A literal inside the test holds no parenthesis this depth
+			// count should see, and a comment stands wherever whitespace
+			// does -- "element(: c :)(a)" is a kind test with a comment
+			// in it, and the "(" inside the comment is not the test's.
+			// Going through skipNonSyntax is what gives this scan the
+			// comment case it lacked.
+			if end, ok, err := skipNonSyntax(p.src, p.pos); ok {
+				if err != nil {
 					return "", err
 				}
+				p.pos = end + 1
+				continue
 			}
-		} else {
-			p.pos = save
+			switch p.src[p.pos] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+			}
+			p.pos++
 		}
+		// "function(...) as T" and "element(a, T)" continue past the
+		// parentheses, and only "as" does so with a further type.
+		if !p.consumeWord("as") {
+			break
+		}
+		links++
 	}
 	// An occurrence indicator binds to the item type, and only one may
-	// appear.
-	save := p.pos
-	p.skipSpaceAndComments()
-	if !p.eof() {
-		switch p.src[p.pos] {
-		case '?', '*', '+':
-			p.pos++
-		default:
+	// appear on each type of the chain.
+	for i := 0; i <= links; i++ {
+		save := p.pos
+		p.skipSpaceAndComments()
+		if p.eof() {
 			p.pos = save
+			break
 		}
-	} else {
-		p.pos = save
+		if c := p.src[p.pos]; c != '?' && c != '*' && c != '+' {
+			p.pos = save
+			break
+		}
+		p.pos++
 	}
 	src := strings.TrimSpace(p.src[start:p.pos])
 	if src == "" {
