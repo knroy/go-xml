@@ -475,7 +475,7 @@ func TestStreamForkGroupByMemberReads(t *testing.T) {
 			t.Fatal(err)
 		}
 		el := tree.Root.FirstChild().FirstChild().FirstChild()
-		if !copyFreeBody(el) {
+		if !copyFreeBody(el, nil) {
 			t.Fatalf("%s %s: not copy-free", c.by, c.body)
 		}
 		got, want := "-", c.attrs+"|"+c.kids
@@ -607,7 +607,7 @@ func TestCopyFreeBodyReadsEveryRoute(t *testing.T) {
 			t.Fatal(err)
 		}
 		el := tree.Root.FirstChild().FirstChild().NextSibling().FirstChild()
-		if got := copyFreeBody(el); got != c.ok {
+		if got := copyFreeBody(el, nil); got != c.ok {
 			t.Errorf("%s %s: copy-free %v, want %v", c.attrs, c.body, got, c.ok)
 		}
 	}

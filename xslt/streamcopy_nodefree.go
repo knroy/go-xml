@@ -15,12 +15,12 @@ import (
 
 // nodeFreeSelect reports whether el's select holds no node: arrays, maps
 // and simple maps of atomic values (atomicValued), as leafAtomic reads it.
-func nodeFreeSelect(el *xdm.Node) bool {
+func nodeFreeSelect(el *xdm.Node, tabs *moduleTabs) bool {
 	e := parseAt(el, el.AttrValue("select"))
 	if e == nil {
 		return false
 	}
-	markSheetCalls(e, collectStreamFuncs(documentElementOf(el))) // streamsplit_calls.go
+	markSheetCalls(e, tabs.of(documentElementOf(el)).funcs()) // streamsplit_calls.go
 	return nodeFree(e)
 }
 

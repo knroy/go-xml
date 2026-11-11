@@ -144,6 +144,8 @@ type streamExec struct {
 	// whose element names are schemaFold's.
 	schema     *xsd.Schema
 	schemaFold map[xdm.QName]bool
+	// tabs are the module tables the plan reads (streamplan.go).
+	tabs moduleTabs
 }
 
 func newStreamExec() *streamExec {
@@ -266,15 +268,15 @@ func (b *streamBuilder) refuse(why string) bool {
 
 // planStream builds the core plan of the streamable xsl:source-document sd,
 // or returns nil and why not. shared says sd's module is not the whole
-// stylesheet (streamtrust.go).
-func planStream(sd *xdm.Node, shared bool, xmods ...*xdm.Node) (*streamExec, string) {
+// stylesheet (streamtrust.go); tabs are the compile's module tables.
+func planStream(tabs *moduleTabs, sd *xdm.Node, shared bool, xmods ...*xdm.Node) (*streamExec, string) {
 	// @validation and @type: decided when the document is read (streamvalidin.go).
-	pl := buildStreamPlan(sd, shared, xmods...)
+	pl := buildStreamPlan(tabs, sd, shared, xmods...)
 	if !pl.trusted() {
 		return nil, "verdict not trusted"
 	}
 	x := newStreamExec()
-	x.class, x.modes = classDoc, enclosingRuleModes(sd)
+	x.class, x.modes, x.tabs = classDoc, enclosingRuleModes(sd), pl.tabs
 	b := &streamBuilder{pl: pl, x: x, ops: &x.top, kinds: &x.kinds}
 	if !b.seq(sd, vNone) {
 		return nil, b.why
@@ -773,7 +775,7 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if local == "result-document" {
 			return b.resultDocAttrs(el, f) && b.content(el, f) // streamresult.go
 		}
-		if b.noIdent && (local == "sequence" || local == "variable") && !leafAtomic(el) && !atomicSelect(el) { // streamcopy_l3leaf.go, streamsplit_l6.go
+		if b.noIdent && (local == "sequence" || local == "variable") && !leafAtomic(el, &b.pl.tabs) && !atomicSelect(el) { // streamcopy_l3leaf.go, streamsplit_l6.go
 			// They could hand the copy on as the node it stands for.
 			return b.refuse("xsl:" + local + " on a copied text, comment or PI node")
 		}

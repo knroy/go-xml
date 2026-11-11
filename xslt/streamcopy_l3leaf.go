@@ -16,8 +16,9 @@ import (
 )
 
 // leafAtomic reports whether el, an xsl:sequence or xsl:variable, returns
-// only atomic values: a select atomicValued says so, and no content.
-func leafAtomic(el *xdm.Node) bool {
+// only atomic values: a select atomicValued says so, and no content. tabs
+// are the plan's module tables (streamplan.go), or nil.
+func leafAtomic(el *xdm.Node, tabs *moduleTabs) bool {
 	src := el.AttrValue("select")
 	if src == "" {
 		return false
@@ -38,7 +39,7 @@ func leafAtomic(el *xdm.Node) bool {
 	}
 	// A fresh parse: its calls on the module's functions are marked here,
 	// for atomicValued to read their declared types (su-absorbing-016).
-	markSheetCalls(e, collectStreamFuncs(documentElementOf(el))) // streamsplit_calls.go
+	markSheetCalls(e, tabs.of(documentElementOf(el)).funcs()) // streamsplit_calls.go
 	return atomicValued(e)
 }
 

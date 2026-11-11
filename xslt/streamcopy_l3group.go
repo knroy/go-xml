@@ -37,7 +37,7 @@ func eventPopulation(op *streamOp) bool {
 	s := op.split
 	if !op.heldPop || s == nil || s.cond != nil || s.nests || s.tail != nil || s.tailText != "" ||
 		s.red != "" || s.mode != matchGround || s.keepLeaves || s.group || s.ctxItem || s.steps == nil ||
-		!isVarRef(s.outer.Expr(), splitItems) || !copyFreeBody(op.el) {
+		!isVarRef(s.outer.Expr(), splitItems) || !copyFreeBody(op.el, &op.x.tabs) {
 		return false
 	}
 	_, elem := testKinds(s.steps[len(s.steps)-1].test)
@@ -206,8 +206,9 @@ var copyFreeFns = map[string]bool{"generate-id": true, "root": true, "path": tru
 	"document": true, "collection": true, "uri-collection": true, "transform": true, "load-xquery-module": true}
 
 // copyFreeBody reports whether nothing in el, an xsl:for-each-group with
-// its attributes and content, can tell a member from its copy.
-func copyFreeBody(el *xdm.Node) bool {
+// its attributes and content, can tell a member from its copy; tabs are
+// the plan's module tables (streamplan.go), or nil.
+func copyFreeBody(el *xdm.Node, tabs *moduleTabs) bool {
 	ok := true
 	var check func(n *xdm.Node)
 	check = func(n *xdm.Node) {
@@ -229,8 +230,8 @@ func copyFreeBody(el *xdm.Node) bool {
 			ok = false
 			return
 		}
-		if xsl && n.Name().Local == "sequence" && n.Attr("", "select") != nil && !leafAtomic(n) &&
-			!nodeFreeSelect(n) { // streamcopy_nodefree.go
+		if xsl && n.Name().Local == "sequence" && n.Attr("", "select") != nil && !leafAtomic(n, tabs) &&
+			!nodeFreeSelect(n, tabs) { // streamcopy_nodefree.go
 			ok = false // it could hand a member on as the node itself
 			return
 		}

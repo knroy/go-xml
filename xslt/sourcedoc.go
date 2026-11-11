@@ -85,7 +85,7 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 		if !shared {
 			xm = c.crossModules() // streamtrust_xmod_l7.go
 		}
-		if core, why = planStream(n, shared, xm...); core == nil && traceCore != nil && why != "verdict not trusted" {
+		if core, why = planStream(&c.streamTabs, n, shared, xm...); core == nil && traceCore != nil && why != "verdict not trusted" {
 			traceCore(n, why)
 		}
 		if core != nil && c.streamMayAlias(false) { // streamalias_l7.go
@@ -114,7 +114,7 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	}
 	instr := &sourceDocumentInstr{href: href, validation: spec, body: body,
 		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI, stream: core, pkg: compilePackage}
-	instr.fragOK = core != nil && fragmentBody(n) // streamfrag.go
+	instr.fragOK = core != nil && fragmentBody(n, &c.streamTabs) // streamfrag.go
 	if link {
 		// Its apply ops reach rules that may not have compiled yet.
 		c.streamLinks = append(c.streamLinks, streamLink{n, instr})

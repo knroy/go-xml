@@ -119,7 +119,7 @@ func TestStreamPlanAgreesWithAnalysis(t *testing.T) {
 		for _, sd := range streamableContainers(tree.Root) {
 			n.containers++
 			name := p + " href=" + sd.AttrValue("href")
-			pl := buildStreamPlan(sd, false)
+			pl := buildStreamPlan(nil, sd, false)
 			if len(pl.frames) != 0 {
 				t.Errorf("%s: %d frames left open", name, len(pl.frames))
 			}
@@ -250,7 +250,7 @@ func planOfSheet(t *testing.T, sheet string) (*streamPlan, *xdm.Node) {
 	if len(sds) != 1 {
 		t.Fatalf("%d streamable containers", len(sds))
 	}
-	return buildStreamPlan(sds[0], false), sds[0]
+	return buildStreamPlan(nil, sds[0], false), sds[0]
 }
 
 // firstXSL returns the first element in el's subtree with the given XSLT

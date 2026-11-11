@@ -28,6 +28,9 @@ type compiler struct {
 	stream *streamExec
 	// streamFns are the stylesheet's functions, for the split (streamcall.go).
 	streamFns map[funcKey]*streamFunc
+	// streamTabs are the module tables every streamed container of the
+	// compile is analysed with (streamplan.go).
+	streamTabs moduleTabs
 	// ruleExecs are the plans of the template rule whose body is being
 	// compiled, rulePlans the walks they are made from, by module, and
 	// streamLinks the containers whose plans apply templates, linked once
