@@ -640,6 +640,10 @@ func (p *parser) readAttributes(el *xdm.Node, target *[]*AttributeUse, into **Wi
 					// record the edge and let the graph
 					// walk resolve it later.
 					owner.refs = append(owner.refs, g)
+					// A new edge can change what any group
+					// reaches, so every memoised wildcard
+					// is stale.
+					p.groupWild = nil
 					return nil
 				}
 				// The graph is read in a second pass. The edges
@@ -655,7 +659,7 @@ func (p *parser) readAttributes(el *xdm.Node, target *[]*AttributeUse, into **Wi
 					// has. Dropping it left a type whose
 					// only wildcard came through a group
 					// with none at all.
-					if w := groupWildcard(g, nil); w != nil {
+					if w := p.groupWildcard(g); w != nil {
 						*into = intersectWildcards(*into, w)
 					}
 					return nil
@@ -1307,25 +1311,109 @@ func groupUses(g *AttributeGroupDef, seen map[*AttributeGroupDef]bool) []*Attrib
 
 // groupWildcard returns the intersection of a group's own attribute wildcard
 // and those of the groups it references.
-func groupWildcard(g *AttributeGroupDef, seen map[*AttributeGroupDef]bool) *Wildcard {
+//
+// The answer is memoised per group, because every attributeGroup reference
+// asks it and a group is shared by many: walking the reachable graph once per
+// reference cost the product of the two. A group's answer is the intersection
+// over everything it reaches, so the members of one strongly connected
+// component (XSD 1.1 permits circular attribute groups) share one answer, and
+// each component is computed once, after the components it references.
+func (p *parser) groupWildcard(g *AttributeGroupDef) *Wildcard {
 	if g == nil {
 		return nil
 	}
-	if seen == nil {
-		seen = map[*AttributeGroupDef]bool{}
+	if w, ok := p.groupWild[g]; ok {
+		return w
 	}
-	if seen[g] {
-		return nil
+	if p.groupWild == nil {
+		p.groupWild = map[*AttributeGroupDef]*Wildcard{}
 	}
-	seen[g] = true
+	tarjanSCC([]*AttributeGroupDef{g},
+		func(v *AttributeGroupDef) []*AttributeGroupDef { return v.refs },
+		func(v *AttributeGroupDef) bool {
+			_, done := p.groupWild[v]
+			return v == nil || done
+		},
+		func(scc []*AttributeGroupDef) {
+			// Every component scc references outside itself has
+			// already been emitted and memoised; its own members
+			// have not, so they contribute only their own wildcards.
+			var out *Wildcard
+			for _, m := range scc {
+				out = intersectWildcards(out, m.AttributeWildcard)
+				for _, r := range m.refs {
+					if w, ok := p.groupWild[r]; ok {
+						out = intersectWildcards(out, w)
+					}
+				}
+			}
+			for _, m := range scc {
+				p.groupWild[m] = out
+			}
+		})
+	return p.groupWild[g]
+}
 
-	out := g.AttributeWildcard
-	for _, ref := range g.refs {
-		if w := groupWildcard(ref, seen); w != nil {
-			out = intersectWildcards(out, w)
+// tarjanSCC emits the strongly connected components reachable from roots,
+// each after every component it has an edge to (Tarjan's algorithm). skip
+// reports a node to treat as absent. The walk is iterative, so a long chain
+// costs heap, not stack.
+func tarjanSCC[T comparable](roots []T, succ func(T) []T, skip func(T) bool, emit func([]T)) {
+	type frame struct {
+		v     T
+		edges []T
+		next  int
+	}
+	index, low := map[T]int{}, map[T]int{}
+	on := map[T]bool{}
+	var stack []T
+	var call []frame
+	push := func(v T) {
+		index[v] = len(index)
+		low[v] = index[v]
+		stack = append(stack, v)
+		on[v] = true
+		call = append(call, frame{v: v, edges: succ(v)})
+	}
+	for _, r := range roots {
+		if _, seen := index[r]; seen || skip(r) {
+			continue
+		}
+		push(r)
+		for len(call) > 0 {
+			f := &call[len(call)-1]
+			if f.next < len(f.edges) {
+				w := f.edges[f.next]
+				f.next++
+				if skip(w) {
+					continue
+				}
+				if _, seen := index[w]; !seen {
+					push(w)
+				} else if on[w] && index[w] < low[f.v] {
+					low[f.v] = index[w]
+				}
+				continue
+			}
+			v := f.v
+			call = call[:len(call)-1]
+			if n := len(call); n > 0 && low[v] < low[call[n-1].v] {
+				low[call[n-1].v] = low[v]
+			}
+			if low[v] == index[v] {
+				i := len(stack) - 1
+				for stack[i] != v {
+					i--
+				}
+				scc := append([]T(nil), stack[i:]...)
+				for _, m := range scc {
+					on[m] = false
+				}
+				stack = stack[:i]
+				emit(scc)
+			}
 		}
 	}
-	return out
 }
 
 // formQualified reports whether a local declaration's name is qualified.

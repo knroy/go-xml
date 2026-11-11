@@ -277,6 +277,10 @@ type parser struct {
 	// once rather than once per derivation.
 	attrsDone map[*ComplexType]bool
 
+	// groupWild memoises groupWildcard per attribute group. It is reset
+	// whenever a group reference edge is added.
+	groupWild map[*AttributeGroupDef]*Wildcard
+
 	// simpleTypes records every simple type read, with the element it came
 	// from, so that the Part 2 facet schema-component constraints can be
 	// applied once the base chain is resolved. They cannot be checked while
