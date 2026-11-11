@@ -108,8 +108,9 @@ func (p *parser) parseParenExpr() (*enclosed, error) {
 		return nil, err
 	}
 	body := p.src[p.pos+1 : end]
-	p.pos = end + 1
 	inner := &parser{src: body, sc: p.sc, version: p.version}
+	inner.memo, inner.base = p.memoAt(p.pos + 1)
+	p.pos = end + 1
 	items, err := inner.parseQueryBody()
 	if err != nil {
 		return nil, err

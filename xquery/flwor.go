@@ -43,6 +43,41 @@ type flwor struct {
 type tuple struct {
 	names []xdm.QName
 	vals  []xdm.Sequence
+	// valsTip and namesTip record how much of the backing array of vals and
+	// of names has been handed out, so that the one extension owning the
+	// next slot writes it in place instead of copying; see grow. nil means
+	// unknown, and the slot is never written in place.
+	valsTip, namesTip *int
+}
+
+// growSlack is the binding count from which a copied slice is given room to
+// grow. A chain of V let clauses over one tuple copied every binding at every
+// clause, O(V^2) allocation for O(V) of query; doubling the capacity once the
+// tuple is this wide makes the chain amortised O(V). Below it a copy costs a
+// few words, and exact capacity keeps a wide stream of narrow tuples compact.
+const growSlack = 8
+
+// grow returns s with v appended, sharing s's backing array when tip says
+// the slot after s is unclaimed and s owns it, and copying otherwise. A
+// tuple holding a shorter prefix of the array never sees the slot written,
+// so a captured tuple stays immutable.
+func grow[T any](s []T, tip *int, v T) ([]T, *int) {
+	n := len(s)
+	if tip != nil && *tip == n && n < cap(s) {
+		*tip = n + 1
+		s = s[:n+1]
+		s[n] = v
+		return s, tip
+	}
+	c := n + 1
+	if n >= growSlack {
+		c = 2 * n
+	}
+	out := make([]T, n+1, c)
+	copy(out, s)
+	out[n] = v
+	nt := n + 1
+	return out, &nt
 }
 
 // bind adds or replaces a binding, returning a tuple that shares nothing
@@ -72,15 +107,18 @@ func (t tuple) bind(name xdm.QName, val xdm.Sequence) tuple {
 // to. A clause binds one name onto every tuple of its stream, and the tuples
 // of a stream mostly share one names slice, so the extended slice is made
 // once per shared input slice rather than once per tuple.
-type nameExt struct{ from, to []xdm.QName }
+type nameExt struct {
+	from, to []xdm.QName
+	toTip    *int
+}
 
-func (x *nameExt) extend(names []xdm.QName, name xdm.QName) []xdm.QName {
+func (x *nameExt) extend(names []xdm.QName, tip *int, name xdm.QName) ([]xdm.QName, *int) {
 	if x.to == nil || len(names) != len(x.from) ||
 		(len(names) > 0 && &names[0] != &x.from[0]) {
 		x.from = names
-		x.to = append(append(make([]xdm.QName, 0, len(names)+1), names...), name)
+		x.to, x.toTip = grow(names, tip, name)
 	}
-	return x.to
+	return x.to, x.toTip
 }
 
 // bindx is bind for a clause binding name onto every tuple of a stream, with
@@ -89,10 +127,10 @@ func (t tuple) bindx(x *nameExt, name xdm.QName, val xdm.Sequence) tuple {
 	if slices.Contains(t.names, name) {
 		return t.bind(name, val)
 	}
-	vals := make([]xdm.Sequence, len(t.vals)+1)
-	copy(vals, t.vals)
-	vals[len(t.vals)] = val
-	return tuple{names: x.extend(t.names, name), vals: vals}
+	out := tuple{}
+	out.names, out.namesTip = x.extend(t.names, t.namesTip, name)
+	out.vals, out.valsTip = grow(t.vals, t.valsTip, val)
+	return out
 }
 
 func (t tuple) lookup(name xdm.QName) (xdm.Sequence, bool) {

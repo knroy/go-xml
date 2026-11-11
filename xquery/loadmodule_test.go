@@ -2,6 +2,7 @@ package xquery_test
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,5 +99,36 @@ func TestLoadXQueryModuleFromXPath(t *testing.T) {
 	seq, err := xpath.Eval(`load-xquery-module("urn:lxm")("functions")(QName("urn:lxm", "f"))(1)(4)`, ctx, nil)
 	if err != nil || render(seq) != "8" {
 		t.Errorf("got %q, %v; want 8", render(seq), err)
+	}
+}
+
+// lxmResolver serves lxmModule and counts the reads.
+type lxmResolver struct{ n int }
+
+func (r *lxmResolver) Resolve(ns string, hints []string, base string) (
+	io.ReadCloser, string, error) {
+	r.n++
+	return io.NopCloser(strings.NewReader(lxmModule.Source)), "", nil
+}
+
+// TestLoadXQueryModuleIsCachedAndBudgeted: within one evaluation a repeated
+// call reads and compiles the module once, and distinct calls spend one
+// cumulative MaxModuleBytes. Each call compiled afresh with a new allowance:
+// five calls made five resolver reads, and five calls with distinct hints
+// read five times a budget meant to bound the evaluation.
+func TestLoadXQueryModuleIsCachedAndBudgeted(t *testing.T) {
+	r := &lxmResolver{}
+	_, err := run(t, `for $i in 1 to 5 return load-xquery-module("urn:lxm")("variables")(QName("urn:lxm", "v"))`,
+		xquery.Options{ModuleResolver: r})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.n != 1 {
+		t.Errorf("5 calls read the module %d times, want 1", r.n)
+	}
+	_, err = run(t, `for $i in 1 to 5 return load-xquery-module("urn:lxm", map{"location-hints": "h" || $i})`,
+		xquery.Options{ModuleResolver: &lxmResolver{}, MaxModuleBytes: 3 * int64(len(lxmModule.Source))})
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("err = %v, want the cumulative MaxModuleBytes refusal", err)
 	}
 }

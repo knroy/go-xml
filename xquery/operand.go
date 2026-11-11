@@ -72,7 +72,7 @@ type liftedOperand struct{ n node }
 // costs nothing that was not already refused.
 func (p *parser) parseOperandSubst() ([]node, bool, error) {
 	src := p.src[p.pos:]
-	ops, rewritten, err := p.substituteOperands(src)
+	ops, rewritten, err := p.substituteOperands(src, p.pos)
 	if err != nil || len(ops) == 0 {
 		return nil, false, err
 	}
@@ -140,7 +140,14 @@ func isSubstitutionSafeError(err error) bool {
 // or a "<" is at operand position at all: after a name, a literal or a
 // closing bracket, "<" is less-than and "element" is a name. Strings and
 // comments are stepped over so that neither can be mistaken for source.
-func (p *parser) substituteOperands(src string) ([]liftedOperand, string, error) {
+//
+// off is where src begins in p.src, or -1 when src is not a substring of it,
+// so that the operands parsed here share p's constructor memo.
+func (p *parser) substituteOperands(src string, off int) ([]liftedOperand, string, error) {
+	// q stands for src: the probes in startsOperand and the parses below are
+	// sub-parsers over it, and they share its memo.
+	q := &parser{src: src, sc: p.sc, version: p.version, depth: p.depth}
+	q.memo, q.base = p.memoAt(off)
 	var ops []liftedOperand
 	var out strings.Builder
 	copied := 0
@@ -158,7 +165,7 @@ func (p *parser) substituteOperands(src string) ([]liftedOperand, string, error)
 		// with two backticks and a bracket. Stepping over one would lose the
 		// very operand being sought, so the region is only skipped when it is
 		// not an operand: a string literal or a comment.
-		isOperand := p.startsOperand(src, i, prev)
+		isOperand := q.startsOperand(src, i, prev)
 		if !isOperand {
 			if end, ok, err := skipNonSyntax(src, i); ok {
 				if err != nil {
@@ -234,7 +241,7 @@ func (p *parser) substituteOperands(src string) ([]liftedOperand, string, error)
 		// constructor's extent is decided by its markup and a FLWOR's by its
 		// clauses, and neither can be found by counting brackets.
 		sub := &parser{src: src, pos: i, sc: p.sc, version: p.version,
-			depth: p.depth + 1}
+			depth: p.depth + 1, memo: q.memo, base: q.base}
 		n, err := sub.parseBareItem()
 		if err != nil {
 			// Not something this can lift out after all. The expression is
@@ -422,6 +429,7 @@ func (p *parser) startsOperand(src string, i int, prev byte) bool {
 		// parameters are bound in. See inlineFunc.
 		sub := &parser{src: src, pos: i, sc: p.sc, version: p.version,
 			depth: p.depth + 1}
+		sub.memo, sub.base = p.memoAt(0)
 		_, ok, _ := sub.parseInlineFunc()
 		return ok
 	case "try", "switch", "typeswitch", "validate":
@@ -436,6 +444,7 @@ func (p *parser) startsOperand(src string, i int, prev byte) bool {
 		// would hit.
 		sub := &parser{src: src, pos: i, sc: p.sc, version: p.version,
 			depth: p.depth + 1}
+		sub.memo, sub.base = p.memoAt(0)
 		_, ok, _ := sub.parseXQueryOnly()
 		return ok
 	}

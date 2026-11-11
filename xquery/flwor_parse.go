@@ -607,6 +607,7 @@ func (p *parser) parseClauseExpr() (*compiledExpr, error) {
 	if c, ok, err := p.parseOwnExpr(); ok || err != nil {
 		return c, err
 	}
+	at := p.pos
 	src, err := p.scanExprSingleSource()
 	if err != nil {
 		return nil, err
@@ -614,7 +615,7 @@ func (p *parser) parseClauseExpr() (*compiledExpr, error) {
 	if !needsXQueryParser(src) {
 		return p.compileExpr(src)
 	}
-	return p.parseFromSource(src)
+	return p.parseFromSource(src, at+leadingSpace(p.src[at:]))
 }
 
 // parseTypedClauseExpr is parseClauseExpr with a declared type applied to the
@@ -642,12 +643,13 @@ func (p *parser) parseTypedClauseExpr(typ string, perItem bool) (*compiledExpr, 
 		}
 		return c, nil
 	}
+	at := p.pos
 	src, err := p.scanExprSingleSource()
 	if err != nil {
 		return nil, err
 	}
 	if needsXQueryParser(src) {
-		c, err := p.parseFromSource(src)
+		c, err := p.parseFromSource(src, at+leadingSpace(p.src[at:]))
 		if err != nil {
 			return nil, err
 		}
@@ -690,8 +692,12 @@ func (p *parser) parseOwnExpr() (*compiledExpr, bool, error) {
 // Reading from a substring rather than from the cursor keeps the extent the
 // enclosing scan already decided, which is what the clause after it depends
 // on: the cursor has moved past the expression and must stay there.
-func (p *parser) parseFromSource(src string) (*compiledExpr, error) {
+//
+// off is where src begins in p.src, so that the two share the constructor
+// memo; see ctorMemo.
+func (p *parser) parseFromSource(src string, off int) (*compiledExpr, error) {
 	sub := &parser{src: src, sc: p.sc, version: p.version, depth: p.depth}
+	sub.memo, sub.base = p.memoAt(off)
 	items, err := sub.parseNestedExpr()
 	if err != nil {
 		return nil, err

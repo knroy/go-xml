@@ -300,7 +300,7 @@ func Compile(src string, opts Options) (*Query, error) {
 		contextItem: p.contextItem, formats: p.formats,
 		serialization: p.serialization, modules: mods}
 	if len(opts.Modules) > 0 || opts.ModuleResolver != nil {
-		q.modSrc = queryModules{opts}
+		q.modSrc = queryModules{opts: opts}
 	}
 	// §4.12 adds the imported declarations to this module's static context,
 	// so a clash between an import and this module -- or between two imports
@@ -406,6 +406,10 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 			// unless the caller said otherwise.
 			if e.Modules == nil {
 				e.Modules = q.modSrc
+				if m, ok := q.modSrc.(queryModules); ok {
+					m.cache = &moduleCache{}
+					e.Modules = m
+				}
 			}
 		})
 	}
@@ -713,6 +717,7 @@ func (p *parser) retryAsOperandSubst(start int) (node, bool, error) {
 	}
 	end := p.pos
 	sub := &parser{src: src, sc: p.sc, version: p.version, depth: p.depth}
+	sub.memo, sub.base = p.memoAt(start + leadingSpace(p.src[start:end]))
 	items, ok, err := sub.parseOperandSubst()
 	if err != nil || !ok {
 		p.pos = save
@@ -800,6 +805,7 @@ func (p *parser) parseExprItem() (node, error) {
 			}
 			sub := &parser{src: p.src, pos: p.pos, sc: p.sc,
 				version: p.version, depth: p.depth + 1}
+			sub.memo, sub.base = p.memoAt(0)
 			if _, err := sub.parseConstructorHere(); err != nil {
 				break
 			}
@@ -834,7 +840,7 @@ done:
 		// than at its start: "(<a/>, <b/>)" and "count(for $x in E group by
 		// $k return $x)" are both expressions xpath cannot read whole, and
 		// neither begins with the construct that makes it so.
-		c, err := p.parseFromSource(src)
+		c, err := p.parseFromSource(src, start+leadingSpace(p.src[start:]))
 		if err != nil {
 			return nil, err
 		}

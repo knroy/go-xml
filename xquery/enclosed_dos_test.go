@@ -2,11 +2,13 @@ package xquery
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // The direct-constructor scan was both exponential and unbounded, and the two
@@ -154,5 +156,84 @@ func TestOrdinaryConstructorsStillCompile(t *testing.T) {
 		if _, err := Compile(c.src, Options{}); err != nil {
 			t.Errorf("%s: %q: %v", c.name, c.src, err)
 		}
+	}
+}
+
+// A well-formed constructor nested in its own operand was parsed about 3^d
+// times for d levels.
+//
+// "<a>{X}</a> = 1" is parsed as an item, then re-read from its start as the
+// left operand of "=" (retryAsOperandSubst): the scan that finds the
+// operand's extent stepped over the constructor by parsing it, and the
+// substitution parsed it a third time. Each parse compiled the enclosed body
+// with a fresh parser, which did the same three reads one level down. The
+// same multiplication ran through a let clause, a parenthesis and a call
+// argument. Measured on the base: 232 MB at d=10 and 2.1 GB at d=12, from
+// about 130 bytes of query; with the constructor memo every form here stays
+// under 100 KB at d=10.
+func TestNestedConstructorOperandIsParsedOnce(t *testing.T) {
+	forms := map[string]func(string) string{
+		"operand":     func(x string) string { return "<a>{" + x + "}</a> = 1" },
+		"right":       func(x string) string { return "1 = <a>{" + x + "}</a>" },
+		"paren":       func(x string) string { return "(<a>{" + x + "}</a>) = 1" },
+		"let":         func(x string) string { return "let $v := <a>{" + x + "}</a> return $v" },
+		"argument":    func(x string) string { return "f(<a>{" + x + "}</a>) = 1" },
+		"interpolate": func(x string) string { return "``[`{<a>{" + x + "}</a> = 1}`]`` = 1" },
+	}
+	for name, wrap := range forms {
+		src := "1"
+		for i := 0; i < 10; i++ {
+			src = wrap(src)
+		}
+		var err error
+		if b := allocated(func() { _, err = Compile(src, Options{}) }); b > 1<<20 {
+			t.Fatalf("%s: %d bytes of query allocated %d bytes; a nested "+
+				"constructor is re-parsed per level again", name, len(src), b)
+		}
+		if err != nil {
+			t.Errorf("%s: %q: %v", name, src, err)
+		}
+	}
+}
+
+// Every direct element copied the whole in-scope prefix map and constructor
+// namespace map, and kept the copy in its AST, so K declarations on an outer
+// element and N children retained K*N entries. Measured on the base: 12 MB
+// allocated by Compile for K=N=300 (8.6 KB of query); with linked scopes
+// it is under 1 MB. The children must still see every inherited binding
+// (§3.9.1.3), which in-scope-prefixes on the last one checks.
+func TestNamespaceScopesAreNotCopiedPerElement(t *testing.T) {
+	const k, n = 300, 300
+	var sb strings.Builder
+	sb.WriteString("<a")
+	for i := 0; i < k; i++ {
+		fmt.Fprintf(&sb, " xmlns:p%d='u%d'", i, i)
+	}
+	sb.WriteString(">")
+	for i := 0; i < n; i++ {
+		if i%2 == 0 {
+			sb.WriteString("<b/>")
+		} else {
+			fmt.Fprintf(&sb, "<b xmlns:q%d='v'/>", i)
+		}
+	}
+	sb.WriteString("{count(in-scope-prefixes(<c xmlns:r='w'/>))}</a>")
+	src := sb.String()
+	var q *Query
+	var err error
+	if b := allocated(func() { q, err = Compile(src, Options{}) }); b > 1<<20 {
+		t.Fatalf("%d bytes of query allocated %d bytes; namespace scopes are "+
+			"copied per element again", len(src), b)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := q.Eval(xpath.NewContext(nil, xpath.Builtins()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// k inherited prefixes, r, and xml.
+	if got := seq[0].(*xdm.Node).StringValue(); got != fmt.Sprint(k+2) {
+		t.Errorf("in-scope-prefixes of the inner element: got %s, want %d", got, k+2)
 	}
 }
