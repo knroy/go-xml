@@ -140,11 +140,9 @@ func (p *parser) parseVarDecl(private bool) error {
 	if err := checkReservedNamespace(name, "variable"); err != nil {
 		return err
 	}
-	for _, prev := range p.vars {
-		if prev.name.Clark() == name.Clark() {
-			return p.errorf("XQST0049: the variable %q is declared twice",
-				name.Lexical())
-		}
+	if p.varNames[declKeyOf(name, 0)] {
+		return p.errorf("XQST0049: the variable %q is declared twice",
+			name.Lexical())
 	}
 	d := &varDecl{name: name, private: private}
 	p.skipSpaceAndComments()
@@ -178,8 +176,21 @@ func (p *parser) parseVarDecl(private bool) error {
 			":=", "external")
 	}
 	p.vars = append(p.vars, d)
+	if p.varNames == nil {
+		p.varNames = map[declKey]bool{}
+	}
+	p.varNames[declKeyOf(name, 0)] = true
 	return nil
 }
+
+// declKey identifies a declaration by expanded name, and for a function by
+// arity too; the prefix is not part of it.
+type declKey struct {
+	uri, local string
+	arity      int
+}
+
+func declKeyOf(n xdm.QName, arity int) declKey { return declKey{n.URI, n.Local, arity} }
 
 // parseDeclBody parses the right-hand side of a variable declaration or the
 // initialiser of a context item.
@@ -347,14 +358,17 @@ func (p *parser) parseFunctionDeclBody(private bool) error {
 	// XQST0034: two functions may not share a name and arity. Unlike XSLT
 	// there is no import precedence to break the tie, so any repeat is an
 	// error.
-	for _, prev := range p.funcs {
-		if prev.name.Clark() == d.name.Clark() && len(prev.params) == len(d.params) {
-			return p.errorf(
-				"XQST0034: the function %s#%d is declared twice",
-				d.name.Lexical(), len(d.params))
-		}
+	key := declKeyOf(d.name, len(d.params))
+	if p.funcNames[key] {
+		return p.errorf(
+			"XQST0034: the function %s#%d is declared twice",
+			d.name.Lexical(), len(d.params))
 	}
 	p.funcs = append(p.funcs, d)
+	if p.funcNames == nil {
+		p.funcNames = map[declKey]bool{}
+	}
+	p.funcNames[key] = true
 	return nil
 }
 
@@ -516,6 +530,7 @@ func (p *parser) skipAnnotationLiteral() error {
 // opening parenthesis.
 func (p *parser) parseParamList() ([]funcParam, error) {
 	var out []funcParam
+	var seen map[declKey]bool // by name, for XQST0039
 	p.skipSpaceAndComments()
 	if p.consume(")") {
 		return nil, nil
@@ -535,12 +550,15 @@ func (p *parser) parseParamList() ([]funcParam, error) {
 		}
 		// XQST0039: two parameters of one function may not share a name,
 		// because the second binding would silently shadow the first.
-		for _, prev := range out {
-			if prev.name.Clark() == name.Clark() {
-				return nil, p.errorf(
-					"XQST0039: the parameter %q appears twice", name.Lexical())
-			}
+		key := declKeyOf(name, 0)
+		if seen[key] {
+			return nil, p.errorf(
+				"XQST0039: the parameter %q appears twice", name.Lexical())
 		}
+		if seen == nil {
+			seen = map[declKey]bool{}
+		}
+		seen[key] = true
 		param := funcParam{name: name}
 		p.skipSpaceAndComments()
 		if p.consumeKeyword("as") {
