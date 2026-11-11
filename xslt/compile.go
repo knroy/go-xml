@@ -12,6 +12,9 @@ import (
 
 // compiler holds state while compiling a stylesheet and its included modules.
 type compiler struct {
+	// exposedVis memoises, per xsl:package element, the visibility its
+	// xsl:expose declarations give each declaration; see exposedVisibility.
+	exposedVis map[*xdm.Node]map[*xdm.Node]visibility
 	// env is the state this compilation shares with code that has no
 	// compiler in scope; see compileEnv.
 	env *compileEnv
@@ -71,6 +74,13 @@ type compiler struct {
 	// used on several paths is resolved and read once. Only the part that
 	// depends on the package alone is kept; see readUsePackage.
 	packageReads map[string]*usePackageDecl
+	// packageReadsByKey holds the same reads keyed by packageKey, so that
+	// version ranges spelled differently that resolve to one package read
+	// it once rather than once per spelling.
+	packageReadsByKey map[string]*usePackageDecl
+	// globalTies indexes the globals declared so far for XTSE0630; see
+	// appendGlobal.
+	globalTies map[globalTie]bool
 	// schemaHoisted records that the xsl:import-schema pre-pass has run, so
 	// that the recursion for each included module does not repeat it from a
 	// root that sees less than the first one did.
@@ -654,7 +664,7 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 				return err
 			}
 			v.precedence = precedence
-			c.sheet.globals = append(c.sheet.globals, v)
+			c.appendGlobal(v)
 			return nil
 		}
 		v, err := c.compileVariable(el)
@@ -669,17 +679,13 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		// at the same import precedence. A higher precedence legitimately
 		// overrides a lower one, so only a tie is an error.
 		v.pkg = compilePackage
-		for _, prev := range c.sheet.globals {
-			if prev.Name.Clark() == v.Name.Clark() &&
-				prev.pkg == v.pkg &&
-				prev.precedence == precedence {
-				return fmt.Errorf(
-					"XTSE0630: two global variables are named %s at the same "+
-						"import precedence", v.Name.Lexical())
-			}
+		if c.globalTies[globalTie{v.Name.Clark(), v.pkg, precedence}] {
+			return fmt.Errorf(
+				"XTSE0630: two global variables are named %s at the same "+
+					"import precedence", v.Name.Lexical())
 		}
 		v.precedence = precedence
-		c.sheet.globals = append(c.sheet.globals, v)
+		c.appendGlobal(v)
 		return nil
 	case "output":
 		return c.compileOutput(el, precedence)
@@ -986,6 +992,7 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 					"sequence-constructor) (XTSE0010)")
 		}
 	}
+	seen := map[string]bool{}
 	for ; i < len(children); i++ {
 		if !isXSL(children[i], "param") {
 			break
@@ -995,13 +1002,12 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 			return err
 		}
 		// XTSE0580: two parameters of a template may not share a name.
-		for _, prev := range t.Params {
-			if prev.Name.Clark() == v.Name.Clark() {
-				return fmt.Errorf(
-					"XTSE0580: xsl:template has two parameters named %s",
-					v.Name.Lexical())
-			}
+		if seen[v.Name.Clark()] {
+			return fmt.Errorf(
+				"XTSE0580: xsl:template has two parameters named %s",
+				v.Name.Lexical())
 		}
+		seen[v.Name.Clark()] = true
 		t.Params = append(t.Params, v)
 	}
 
@@ -1650,6 +1656,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	var params []*Variable
 	children := el.ChildElements()
 	i := 0
+	seen := map[string]bool{}
 	for ; i < len(children); i++ {
 		if !isXSL(children[i], "param") {
 			break
@@ -1659,13 +1666,12 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 			return err
 		}
 		// XTSE0580: two parameters of a function may not share a name.
-		for _, prev := range params {
-			if prev.Name.Clark() == p.Name.Clark() {
-				return fmt.Errorf(
-					"XTSE0580: xsl:function %s has two parameters named %s",
-					qn.Lexical(), p.Name.Lexical())
-			}
+		if seen[p.Name.Clark()] {
+			return fmt.Errorf(
+				"XTSE0580: xsl:function %s has two parameters named %s",
+				qn.Lexical(), p.Name.Lexical())
 		}
+		seen[p.Name.Clark()] = true
 		params = append(params, p)
 	}
 	if refs := bodyVariableRefs(el); len(refs) > 0 {
@@ -1833,7 +1839,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 			vis = strings.TrimSpace(el.AttrValue("visibility"))
 		}
 		if vis == "" {
-			if v := exposedVisibility(el); v != "" {
+			if v := c.exposedVisibility(el); v != "" {
 				vis = string(v)
 			} else {
 				vis = "private"
@@ -2493,28 +2499,53 @@ func (c *compiler) deferDependentGlobals() {
 			byName[g.Name.Clark()] = g
 		}
 	}
-	// Repeated to a fixed point: a chain of proxies defers from the far end
-	// back, and one pass would only move the mark one link. The loop is
-	// bounded by the number of globals, since each pass that changes
-	// anything defers at least one more.
-	for range c.sheet.globals {
-		changed := false
-		for _, g := range c.sheet.globals {
-			if g.deferred {
-				continue
-			}
-			for _, dep := range globalRefs(g) {
-				if d, ok := byName[dep]; ok && d.deferred && d != g {
-					g.deferred = true
-					changed = true
-					break
-				}
-			}
+	// A chain of proxies defers from the far end back. Each global's
+	// references are read once into reverse edges -- dependency to the
+	// globals naming it -- and the mark is pushed along them from the
+	// globals already deferred, so each edge is followed at most once rather
+	// than every reference being rescanned on every pass of a fixed point.
+	dependents := make(map[*Variable][]*Variable)
+	var work []*Variable
+	for _, g := range c.sheet.globals {
+		if g.deferred {
+			work = append(work, g)
+			continue
 		}
-		if !changed {
-			break
+		for _, dep := range globalRefs(g) {
+			if d, ok := byName[dep]; ok && d != g {
+				dependents[d] = append(dependents[d], g)
+			}
 		}
 	}
+	for len(work) > 0 {
+		d := work[len(work)-1]
+		work = work[:len(work)-1]
+		for _, g := range dependents[d] {
+			if !g.deferred {
+				g.deferred = true
+				work = append(work, g)
+			}
+		}
+	}
+}
+
+// globalTie is what XTSE0630 compares two global bindings on: name, package
+// and import precedence.
+type globalTie struct {
+	name            string
+	pkg, precedence int
+}
+
+// appendGlobal adds v to the stylesheet's globals and indexes it for the
+// XTSE0630 check, so that check is a lookup rather than a scan of every global
+// declared so far. Nothing removes a global before pruneOverriddenGlobals,
+// which runs once every declaration has been compiled.
+func (c *compiler) appendGlobal(v *Variable) {
+	if c.globalTies == nil {
+		c.globalTies = map[globalTie]bool{}
+	}
+	c.globalTies[globalTie{v.Name.Clark(), v.pkg, v.precedence}] = true
+	c.sheet.globals = append(c.sheet.globals, v)
 }
 
 // pruneOverriddenGlobals drops every global variable a higher-precedence
