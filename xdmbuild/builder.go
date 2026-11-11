@@ -1,10 +1,12 @@
 package xdmbuild
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"sort"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -538,8 +540,11 @@ func (b *Builder) AddAttributeTyped(name xdm.QName, value string,
 // Typing's zero value is the unassessed node, so AddAttributeWithTyping with
 // an empty Typing is exactly AddAttribute.
 func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
-	typing xdm.Typing) error {
+	typing xdm.Typing) (err error) {
 
+	// Storing the value can meet the tree's text-store ceiling, raised as an
+	// internal/xdmlimit panic; it is this method's error instead.
+	defer xdmlimit.Recover(&err)
 	if b.open != nil && b.open.Kind() == xdm.KindDocument {
 		return b.policy.Err(FaultAttrOnDocument,
 			fmt.Sprintf("an attribute node (%s) cannot be the content of "+
@@ -987,7 +992,8 @@ func (b *Builder) Sequence() xdm.Sequence { return b.items }
 // document. A sequence constructor producing a bare attribute is legitimate —
 // xsl:function as="attribute()" is written that way — and only wrapping the
 // result in a document node makes it wrong.
-func (b *Builder) ToDocument() (*xdm.Node, error) {
+func (b *Builder) ToDocument() (_ *xdm.Node, err error) {
+	defer xdmlimit.Recover(&err) // the copy can meet the text-store ceiling
 	if b.sink != nil && b.doc == docSeq && b.fr != 0 {
 		return b.sink.toDocument(b)
 	}
@@ -1214,10 +1220,18 @@ func (b *Builder) Items() xdm.Sequence { return b.items }
 // At the TOP level the array stays an array: that is what lets an
 // xsl:variable declared as="array(*)" be built by a sequence constructor, and
 // what an xsl:function returning an array depends on.
-func (b *Builder) AppendOpaque(it xdm.Item) error {
+//
+// A flattening past xdm's step bound, or members that overrun the tree's text
+// store, are refused with an error matching xdm.ErrResourceLimit.
+func (b *Builder) AppendOpaque(it xdm.Item) (err error) {
+	defer xdmlimit.Recover(&err) // a member's text meeting the store's ceiling
 	if b.open != nil {
 		if arr, ok := it.(*xdm.ArrayItem); ok {
-			for _, m := range xdm.Flatten(xdm.Sequence{arr}) {
+			flat, err := xdm.FlattenContext(context.Background(), xdm.Sequence{arr})
+			if err != nil {
+				return err
+			}
+			for _, m := range flat {
 				switch v := m.(type) {
 				case *xdm.Node:
 					b.AppendNode(v)

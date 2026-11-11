@@ -255,6 +255,11 @@ func (p *includeProc) charge(picked []*Node) error {
 		p.nodes += c
 		p.bytes += b
 	}
+	return p.overBudget()
+}
+
+// overBudget refuses once the pass's counts are past its node or byte budget.
+func (p *includeProc) overBudget() error {
 	if limit := p.nodeLimit(); limit >= 0 && p.nodes > limit {
 		return fatalInclude{fmt.Errorf(
 			"resource limit exceeded: inclusions exceed %d nodes: %w",
@@ -798,7 +803,19 @@ func (p *includeProc) fetch(dst *Node, target, base, parse, xptr, encoding strin
 	p.stack = append(p.stack, uri)
 	done := sub
 	if mentionsXInclude(sub) {
-		done, err = p.processTree(sub, uri, depth+1)
+		// The parsed document is live for the whole recursion, so it is
+		// charged before it, and credited back once the picked nodes are
+		// charged below: a chain of inclusions is refused as the sum of the
+		// documents it holds passes the budget, not on the unwind after every
+		// level was parsed.
+		subNodes, subBytes := subtreeCost(sub.Root)
+		p.nodes += subNodes
+		p.bytes += subBytes
+		if err = p.overBudget(); err == nil {
+			done, err = p.processTree(sub, uri, depth+1)
+		}
+		p.nodes -= subNodes
+		p.bytes -= subBytes
 	}
 	p.stack = p.stack[:len(p.stack)-1]
 	if err != nil {
