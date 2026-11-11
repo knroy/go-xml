@@ -834,7 +834,10 @@ func nestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem)
 	if text, ok, terr := transformString(opts, "stylesheet-text"); terr != nil {
 		return nil, terr
 	} else if ok {
-		tree, perr := xdm.ParseString(text, nestedParseOptions(rt, base))
+		// The evaluation's entity allowance, as stylesheet-location and
+		// fn:parse-xml charge: one per evaluation, not one per call.
+		tree, perr := xdm.ParseString(text,
+			nestedParseOptions(rt, base).WithEntityBudget(ctx.EntityBudget()))
 		if perr != nil {
 			return nil, xdm.Errorf("FOXT0002",
 				"fn:transform: parsing stylesheet-text: %v", perr)
