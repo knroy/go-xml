@@ -193,6 +193,62 @@ func (p *parser) parseDirElement() (node, error) {
 // two strings share their bytes and the comparison is a pointer test.
 type ctorMemo struct {
 	dir map[int]ctorResult
+	// body remembers the parse of every bracketed body -- a try, catch,
+	// ordered, validate or computed constructor's braces, a switch or if
+	// operand's parentheses, a direct constructor's enclosed expression, a
+	// string constructor's interpolation and an inline function's body --
+	// by the absolute offset of its first byte. A body is delimited by its
+	// own brackets, so its extent and its parse are the same whichever outer
+	// read reached it. The constructor memo alone left every other form to be
+	// parsed again by each of the three reads an item can get (the item, the
+	// operand probe, the lifted operand), 3^d for d levels of nesting.
+	body map[bodyKey]bodyResult
+	// refused latches the first nesting refusal any parser over this source
+	// met; see parser.descend.
+	refused error
+}
+
+// bodyKey is a body's absolute offset, and whether it was read as an inline
+// function's body, whose parse differs from a query body's.
+type bodyKey struct {
+	off int
+	fn  bool
+}
+
+// bodyResult is one remembered body parse, keyed by bodyKey.
+type bodyResult struct {
+	text  string
+	items []node
+	err   error
+}
+
+// parseMemoBody parses p's whole source, a bracketed body whose memo and
+// base p already holds, once per offset: query body, or with fn an inline
+// function's body.
+func (p *parser) parseMemoBody(fn bool) ([]node, error) {
+	if p.memo == nil {
+		p.memo = &ctorMemo{}
+	}
+	key := bodyKey{p.base, fn}
+	if r, ok := p.memo.body[key]; ok && r.text == p.src {
+		return r.items, r.err
+	}
+	var items []node
+	var err error
+	if fn {
+		items, err = p.parseBodyItems()
+	} else {
+		items, err = p.parseQueryBody()
+	}
+	// As for constructors: a nesting refusal depends on the route, not on
+	// the source, and is not remembered.
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		if p.memo.body == nil {
+			p.memo.body = map[bodyKey]bodyResult{}
+		}
+		p.memo.body[key] = bodyResult{text: p.src, items: items, err: err}
+	}
+	return items, err
 }
 
 // ctorResult is one remembered parse: the source it consumed, the result and
@@ -698,8 +754,8 @@ func (p *parser) parseEnclosed() (node, error) {
 	// The body is a query body rather than a bare expression: it may itself
 	// hold constructors, as in <a>{<b/>}</a>.
 	inner := &parser{src: body, sc: p.sc, version: p.version, memo: m,
-		base: base}
-	items, err := inner.parseQueryBody()
+		base: base, depth: p.depth}
+	items, err := inner.parseMemoBody(false)
 	if err != nil {
 		return nil, err
 	}
