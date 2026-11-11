@@ -2286,6 +2286,24 @@ func allBranchCounts(p *Particle) ([]branchCount, error) {
 
 // allBranchCountsIn is allBranchCounts with the branch budget given.
 func allBranchCountsIn(p *Particle, limit int) ([]branchCount, error) {
+	return branchCountsMemo(p, limit, map[*ModelGroup]groupBranches{})
+}
+
+// groupBranches is one model group's enumeration, kept for the walk.
+type groupBranches struct {
+	brs []branchCount
+	err error
+}
+
+// branchCountsMemo is allBranchCountsIn with each group enumerated once.
+//
+// Group refs share their definition's *ModelGroup, so a DAG of groups each
+// referencing the next twice is reached by 2^n paths, and a sequence-only
+// DAG yields one branch at every level: the branch budget never trips while
+// the walk makes 2^n calls. A group's branches depend on the group alone, the
+// containing particle's range being applied by the caller into fresh maps, so
+// the memoised slices are only ever read.
+func branchCountsMemo(p *Particle, limit int, memo map[*ModelGroup]groupBranches) ([]branchCount, error) {
 	if p.MaxOccurs == 0 {
 		return []branchCount{{}}, nil
 	}
@@ -2296,7 +2314,12 @@ func allBranchCountsIn(p *Particle, limit int) ([]branchCount, error) {
 		return []branchCount{c}, nil
 
 	case *ModelGroup:
-		inner, err := groupBranchCounts(t, limit)
+		gb, ok := memo[t]
+		if !ok {
+			gb.brs, gb.err = groupBranchCounts(t, limit, memo)
+			memo[t] = gb
+		}
+		inner, err := gb.brs, gb.err
 		if err != nil {
 			return nil, err
 		}
@@ -2357,14 +2380,14 @@ var errNotCountable = errorString("the model has a term with no per-name count")
 // It is a var only so tests may lower it; it is never assigned in production.
 var branchLimit = DefaultMaxRestrictionBranches
 
-func groupBranchCounts(g *ModelGroup, limit int) ([]branchCount, error) {
+func groupBranchCounts(g *ModelGroup, limit int, memo map[*ModelGroup]groupBranches) ([]branchCount, error) {
 	if g.Compositor == CompositorChoice {
 		if len(g.Particles) == 0 {
 			return []branchCount{{}}, nil
 		}
 		var out []branchCount
 		for _, child := range g.Particles {
-			brs, err := allBranchCountsIn(child, limit)
+			brs, err := branchCountsMemo(child, limit, memo)
 			if err != nil {
 				return nil, err
 			}
@@ -2383,7 +2406,7 @@ func groupBranchCounts(g *ModelGroup, limit int) ([]branchCount, error) {
 	// the base is an all group, whose language is likewise order-blind.
 	out := []branchCount{{}}
 	for _, child := range g.Particles {
-		brs, err := allBranchCountsIn(child, limit)
+		brs, err := branchCountsMemo(child, limit, memo)
 		if err != nil {
 			return nil, err
 		}
