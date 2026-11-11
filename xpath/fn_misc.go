@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // registerMiscFuncs adds the remaining F&O functions.
@@ -3021,6 +3022,12 @@ func registerParseXML(l *Library, since Version) {
 		if err := checkNamespaceWellFormed(tree.Root, "fn:parse-xml"); err != nil {
 			return nil, err
 		}
+		// The parsed document is a tree this evaluation now holds, so it is
+		// charged to the node budget like any constructed one; the parse's
+		// own MaxNodes bounds one call, not what the evaluation retains.
+		if err := ctx.countNodes(xdmbuild.CountSubtree(tree.Root)); err != nil {
+			return nil, err
+		}
 		return xdm.One(tree.Root), nil
 	})
 
@@ -3045,6 +3052,11 @@ func registerParseXML(l *Library, since Version) {
 			return nil, perr
 		}
 		if err := checkNamespaceWellFormed(frag, "fn:parse-xml-fragment"); err != nil {
+			return nil, err
+		}
+		// Charged as fn:parse-xml's document is. The wrapper tree the copy
+		// was taken from is dropped here, so only the result is retained.
+		if err := ctx.countNodes(xdmbuild.CountSubtree(frag)); err != nil {
 			return nil, err
 		}
 		return xdm.One(frag), nil

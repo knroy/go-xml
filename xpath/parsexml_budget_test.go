@@ -178,3 +178,27 @@ func TestParseXMLBudgetRefusalIsNotAWellFormednessError(t *testing.T) {
 			"error, which a catch on FODC0006 could launder: %v", err)
 	}
 }
+
+// fn:parse-xml and fn:parse-xml-fragment return a tree the evaluation then
+// holds, but charged none of it to MaxNodes: the parse's own per-call limit
+// bounded one call, so repeating the call retained trees past the budget while
+// the counter read zero. With 16 nodes of headroom a 102-node document is now
+// refused, and a 3-node one still parses.
+func TestParseXMLChargesTheNodeBudget(t *testing.T) {
+	doc := "'<r>" + strings.Repeat("<a/>", 100) + "</r>'"
+	for _, fn := range []string{"parse-xml", "parse-xml-fragment"} {
+		t.Run(fn, func(t *testing.T) {
+			ctx := NewContext(nil, Builtins()).WithVersion(XPath31)
+			if err := ctx.countNodes(MaxNodes - 16); err != nil {
+				t.Fatalf("charging the node budget: %v", err)
+			}
+			if _, err := Eval("count("+fn+"('<r><a/></r>'))", ctx, nil); err != nil {
+				t.Fatalf("a 3-node document under 16 nodes of headroom: %v", err)
+			}
+			_, err := Eval("count("+fn+"("+doc+"))", ctx, nil)
+			if xdm.ErrorCode(err) != "XPDY0130" || !errors.Is(err, xdm.ErrResourceLimit) {
+				t.Errorf("a 102-node document under 16 nodes of headroom: err = %v, want XPDY0130", err)
+			}
+		})
+	}
+}
