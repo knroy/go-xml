@@ -90,6 +90,13 @@ type Lexer struct {
 	// braced URI literal as part of the grammar proper.
 	version Version
 
+	// xpath10 lexes numbers by XPath 1.0 section 3.7: Number ::= Digits ('.'
+	// Digits?)? | '.' Digits, a double, with no exponent and no rule
+	// separating it from a following name, so "10div 2" is 10 div 2 and
+	// "1e3" is the number 1 followed by the name e3. See
+	// CompileOptions.XPath10.
+	xpath10 bool
+
 	// bracedURIs collects the URIs seen in braced URI literals, in the order
 	// they were lexed. A literal is rewritten to a synthetic prefix naming
 	// its index here, so that the ordinary QName resolution path can bind it
@@ -413,7 +420,14 @@ func (l *Lexer) lexNumber(start int) (Token, error) {
 			l.pos++
 		}
 	}
-	if l.pos < len(l.src) && (l.src[l.pos] == 'e' || l.src[l.pos] == 'E') {
+	if l.xpath10 {
+		// An integer literal stays xs:integer, which no 1.0 operation can tell
+		// from the double (arithmetic converts it, string10 writes it as one),
+		// so the 2.0 functions and "to" that take xs:integer keep accepting it.
+		if kind == numDecimal {
+			kind = numDouble
+		}
+	} else if l.pos < len(l.src) && (l.src[l.pos] == 'e' || l.src[l.pos] == 'E') {
 		save := l.pos
 		l.pos++
 		if l.pos < len(l.src) && (l.src[l.pos] == '+' || l.src[l.pos] == '-') {
@@ -435,7 +449,7 @@ func (l *Lexer) lexNumber(start int) (Token, error) {
 	// character. "10idiv 3" is not "10 idiv 3": the grammar requires the
 	// separation, and without this check the number and the operator ran
 	// together and evaluated as though the space were there.
-	if l.pos < len(l.src) && isNameStart(rune(l.src[l.pos])) {
+	if !l.xpath10 && l.pos < len(l.src) && isNameStart(rune(l.src[l.pos])) {
 		return Token{}, fmt.Errorf(
 			"XPST0003: numeric literal %q must be separated from what follows",
 			text)

@@ -61,6 +61,10 @@ type Parser struct {
 	// SequenceType. It is set only while the target of "cast as" or
 	// "castable as" is being parsed. See parseSingleType.
 	singleType bool
+	// xpath10 parses "=" and "!=" over "<", "<=", ">" and ">=" as two
+	// left-associative levels, the XPath 1.0 EqualityExpr and RelationalExpr
+	// (1.0 section 3.4), where 2.0 has one non-associative ComparisonExpr.
+	xpath10 bool
 }
 
 // maxParseDepth bounds expression nesting.
@@ -202,7 +206,13 @@ func ParseVersionRefFloor(src string, ns NamespaceResolver, v, refFloor Version)
 // xgc:leading-lone-slash consults to decide whether a "/" is a whole
 // expression or the head of a path. See Parser.xquery and startsStep.
 func ParseXQuery(src string, ns NamespaceResolver, v Version) (Expr, error) {
-	return parseHost(src, ns, false, v, 0, true)
+	return parseHost(src, ns, false, v, 0, true, false)
+}
+
+// parseXPath10 is ParseVersion with the XPath 1.0 lexical rules for numbers
+// and the 1.0 comparison grammar; see CompileOptions.XPath10.
+func parseXPath10(src string, ns NamespaceResolver, v Version) (Expr, error) {
+	return parseHost(src, ns, false, v, 0, false, true)
 }
 
 func parse(src string, ns NamespaceResolver, extended bool, v Version) (Expr, error) {
@@ -210,10 +220,10 @@ func parse(src string, ns NamespaceResolver, extended bool, v Version) (Expr, er
 }
 
 func parseWith(src string, ns NamespaceResolver, extended bool, v, refFloor Version) (Expr, error) {
-	return parseHost(src, ns, extended, v, refFloor, false)
+	return parseHost(src, ns, extended, v, refFloor, false, false)
 }
 
-func parseHost(src string, ns NamespaceResolver, extended bool, v, refFloor Version, xquery bool) (Expr, error) {
+func parseHost(src string, ns NamespaceResolver, extended bool, v, refFloor Version, xquery, xpath10 bool) (Expr, error) {
 	if ns == nil {
 		ns = defaultResolver{}
 	}
@@ -222,6 +232,7 @@ func parseHost(src string, ns NamespaceResolver, extended bool, v, refFloor Vers
 		lex = newExtendedLexer(src)
 	}
 	lex.version = v
+	lex.xpath10 = xpath10
 	toks, err := lex.Tokens()
 	if err != nil {
 		return nil, fmt.Errorf("%w in %q", err, src)
@@ -230,7 +241,7 @@ func parseHost(src string, ns NamespaceResolver, extended bool, v, refFloor Vers
 		ns = wrapBraced(ns, lex.bracedURIs)
 	}
 	p := &Parser{toks: toks, src: src, ns: ns, version: v, refFloor: refFloor,
-		xquery: xquery}
+		xquery: xquery, xpath10: xpath10}
 	e, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -829,6 +840,8 @@ func (p *Parser) parseAnd() (Expr, error) {
 // comparisonOps covers all three families: general (=, !=, <, ...), value
 // (eq, ne, lt, ...) and node (is, <<, >>). They share a precedence level and
 // are non-associative, so this parses at most one.
+// comparisonOps is ordered: the 1.0 equality operators, the 1.0 relational
+// operators, then the ones 2.0 adds. parseComparison slices it by that order.
 var comparisonOps = []string{
 	"=", "!=", "<", "<=", ">", ">=",
 	"eq", "ne", "lt", "le", "gt", "ge",
@@ -836,11 +849,57 @@ var comparisonOps = []string{
 }
 
 func (p *Parser) parseComparison() (Expr, error) {
+	if p.xpath10 {
+		return p.parseComparisonChain(comparisonOps[:2], func() (Expr, error) {
+			return p.parseComparisonChain(comparisonOps[2:6], p.parseComparison20)
+		})
+	}
+	return p.parseComparison20()
+}
+
+// parseComparisonChain parses operand (op operand)* left-associatively, the
+// shape of XPath 1.0's EqualityExpr and RelationalExpr, charging the chain
+// like every other infix loop (see maxChainLength).
+func (p *Parser) parseComparisonChain(ops []string, operand func() (Expr, error)) (Expr, error) {
+	outer := p.spine
+	p.spine = 0
+	left, err := operand()
+	if err != nil {
+		return nil, err
+	}
+	h := p.spine
+	for {
+		op, ok := p.acceptOp(ops...)
+		if !ok {
+			p.spine = max(outer, h)
+			return left, nil
+		}
+		p.spine = 0
+		right, err := operand()
+		if err != nil {
+			return nil, err
+		}
+		if h, err = p.grow(h, op); err != nil {
+			return nil, err
+		}
+		left = &BinaryOp{Op: op, Left: left, Right: right,
+			ResolveQName: p.qnameResolver()}
+	}
+}
+
+// parseComparison20 is the XPath 2.0 ComparisonExpr: at most one operator.
+// Under xpath10 it is reached for the operands of the 1.0 levels, and then
+// takes only the operators 1.0 lacks.
+func (p *Parser) parseComparison20() (Expr, error) {
+	ops := comparisonOps
+	if p.xpath10 {
+		ops = comparisonOps[6:]
+	}
 	left, err := p.parseStringConcat()
 	if err != nil {
 		return nil, err
 	}
-	if op, ok := p.acceptOp(comparisonOps...); ok {
+	if op, ok := p.acceptOp(ops...); ok {
 		right, err := p.parseStringConcat()
 		if err != nil {
 			return nil, err

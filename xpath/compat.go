@@ -2,6 +2,7 @@ package xpath
 
 import (
 	"math"
+	"strconv"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -23,12 +24,18 @@ import (
 // B.1 rule 2: where an operand of an arithmetic operator, or of a relational
 // general comparison, is not numeric, 1.0 applied number() to it. "'apple' + 1"
 // is NaN in 1.0 and XPTY0004 in 2.0.
-func compatNumber(a *xdm.Atomic) *xdm.Atomic {
+//
+// x10 is CompileOptions.XPath10: a string converts by number10 rather than by
+// the xs:double cast.
+func compatNumber(a *xdm.Atomic, x10 bool) *xdm.Atomic {
 	if a == nil {
 		return xdm.NewDouble(math.NaN())
 	}
 	if a.Type == xdm.TypeDouble {
 		return a
+	}
+	if x10 && !a.Type.IsNumeric() && a.Type != xdm.TypeBoolean {
+		return xdm.NewDouble(number10(a.String()))
 	}
 	conv, err := CastAtomic(a, xdm.TypeDouble)
 	if err != nil {
@@ -41,12 +48,76 @@ func compatNumber(a *xdm.Atomic) *xdm.Atomic {
 // cardinality rule first: 1.0 had no sequences, so a multi-item operand is
 // reduced to its first item rather than raising XPTY0004. The empty sequence
 // becomes NaN, which is what number(()) gives.
-func compatNumberSeq(seq xdm.Sequence) *xdm.Atomic {
+func compatNumberSeq(seq xdm.Sequence, x10 bool) *xdm.Atomic {
 	atoms := xdm.Atomize(seq)
 	if len(atoms) == 0 {
 		return xdm.NewDouble(math.NaN())
 	}
-	return compatNumber(atoms[0].(*xdm.Atomic))
+	return compatNumber(atoms[0].(*xdm.Atomic), x10)
+}
+
+// number10 is XPath 1.0 number() of a string (1.0 section 4.2, from memory):
+// "a string that consists of optional whitespace followed by an optional
+// minus sign followed by a Number followed by whitespace is converted to the
+// IEEE 754 number that is nearest ... to the mathematical value represented by
+// the string; any other string is converted to NaN", where Number ::= Digits
+// ('.' Digits?)? | '.' Digits (section 3.7). So "+1", "1e3" and "INF", which
+// the xs:double cast accepts, are NaN. One pass to validate, then ParseFloat,
+// which rounds to nearest and accepts every string that passes.
+func number10(s string) float64 {
+	s = trimXMLSpace(s)
+	t := s
+	if len(t) > 0 && t[0] == '-' {
+		t = t[1:]
+	}
+	digits, dot := 0, false
+	for i := 0; i < len(t); i++ {
+		switch c := t[i]; {
+		case c >= '0' && c <= '9':
+			digits++
+		case c == '.' && !dot:
+			dot = true
+		default:
+			return math.NaN()
+		}
+	}
+	if digits == 0 {
+		return math.NaN()
+	}
+	// The only error left is ErrRange, whose ±Inf is the nearest value.
+	f, _ := strconv.ParseFloat(s, 64)
+	return f
+}
+
+// string10 is XPath 1.0 string() of a number (1.0 section 4.2, from memory):
+// NaN is "NaN", positive and negative zero are "0", the infinities are
+// "Infinity" and "-Infinity", an integer is "represented in decimal form as a
+// Number with no decimal point and no leading zeros", and any other number in
+// decimal form with "as many, but only as many, more digits as are needed to
+// uniquely distinguish the number from all other IEEE 754 numeric values".
+// There is no exponent. An integer is written exactly, as the double it is.
+//
+// 1.0 has one numeric type, so every numeric value is written as the double
+// nearest it: an integer literal past 2^53 is the double, as in 1.0. A value
+// that is not numeric keeps its 2.0 string.
+func string10(a *xdm.Atomic) string {
+	if !a.Type.IsNumeric() {
+		return a.String()
+	}
+	f := compatNumber(a, false).Float64() // the cast, so xs:long etc. too
+	switch {
+	case math.IsNaN(f):
+		return "NaN"
+	case math.IsInf(f, 1):
+		return "Infinity"
+	case math.IsInf(f, -1):
+		return "-Infinity"
+	case f == 0:
+		return "0"
+	case f == math.Trunc(f):
+		return strconv.FormatFloat(f, 'f', 0, 64)
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64)
 }
 
 // compatFirst truncates a sequence to its first item.
@@ -81,7 +152,20 @@ func compatFirst(seq xdm.Sequence) xdm.Sequence {
 //
 // The boolean rule takes precedence over the relational one: 1.0 converted to
 // boolean whenever either side was one, whatever the operator.
-func compatGeneralCompare(l, r, la, ra xdm.Sequence, op string) (xdm.Sequence, xdm.Sequence, bool) {
+//
+// x10 is CompileOptions.XPath10, under which a relational operator follows
+// XPath 1.0 section 3.4 instead: a node-set against a boolean converts the
+// node-set to a boolean, and otherwise both operands become numbers, a
+// boolean included -- "true() > 0.5" is 1 > 0.5, where the boolean rule
+// above makes it true() > true(). That is what makes "1 < 2 < 3" true.
+func compatGeneralCompare(l, r, la, ra xdm.Sequence, op string, x10 bool) (xdm.Sequence, xdm.Sequence, bool) {
+	relational := op == "<" || op == "<=" || op == ">" || op == ">="
+	if x10 && relational {
+		lb, rb := hasType(la, xdm.TypeBoolean), hasType(ra, xdm.TypeBoolean)
+		if !(lb && isNodeSet(r) || rb && isNodeSet(l)) {
+			return numberEach(la, true), numberEach(ra, true), true
+		}
+	}
 	if hasType(la, xdm.TypeBoolean) || hasType(ra, xdm.TypeBoolean) {
 		lb, err1 := EffectiveBooleanValue(l)
 		rb, err2 := EffectiveBooleanValue(r)
@@ -98,8 +182,8 @@ func compatGeneralCompare(l, r, la, ra xdm.Sequence, op string) (xdm.Sequence, x
 	// converted item by item rather than being reduced to its first.
 	// boolean-069 compares two two-item sequences and needs three of the four
 	// operators to find their pair.
-	if op == "<" || op == "<=" || op == ">" || op == ">=" {
-		return numberEach(la), numberEach(ra), true
+	if relational {
+		return numberEach(la, x10), numberEach(ra, x10), true
 	}
 	// For "=" and "!=" the node-set side keeps its cardinality: 1.0's rule is
 	// that the comparison holds if *some* node of the set, converted to a
@@ -109,9 +193,20 @@ func compatGeneralCompare(l, r, la, ra xdm.Sequence, op string) (xdm.Sequence, x
 	// backwards-033 needs both sides converted item by item, so that the one
 	// string that is a number matches.
 	if isNumericSeq(la) || isNumericSeq(ra) {
-		return numberEach(la), numberEach(ra), true
+		return numberEach(la, x10), numberEach(ra, x10), true
 	}
 	return la, ra, false
+}
+
+// isNodeSet reports whether seq is what XPath 1.0 calls a node-set: nodes
+// only. The empty sequence is one, since no other 1.0 value is empty.
+func isNodeSet(seq xdm.Sequence) bool {
+	for _, it := range seq {
+		if _, ok := it.(*xdm.Node); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // hasType reports whether any item of an atomized sequence has type t.
@@ -194,11 +289,39 @@ var seqParamFuncs = map[string]bool{
 // declares its parameter types explicitly with @as, and section 3.8 does not
 // put those under the compatibility rules; coercing them would discard items a
 // stylesheet passed on purpose.
-func compatCoerceArgs(name xdm.QName, args []xdm.Sequence) []xdm.Sequence {
+//
+// x10 is CompileOptions.XPath10. It converts by number10 and string10, and
+// adds the 1.0 conversions 2.0 does not need: sum() converts each item with
+// number() (1.0 section 4.4), and string() and concat() write a number by the
+// 1.0 rule (section 4.2).
+func compatCoerceArgs(name xdm.QName, args []xdm.Sequence, x10 bool) []xdm.Sequence {
 	if name.URI != xdm.NSFN {
 		return args
 	}
 	var out []xdm.Sequence
+	if x10 {
+		switch name.Local {
+		case "sum":
+			if len(args) > 0 && len(args[0]) > 0 {
+				out = make([]xdm.Sequence, len(args))
+				copy(out, args)
+				out[0] = numberEach(xdm.Atomize(args[0]), true)
+			}
+		case "string", "concat":
+			for i, a := range args {
+				if len(a) != 1 {
+					continue
+				}
+				if n, ok := a[0].(*xdm.Atomic); ok && n.Type.IsNumeric() {
+					if out == nil {
+						out = make([]xdm.Sequence, len(args))
+						copy(out, args)
+					}
+					out[i] = xdm.One(xdm.NewString(string10(n)))
+				}
+			}
+		}
+	}
 	// The truncation half of the rule. A sequence-taking function is exempt
 	// from it but not from the conversions below: fn:string-join takes a
 	// sequence in position 0 and an xs:string separator in position 1, and
@@ -259,13 +382,17 @@ func compatCoerceArgs(name xdm.QName, args []xdm.Sequence) []xdm.Sequence {
 			}
 			var repl xdm.Item
 			if to == xdm.TypeDouble {
-				repl = compatNumber(a)
+				repl = compatNumber(a, x10)
 			} else {
 				if (a.Type == xdm.TypeUntypedAtomic || a.Type == xdm.TypeAnyURI) &&
 					len(src[i]) == 1 {
 					continue
 				}
-				repl = xdm.NewString(a.String())
+				if x10 {
+					repl = xdm.NewString(string10(a))
+				} else {
+					repl = xdm.NewString(a.String())
+				}
 			}
 			if out == nil {
 				out = make([]xdm.Sequence, len(args))
@@ -340,14 +467,14 @@ var doubleParams = map[string][]int{
 // what the 1.0 rule for "=" and "!=" against a node-set amounts to once both
 // sides are atomized: each candidate pair is compared as numbers, and an item
 // that is not a number becomes NaN and matches nothing.
-func numberEach(seq xdm.Sequence) xdm.Sequence {
+func numberEach(seq xdm.Sequence, x10 bool) xdm.Sequence {
 	out := make(xdm.Sequence, 0, len(seq))
 	for _, it := range seq {
 		a, ok := it.(*xdm.Atomic)
 		if !ok {
 			continue
 		}
-		out = append(out, compatNumber(a))
+		out = append(out, compatNumber(a, x10))
 	}
 	return out
 }

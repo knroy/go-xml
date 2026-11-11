@@ -870,7 +870,7 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	// string, a number or a single node is expected is reduced to its first
 	// item instead of raising XPTY0004. See compatCoerceArgs.
 	if ctx.Compat() {
-		args = compatCoerceArgs(e.Name, args)
+		args = compatCoerceArgs(e.Name, args, ctx.xpath10())
 	}
 
 	// The declared parameter types refuse an argument whose CARDINALITY the
@@ -936,7 +936,7 @@ func (e *UnaryOp) Eval(ctx *Context) (xdm.Sequence, error) {
 	// the same rule through compatNumber in operators.go.
 	var n *xdm.Atomic
 	if ctx.Compat() {
-		n = compatNumber(a)
+		n = compatNumber(a, ctx.xpath10())
 	} else {
 		n, err = toNumeric(a)
 		if err != nil {

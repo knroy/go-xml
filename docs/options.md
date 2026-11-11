@@ -743,6 +743,7 @@ c, err := xpath.CompileWith(src, xpath.CompileOptions{
 | `XQuery` | `bool` | XPath | The expression came from an XQuery module; see `ParseXQuery` for the one rule that differs. |
 | `Context` | `context.Context` | no deadline | A deadline or cancellation for the compile. The optimiser checks it every few thousand nodes; parsing does not, so a refusal can arrive late on a very large source. `XPDY0130` wrapping `xdm.ErrResourceLimit` and the context's error. |
 | `MaxBytes` | `int` | unbounded | Refuse a source longer than this before parsing it, as `XPDY0130` wrapping `xdm.ErrResourceLimit`. |
+| `XPath10` | `bool` | off | Compile as XPath 1.0, for a host defined on 1.0 (c14n's XML-DSig filters use it). Implies 1.0 compatibility mode and adds the 1.0 number model and grammar where that mode still follows 2.0: `number("+1")`, `number("1e3")` and `number("INF")` are NaN, `sum()` of a non-number is NaN, `string()` writes `10000000`, `Infinity` and `0` where 2.0 writes `1.0E7`, `INF` and `-0`, `1 < 2 < 3` parses as `(1 < 2) < 3` with `=` binding looser than `<`, and `10div 2` lexes. 2.0 constructs are still accepted. Not for XSLT 1.0-compatible stylesheets, which keep `WithCompatMode`'s 2.0 answers. |
 
 `CompileVersion`, `CompileXQuery` and `CompileVersionRefFloor` are the older
 positional spellings. They are deprecated as of 2026-09-14, delegate to
