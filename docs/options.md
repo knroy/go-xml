@@ -131,12 +131,11 @@ syntax error does *not* carry the sentinel.
 | `MaxNodes` (result tree) | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own. Distinct from `xdm/parse.go`'s `MaxNodes`, which bounds a *parse*: this one bounds the nodes a transform or query **constructs**, and the wording says "result-tree nodes" so the three refusals that share the code are told apart) |
 | `Env.MaxDepth` | `xpath/context.go` | `XPDY0001` | no context item is defined |
 | `backtrackBudget` | `xpath/regex_backtrack.go` | `XPDY0130` | (the code §2.3.1 names for a limit; it borrowed `FORX0002`, "syntactically invalid", until 2026-11-06, about a pattern that was valid) |
-| `backrefAnalysisMax` (4M steps) | `xpath/regex_backref.go` | `XPDY0130` | as above; bounds the backreference fixed-width analysis at compile |
 | `backtrackMaxDepth` (50,000) | `xpath/regex_backtrack.go` | `XPDY0130` | as above; nested matcher calls of the opt-in backtracking engine, so a long subject is an error, not a stack overflow |
 | `MaxRegexpProgram` (100,000 instructions) | `xpath/regex_size.go` | `XPDY0130` | as above; a valid pattern whose compiled program would be larger, from `fn:matches` and the other regex functions. `xpath.CompileBounded` itself returns the bare refusal wrapping `xdm.ErrResourceLimit`, and `xsd` facets report it under their own `pattern %q:` prefix |
 | `maxFlattenSteps` (1<<24) | `xdm/maparray.go` | `XPDY0130` | items and arrays one `xdm.Flatten` visits inside arrays; `array:flatten` and `fn:data` also charge `MaxItems`. `xdm.FlattenContext(ctx, seq)` returns this refusal as an error rather than an `internal/xdmlimit` panic, and checks `ctx` every 1024 items (`flattenCheckEvery`); `array:flatten`, `fn:data`, `xsl:copy-of`, `xsl:value-of` and `xsl:attribute` flatten under the evaluation's context, so a host deadline stops a large flatten |
 | range length | `xpath/operators.go` | `XPDY0130` | (the code §2.3.1 names for a limit) a range longer than `MaxItems`; a bound outside int64 is an ordinary `xs:integer` and is enumerated, so `1e21 to 1e21+3` is four items. The dead `FOAR0002` bound check was removed in round SK |
-| `maxNestDepth` | `xquery/nested.go` | `XPDY0130` | as the XPath caps; it borrowed `XPST0003` until 2026-09-14 |
+| `maxNestDepth` | `xquery/nested.go` | `XPDY0130` | as the XPath caps; it borrowed `XPST0003` until 2026-09-14. Since round SM the 200 levels count across every bracketed body a sub-parser reads back (try/catch, `ordered`, `validate`, `switch`, `if`, computed constructors, string-constructor interpolation, inline functions) |
 | `maxConstructorDepth` | `xquery/enclosed.go` | `XPDY0130` | as above |
 | `MaxModules` / `MaxModuleBytes` | `xquery/module.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the module is not there |
 | `MaxSchemaBytes` | `xquery/schemaimport.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the schema is not there |
@@ -603,10 +602,10 @@ res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{
 | `Documents` | `xpath.DocumentResolver` | disabled | Resolves `fn:doc` and `fn:document`, and `fn:transform`'s `stylesheet-location` and `source-location`. **Nil disables them**, which is the default: a stylesheet that can open arbitrary URIs is an SSRF and file-disclosure vector. A resolver that also implements `xslt.StreamingDocumentResolver` has a streamable `xsl:source-document` or `xsl:merge-source` stream its documents; see [below](#xsltstreamingdocumentresolver). |
 | `Collections` | `xpath.CollectionResolver` | disabled | Resolves `fn:collection`. **Nil disables it**, and setting `Documents` does not set this — the two are separate switches on purpose. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Template recursion limit, and the bound on `fn:transform` nesting. Catches a stylesheet with no base case. |
-| `MaxItems` | `int` | `xpath.MaxItems` = 5,000,000 | Items one transformation may materialise, `XPDY0130` past it. Negative removes the bound; nested `fn:transform` and `xsl:evaluate` keep the caller's. |
+| `MaxItems` | `int` | `xpath.MaxItems` = 5,000,000 | Items one transformation may materialise, `XPDY0130` past it. Negative removes the bound; nested `fn:transform` and `xsl:evaluate` keep the caller's. Since round SM it also covers what live local variables and parameters hold, `xsl:on-empty`/`xsl:on-non-empty` output after each instruction, streamed `xsl:merge` groups, streamed accumulator recorders and held `climbSort` nodes; an `xsl:number level="any"` table it refuses is not built, and that execution walks instead. |
 | `MaxMergeStreams` | `int` | 64 | Documents streamed `xsl:merge` reads at once, counted over every merge open at the time (one run from another's action, and one in a nested `fn:transform`, share the count). Each holds its open resource (a file descriptor for a `FileResolver`), a cursor and a coroutine until its merge ends. **Refuses nothing**: a merge that would pass it reads its inputs on the tree instead, with the same result. Negative is no limit, which lets a `for-each-source` naming many URIs hold that many open at once. Nested `fn:transform` keeps the caller's; the static phase has the default. |
 | `MaxNodes` | `int` | `xpath.MaxNodes` = 2,000,000 | Result- and temporary-tree nodes the transform may hold, `XPDY0130` past it. Negative removes the bound. In a streamed `xsl:for-each`/`xsl:iterate` an item that writes no output hands back what it dropped, so only what it carries on counts; elsewhere every node built counts. |
-| `MaxBytes` | `int64` | `xpath.MaxBytes` = 1 GiB | String content held, on `MaxNodes`' terms. |
+| `MaxBytes` | `int64` | `xpath.MaxBytes` = 1 GiB | String content held, on `MaxNodes`' terms. Since round SM it counts kept `xsl:message` text, `inherit-namespaces="no"` undeclarations, and copied attribute and text values under 8 KiB in `snapshot()`, `copy-of()` and `xsl:sequence`. |
 | `MaxNodesBuilt` | `int64` | 0: a streamed item hands back at most 4,096 nodes | Every node built, refunds notwithstanding. Positive bounds the total and lifts the per-item cap; negative removes both, so only what is held is bounded. |
 | `MaxBytesBuilt` | `int64` | 0: at most 65,536 bytes per item | `MaxNodesBuilt` for string content. |
 | `DisableAssertions` | `bool` | `false` — assertions enabled | Turns off `xsl:assert` checking for the whole transformation. XSLT 3.0 §22.2: "By default, assertions are enabled." |
@@ -810,7 +809,7 @@ functions or `WithEnv`):
 | `RegexVersion`, `LibraryVersion` | `Version` | Raise the regular-expression dialect and the function library above the expression's version, without admitting new syntax. |
 | `MaxDepth` | `int` | Recursion bound. Zero is `xpath.MaxDepth` (500). |
 | `MaxItems` | `int` | Items an evaluation may materialise. Zero is `xpath.MaxItems` (5,000,000); negative is no bound; a nested evaluation adopts the caller's bound and cannot raise it. |
-| `MaxDigits` | `int` | Digits of an `xs:integer` or `xs:decimal` a cast or arithmetic may produce. Zero is `xpath.MaxDigits` (10^6), `FOCA0003` or `FOAR0002` past it; negative is no bound. |
+| `MaxDigits` | `int` | Digits of an `xs:integer` or `xs:decimal` a cast or arithmetic may produce. Zero is `xpath.MaxDigits` (10^6), `FOCA0003` or `FOAR0002` past it; negative is no bound for cast expressions, constructors and function conversion only. Every other conversion through `xpath.CastAtomic`/`CastToDerived` (comparison, coercion, a host's own call) is refused past 10^6 digits whatever this says. A function item runs under the calling evaluation's bound. |
 | `QualifyVar`, `MissingVar` | funcs | Host hooks for variable references (XSLT packages, XQuery cycles). |
 | `MapDuplicateCode` | `string` | Error code for a duplicate key in a map constructor; `XQDY0137` by default. |
 
@@ -945,8 +944,10 @@ for it only where whatever runs is trusted with the process's own secrets.
 `Options.ModuleResolver` unless the caller already did. The function needs the
 program to import `xquery`; without it the call is `FOQM0006`. Under an XQuery evaluation the compiled
 module is cached per evaluation, keyed by base URI and import source, and
-distinct calls spend one `MaxModules`/`MaxModuleBytes` budget between them;
-an XPath or XSLT host compiles afresh per call. See
+distinct calls spend one `MaxModules`/`MaxModuleBytes` budget between them,
+and one `MaxSchemaBytes` counter; a failed compile counts toward `MaxModules`,
+and a load past it is refused before compiling. An XPath or XSLT host compiles
+afresh per call. See
 [xquery.md](xquery.md#loading-a-module-at-run-time).
 
 ### xslt.FileResolver
@@ -958,7 +959,7 @@ only the roots.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `Roots` | `[]string` | the constructor's arguments | The directories a path may resolve inside. A path escaping all of them is refused, and confinement is enforced at the open by `os.Root`. |
+| `Roots` | `[]string` | the constructor's arguments | The directories a path may resolve inside. A path escaping all of them is refused, and confinement is enforced at the open by `os.Root`. `NewFileResolver` refuses an empty or whitespace root with an error, and a blank entry set here by hand grants nothing; neither stands for the working directory. |
 | `AllowDOCTYPE` | `bool` | refuse | Permits a `DOCTYPE` in the documents this resolver parses. |
 | `ExternalEntities` | `bool` | refuse | Permits those documents to read external entities, through this same resolver. Separate from `AllowDOCTYPE`. |
 | `UnparsedText` | `bool` | refuse | Permits `fn:unparsed-text` to read through this resolver. |
@@ -1116,7 +1117,10 @@ transform.
 ### Regular-expression backreferences
 
 Not configurable, and deliberately so. `fn:matches` resolves a backreference
-when every group it names has a **fixed** width:
+when every group it names has a **fixed** width, and so does everything before
+it (since round SM-b the whole head is checked on the parsed pattern, and a
+referenced group may not sit under alternation or repetition; `^` only leads,
+`\N*` only trails, and `$` under the `m` flag is refused):
 
 ```
 matches("aa", "(a)\1")              → true
@@ -1124,10 +1128,12 @@ matches("Mum", "([md])[aeiou]\1", "i") → true
 matches("A", "([A-Z])\1*")           → true
 ```
 
-A group whose width can vary raises `FORX0002` instead:
+A group whose width can vary, or a variable-width head, raises `FORX0002`
+instead (before round SM-b the second answered false):
 
 ```
 matches("aa", "(a*)\1")             → FORX0002
+matches("aa", "a*(a)\1")            → FORX0002
 ```
 
 The reason is that Go's `regexp` is RE2, which returns a *single* submatch
@@ -1208,10 +1214,10 @@ Passed to `dtd.Validate`.
 
 | Field | Type | Zero value | What it does |
 |---|---|---|---|
-| `MaxErrors` | `int` | `DefaultMaxErrors` = 100 | Stops after this many failures; negative means no limit. |
+| `MaxErrors` | `int` | `DefaultMaxErrors` = 100 | Stops after this many failures; negative means no limit. Since round SM the walk itself stops there, not only the report. |
 | `AllowUndeclared` | `bool` | off | Skips elements and attributes the DTD does not declare, for a DTD known to be partial. |
 | `MaxContentModelPositions` | `int` | 8192 (`xsd.DefaultMaxContentModelPositions`) | Positions one element content model may compile to. |
-| `MaxContentModelEdges` | `int` | 1<<20 | Follow entries one content model may store: a repeated choice of n costs about 2n, a dense `(a?,a?,…)` about n²/2, so the default refuses the dense form at about 1450 positions. |
+| `MaxContentModelEdges` | `int` | 1<<20 | Follow entries one content model may store: a repeated choice of n costs about 2n, a dense `(a?,a?,…)` about n²/2, so the default refuses the dense form at about 1450 positions. Since round SM one call holds one compiled element-only model at a time (they are matched per declaration after the walk), so this and `MaxContentModelPositions` also bound what one `Validate` holds. |
 | `MaxMatchStates` | `int` | 4096 (`xsd.DefaultMaxMatchStates`) | Simultaneous automaton states while matching one element's children. |
 
 The three content-model limits follow the house rule (`-1` is no limit) and

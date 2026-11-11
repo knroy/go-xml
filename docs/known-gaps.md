@@ -116,7 +116,9 @@ Found by the third memory audit (2026-11-01) and not fixed, each with the reason
   carried into nested `fn:transform`, and every reader covered. Lower
   `FileResolver.MaxBytes` or the allowed roots meanwhile.
 - **`Env.MaxDigits` covers casts, constructors and binary arithmetic, not
-  `CastAtomic`, `fn:sum` or `fn:avg`**, which take no context.
+  `fn:sum` or `fn:avg`.** Since round SM `CastAtomic` and `CastToDerived`
+  refuse over 10^6 digits for every caller, but at the default, not the
+  host's setting, since they take no context.
 - **RELAX NG's derivative cap still refuses some valid documents.** The choice
   merge fixed `(a?){n} a{n}` up to about n = 30. At n = 50 and 100 the cap is
   reached again, though in 20–300 ms rather than 19.9 s. Hash-consing
@@ -162,9 +164,12 @@ reason:
   text in one tree). Every entry point that returns an error (xdm parse,
   `ParseBursts`, `ProcessXInclude`, `xpath.Compiled.Eval`, `xquery.Query.Eval`,
   `xslt.Compile`/`Transform`/`TransformReader`, xsd typed copies) returns
-  `xdm.ErrResourceLimit` and no result; a host calling `Node.SetValue`,
-  `AppendCopy` or `xdmbuild` methods directly still gets a panic, whose value
-  is an error matching `ErrResourceLimit`.
+  `xdm.ErrResourceLimit` and no result; a host calling `Node.SetValue` or
+  `AppendCopy` directly still gets a panic, whose value is an error matching
+  `ErrResourceLimit`. Since round SM-b no `xdmbuild` call panics: those that
+  return an error (`AppendOpaque`, `AddAttribute*`, `AddNamespace`,
+  `ToDocument`) return one matching `ErrResourceLimit`, and those that do not
+  latch the refusal (`Refused`) for the next error-returning call to report.
 - **Compilations in one process still run one at a time** (`compileSlot` in
   `xslt/stylesheet.go`), so one slow compile delays every other; audit run-2
   measured a trivial compile waiting 944 ms behind a slow static phase. Since
@@ -242,9 +247,11 @@ batches). These remain, each with the reason:
   `FromXPathContext`/`FromXPathFilterContext` with one. Closing it needs xpath
   to charge iteration. Relatedly, `XPath10` mode still accepts XPath 2.0
   syntax such as `some`, `for` and `to` (see the c14n entry below).
-- **UCA substring residuals.** A long needle that keeps matching costs
-  O(n·m²), and a haystack of primary-ignorable characters defeats the
-  `ucaSpanSlack` cut; both are now cancellable through `Env.Ctx`, not bounded.
+- **UCA substring residuals.** A haystack of primary-ignorable characters
+  defeats the `ucaSpanSlack` cut and stays quadratic, cancellable through
+  `Env.Ctx` and bounded by `MaxBytes`, which the keyed bytes are charged to
+  since round SM; the long-needle O(n·m²) case now skips short spans by
+  bisection.
 - **`fn:load-xquery-module` from an XPath or XSLT host has no cache**: each
   call compiles afresh with its own module budget. Only an XQuery evaluation
   carries the per-evaluation cache.
@@ -252,22 +259,46 @@ batches). These remain, each with the reason:
   under xdm's `Flatten` ceiling rather than the host's `MaxItems`.
 - **XSD validation of very long `xs:decimal` and duration text is
   unbudgeted**; the `MaxDigits` bound covers XPath casts, not the validator.
-- **The exported `xdm.CastToDerived` and `CastAtomic` skip `MaxDigits`**, as
-  they take no context.
 - **`internal/fileuri.ToPath` matches `file:` case-sensitively.** The xsd
   instance-location path now normalises the scheme before calling it; other
   callers rely on `url.Parse` having done so.
-- **XQuery window clauses copy bindings in `extendN`** (`xquery/window.go`),
-  where FLWOR tuples now extend in place.
+- **XQuery window clauses copy a narrow tuple's bindings in `extendN`**
+  (`xquery/window.go`); since round SM a wide tuple's windows share its frame.
 - **`if (1) then <a>{1}</a> = 1 else 0` is XPST0003**, a parse defect that
   predates round SL's constructor memo.
-- **`fn:serialize`'s comment writer lacks the leading-`>` and `--` checks**
-  `xsl:output` has, and closes an html PI with `?>` where the html method
-  writes `>`.
+- **`fn:serialize`'s comment writer lacks the `--` check** `xsl:output` has,
+  and closes an html PI with `?>` where the html method writes `>`; the
+  leading-`>` check was added in round SM.
 - **The `xsl:key` cache may share one nil-tree key across fragments**, the
   shape round SL fixed for accumulators; unverified.
 - **`dtd.Validate` takes no context**, so a validation cannot be cancelled;
   its scans are linear since round SL.
+
+### Security audit run-5 at `dcc4d3d6`: what rounds SM/SM-b left open (security, resource limits)
+
+Run-5's 81 confirmed findings and both needs-validation leads were fixed in
+rounds SM and SM-b (see the changelog and the Twenty-ninth pass in
+[security](security.md)), and so were the three units the run deferred: the
+duplicate-declaration scans in XQuery and XSLT, the fixed-width backreference
+wrong answers, and the `xsl:use-package` parameter-override lookup. The
+`xdmbuild.AppendOpaque` lead is fixed as supported API, and
+`leafInlinedSafe`'s reachability was confirmed and fixed. These remain, each
+with the reason:
+
+- **UCA substring search over primary-ignorable haystacks stays quadratic**,
+  bounded by `MaxBytes` and cancellable; see the run-4 entry above.
+- **The XSLT per-transform `prime` still expands each eager or deferred
+  global's function-reference closure.** The expansion is temporary, not
+  retained, since compile now keeps only each global's direct calls.
+- **`judgeSheetCall` can still cost up to K² for K distinct functions with
+  overlapping call chains**; judgements are memoised per compile, which closes
+  the repeated-site case only.
+- **Long `+` chains in a streamed body with no `xsl:try` show a quadratic
+  step** whose cause is not identified.
+- **Streamability analysis polls no context or deadline**; its walks are
+  bounded by the compile's other limits, not cancellable.
+- **DTD nested INCLUDE sections are rescanned once per nesting level**,
+  O(depth × n) with depth capped by `MaxConditionalDepth`.
 
 ### Memory: what the footprint round left open (performance)
 
@@ -445,7 +476,9 @@ Since the completion round L (L1–L7) the core also takes:
   DTD; a variable's map constructor at the document node whose entries each
   read is a tee of its entries; an `xsl:fork` with several reading prongs in
   an `xsl:try` (since round SL a map or fork of over 64 reading parts runs on
-  the tree instead, one parse and goroutine per part being the tee's cost); `base-uri()`, `document-uri()`, `. instance of
+  the tree instead, one parse and goroutine per part being the tee's cost;
+  since round SM-b the 64 counts transform-wide, across nested forks and
+  streamed `xsl:source-document`s); `base-uri()`, `document-uri()`, `. instance of
   document-node()` and `unparsed-entity-uri()` at the document node (the
   stand-in has the document's URIs and DOCTYPE);
 - **stylesheet functions**: bodies that climb, a body with instructions
@@ -2026,14 +2059,19 @@ backreference, and a comparison against that answers **false** where the
 correct answer is true (the split is `"a"` + `"a"`). The information needed was
 discarded before the comparison ran.
 
-When every group a backreference names has a *fixed* width, the greedy
-assignment is the only assignment. There is nothing to enumerate, so
-capture-and-compare is not an approximation — it is exact, and it runs in RE2's
-linear time with one comparison pass per candidate position. Measured on
+When every group a backreference names has a *fixed* width, and so does the
+whole head before it, the greedy assignment is the only assignment. Since
+round SM-b admission is decided on the parsed pattern: the referenced group
+may not sit under alternation or repetition, `^` may only lead, `\N*` may only
+trail, and `$` under the `m` flag is refused. Before that a variable-width head
+was admitted and answered wrongly (`matches('aa', 'a*(a)\1')` was false). There is nothing to enumerate, so
+capture-and-compare is not an approximation — it is exact, and it runs in
+linear time: a fixed-width window slides over the input with one anchored RE2
+run per position. Measured on
 `([a-z])\1*`: 4,000 characters in 53 µs, 64,000 in 567 µs. That path is
 unconditional, and it is what the default uses.
 
-A variable-width backreference is refused with `FORX0002` rather than guessed
+Every other shape is refused with `FORX0002` rather than guessed
 at, because an engine that answers correctly or says it cannot is safe to have
 on always, where one that guesses is not safe at any setting.
 

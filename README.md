@@ -139,7 +139,7 @@ and maintains it as a project of his own.
 | **XSD 1.1** | 99.90% instance (26,218 of 26,244); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 3,579 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 3,687 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -532,7 +532,7 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 | `-xsl` | the stylesheet to apply (required) |
 | `-o` | write to a file instead of stdout |
 | `-p name=value` | supply a top-level `xsl:param`; repeatable |
-| `-allow-dir` | open `xsl:include`/`xsl:import`/`xsl:import-schema`/`doc()`/`document()` to further directories, each covering its subdirectories to any depth; the stylesheet's own directory is always readable. It says *where*, not *what*: raw text, external entities and XInclude each need their own flag as well |
+| `-allow-dir` | open `xsl:include`/`xsl:import`/`xsl:import-schema`/`doc()`/`document()` to further directories, each covering its subdirectories to any depth; the stylesheet's own directory is always readable. Empty or whitespace segments are ignored, never read as the working directory. It says *where*, not *what*: raw text, external entities and XInclude each need their own flag as well |
 | `-allow-doctype` | permit a `DOCTYPE` in the source |
 | `-catalog DIR` | answer `xsl:import-schema`'s references to the W3C schemas (`XMLSchema.xsd`, `xml.xsd`) from local copies in `DIR` instead of leaving them unresolved; see [validation.md](docs/validation.md#resolving-schemalocation) |
 | `-timeout` | bound the transform, and the `-xinclude` pass before it (default 60s) |
@@ -1517,7 +1517,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (3,579 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (3,687 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,530 XQuery cases | XSLT (it is an XPath suite) |
