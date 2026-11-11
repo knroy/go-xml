@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // TestRegexCacheRefusesClassHeavyProgram: 504 copies of \w are a 1 KB key but
@@ -33,37 +31,38 @@ func TestRegexCacheRefusesClassHeavyProgram(t *testing.T) {
 	}
 }
 
-// TestBackrefAnalysisBounded: the fixed-width analysis rescans the head per
-// referenced group and per nesting level. A pattern built to make that
-// quadratic is refused as a resource limit instead of burning seconds; the
-// same group referenced many times is analysed once. Ordinary patterns are
-// covered by TestBackrefFixedWidth and its neighbours.
-func TestBackrefAnalysisBounded(t *testing.T) {
+// TestSMB5BackrefAdmissionIsLinear: admission is decided once on the parsed
+// tree, so patterns that made the old per-group string rescans quadratic
+// (thousands of referenced groups, deep nesting around a wide class) compile
+// promptly and are not refused as a resource limit.
+func TestSMB5BackrefAdmissionIsLinear(t *testing.T) {
 	var g, r strings.Builder
 	for i := 1; i <= 4000; i++ {
 		g.WriteString("(a)")
 		fmt.Fprintf(&r, `\%d`, i)
 	}
-	cases := []struct {
-		name    string
-		pattern string
-		refused bool
-	}{
-		{"flat groups", g.String() + r.String(), true},
+	cases := []struct{ name, pattern, input string }{
+		{"flat groups", g.String() + r.String(), strings.Repeat("a", 8000)},
 		{"nested groups", strings.Repeat("(", 300) + "[" + strings.Repeat("b", 4000) + "]" +
-			strings.Repeat(")", 300) + r.String()[:len(`\1\2\3\4\5\6\7\8\9`)], true},
-		{"one group", "(a)[" + strings.Repeat("b", 16000) + "]" + strings.Repeat(`\1`, 16000), false},
+			strings.Repeat(")", 300) + r.String()[:len(`\1\2\3\4\5\6\7\8\9`)], strings.Repeat("b", 10)},
+		{"one group", "(a)[" + strings.Repeat("b", 16000) + "]" + strings.Repeat(`\1`, 16000), "ab" + strings.Repeat("a", 16000)},
 	}
 	for _, c := range cases {
 		done := make(chan error, 1)
-		go func() { _, err := buildBackrefRegexp(c.pattern, "", XPath31); done <- err }()
+		go func() {
+			re, err := buildBackrefRegexp(c.pattern, "", XPath31)
+			if err == nil && !re.MatchString(c.input) {
+				err = errors.New("no match")
+			}
+			done <- err
+		}()
 		select {
 		case err := <-done:
-			if got := errors.Is(err, xdm.ErrResourceLimit); got != c.refused {
-				t.Errorf("%s: err = %v, want refused = %v", c.name, err, c.refused)
+			if err != nil {
+				t.Errorf("%s: %v", c.name, err)
 			}
 		case <-time.After(2 * time.Second):
-			t.Fatalf("%s: analysis still running after 2s", c.name)
+			t.Fatalf("%s: admission still running after 2s", c.name)
 		}
 	}
 }

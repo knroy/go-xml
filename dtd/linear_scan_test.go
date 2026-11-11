@@ -193,3 +193,18 @@ func TestEnumerationPreparedOncePerDeclaration(t *testing.T) {
 		t.Errorf("%d MB allocated, want the enumeration joined once", got>>20)
 	}
 }
+
+// A PI ended at its first '>', and a quote in it was read as a literal, so a
+// "%e;" after a '>' inside the PI was substituted. XML 1.0 §2.6: a PI ends
+// at "?>" and its body is opaque.
+func TestSMB5PIEndsAtQuestionGreater(t *testing.T) {
+	l := newLoader(LoadOptions{})
+	in := `<!ENTITY % e "X"><?pi a > don't %e; ?><!ELEMENT r EMPTY>`
+	out, err := l.expand(in, "", 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "<?pi a > don't %e; ?>") {
+		t.Errorf("expand = %q, want the PI copied untouched", out)
+	}
+}

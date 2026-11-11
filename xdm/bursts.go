@@ -142,9 +142,10 @@ type burster struct {
 	pspaces     *spaceTable
 	pnames      *nameCache
 	prologPause bool
-	// viewCopies counts the records views copied for ancestors, and
-	// viewScans the copies they looked past, for the test that keeps them
-	// in proportion to the elements viewed.
+	// viewCopies counts what views copied for ancestors (each ancestor's
+	// record, its attributes and its namespace bindings), and viewScans the
+	// copies they looked past, for the tests that keep them in proportion
+	// to the elements viewed.
 	viewCopies, viewScans int
 	// leafDrops counts the leaves dropLeaf took back, for the test that
 	// keeps them off RemoveLastChild's general path.

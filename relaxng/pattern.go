@@ -278,6 +278,11 @@ type patBox struct {
 }
 
 // get expands the reference.
+//
+// It writes done and cached without synchronisation. That is sound because
+// Compile resolves every reachable lazy reference before it publishes the
+// Schema (checkCompetition walks them all, and addMemoPoints again), so a
+// validation only reads.
 func (r *refPat) get() (pattern, error) {
 	if !r.done {
 		r.done = true

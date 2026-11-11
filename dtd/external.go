@@ -987,7 +987,16 @@ func endOfConstruct(s string, i int) int {
 		}
 		return i + len("<!--") + end + len("-->")
 	}
-	if !strings.HasPrefix(rest, "<!") && !strings.HasPrefix(rest, "<?") {
+	if strings.HasPrefix(rest, "<?") {
+		// A PI ends at "?>" (XML 1.0 §2.6), not at its first ">", and its
+		// body is opaque: neither a quote nor a "%" in it means anything.
+		end := strings.Index(rest[len("<?"):], "?>")
+		if end < 0 {
+			return len(s)
+		}
+		return i + len("<?") + end + len("?>")
+	}
+	if !strings.HasPrefix(rest, "<!") {
 		return i
 	}
 	end := endOfDeclaration(rest)
