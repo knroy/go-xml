@@ -64,9 +64,12 @@ func TestXIncludeSharesTheEntityBudget(t *testing.T) {
 	tree := parseWithBase(t, "mem:/root.xml", src)
 	_, err := ProcessXInclude(tree, XIncludeOptions{
 		Resolver: &mapResolver{files: files},
-		// The knobs a caller would reach for are set as tightly as the
-		// documents allow, to pin that they are NOT what refuses this.
-		Parse: ParseOptions{AllowDOCTYPE: true, MaxBytes: 8192, MaxNodes: 50},
+		// The node knob is set as tightly as the documents allow, to pin
+		// that it is NOT what refuses this. The byte knob is lifted: the
+		// pass now charges an included document's expanded bytes before
+		// recursing into it, so a tight MaxBytes would refuse first, and
+		// this test is about the entity budget.
+		Parse: ParseOptions{AllowDOCTYPE: true, MaxBytes: -1, MaxNodes: 50},
 	})
 	if err == nil {
 		t.Fatalf("a chain of %d included documents expanded to %d bytes "+
