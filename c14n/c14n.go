@@ -440,6 +440,11 @@ func Func(root *xdm.Node, f func(*xdm.Node) bool) NodeSet { return funcSet{root,
 // number("1e3") is NaN and string(1 div 0) is "Infinity", for instance. Namespace nodes the expression returns are ignored; see the package
 // documentation. ExcludeSubtree is faster and should be preferred where it
 // applies.
+//
+// The evaluation is bounded in what it holds (xpath.MaxItems,
+// xpath.MaxBytes) but not in time, and cannot be cancelled; a caller
+// evaluating an expression it does not trust should use FromXPathContext
+// with a deadline.
 func FromXPath(doc *xdm.Node, expr string, ns map[string]string) (NodeSet, error) {
 	return FromXPathContext(context.Background(), doc, expr, ns)
 }
@@ -511,10 +516,14 @@ type NamespaceSet interface {
 // FromXPathFilterHere is the form that provides it.
 //
 // The filter is compiled once, and every per-node evaluation spends one
-// shared item and byte budget (xpath.MaxItems, xpath.MaxBytes), so a filter
-// whose work per node is small but whose total is not is refused with an
-// error carrying xdm.ErrResourceLimit. Use FromXPathFilterContext to bound
-// the time as well.
+// shared item and byte budget (xpath.MaxItems, xpath.MaxBytes), which the
+// input node-set's namespace nodes are charged against too, so a filter that
+// materialises too much in total is refused with an error carrying
+// xdm.ErrResourceLimit. Those budgets bound what is held, not time: a filter
+// that iterates without materialising, such as nested quantified
+// expressions, runs as long as it iterates, and this form cannot be
+// cancelled. A caller applying a filter it does not trust should use
+// FromXPathFilterContext with a deadline.
 func FromXPathFilter(doc *xdm.Node, filter string, ns map[string]string) (NodeSet, error) {
 	return FromXPathFilterContext(context.Background(), doc, filter, ns)
 }
