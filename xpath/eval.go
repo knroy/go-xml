@@ -245,10 +245,19 @@ func evalPathFromItem(ctx *Context, it xdm.Item, steps []Expr) (xdm.Sequence, er
 // The result must be sorted into document order and deduplicated: two distinct
 // context nodes can select the same node (as in "a/../b"), and the spec
 // requires the path's value to be a node sequence in document order.
+//
+// The duplicates are removed as the step goes, not only at its end. Over an
+// overlapping axis ("//*/following::*") or a rooted inner path ("//*/(//*)")
+// each of N context nodes selects up to N nodes, so concatenating them all
+// before one final sort held N^2 entries for a result of at most N, and no
+// budget saw them. Once out reaches stepDedupMin entries, every node appended
+// after is kept only if it is not already there, so out stays the distinct
+// nodes plus one context node's selection.
 func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.Sequence, error) {
 	var out xdm.Sequence
 	size := len(input)
 	allNodes := true
+	var seen map[xdm.IdentityKey]struct{}
 
 	// The left operand of "/" must be a sequence of nodes. This is its own
 	// error — XPTY0019, "the step operand is not a node" — and is distinct
@@ -296,7 +305,9 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 			// Nothing numbers this node's selection apart from the others,
 			// so it goes straight onto out; the sort below orders and
 			// deduplicates the whole, as it would the per-node results.
+			from := len(out)
 			out = st.appendFrom(out, it.(*xdm.Node))
+			out, seen = dedupStep(out, from, seen, allNodes)
 			continue
 		}
 		if fresh {
@@ -319,11 +330,13 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 		// input node, the common case, that copy was the accumulation's
 		// whole cost. Any other step can return a sequence a variable still
 		// holds, whose spare capacity a later append must not write into.
+		from := len(out)
 		if fresh && out == nil {
 			out = v
 		} else {
 			out = append(out, v...)
 		}
+		out, seen = dedupStep(out, from, seen, allNodes)
 	}
 
 	if !allNodes {
@@ -365,6 +378,40 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 		return out, nil
 	}
 	return xdm.SortDocumentOrder(out), nil
+}
+
+// stepDedupMin is the size at which evalStepOver starts removing duplicates
+// as it accumulates. Below it the accumulation is left to the final sort,
+// which costs nothing extra for the common path whose selections never meet.
+const stepDedupMin = 4096
+
+// dedupStep drops from out[from:] every node already in out, recording the
+// ones it keeps in seen, which it creates (from the whole of out) once out
+// reaches stepDedupMin. The tail is filtered in place: out is a slice
+// evalStepOver owns. Identity is what Is compares, so no two distinct nodes
+// are merged; the final sort still orders the result. An accumulation holding
+// an atomic value is left as it is, for the final type check.
+func dedupStep(out xdm.Sequence, from int, seen map[xdm.IdentityKey]struct{}, allNodes bool) (xdm.Sequence, map[xdm.IdentityKey]struct{}) {
+	if !allNodes {
+		return out, seen
+	}
+	if seen == nil {
+		if len(out) < stepDedupMin {
+			return out, nil
+		}
+		seen = make(map[xdm.IdentityKey]struct{}, len(out))
+		from = 0
+	}
+	kept := out[:from]
+	for _, it := range out[from:] {
+		k := it.(*xdm.Node).Identity()
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		kept = append(kept, it)
+	}
+	return kept, seen
 }
 
 // Eval implements Expr for a filtered expression.
@@ -735,21 +782,51 @@ func (e *LetExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	return e.Return.Eval(sub)
 }
 
+// bindingFrame is one level of a multi-binding for or quantified expression
+// while it iterates: the scope its binding's sequence was evaluated in, that
+// sequence, and the next item of it to bind.
+type bindingFrame struct {
+	scope *Context
+	seq   xdm.Sequence
+	next  int
+}
+
+// evalFor runs the nested loops of a for expression with an explicit stack of
+// frames rather than one Go call per binding. The parser puts no bound on the
+// number of bindings, and Descend is charged once for the whole expression, so
+// recursing over bindings[1:] let a long enough binding list exhaust the
+// goroutine stack, which is fatal rather than an error.
 func evalFor(ctx *Context, bindings []Binding, body Expr) (xdm.Sequence, error) {
 	if len(bindings) == 0 {
 		return body.Eval(ctx)
 	}
-	b := bindings[0]
-	seq, err := b.Seq.Eval(ctx)
+	seq, err := bindings[0].Seq.Eval(ctx)
 	if err != nil {
 		return nil, err
 	}
+	frames := []bindingFrame{{scope: ctx, seq: seq}}
 	var out xdm.Sequence
-	for _, it := range seq {
+	for len(frames) > 0 {
+		k := len(frames) - 1
+		f := &frames[k]
+		if f.next == len(f.seq) {
+			frames = frames[:k]
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		v, err := evalFor(ctx.WithVar(b.Var, xdm.One(it)), bindings[1:], body)
+		inner := f.scope.WithVar(bindings[k].Var, xdm.One(f.seq[f.next]))
+		f.next++
+		if k+1 < len(bindings) {
+			seq, err := bindings[k+1].Seq.Eval(inner)
+			if err != nil {
+				return nil, err
+			}
+			frames = append(frames, bindingFrame{scope: inner, seq: seq})
+			continue
+		}
+		v, err := body.Eval(inner)
 		if err != nil {
 			return nil, err
 		}
@@ -777,6 +854,9 @@ func (e *QuantifiedExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 // evalQuantified short-circuits: "some" stops at the first true, "every" at
 // the first false. Over a large node-set that is the difference between one
 // comparison and a full scan.
+//
+// The bindings iterate on a stack of frames, as in evalFor and for the same
+// reason: a Go call per binding let a long binding list overflow the stack.
 func evalQuantified(ctx *Context, every bool, bindings []Binding, test Expr) (bool, error) {
 	if len(bindings) == 0 {
 		v, err := test.Eval(ctx)
@@ -785,24 +865,43 @@ func evalQuantified(ctx *Context, every bool, bindings []Binding, test Expr) (bo
 		}
 		return EffectiveBooleanValue(v)
 	}
-	b := bindings[0]
-	seq, err := b.Seq.Eval(ctx)
+	seq, err := bindings[0].Seq.Eval(ctx)
 	if err != nil {
 		return false, err
 	}
-	for _, it := range seq {
+	frames := []bindingFrame{{scope: ctx, seq: seq}}
+	for len(frames) > 0 {
+		k := len(frames) - 1
+		f := &frames[k]
+		if f.next == len(f.seq) {
+			// An exhausted inner binding decided nothing; the one around it
+			// moves on to its next item.
+			frames = frames[:k]
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		ok, err := evalQuantified(ctx.WithVar(b.Var, xdm.One(it)), every, bindings[1:], test)
+		inner := f.scope.WithVar(bindings[k].Var, xdm.One(f.seq[f.next]))
+		f.next++
+		if k+1 < len(bindings) {
+			seq, err := bindings[k+1].Seq.Eval(inner)
+			if err != nil {
+				return false, err
+			}
+			frames = append(frames, bindingFrame{scope: inner, seq: seq})
+			continue
+		}
+		v, err := test.Eval(inner)
 		if err != nil {
 			return false, err
 		}
-		if every && !ok {
-			return false, nil
+		ok, err := EffectiveBooleanValue(v)
+		if err != nil {
+			return false, err
 		}
-		if !every && ok {
-			return true, nil
+		if ok != every {
+			return ok, nil
 		}
 	}
 	// An empty sequence makes "every" vacuously true and "some" false.
