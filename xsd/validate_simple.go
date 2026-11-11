@@ -130,6 +130,13 @@ func validateSimpleValueVersion(lexical string, t *SimpleType, version Version) 
 // ignores it, which is why it is threaded as an extra parameter rather than
 // made part of the type or the version.
 func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *instance) (string, error) {
+	return validateSimpleValueMemo(lexical, t, version, at, nil)
+}
+
+// validateSimpleValueMemo is validateSimpleValueIn carrying the union memo of
+// the enclosing union walk, so a member type shared by several unions is
+// validated once per value rather than once per path through the union DAG.
+func validateSimpleValueMemo(lexical string, t *SimpleType, version Version, at *instance, memo unionMemo) (string, error) {
 	// A definition naming a type that does not exist loaded anyway, because
 	// the spec makes that an error only where the type is used. This is
 	// where it is used, so it is an error now — and checking here also
@@ -144,7 +151,7 @@ func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *i
 	case VarietyList:
 		return validateListValueIn(lexical, t, at)
 	case VarietyUnion:
-		return validateUnionValueIn(lexical, t, at)
+		return validateUnionValueMemo(lexical, t, at, memo)
 	}
 	// Part 2 §3.2.18: an xs:QName value is a (namespace name, local name)
 	// pair, and the namespace name is the one the prefix is bound to where
@@ -404,6 +411,42 @@ func validateUnionValue(lexical string, t *SimpleType) (string, error) {
 }
 
 func validateUnionValueIn(lexical string, t *SimpleType, at *instance) (string, error) {
+	return validateUnionValueMemo(lexical, t, at, nil)
+}
+
+// unionMemo records, for one lexical value, the outcome of validating it
+// against each member type already tried. Unions may share members and nest
+// (a DAG), and the outcome for one (value, member) pair never changes, so
+// each member type is validated at most once per value: the walk is linear in
+// the number of distinct types, not in the number of paths to them.
+type unionMemo map[*SimpleType]memoResult
+
+type memoResult struct {
+	normalized string
+	err        error
+}
+
+// errUnionCycle stands in for a member still being validated. A union that
+// reaches itself through its members is st-props-correct.2, refused at Load;
+// the sentinel only keeps a walk over such a graph finite.
+var errUnionCycle = fmt.Errorf("st-props-correct.2: union type is a member of itself")
+
+// memberAccepts validates lexical against the union member m, consulting
+// and filling memo.
+func (memo unionMemo) memberAccepts(lexical string, m *SimpleType, at *instance) (string, error) {
+	if r, ok := memo[m]; ok {
+		return r.normalized, r.err
+	}
+	memo[m] = memoResult{err: errUnionCycle}
+	n, err := validateSimpleValueMemo(lexical, m, Version10, at, memo)
+	memo[m] = memoResult{normalized: n, err: err}
+	return n, err
+}
+
+func validateUnionValueMemo(lexical string, t *SimpleType, at *instance, memo unionMemo) (string, error) {
+	if memo == nil {
+		memo = unionMemo{}
+	}
 	steps := facetChain(t)
 
 	// A restriction of a union carries no member list of its own; the members
@@ -423,7 +466,7 @@ func validateUnionValueIn(lexical string, t *SimpleType, at *instance) (string, 
 		// winner on the way through, but the outer winner is written *after*
 		// this call returns and so overwrites it, which is the right order —
 		// the outermost union is the one the node's annotation names.
-		normalized, err := validateSimpleValueIn(lexical, m, Version10, at)
+		normalized, err := memo.memberAccepts(lexical, m, at)
 		if err != nil {
 			continue
 		}
@@ -688,11 +731,12 @@ func unionMemberFor(lexical string, t *SimpleType) *SimpleType {
 	if len(members) == 0 {
 		members = unionMemberTypesOf(t)
 	}
+	memo := unionMemo{}
 	for _, m := range members {
 		if m == nil {
 			continue
 		}
-		if _, err := validateSimpleValue(lexical, m); err == nil {
+		if _, err := memo.memberAccepts(lexical, m, nil); err == nil {
 			return m
 		}
 	}
@@ -1112,21 +1156,37 @@ type idDef struct {
 //
 // A list of xs:IDREF behaves the same way, which is what xs:IDREFS is.
 func idKind(t *SimpleType, value string) string {
-	if t == nil {
-		return ""
-	}
-	switch t.Variety {
-	case VarietyUnion:
+	// The union case descends to the accepting member iteratively, sharing
+	// one memo, so nested unions cost one validation per distinct member.
+	var memo unionMemo
+	var seen map[*SimpleType]bool
+	for t != nil && t.Variety == VarietyUnion {
+		if memo == nil {
+			memo, seen = unionMemo{}, map[*SimpleType]bool{}
+		}
+		if seen[t] {
+			return ""
+		}
+		seen[t] = true
+		var next *SimpleType
 		for _, m := range t.MemberTypes {
 			if m == nil {
 				continue
 			}
-			if _, err := validateSimpleValue(value, m); err != nil {
-				continue
+			if _, err := memo.memberAccepts(value, m, nil); err == nil {
+				next = m
+				break
 			}
-			return idKind(m, value)
 		}
+		if next == nil {
+			return ""
+		}
+		t = next
+	}
+	if t == nil {
 		return ""
+	}
+	switch t.Variety {
 	case VarietyList:
 		// A list whose items are IDREFs contributes each item as a
 		// reference, which is what xs:IDREFS is. XSD 1.1 also permits

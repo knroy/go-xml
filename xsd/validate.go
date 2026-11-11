@@ -956,33 +956,53 @@ func (v *validator) derivedFrom(t, want Type) bool {
 	// would let the instance escape the facets — which is what saxonData
 	// simple016.n01.xml does with xsi:type="xs:date" against a union whose
 	// member is a union restricted by a pattern.
-	if u, ok := want.(*SimpleType); ok && u.Variety == VarietyUnion &&
-		unionIsPure(u) {
-		for _, m := range u.MemberTypes {
-			if m != nil && v.derivedFrom(t, m) {
-				return true
-			}
-		}
-	}
+	return derivesThroughUnions(t, want, unionIsPure)
+}
 
-	// A malformed schema can build a cycle that is not a self-loop, so the
-	// walk terminates on a repeated component rather than on a count.
-	seen := map[Type]bool{}
-	for cur := t; cur != nil && !seen[cur]; {
-		seen[cur] = true
-		if cur == want {
-			return true
-		}
+// derivesThroughUnions reports whether t's base chain reaches want or, for
+// every union u that follow admits, one of u's members, transitively.
+//
+// The base chain of t is walked once into a set, then the union-member DAG
+// under want is walked breadth-first with a visited set. Each type is
+// examined once, so unions sharing members cost the size of the graph rather
+// than the number of paths through it, and a malformed schema's cycle (in
+// either the base chain or the member graph) terminates.
+func derivesThroughUnions(t, want Type, follow func(*SimpleType) bool) bool {
+	if t == want {
+		return t != nil
+	}
+	chain := map[Type]bool{}
+	names := map[xdm.QName]bool{}
+	for cur := t; cur != nil && !chain[cur]; {
+		chain[cur] = true
 		// Comparing by name as well catches the case where a built-in
 		// was reached through two different schema loads.
-		if n := cur.TypeName(); n.Local != "" && n == want.TypeName() {
-			return true
+		if n := cur.TypeName(); n.Local != "" {
+			names[n] = true
 		}
 		base := cur.BaseType()
-		if base == cur || base == nil {
-			return false
+		if base == cur {
+			break
 		}
 		cur = base
+	}
+	visited := map[Type]bool{want: true}
+	queue := []Type{want}
+	for i := 0; i < len(queue); i++ {
+		w := queue[i]
+		if chain[w] || names[w.TypeName()] {
+			return true
+		}
+		u, ok := w.(*SimpleType)
+		if !ok || u.Variety != VarietyUnion || !follow(u) {
+			continue
+		}
+		for _, m := range u.MemberTypes {
+			if m != nil && !visited[m] {
+				visited[m] = true
+				queue = append(queue, m)
+			}
+		}
 	}
 	return false
 }
