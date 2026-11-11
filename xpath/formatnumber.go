@@ -204,7 +204,7 @@ func FormatNumber(num *xdm.Atomic, pic string, df *DecimalFormat) (string, error
 // rewritten here, since the two differ only in that prefix.
 func FormatNumberVersion(num *xdm.Atomic, pic string, df *DecimalFormat, v Version) (string, error) {
 	out, err := formatNumberImpl(num, pic, df, v)
-	if err != nil && v.atLeast30() {
+	if err != nil && v.atLeast30() && !errors.Is(err, xdm.ErrResourceLimit) {
 		return "", errors.New(strings.Replace(err.Error(), "XTDE1310", "FODF1310", 1))
 	}
 	return out, err
@@ -713,6 +713,17 @@ func parsePicture(pic string, df *DecimalFormat, v Version) (picture, error) {
 		}
 	} else {
 		p.maxFrac = 0
+	}
+	// An exponent picture scales the value by about 10^minInt and rounds it
+	// at 10^maxFrac, bignum work superlinear in those counts, which only the
+	// picture's length bounds. They are bounded as a date picture's width is.
+	if p.exponent && max(p.minInt, p.maxFrac) > maxPictureWidth {
+		code := "XTDE1310"
+		if v.atLeast30() {
+			code = "FODF1310"
+		}
+		return p, fmt.Errorf("%s: exponent picture asks for more than %d digits: %w",
+			code, maxPictureWidth, xdm.ErrResourceLimit)
 	}
 	return p, nil
 }
