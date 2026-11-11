@@ -169,17 +169,24 @@ func (p *dtdScan) quoted(what string) (string, error) {
 
 // subset reads markupdecls, DeclSeps and (external only) conditional
 // sections up to end, which is left unconsumed, or to the end of the text
-// when end is "".
+// when end is "". An INCLUDE section's contents are read by this same loop,
+// counted in open until its "]]>", so nesting them costs no stack.
 func (p *dtdScan) subset(end string) error {
+	open := 0 // INCLUDE sections entered and not yet closed
 	for {
 		p.space()
 		if p.i == len(p.s) {
-			if end != "" {
+			if end != "" || open > 0 {
 				return dtdErr("unterminated internal subset or conditional section")
 			}
 			return nil
 		}
-		if end != "" && strings.HasPrefix(p.s[p.i:], end) {
+		if open > 0 {
+			if p.lit("]]>") {
+				open--
+				continue
+			}
+		} else if end != "" && strings.HasPrefix(p.s[p.i:], end) {
 			return nil
 		}
 		switch {
@@ -202,8 +209,12 @@ func (p *dtdScan) subset(end string) error {
 			if !p.external {
 				return dtdErr("a conditional section is allowed only in the external subset (XML 1.0 §3.4)")
 			}
-			if err := p.conditional(); err != nil {
+			include, err := p.conditional()
+			if err != nil {
 				return err
+			}
+			if include {
+				open++
 			}
 		case p.lit("<!"):
 			if err := p.declaration(); err != nil {
@@ -244,17 +255,19 @@ func (p *dtdScan) pi() error {
 	return nil
 }
 
-// conditional reads [61] conditionalSect after "<![".
-func (p *dtdScan) conditional() error {
+// conditional reads the start of [61] conditionalSect after "<![". An
+// IGNORE section is read whole; for an INCLUDE it reads up to the "[" and
+// reports include, and the calling subset reads the contents and "]]>".
+func (p *dtdScan) conditional() (include bool, err error) {
 	p.space()
 	kw := p.keyword("INCLUDE", "IGNORE")
 	ref := kw == ""
 	if ref {
 		if !p.lit("%") {
-			return dtdErr("expected INCLUDE or IGNORE after <![")
+			return false, dtdErr("expected INCLUDE or IGNORE after <![")
 		}
 		if err := p.reference(); err != nil {
-			return err
+			return false, err
 		}
 		kw = "IGNORE" // a reference decides it; read past without checking
 	}
@@ -262,32 +275,39 @@ func (p *dtdScan) conditional() error {
 	// After a reference the "[" may be in its text (xmltest
 	// invalid-not-sa-022: <!ENTITY % e "INCLUDE[">).
 	if !p.lit("[") && !ref {
-		return dtdErr("expected [ after %s", kw)
+		return false, dtdErr("expected [ after %s", kw)
 	}
 	if kw == "INCLUDE" {
-		if err := p.subset("]]>"); err != nil {
-			return err
-		}
-		p.i += 3
-		return nil
+		return true, nil
 	}
-	// [63]-[65]: an ignored section's text is not markup, but its "<![" and
-	// "]]>" still nest.
-	for depth := 1; depth > 0; {
-		o := strings.Index(p.s[p.i:], "<![")
-		c := strings.Index(p.s[p.i:], "]]>")
+	end := ignoreSectEnd(p.s, p.i)
+	if end < 0 {
+		return false, dtdErr("unterminated conditional section")
+	}
+	p.i = end
+	return false, nil
+}
+
+// ignoreSectEnd returns the offset just past the "]]>" that closes an IGNORE
+// section whose [63] ignoreSectContents start at s[i], or -1 when none does.
+// [63]-[65]: the contents are not markup, but their "<![" and "]]>" still
+// nest. One forward pass: the contents are read once whatever the nesting.
+func ignoreSectEnd(s string, i int) int {
+	for depth := 1; i < len(s); {
 		switch {
-		case c < 0:
-			return dtdErr("unterminated conditional section")
-		case o >= 0 && o < c:
+		case strings.HasPrefix(s[i:], "<!["):
 			depth++
-			p.i += o + 3
+			i += len("<![")
+		case strings.HasPrefix(s[i:], "]]>"):
+			i += len("]]>")
+			if depth--; depth == 0 {
+				return i
+			}
 		default:
-			depth--
-			p.i += c + 3
+			i++
 		}
 	}
-	return nil
+	return -1
 }
 
 // declaration reads one markup declaration after "<!".
@@ -412,42 +432,47 @@ func (p *dtdScan) mixed() error {
 	}
 }
 
-// group reads the rest of [49] choice or [50] seq after "(" S?.
+// group reads the rest of [49] choice or [50] seq after "(" S?, every nested
+// [48] cp group included. It iterates with a stack holding each open group's
+// separator rather than recursing per "(": the nesting is bounded only by the
+// input's length, and a goroutine stack overflow is fatal, not an error.
 func (p *dtdScan) group() error {
-	var sep byte
+	seps := []byte{0} // the separator of each open group, 0 until its first
 	for {
-		if err := p.cp(); err != nil {
-			return err
+		// [48] cp: a nested group opens, or a name is read.
+		if p.lit("(") {
+			p.space()
+			seps = append(seps, 0)
+			continue
 		}
-		p.space()
-		if p.lit(")") {
-			return nil
+		if _, ok := p.name(); !ok {
+			return dtdErr("expected a name or ( in a content model, found %q", p.rest())
+		}
+		p.occurrence()
+		// Close groups until a separator continues one.
+		for {
+			p.space()
+			if !p.lit(")") {
+				break
+			}
+			seps = seps[:len(seps)-1]
+			if len(seps) == 0 {
+				return nil // the caller reads the outermost group's occurrence
+			}
+			p.occurrence()
 		}
 		c := p.peek()
 		if c != '|' && c != ',' {
 			return dtdErr("expected |, , or ) in a content model, found %q", p.rest())
 		}
-		if sep != 0 && c != sep {
+		top := &seps[len(seps)-1]
+		if *top != 0 && c != *top {
 			return dtdErr("a content model group mixes | and ,")
 		}
-		sep = c
+		*top = c
 		p.i++
 		p.space()
 	}
-}
-
-// cp reads [48] cp.
-func (p *dtdScan) cp() error {
-	if p.lit("(") {
-		p.space()
-		if err := p.group(); err != nil {
-			return err
-		}
-	} else if _, ok := p.name(); !ok {
-		return dtdErr("expected a name or ( in a content model, found %q", p.rest())
-	}
-	p.occurrence()
-	return nil
 }
 
 func (p *dtdScan) occurrence() {
