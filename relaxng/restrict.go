@@ -687,17 +687,79 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 }
 
 // overlapAcross returns a name that some class in a and some class in b both
-// admit, or "". The two slices come from different branches, so every pair is
-// compared.
+// admit, or "". The two slices come from different branches.
+//
+// Comparing every pair made a branch of n single names against another of m
+// cost n*m representative-name tests, each allocating. Single names are what
+// nearly every class is, and two of them overlap only when they are equal, so
+// they are compared through a set; only an open class (anyName or nsName) is
+// tested against the other side one class at a time. Choices are flattened
+// first, since a choice overlaps a class exactly when one of its branches
+// does, and repeats are dropped, since they cannot change the answer.
+//
+// ponytail: an open class is still tested against every class on the other
+// side, O(open * total); index nsName by namespace if schemas with thousands
+// of open classes per branch matter.
 func overlapAcross(a, b []nameClass) string {
-	for _, x := range a {
-		for _, y := range b {
+	an, ao := splitClasses(a)
+	bn, bo := splitClasses(b)
+	bset := make(map[xdm.QName]bool, len(bn))
+	for _, n := range bn {
+		bset[n] = true
+	}
+	for _, n := range an {
+		if bset[n] {
+			return showQName(n)
+		}
+		for _, y := range bo {
+			if y.contains(n) {
+				return showQName(n)
+			}
+		}
+	}
+	for _, x := range ao {
+		for _, n := range bn {
+			if x.contains(n) {
+				return showQName(n)
+			}
+		}
+		for _, y := range bo {
 			if s := describeOverlap(x, y); s != "" {
 				return s
 			}
 		}
 	}
 	return ""
+}
+
+// splitClasses flattens the choices in cs and separates its single names from
+// its open classes, each in first-seen order with repeats dropped, so that
+// the name a conflict is reported under does not depend on map order.
+func splitClasses(cs []nameClass) (names []xdm.QName, open []nameClass) {
+	seenName := map[xdm.QName]bool{}
+	seenOpen := map[nameClass]bool{}
+	var walk func(c nameClass)
+	walk = func(c nameClass) {
+		switch x := c.(type) {
+		case qnamePat:
+			if !seenName[x.Name] {
+				seenName[x.Name] = true
+				names = append(names, x.Name)
+			}
+		case nameChoicePat:
+			walk(x.Left)
+			walk(x.Right)
+		default:
+			if !seenOpen[c] {
+				seenOpen[c] = true
+				open = append(open, c)
+			}
+		}
+	}
+	for _, c := range cs {
+		walk(c)
+	}
+	return names, open
 }
 
 // describeOverlap names a name both classes admit, or returns "".
