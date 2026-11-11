@@ -886,8 +886,20 @@ func nestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem)
 }
 
 // nestedParseOptions are the parse settings a nested stylesheet is read with.
+//
+// When the caller's Documents is a FileResolver they are that resolver's own,
+// so a stylesheet-text is parsed exactly as the same stylesheet given by
+// stylesheet-location is: its DOCTYPE, entity and size limits are the
+// caller's, not a fresh set this path alone would ignore. The text was read
+// from no URI, so it keeps base as its base URI and has no document URI.
 func nestedParseOptions(rt transformCaller, base string) xdm.ParseOptions {
-	return xdm.ParseOptions{BaseURI: base}
+	r, ok := callerDocuments(rt.opts.Documents).(*FileResolver)
+	if !ok {
+		return xdm.ParseOptions{BaseURI: base}
+	}
+	opts := r.parseOptions("", false)
+	opts.BaseURI, opts.DocumentURI = base, ""
+	return opts
 }
 
 // compileNested compiles a stylesheet for fn:transform.

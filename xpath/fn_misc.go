@@ -2992,7 +2992,7 @@ func registerParseXML(l *Library, since Version) {
 		// an ordinary function, so an expression calls it once per node, and
 		// sixty bombs that each stayed under the 1 MB ceiling expanded 47 MB
 		// between them and were accepted. See Env.entities.
-		tree, perr := xdm.ParseString(s, xdm.ParseOptions{
+		tree, perr := xdm.ParseString(s, ctx.ev().entityLimits(xdm.ParseOptions{
 			AllowDOCTYPE: true,
 			BaseURI:      ctx.StaticBaseURI(),
 			// A document handed to parse-xml may declare external entities,
@@ -3002,7 +3002,7 @@ func registerParseXML(l *Library, since Version) {
 			// the default of refusing every one, so an expression parsing
 			// untrusted XML cannot be talked into a file read.
 			ExternalEntities: ctx.ev().Entities,
-		}.WithEntityBudget(ctx.EntityBudget()))
+		}).WithEntityBudget(ctx.EntityBudget()))
 		if perr != nil {
 			// A resource refusal is this engine declining to spend more, not a
 			// statement about the argument, so it is reported as the resource
@@ -3049,6 +3049,21 @@ func registerParseXML(l *Library, since Version) {
 		}
 		return xdm.One(frag), nil
 	})
+}
+
+// entityLimits returns o with the entity limits the host set for this
+// evaluation (xpathleaf.Limits.Entities). With none, o is returned as it is
+// and parses under the xdm defaults.
+func (e *Env) entityLimits(o xdm.ParseOptions) xdm.ParseOptions {
+	if e.limits == nil || e.limits.entities == nil {
+		return o
+	}
+	l := e.limits.entities
+	o.MaxEntityDepth, o.MaxEntityBytes = l.MaxEntityDepth, l.MaxEntityBytes
+	o.MaxTotalEntityBytes, o.MaxEntities = l.MaxTotalEntityBytes, l.MaxEntities
+	o.MaxExternalFetches, o.MaxExternalFetchBytes = l.MaxExternalFetches, l.MaxExternalFetchBytes
+	o.MaxExternalDepth = l.MaxExternalDepth
+	return o
 }
 
 // parseXMLFragment parses a string as an external general parsed entity.

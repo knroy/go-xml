@@ -346,6 +346,9 @@ type budgetLimits struct {
 	// refusal a builder latched after a refund has brought the counter back
 	// under the bound.
 	nodesHit atomic.Bool
+	// entities are the entity limits fn:parse-xml parses with
+	// (xpathleaf.Limits.Entities); nil is the xdm defaults.
+	entities *xdm.ParseOptions
 }
 
 // nodeLimit and byteLimit are the bounds in force.

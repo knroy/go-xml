@@ -988,10 +988,19 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 			return rt.deferredError(c, name)
 		}
 	})
-	xpathleaf.SetLimits(xctx, xpathleaf.Limits{
+	lim := xpathleaf.Limits{
 		Nodes: int64(opts.MaxNodes), Bytes: opts.MaxBytes,
 		NodesBuilt: opts.MaxNodesBuilt, BytesBuilt: opts.MaxBytesBuilt,
-	})
+	}
+	// fn:parse-xml parses on the stylesheet's behalf as fn:doc does, so a
+	// FileResolver's entity limits bind it too: otherwise a stylesheet
+	// refused a document through doc() would read it with
+	// unparsed-text() and hand it to parse-xml() under the defaults.
+	if fr, ok := callerDocuments(opts.Documents).(*FileResolver); ok {
+		ent := fr.entityOptions()
+		lim.Entities = &ent
+	}
+	xpathleaf.SetLimits(xctx, lim)
 	// A transform started by fn:transform continues its caller's item and byte
 	// allowances rather than restarting on fresh ones, the same policy the
 	// recursion depth above follows. The item counter travels with its held

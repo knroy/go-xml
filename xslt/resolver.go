@@ -37,7 +37,9 @@ type FileResolver struct {
 	// resolver parses. It is off by default, which is what keeps a
 	// stylesheet from reaching a document that expands entities or names an
 	// external one — the XXE entry point. A caller whose inputs are trusted,
-	// a conformance suite among them, can turn it on.
+	// a conformance suite among them, can turn it on. When this resolver is
+	// a transform's Documents, the stylesheet-text of a nested fn:transform
+	// is parsed with it too, as the same text read by stylesheet-location is.
 	AllowDOCTYPE bool
 
 	// ExternalEntities permits the documents this resolver parses to read
@@ -95,6 +97,27 @@ type FileResolver struct {
 	// xsl:source-document reads it without building it -- so raising both is
 	// what lets such a stylesheet read a document of any size.
 	MaxNodes int
+
+	// MaxEntityDepth, MaxEntityBytes, MaxTotalEntityBytes, MaxEntities,
+	// MaxExternalFetches, MaxExternalFetchBytes and MaxExternalDepth bound
+	// the entity expansion of one document this resolver parses, as the
+	// xdm.ParseOptions fields of the same names do and with the same zero
+	// values: zero is the xdm default, a negative budget is no limit, and a
+	// depth is clamped to its ceiling. They matter only with AllowDOCTYPE,
+	// and the external ones only with ExternalEntities.
+	//
+	// They also bound every other parse a transform makes on this resolver's
+	// behalf -- fn:parse-xml, fn:parse-xml-fragment and the stylesheet-text
+	// of a nested fn:transform -- when the transform's Documents is this
+	// resolver. A limit one path ignored would be no limit: the stylesheet
+	// would move its document to that path.
+	MaxEntityDepth        int
+	MaxEntityBytes        int64
+	MaxTotalEntityBytes   int64
+	MaxEntities           int
+	MaxExternalFetches    int
+	MaxExternalFetchBytes int64
+	MaxExternalDepth      int
 
 	// There is deliberately no network option. Adding one would mean this
 	// type could not be recommended without caveats, and a validator has no
@@ -796,24 +819,35 @@ func (r *FileResolver) publish(path string, tree *xdm.Tree, size int64) {
 
 // parseOptions are the options a document at path is parsed with.
 func (r *FileResolver) parseOptions(path string, trackPos bool) xdm.ParseOptions {
-	opts := xdm.ParseOptions{
-		BaseURI: fileURIOf(path),
-		// This document *was* retrieved by URI, so it has a dm:document-uri
-		// as well as a base URI, and fn:document-uri must report it. The two
-		// carry the same string here only because the retrieval succeeded
-		// from that URI; a temporary tree gets a base URI from its
-		// stylesheet and no document URI at all, which is the distinction
-		// fn:document-uri exists to make.
-		DocumentURI:    fileURIOf(path),
-		AllowDOCTYPE:   r.AllowDOCTYPE,
-		TrackPositions: trackPos,
-		MaxBytes:       r.MaxBytes,
-		MaxNodes:       r.MaxNodes,
-	}
+	opts := r.entityOptions()
+	opts.BaseURI = fileURIOf(path)
+	// This document *was* retrieved by URI, so it has a dm:document-uri as
+	// well as a base URI, and fn:document-uri must report it. The two carry
+	// the same string here only because the retrieval succeeded from that
+	// URI; a temporary tree gets a base URI from its stylesheet and no
+	// document URI at all, which is the distinction fn:document-uri exists
+	// to make.
+	opts.DocumentURI = opts.BaseURI
+	opts.AllowDOCTYPE, opts.TrackPositions = r.AllowDOCTYPE, trackPos
+	opts.MaxBytes, opts.MaxNodes = r.MaxBytes, r.MaxNodes
 	if r.ExternalEntities {
 		opts.ExternalEntities = r
 	}
 	return opts
+}
+
+// entityOptions are r's entity limits as the xdm.ParseOptions fields they
+// mirror, every other field zero.
+func (r *FileResolver) entityOptions() xdm.ParseOptions {
+	return xdm.ParseOptions{
+		MaxEntityDepth:        r.MaxEntityDepth,
+		MaxEntityBytes:        r.MaxEntityBytes,
+		MaxTotalEntityBytes:   r.MaxTotalEntityBytes,
+		MaxEntities:           r.MaxEntities,
+		MaxExternalFetches:    r.MaxExternalFetches,
+		MaxExternalFetchBytes: r.MaxExternalFetchBytes,
+		MaxExternalDepth:      r.MaxExternalDepth,
+	}
 }
 
 // parseUncached reads and parses a file. It holds no lock: this is the work

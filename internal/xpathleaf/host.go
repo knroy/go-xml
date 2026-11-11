@@ -95,9 +95,13 @@ var WithExpr func(c, e any) any
 // refund (Refund); zero is xpath.MaxNodes or xpath.MaxBytes and a negative
 // value is no bound. NodesBuilt and BytesBuilt, when positive, bound every
 // node and byte charged, refunds notwithstanding; zero or negative is none.
+// Entities, when non-nil, holds the entity limits (the xdm.ParseOptions
+// Max*Entity* and MaxExternal* fields; the rest is ignored) that
+// fn:parse-xml parses with; nil is the xdm defaults.
 type Limits struct {
 	Nodes, Bytes           int64
 	NodesBuilt, BytesBuilt int64
+	Entities               *xdm.ParseOptions
 }
 
 // Package xpath sets these in its init. ctx is a *xpath.Context. SetLimits
