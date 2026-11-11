@@ -64,6 +64,20 @@ func (e *SequenceExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 // that ordinary small sequences cost no atomic add.
 const chargeCopyFloor = 64
 
+// chargeGrowth charges an accumulation's excess as it grows rather than once
+// it is built: *charged is what has been charged so far, and excess the items
+// now held beyond those already paid for. Growth is charged in steps of at
+// least chargeCopyFloor, so the total charged trails the peak by less than
+// that.
+func (c *Context) chargeGrowth(charged *int, excess int) error {
+	if excess-*charged < chargeCopyFloor {
+		return nil
+	}
+	n := excess - *charged
+	*charged = excess
+	return c.countItems(n)
+}
+
 // chargeCopies charges n items a constructor copied beyond those the
 // expressions that built them already charged.
 func (c *Context) chargeCopies(n int) error {
@@ -257,6 +271,8 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 	var out xdm.Sequence
 	size := len(input)
 	allNodes := true
+	hasNode := false
+	charged := 0
 	var seen map[xdm.IdentityKey]struct{}
 
 	// The left operand of "/" must be a sequence of nodes. This is its own
@@ -321,9 +337,14 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 			return nil, err
 		}
 		for _, r := range v {
-			if _, ok := r.(*xdm.Node); !ok {
+			if _, ok := r.(*xdm.Node); ok {
+				hasNode = true
+			} else {
 				allNodes = false
 			}
+		}
+		if !allNodes && hasNode {
+			return nil, mixedStepError(last)
 		}
 		// evalFrom's result is a fresh slice no one else holds, so the first
 		// one becomes out instead of being copied into it: for a single
@@ -337,6 +358,13 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 			out = append(out, v...)
 		}
 		out, seen = dedupStep(out, from, seen, allNodes)
+		if !allNodes {
+			// An atomic accumulation has no dedup to bound it, so what it
+			// holds beyond one item per context node is charged as it grows.
+			if err := ctx.chargeGrowth(&charged, len(out)-(i+1)); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	if !allNodes {
@@ -357,27 +385,29 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 		// is what is examined.
 		//
 		// A mixed result is also unsortable, which is why the check precedes
-		// the sort: document order is not defined over atomic values.
-		for _, r := range out {
-			if _, ok := r.(*xdm.Node); !ok {
-				continue
-			}
-			// XPTY0018 is the *last* step's error. A step with another after
-			// it has produced the left operand of the next "/", and a
-			// non-node there is XPTY0019 — the same complaint the operand
-			// loop above makes, reached one step earlier. Reporting XPTY0018
-			// for both named the wrong fault whenever the mixture appeared
-			// mid-path, as in "$x/b/(f(position()))/a".
-			if !last {
-				return nil, xdm.Errorf("XPTY0019",
-					"the left operand of a path step contains a non-node")
-			}
-			return nil, xdm.Errorf("XPTY0018",
-				"the result of a path step contains both nodes and atomic values")
-		}
+		// the sort: document order is not defined over atomic values. It is
+		// made in the loop above, as soon as the accumulation holds both, so
+		// a mixed result is never built in full.
 		return out, nil
 	}
 	return xdm.SortDocumentOrder(out), nil
+}
+
+// mixedStepError is the error for a step result holding both nodes and
+// atomic values.
+//
+// XPTY0018 is the *last* step's error. A step with another after it has
+// produced the left operand of the next "/", and a non-node there is XPTY0019
+// -- the same complaint the operand check makes, reached one step earlier.
+// Reporting XPTY0018 for both named the wrong fault whenever the mixture
+// appeared mid-path, as in "$x/b/(f(position()))/a".
+func mixedStepError(last bool) error {
+	if !last {
+		return xdm.Errorf("XPTY0019",
+			"the left operand of a path step contains a non-node")
+	}
+	return xdm.Errorf("XPTY0018",
+		"the result of a path step contains both nodes and atomic values")
 }
 
 // stepDedupMin is the size at which evalStepOver starts removing duplicates

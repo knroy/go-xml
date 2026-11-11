@@ -21,16 +21,19 @@ func registerSeq30Funcs(l *Library) {
 	})
 
 	// fn:tail($arg as item()*) as item()*  ==  subsequence($arg, 2)
-	l.registerFnSince(XPath30, "tail", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFnSince(XPath30, "tail", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		if len(args) == 0 || len(args[0]) < 2 {
 			return xdm.Empty(), nil
 		}
 		// A fresh slice rather than a reslice of the argument: sequences are
 		// passed around by value here, and handing back an alias of the
 		// caller's backing array would let a later append write into it.
-		out := make(xdm.Sequence, len(args[0])-1)
-		copy(out, args[0][1:])
-		return out, nil
+		// The copy is charged to the item budget, as for fn:reverse.
+		out, err := makeSequence(ctx, len(args[0])-1)
+		if err != nil {
+			return nil, err
+		}
+		return append(out, args[0][1:]...), nil
 	})
 
 	// fn:has-children() / fn:has-children($node as node()?) as xs:boolean

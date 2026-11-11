@@ -119,7 +119,7 @@ func registerListTypes(l *Library) {
 			if _, err := listSourceValue(a); err != nil {
 				return nil, err
 			}
-			return castToListType(a, facet)
+			return castToListType(ctx, a, facet)
 		}
 		l.Add(Function{
 			Name:  xdm.QName{URI: xdm.NSXS, Local: name},
@@ -217,10 +217,7 @@ func registerConstructors(l *Library) {
 			if err != nil {
 				return nil, err
 			}
-			if err := ctx.checkCastDigits(it.(*xdm.Atomic), target); err != nil {
-				return nil, err
-			}
-			out, err := CastAtomic(it.(*xdm.Atomic), target)
+			out, err := ctx.castAtomic(it.(*xdm.Atomic), target)
 			if err != nil {
 				return nil, err
 			}

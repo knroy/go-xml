@@ -1459,16 +1459,21 @@ func (c *Context) Descend() (*Context, error) {
 // FuncCall.Eval uses for a leaf builtin.
 func (c *Context) checkDepth() error {
 	if lim := c.depthLimit(); int(c.Depth) >= lim {
-		// XPDY0001 is kept because callers and the conformance suites read
-		// it, but it properly means "no context item is defined" and this
-		// is nothing of the sort: the expression is well-formed and has a
-		// context, it is merely deeper than this processor will evaluate.
-		// The sentinel is added alongside so a caller can tell a refusal
-		// from a fault. See xdm.ErrResourceLimit.
-		return fmt.Errorf("XPDY0001: recursion exceeded %d levels: %w",
-			lim, xdm.ErrResourceLimit)
+		return depthRefusal(lim)
 	}
 	return nil
+}
+
+// depthRefusal is the error for recursion deeper than lim.
+//
+// XPDY0001 is kept because callers and the conformance suites read it, but it
+// properly means "no context item is defined" and this is nothing of the
+// sort: the expression is well-formed and has a context, it is merely deeper
+// than this processor will evaluate. The sentinel is added alongside so a
+// caller can tell a refusal from a fault. See xdm.ErrResourceLimit.
+func depthRefusal(lim int) error {
+	return fmt.Errorf("XPDY0001: recursion exceeded %d levels: %w",
+		lim, xdm.ErrResourceLimit)
 }
 
 // checkValueDepth bounds the nesting of a map or array value that deep-equal

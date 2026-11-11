@@ -126,6 +126,20 @@ const maxParseDepth = 1000
 // stylesheet would be the worse bug of the two.
 const maxChainLength = 10000
 
+// spineDepth is how many terms of an inline function body's operator chain
+// count as one level of recursion depth, on top of the level the call itself
+// costs.
+//
+// maxChainLength bounds one expression's spine and MaxDepth bounds call
+// nesting, but evaluation descends a left spine by recursion, so a function
+// whose recursive call sits at the bottom of a 10,000-term chain pushes
+// 10,000 operator frames per level: 499 levels overflowed the default 1 GB Go
+// stack, which is fatal. Charging spine/spineDepth extra levels per call
+// composes the two bounds: the frames held at once are at most about
+// MaxDepth * spineDepth whatever the chains, and a body below spineDepth --
+// every real chain measured, see maxChainLength -- costs nothing extra.
+const spineDepth = 200
+
 // chainTooLong reports whether a chain has reached a height of more than
 // maxChainLength, and yields the error to return when it has.
 //
@@ -1390,6 +1404,7 @@ func (e *SimpleMap) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, err
 	}
 	var out xdm.Sequence
+	charged := 0
 	for i, it := range in {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1399,11 +1414,13 @@ func (e *SimpleMap) Eval(ctx *Context) (xdm.Sequence, error) {
 			return nil, err
 		}
 		out = append(out, v...)
-	}
-	// One result per input is covered by the input's own charge; more than
-	// that is copying, which a doubling right-hand side compounds.
-	if err := ctx.chargeCopies(len(out) - len(in)); err != nil {
-		return nil, err
+		// One result per input is covered by the input's own charge; more
+		// than that is copying, which a doubling right-hand side compounds.
+		// It is charged as it accumulates, so an oversized map is refused
+		// while it is built rather than after.
+		if err := ctx.chargeGrowth(&charged, len(out)-(i+1)); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }

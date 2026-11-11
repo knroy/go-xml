@@ -1,6 +1,8 @@
 package xpath
 
 import (
+	"iter"
+
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -60,14 +62,24 @@ func listTypeName(lex string, ns NamespaceResolver) (string, bool) {
 // item type of L". Without the annotation the tokens came back as plain
 // xs:string, so "'a b c' cast as xs:IDREFS instance of xs:IDREF*" was false --
 // CastAs-ListType-7 and its neighbours.
-func castToListType(a *xdm.Atomic, facet string) (xdm.Sequence, error) {
-	toks := collapseXMLSpaceFields(a.String())
-	if len(toks) == 0 {
-		return nil, xdm.ErrCast(
-			"%q has no tokens, so it is not a value of a list type", a.String())
+//
+// The token count is reserved against the item budget before any item is
+// built, as fn:tokenize does, so an oversized list is refused up front.
+func castToListType(ctx *Context, a *xdm.Atomic, facet string) (xdm.Sequence, error) {
+	s := a.String()
+	n := 0
+	for range xmlSpaceFields(s) {
+		n++
 	}
-	out := make(xdm.Sequence, 0, len(toks))
-	for _, tok := range toks {
+	if n == 0 {
+		return nil, xdm.ErrCast(
+			"%q has no tokens, so it is not a value of a list type", s)
+	}
+	out, err := makeSequence(ctx, n)
+	if err != nil {
+		return nil, err
+	}
+	for tok := range xmlSpaceFields(s) {
 		v, err := applyStringFacet(xdm.NewString(tok), facet)
 		if err != nil {
 			return nil, err
@@ -75,6 +87,20 @@ func castToListType(a *xdm.Atomic, facet string) (xdm.Sequence, error) {
 		out = append(out, v.WithDerived(facet))
 	}
 	return out, nil
+}
+
+// listTypeCastable answers "castable as" for a built-in list type without
+// building the sequence: every token must satisfy the facet, and there must
+// be at least one.
+func listTypeCastable(a *xdm.Atomic, facet string) bool {
+	n := 0
+	for tok := range xmlSpaceFields(a.String()) {
+		if _, err := applyStringFacet(xdm.NewString(tok), facet); err != nil {
+			return false
+		}
+		n++
+	}
+	return n > 0
 }
 
 // listSourceValue is the operand-type gate F&O 3.0 18.3.6 puts on a cast to a
@@ -96,29 +122,32 @@ func listSourceValue(a *xdm.Atomic) (string, error) {
 			"which requires xs:string or xs:untypedAtomic", a.TypeName())
 }
 
-// collapseXMLSpaceFields splits on the four XML whitespace characters alone.
-// strings.Fields splits on every Unicode space, which would treat U+00A0 as a
-// separator; a non-breaking space is an ordinary NMTOKEN character.
-func collapseXMLSpaceFields(s string) []string {
-	var out []string
-	start := -1
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case ' ', '\t', '\n', '\r':
-			if start >= 0 {
-				out = append(out, s[start:i])
-				start = -1
-			}
-		default:
-			if start < 0 {
-				start = i
+// xmlSpaceFields yields the tokens of s split on the four XML whitespace
+// characters alone, without allocating a slice of them. strings.Fields splits
+// on every Unicode space, which would treat U+00A0 as a separator; a
+// non-breaking space is an ordinary NMTOKEN character.
+func xmlSpaceFields(s string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		start := -1
+		for i := 0; i < len(s); i++ {
+			switch s[i] {
+			case ' ', '\t', '\n', '\r':
+				if start >= 0 {
+					if !yield(s[start:i]) {
+						return
+					}
+					start = -1
+				}
+			default:
+				if start < 0 {
+					start = i
+				}
 			}
 		}
+		if start >= 0 {
+			yield(s[start:])
+		}
 	}
-	if start >= 0 {
-		out = append(out, s[start:])
-	}
-	return out
 }
 
 // listTypeOfItemFacet is the inverse of listItemFacet, for rendering a list

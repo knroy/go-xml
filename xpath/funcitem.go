@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/knroy/go-xml/v2/internal/xdmfunc"
@@ -253,10 +254,13 @@ func evalLockOf(c *Context) *EvalLock {
 }
 
 // envForCall is the environment a function item's body runs in: the one it
-// captured, with the call's cancellation, item and byte counters and depth
-// bound, which are per evaluation rather than per closure. The entity and node
-// allowances stay the captured ones. Within one evaluation the two
-// environments are the same and nothing is copied.
+// captured, with the call's cancellation, its item, byte, node and entity
+// budgets and the bounds they are checked against, and its depth and digit
+// bounds, which are per evaluation rather than per closure. A counter travels
+// with its bound, as in AdoptBudget: a closure made in another evaluation (an
+// XSLT static variable, kept on the compiled stylesheet) otherwise spent that
+// evaluation's allowances, under its default limits, on every call. Within one
+// evaluation the two environments are the same and nothing is copied.
 //
 // ponytail: environments are compared by pointer, so a closure called across
 // a host boundary copies one per call; compare the four fields if that shows.
@@ -270,6 +274,8 @@ func envForCall(captured *Env, call *Context) *Env {
 	}
 	c := call.ev()
 	e.Ctx, e.items, e.bytes, e.MaxDepth = c.Ctx, c.items, c.bytes, c.MaxDepth
+	e.nodes, e.entities, e.limits = c.nodes, c.entities, c.limits
+	e.MaxItems, e.MaxDigits = c.MaxItems, c.MaxDigits
 	return &e
 }
 
@@ -383,7 +389,13 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			// count, and taking MaxDepth with it keeps a caller that raised
 			// its own bound from having the package default reimposed inside
 			// a closure written before it was set.
-			s.Depth = c.Depth
+			//
+			// A tall body costs extra levels, bounded by maxChainLength
+			// (so at most 50): see spineDepth.
+			s.Depth = c.Depth + int32(e.spine/spineDepth)
+			if lim := s.depthLimit(); int(s.Depth) > lim {
+				return nil, depthRefusal(lim)
+			}
 			sub = &s
 		}
 		for i, p := range e.Params {
@@ -456,7 +468,10 @@ func convertForParam(ctx *Context, v xdm.Sequence, st SequenceType) (xdm.Sequenc
 				return nil, xdm.ErrType(
 					"value does not match the declared type %s", st.String())
 			}
-			c, err := CastAtomic(a, st.AtomicType)
+			c, err := ctx.castAtomic(a, st.AtomicType)
+			if errors.Is(err, xdm.ErrResourceLimit) {
+				return nil, err
+			}
 			if err != nil {
 				return nil, xdm.ErrType(
 					"value does not match the declared type %s", st.String())
