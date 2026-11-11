@@ -323,6 +323,8 @@ type restrictWalk struct {
 	v    Version
 	lb   loadBudgets
 	memo map[restrictPair]error
+	// inlined memoises inlineSameCompositor per group for the walk.
+	inlined map[*ModelGroup][]*Particle
 	// overBudget records that an exact 1.1 check declined for its budget
 	// somewhere in the walk, so a rejection is undecided rather than final.
 	overBudget bool
@@ -657,10 +659,24 @@ func stripPointless(p *Particle, keepChoice bool) *Particle {
 // Only a wrapper with the *same* compositor is inlined. A choice inside a
 // sequence orders nothing the sequence orders and flattening it would change
 // the language; the clause names only the matching pair.
-func inlineSameCompositor(g *ModelGroup) []*Particle {
+//
+// memo holds each group's result for the walk: group refs share their
+// definition's *ModelGroup, so a DAG of groups each holding two refs to the
+// next is reached by 2^n paths, and an empty leaf keeps the inlinedTooLong
+// gate at zero however many there are. Callers only read the result.
+func inlineSameCompositor(g *ModelGroup, memo map[*ModelGroup][]*Particle) []*Particle {
 	if g.Compositor != CompositorSequence && g.Compositor != CompositorChoice {
 		return g.Particles
 	}
+	if out, ok := memo[g]; ok {
+		return out
+	}
+	out := inlineSameCompositorOnce(g, memo)
+	memo[g] = out
+	return out
+}
+
+func inlineSameCompositorOnce(g *ModelGroup, memo map[*ModelGroup][]*Particle) []*Particle {
 	changed := false
 	for _, p := range g.Particles {
 		if inlinable(p, g.Compositor) {
@@ -674,7 +690,7 @@ func inlineSameCompositor(g *ModelGroup) []*Particle {
 	out := make([]*Particle, 0, len(g.Particles))
 	for _, p := range g.Particles {
 		if inlinable(p, g.Compositor) {
-			out = append(out, inlineSameCompositor(p.Term.(*ModelGroup))...)
+			out = append(out, inlineSameCompositor(p.Term.(*ModelGroup), memo)...)
 			continue
 		}
 		out = append(out, p)
@@ -682,10 +698,16 @@ func inlineSameCompositor(g *ModelGroup) []*Particle {
 	return out
 }
 
-// inlinedTooLong reports whether inlineSameCompositor would return more than
-// limit particles for some model group reachable from p. memo holds each
-// group's flattened length, capped at limit+1, so a group-ref DAG is walked in
-// graph time.
+// inlinedTooLong reports whether inlineSameCompositor, or flattenAllGroups for
+// an all group, would return more than limit particles for some model group
+// reachable from p. memo holds each group's flattened length, capped at
+// limit+1, so a group-ref DAG is walked in graph time.
+//
+// All groups count too: under 1.1 allSubsumes and allWildcardShadow flatten
+// nested all-group refs, and a ladder of all groups each holding two refs to
+// the next flattens to 2^n particles. Such a model is refused by the position
+// budget when compiled anyway (buildAll flattens it the same way), so
+// measuring it here refuses nothing that would have loaded.
 func inlinedTooLong(p *Particle, limit int, memo map[*ModelGroup]int) bool {
 	long := false
 	var size func(g *ModelGroup) int
@@ -694,7 +716,6 @@ func inlinedTooLong(p *Particle, limit int, memo map[*ModelGroup]int) bool {
 			return n
 		}
 		memo[g] = 0 // a cycle is reported elsewhere; do not follow it
-		flat := g.Compositor == CompositorSequence || g.Compositor == CompositorChoice
 		n := 0
 		for _, q := range g.Particles {
 			mg, ok := q.Term.(*ModelGroup)
@@ -702,7 +723,7 @@ func inlinedTooLong(p *Particle, limit int, memo map[*ModelGroup]int) bool {
 				n++
 				continue
 			}
-			if m := size(mg); flat && inlinable(q, g.Compositor) {
+			if m := size(mg); inlinable(q, g.Compositor) {
 				n += m
 			} else {
 				n++
@@ -954,6 +975,16 @@ func blockSet(s DerivationSet) DerivationSet {
 // the base chain, plus the union-member case that lets a restriction name one
 // member of the base's union.
 func typeRestricts(t, want Type) bool {
+	return typeRestrictsSeen(t, want, nil)
+}
+
+// typeRestrictsSeen is typeRestricts remembering the union members already
+// tried against t. With t fixed the answer depends on want alone, so a member
+// reached a second time has already failed: a ladder of pure unions each
+// listing the previous one twice is reached by 2^n paths and costs one visit
+// per union. It also ends a union whose members lead back to itself, which
+// checkUnionMemberCycles reports only after the postFixups that call this.
+func typeRestrictsSeen(t, want Type, seen map[Type]bool) bool {
 	if want == nil || t == want {
 		return true
 	}
@@ -976,10 +1007,18 @@ func typeRestricts(t, want Type) bool {
 	// than the restricted union was.
 	if st, ok := want.(*SimpleType); ok && st.Variety == VarietyUnion &&
 		unionIsPure(st) {
+		if seen == nil {
+			seen = map[Type]bool{}
+		}
+		seen[want] = true
 		for _, m := range st.MemberTypes {
-			if m != nil && typeRestricts(t, m) {
+			if m == nil || seen[m] {
+				continue
+			}
+			if typeRestrictsSeen(t, m, seen) {
 				return true
 			}
+			seen[m] = true
 		}
 	}
 	// The walk stops on self as well as nil: the ur-type is its own base
@@ -1149,10 +1188,8 @@ func wildcardSubset(sub, super *Wildcard) bool {
 		if super.Kind != NSNot {
 			return false
 		}
-		for _, ns := range super.Namespace {
-			if !containsNamespace(sub.Namespace, ns) {
-				return false
-			}
+		if !namespacesSubset(super.Namespace, sub.Namespace) {
+			return false
 		}
 		// Excluding the absent namespace narrows in the same
 		// direction: sub may exclude it where super does not, but not
@@ -1162,17 +1199,19 @@ func wildcardSubset(sub, super *Wildcard) bool {
 		// Clause 3: an enumerated set is a subset of a superset of
 		// itself, or of a negation excluding nothing the set contains.
 		if super.Kind == NSEnumerated {
-			for _, ns := range sub.Namespace {
-				if !containsNamespace(super.Namespace, ns) {
-					return false
-				}
-			}
-			return true
+			return namespacesSubset(sub.Namespace, super.Namespace)
 		}
 		// super is a negation: clause 3.2.2 requires that neither the
 		// negated value nor the absent namespace appear in sub's set.
+		excluded := namespaceSet(super.Namespace)
 		for _, ns := range sub.Namespace {
-			if !super.Allows(ns) {
+			if ns == "" {
+				if super.ExcludesAbsent {
+					return false
+				}
+				continue
+			}
+			if _, ok := excluded[ns]; ok {
 				return false
 			}
 		}
@@ -1180,13 +1219,30 @@ func wildcardSubset(sub, super *Wildcard) bool {
 	}
 }
 
-func containsNamespace(set []string, ns string) bool {
-	for _, s := range set {
-		if s == ns {
-			return true
+// namespacesSubset reports whether every namespace in sub is in super.
+//
+// The lists are an author's namespace= words, kept as written with no cap, so
+// membership goes through a set: a nested scan was |sub| x |super| per check,
+// 14 s for a 64000-word pair in an 885 KB schema.
+func namespacesSubset(sub, super []string) bool {
+	if len(sub) == 0 {
+		return true
+	}
+	set := namespaceSet(super)
+	for _, ns := range sub {
+		if _, ok := set[ns]; !ok {
+			return false
 		}
 	}
-	return false
+	return true
+}
+
+func namespaceSet(list []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(list))
+	for _, ns := range list {
+		set[ns] = struct{}{}
+	}
+	return set
 }
 
 // disallowedNamesSubset is the {disallowed names} half of Wildcard Subset
@@ -1225,24 +1281,39 @@ func disallowedNamesSubset(sub, super *Wildcard) bool {
 	if super.DisallowDefinedSibling && !sub.DisallowDefinedSibling {
 		return false
 	}
+	if len(super.DisallowedNames) == 0 {
+		return true
+	}
+	// Sets, not scans: both lists are as long as the author wrote them.
+	subNS := namespaceSet(sub.Namespace)
+	allows := func(ns string) bool {
+		_, in := subNS[ns]
+		switch sub.Kind {
+		case NSAny:
+			return true
+		case NSNot:
+			if ns == "" {
+				return !sub.ExcludesAbsent
+			}
+			return !in
+		case NSEnumerated:
+			return in
+		}
+		return false
+	}
+	refused := make(map[xdm.QName]struct{}, len(sub.DisallowedNames))
+	for _, name := range sub.DisallowedNames {
+		refused[name] = struct{}{}
+	}
 	for _, name := range super.DisallowedNames {
-		if !sub.Allows(name.URI) {
+		if !allows(name.URI) {
 			continue
 		}
-		if !containsQName(sub.DisallowedNames, name) {
+		if _, ok := refused[name]; !ok {
 			return false
 		}
 	}
 	return true
-}
-
-func containsQName(set []xdm.QName, name xdm.QName) bool {
-	for _, n := range set {
-		if n == name {
-			return true
-		}
-	}
-	return false
 }
 
 // nsRecurseCheckCardinality is Particle Derivation OK (All/Choice/Sequence:Any)
@@ -1304,8 +1375,11 @@ func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded 
 	// Clause 2.2 again, this time on the member lists: a same-compositor
 	// wrapper among the members is pointless, and leaving it in place makes
 	// the walk compare one side's elements against the other's groups.
-	rps := inlineSameCompositor(rg)
-	bps := inlineSameCompositor(bg)
+	if w.inlined == nil {
+		w.inlined = map[*ModelGroup][]*Particle{}
+	}
+	rps := inlineSameCompositor(rg, w.inlined)
+	bps := inlineSameCompositor(bg, w.inlined)
 	bi := 0
 	for _, rp := range rps {
 		matched := false
@@ -2267,6 +2341,24 @@ func allBranchCounts(p *Particle) ([]branchCount, error) {
 
 // allBranchCountsIn is allBranchCounts with the branch budget given.
 func allBranchCountsIn(p *Particle, limit int) ([]branchCount, error) {
+	return branchCountsMemo(p, limit, map[*ModelGroup]groupBranches{})
+}
+
+// groupBranches is one model group's enumeration, kept for the walk.
+type groupBranches struct {
+	brs []branchCount
+	err error
+}
+
+// branchCountsMemo is allBranchCountsIn with each group enumerated once.
+//
+// Group refs share their definition's *ModelGroup, so a DAG of groups each
+// referencing the next twice is reached by 2^n paths, and a sequence-only
+// DAG yields one branch at every level: the branch budget never trips while
+// the walk makes 2^n calls. A group's branches depend on the group alone, the
+// containing particle's range being applied by the caller into fresh maps, so
+// the memoised slices are only ever read.
+func branchCountsMemo(p *Particle, limit int, memo map[*ModelGroup]groupBranches) ([]branchCount, error) {
 	if p.MaxOccurs == 0 {
 		return []branchCount{{}}, nil
 	}
@@ -2277,7 +2369,12 @@ func allBranchCountsIn(p *Particle, limit int) ([]branchCount, error) {
 		return []branchCount{c}, nil
 
 	case *ModelGroup:
-		inner, err := groupBranchCounts(t, limit)
+		gb, ok := memo[t]
+		if !ok {
+			gb.brs, gb.err = groupBranchCounts(t, limit, memo)
+			memo[t] = gb
+		}
+		inner, err := gb.brs, gb.err
 		if err != nil {
 			return nil, err
 		}
@@ -2338,14 +2435,14 @@ var errNotCountable = errorString("the model has a term with no per-name count")
 // It is a var only so tests may lower it; it is never assigned in production.
 var branchLimit = DefaultMaxRestrictionBranches
 
-func groupBranchCounts(g *ModelGroup, limit int) ([]branchCount, error) {
+func groupBranchCounts(g *ModelGroup, limit int, memo map[*ModelGroup]groupBranches) ([]branchCount, error) {
 	if g.Compositor == CompositorChoice {
 		if len(g.Particles) == 0 {
 			return []branchCount{{}}, nil
 		}
 		var out []branchCount
 		for _, child := range g.Particles {
-			brs, err := allBranchCountsIn(child, limit)
+			brs, err := branchCountsMemo(child, limit, memo)
 			if err != nil {
 				return nil, err
 			}
@@ -2364,7 +2461,7 @@ func groupBranchCounts(g *ModelGroup, limit int) ([]branchCount, error) {
 	// the base is an all group, whose language is likewise order-blind.
 	out := []branchCount{{}}
 	for _, child := range g.Particles {
-		brs, err := allBranchCountsIn(child, limit)
+		brs, err := branchCountsMemo(child, limit, memo)
 		if err != nil {
 			return nil, err
 		}

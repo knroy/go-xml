@@ -88,6 +88,15 @@ type contentModel struct {
 	// active is the set of model groups on the path currently being built,
 	// used to detect a group that reaches itself.
 	active map[*ModelGroup]bool
+
+	// emptyGroup holds the fragment of each group whose expansion added no
+	// position. Group references share their definition's *ModelGroup, so
+	// a DAG of n groups each referencing the next twice is reached by
+	// 2^(n-1) paths; a group with positions pays maxPositions on every
+	// visit, but one without them would be expanded once per path for
+	// free. Its fragment has empty first and last sets and depends only on
+	// the group, so the first expansion answers every later visit.
+	emptyGroup map[*ModelGroup]frag
 }
 
 // A piece is one run of a position's follow set: positions that may follow it,
@@ -335,6 +344,7 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		scope = len(m.counters) - 1
 	}
 
+	posStart := len(m.positions)
 	var inner frag
 	var err error
 	switch t := p.Term.(type) {
@@ -370,11 +380,28 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 				"content model is recursive: a model group reaches itself, " +
 					"which no finite automaton can describe")
 		}
+		if f, ok := m.emptyGroup[t]; ok {
+			inner = f
+			break
+		}
+		posBefore, ctrBefore := len(m.positions), len(m.counters)
 		m.active[t] = true
 		inner, err = m.buildGroup(t, scope)
 		delete(m.active, t)
 		if err != nil {
 			return frag{}, err
+		}
+		if len(m.positions) == posBefore {
+			// No position refers to a counter created in this
+			// subtree and no edge was laid in it, so its counters
+			// are dropped rather than retained once per path.
+			m.counters = m.counters[:ctrBefore]
+			m.scopeFirst = m.scopeFirst[:ctrBefore]
+			m.scopeLast = m.scopeLast[:ctrBefore]
+			if m.emptyGroup == nil {
+				m.emptyGroup = map[*ModelGroup]frag{}
+			}
+			m.emptyGroup[t] = inner
 		}
 
 	case nil:
@@ -401,6 +428,10 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		for _, l := range inner.last {
 			m.scopeLast[scope][l] = true
 		}
+		if scope == len(m.counters)-1 && m.decisionFree(scope) {
+			m.dropCounter(scope, enclosing, posStart)
+			scope = enclosing
+		}
 	}
 	if (p.MaxOccurs == Unbounded || p.MaxOccurs > 1) && !inner.looped {
 		// The loop-back edges wrap around scope, so they lie inside
@@ -419,6 +450,45 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		inner.nullable = true
 	}
 	return inner, nil
+}
+
+// decisionFree reports whether counter c, the innermost one, can never change
+// what the runtime decides, so the positions and edges alone say everything.
+//
+// A count is set to 1 on entering a scope and only grows, so a minimum of 0
+// or 1 is met whenever it is checked. A maximum of 1 is never repeated past,
+// and an unbounded maximum caps the count at min+1, which every reading meets
+// alike. What the counter could still decide is when a repetition restarts
+// the scopes nested in it, so it is decision-free only with none inside it:
+// the caller asks only for the last counter created.
+//
+// This is what keeps a? and a* off the count vector. Every such particle had
+// a counter of its own, so no two positions of (a?|a?|...|a?)* or of a dense
+// (a?,a?,...,a?) shared one, positionClasses could merge none of them, and
+// each child cost live states x follow width x vector length.
+func (m *contentModel) decisionFree(c int) bool {
+	k := m.counters[c]
+	return k.min <= 1 && (k.max == 1 || k.max == Unbounded)
+}
+
+// dropCounter removes counter c, the last one, as though its particle had
+// never had one: positions created from posStart on leave it off their chains,
+// and the edges laid inside one of its repetitions lie inside enclosing's.
+func (m *contentModel) dropCounter(c, enclosing, posStart int) {
+	for p := posStart; p < len(m.positions); p++ {
+		chain := m.positions[p].counters
+		if len(chain) > 0 && chain[len(chain)-1] == c {
+			m.positions[p].counters = chain[:len(chain)-1]
+		}
+		for i := range m.pieces[p] {
+			if m.pieces[p][i].scope == c {
+				m.pieces[p][i].scope = enclosing
+			}
+		}
+	}
+	m.counters = m.counters[:c]
+	m.scopeFirst = m.scopeFirst[:c]
+	m.scopeLast = m.scopeLast[:c]
 }
 
 // counterChain returns the counter indices containing a scope, outermost first.
