@@ -1390,6 +1390,7 @@ func (e *SimpleMap) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, err
 	}
 	var out xdm.Sequence
+	charged := 0
 	for i, it := range in {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1399,11 +1400,13 @@ func (e *SimpleMap) Eval(ctx *Context) (xdm.Sequence, error) {
 			return nil, err
 		}
 		out = append(out, v...)
-	}
-	// One result per input is covered by the input's own charge; more than
-	// that is copying, which a doubling right-hand side compounds.
-	if err := ctx.chargeCopies(len(out) - len(in)); err != nil {
-		return nil, err
+		// One result per input is covered by the input's own charge; more
+		// than that is copying, which a doubling right-hand side compounds.
+		// It is charged as it accumulates, so an oversized map is refused
+		// while it is built rather than after.
+		if err := ctx.chargeGrowth(&charged, len(out)-(i+1)); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }

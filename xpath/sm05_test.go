@@ -49,3 +49,29 @@ func sm05Ctx(t *testing.T, items int) *Context {
 	return nearlyExhausted(t, MaxBytes, items).WithVersion(XPath31).
 		WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 }
+
+// TestSM05AtomicStepAccumulationIsCharged: a path step whose per-context
+// result is atomic has no dedup to bound it, so its N x N accumulation is
+// charged to the item budget as it grows; a mixed one fails as soon as it is
+// mixed.
+func TestSM05AtomicStepAccumulationIsCharged(t *testing.T) {
+	doc, err := xdm.ParseString("<r>"+strings.Repeat("<a/>", 100)+"</r>", xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eval := func(src string, limit int) (xdm.Sequence, error) {
+		ctx := NewContext(doc.Root, Builtins())
+		if limit > 0 {
+			ctx = ctx.WithEnv(func(e *Env) { e.MaxItems = limit })
+		}
+		return MustCompile(src, testNS{}).Eval(ctx)
+	}
+	_, err = eval("sum(//*/(//*!1))", 2000)
+	wantRefused(t, err, wantItems)
+	if got, err := eval("sum(//*/(//*!1))", 0); err != nil || got[0].(*xdm.Atomic).String() != "10201" {
+		t.Fatalf("control = %v, %v; want 10201", got, err)
+	}
+	if _, err := eval("count(//*/(//*, 1))", 0); err == nil || !strings.Contains(err.Error(), "XPTY0018") {
+		t.Fatalf("mixed step = %v; want XPTY0018", err)
+	}
+}
