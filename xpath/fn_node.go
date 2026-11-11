@@ -26,7 +26,7 @@ func registerNumericFuncs(l *Library) {
 			// FOTY0013 — it is not a leniency fn:number extends to, and
 			// the plain Atomize dropped the item and answered NaN.
 			// higher-order-functions-056 writes number(local:f#1).
-			atoms, err := xdm.AtomizeChecked(args[0])
+			atoms, err := ctx.atomizeChecked(args[0])
 			if err != nil {
 				return nil, err
 			}

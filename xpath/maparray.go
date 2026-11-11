@@ -23,7 +23,7 @@ func (e *MapConstructor) Eval(ctx *Context) (xdm.Sequence, error) {
 		}
 		// The key is atomized and must be exactly one atomic value: a map
 		// entry with no key, or with several, is not an entry.
-		atoms, err := xdm.AtomizeChecked(kv)
+		atoms, err := ctx.atomizeChecked(kv)
 		if err != nil {
 			return nil, err
 		}
@@ -266,7 +266,7 @@ func (e *LookupExpr) keyValues(ctx *Context) ([]*xdm.Atomic, error) {
 		if err != nil {
 			return nil, err
 		}
-		atoms, err := xdm.AtomizeChecked(v)
+		atoms, err := ctx.atomizeChecked(v)
 		if err != nil {
 			return nil, err
 		}

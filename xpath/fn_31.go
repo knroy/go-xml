@@ -273,7 +273,7 @@ func registerContainsToken(l *Library) {
 		// The first argument is xs:string*, so each item is atomised and
 		// compared in turn rather than being joined: the tokens of one item
 		// never run into the next.
-		atoms, err := xdm.AtomizeChecked(args[0])
+		atoms, err := ctx.atomizeChecked(args[0])
 		if err != nil {
 			return nil, err
 		}
@@ -1281,13 +1281,13 @@ func registerNumericConstructor(l *Library) {
 		Name:  xdm.QName{URI: xdm.NSXS, Local: "numeric"},
 		Arity: 1,
 		Since: XPath31,
-		Call: func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		Call: func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			// Like every other constructor, an empty argument gives the empty
 			// sequence rather than raising.
 			if len(args) == 0 || len(args[0]) == 0 {
 				return xdm.Empty(), nil
 			}
-			atoms, err := xdm.AtomizeChecked(args[0])
+			atoms, err := ctx.atomizeChecked(args[0])
 			if err != nil {
 				return nil, err
 			}

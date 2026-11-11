@@ -100,8 +100,11 @@ var (
 func registerListTypes(l *Library) {
 	for name := range listItemFacet {
 		facet := listItemFacet[name]
-		body := func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+		body := func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				// The signatures return xs:IDREF* and its siblings precisely
 				// so that an empty argument can give an empty result, which
@@ -178,8 +181,11 @@ func registerConstructors(l *Library) {
 		Name:  xdm.QName{URI: xdm.NSXS, Local: "QName"},
 		Arity: 1,
 		Since: XPath30,
-		Call: func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+		Call: func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
 			}
@@ -198,7 +204,10 @@ func registerConstructors(l *Library) {
 	for name, code := range types {
 		target := code
 		l.register(xdm.NSXS, name, 1, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			// A constructor applied to the empty sequence yields the empty
 			// sequence rather than raising, so "xs:date($optional)" is safe.
 			if len(atoms) == 0 {
@@ -256,8 +265,11 @@ func registerStringSubtypes(l *Library) {
 
 	for _, st := range subtypes {
 		norm, check, name := st.norm, st.check, st.name
-		l.register(xdm.NSXS, name, 1, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+		l.register(xdm.NSXS, name, 1, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
 			}
@@ -376,8 +388,11 @@ func registerIntegerSubtypes(l *Library) {
 		{"negativeInteger", nil, i(-1)},
 	} {
 		f := f
-		l.register(xdm.NSXS, f.name, 1, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+		l.register(xdm.NSXS, f.name, 1, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
 			}
@@ -406,8 +421,11 @@ func registerIntegerSubtypes(l *Library) {
 	// timezone the facet demands. A value without one is not in the type's
 	// value space, which is FORG0001 rather than a type error — the same
 	// shape as the out-of-range integer subtypes above.
-	l.register(xdm.NSXS, "dateTimeStamp", 1, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		atoms := xdm.Atomize(args[0])
+	l.register(xdm.NSXS, "dateTimeStamp", 1, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		atoms, err := ctx.atomize(args[0])
+		if err != nil {
+			return nil, err
+		}
 		if len(atoms) == 0 {
 			return xdm.Empty(), nil
 		}

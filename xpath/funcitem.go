@@ -392,7 +392,7 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			// where a mismatch is XPTY0004 rather than something the body
 			// discovers as a stranger error later.
 			if p.Type != nil {
-				conv, err := convertForParam(v, *p.Type)
+				conv, err := convertForParam(sub, v, *p.Type)
 				if err != nil {
 					return nil, err
 				}
@@ -408,7 +408,7 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			return nil, err
 		}
 		if e.Result != nil {
-			return convertForParam(out, *e.Result)
+			return convertForParam(sub, out, *e.Result)
 		}
 		return out, nil
 	}
@@ -422,11 +422,14 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 // and a node is atomised when the declared type is atomic. Only the parts that
 // arise for a function item are applied here — the sequence type is checked,
 // and atomisation happens when the target is an atomic type.
-func convertForParam(v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
+//
+// The atomisation is charged to ctx's budgets (see flattenCharged); a nil ctx
+// has none.
+func convertForParam(ctx *Context, v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
 	// An atomic target atomises its argument first: "function($x as xs:string)"
 	// called with an element is given the element's string value.
 	if st.HasAtomicType {
-		atoms, err := xdm.AtomizeChecked(v)
+		atoms, err := ctx.atomizeChecked(v)
 		if err != nil {
 			return nil, err
 		}
@@ -508,13 +511,14 @@ func coerceFunctionItem(fn *xdm.FunctionItem, st SequenceType) *xdm.FunctionItem
 		Arity:     fn.Arity,
 		Signature: sig,
 		Invoke: func(callCtx any, args []xdm.Sequence) (xdm.Sequence, error) {
+			c, _ := callCtx.(invokeContext)
 			// The declared parameter types are applied on the way in and the
 			// declared return type on the way out. The wrapped function then
 			// applies its own, which is what makes a chain of coercions
 			// compose rather than the outermost one deciding everything.
 			for i := range args {
 				if i < len(params) {
-					conv, err := convertForParam(args[i], params[i])
+					conv, err := convertForParam(c, args[i], params[i])
 					if err != nil {
 						return nil, err
 					}
@@ -526,7 +530,7 @@ func coerceFunctionItem(fn *xdm.FunctionItem, st SequenceType) *xdm.FunctionItem
 				return nil, err
 			}
 			if ret != nil {
-				return convertForParam(out, *ret)
+				return convertForParam(c, out, *ret)
 			}
 			return out, nil
 		},

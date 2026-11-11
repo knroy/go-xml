@@ -591,7 +591,7 @@ func (h *comparisonHoist) holds(sub *Context) (keep, ok bool, err error) {
 		}
 		v, err := side.Eval(sub)
 		if err == nil {
-			v, err = xdm.AtomizeChecked(v)
+			v, err = sub.atomizeChecked(v)
 		}
 		if err != nil {
 			return false, false, nil
@@ -602,7 +602,7 @@ func (h *comparisonHoist) holds(sub *Context) (keep, ok bool, err error) {
 	if err != nil {
 		return false, true, err
 	}
-	a, err := xdm.AtomizeChecked(v)
+	a, err := sub.atomizeChecked(v)
 	if err != nil {
 		return false, true, err
 	}
@@ -912,7 +912,10 @@ func (e *UnaryOp) Eval(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	atoms := xdm.Atomize(v)
+	atoms, err := ctx.atomize(v)
+	if err != nil {
+		return nil, err
+	}
 	if len(atoms) == 0 {
 		// Unary operators on the empty sequence return the empty sequence
 		// rather than raising, which keeps "-$maybe-absent" usable.

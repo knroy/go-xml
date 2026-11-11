@@ -109,3 +109,78 @@ func TestFlattenAndDataObserveEnvCtx(t *testing.T) {
 		}
 	}
 }
+
+// Implicit atomization -- a comparison, an argument conversion, sum -- flattens
+// arrays as fn:data does, so the host's MaxItems bounds a shared-member
+// expansion there too. Each atomization used to flatten one array at a time
+// under a fresh bound, uncharged, so a hundred references to one array were a
+// hundred free walks.
+func TestImplicitAtomizationChargesTheItemBudget(t *testing.T) {
+	const nest = `let $a := [1, 2, 3, 4], $b := [$a, $a, $a, $a], $c := [$b, $b, $b, $b] return `
+	eval := func(limit int, expr string) error {
+		ctx := NewContext(nil, Builtins())
+		ctx = ctx.WithEnv(func(e *Env) { e.MaxItems = limit })
+		c, err := CompileWith(nest+expr, CompileOptions{Version: XPath31})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.Eval(ctx)
+		return err
+	}
+	for _, expr := range []string{
+		`((1 to 4) ! $c) = -1`,
+		`sum((1 to 4) ! $c)`,
+		`string-join((1 to 4) ! $c, ',')`,
+		`function($x as xs:integer*) { count($x) }((1 to 4) ! $c)`,
+	} {
+		if err := eval(100, expr); xdm.ErrorCode(err) != "XPDY0130" || !errors.Is(err, xdm.ErrResourceLimit) {
+			t.Errorf("%s under a bound of 100: got %v, want XPDY0130", expr, err)
+		}
+	}
+	if err := eval(1000, `((1 to 4) ! $c) = -1`); err != nil {
+		t.Errorf("256 atoms under a bound of 1000: %v", err)
+	}
+}
+
+// array:join copies every member of every array it is given, and an input
+// can name one array many times: the copies are charged as they are made.
+func TestArrayJoinChargesTheItemBudget(t *testing.T) {
+	const src = `Q{http://www.w3.org/2005/xpath-functions/array}size(Q{http://www.w3.org/2005/xpath-functions/array}join(` +
+		`let $a := array { 1 to 100 } return (1 to 100) ! $a))`
+	eval := func(limit int) (xdm.Sequence, error) {
+		ctx := NewContext(nil, Builtins()).WithEnv(func(e *Env) { e.MaxItems = limit })
+		c, err := CompileWith(src, CompileOptions{Version: XPath31})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.Eval(ctx)
+	}
+	if _, err := eval(1000); xdm.ErrorCode(err) != "XPDY0130" || !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("10,000 joined members under a bound of 1000: got %v, want XPDY0130", err)
+	}
+	if got, err := eval(20000); err != nil || len(got) != 1 || got[0].(*xdm.Atomic).String() != "10000" {
+		t.Errorf("under a bound of 20000: got %v, %v, want 10000", got, err)
+	}
+}
+
+// A host may evaluate the Expr a Parse function returns directly, without
+// Compiled.Eval's recovery. A shared-member array past xdm.Flatten's step
+// bound is then refused with an error, not with a panic out of Eval.
+func TestExprEvalReturnsTheFlattenRefusal(t *testing.T) {
+	e, err := ParseVersion(`-fold-left(1 to 25, [], function($a, $i) { [$a, $a] })`, nil, XPath31)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = func() (err error) {
+		defer func() {
+			if p := recover(); p != nil {
+				t.Fatalf("Expr.Eval panicked: %v", p)
+			}
+		}()
+		_, err = e.Eval(NewContext(nil, Builtins()).WithVersion(XPath31))
+		return err
+	}()
+	if xdm.ErrorCode(err) != "XPDY0130" || !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Fatalf("Expr.Eval: got %v, want XPDY0130", err)
+	}
+}

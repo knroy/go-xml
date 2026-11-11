@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/genid"
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xdmbuild"
 )
@@ -187,7 +188,8 @@ func groupParents(pattern, flags string) []int {
 // below reads the match list, and a list truncated part way through would
 // build a well-formed result element describing an input the engine never
 // finished reading.
-func analyzeString(in string, re Regexp, parents []int) (*xdm.Node, error) {
+func analyzeString(in string, re Regexp, parents []int) (_ *xdm.Node, err error) {
+	defer xdmlimit.Recover(&err) // a tree past its text store's blocks
 	// The result element and its descendants are in the fn: namespace, and
 	// the root carries the declaration that binds it. Without the namespace
 	// node the tree serialises with no binding at all, so a comparison

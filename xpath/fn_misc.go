@@ -426,7 +426,11 @@ func lookupByID(ctx *Context, args []xdm.Sequence, mode idLookup) (xdm.Sequence,
 	// valid xs:IDREF and therefore matches nothing, where id('a c') looks for
 	// "a" and "c". Splitting both made idref find the union of the tokens.
 	want := map[string]bool{}
-	for _, it := range xdm.Atomize(args[0]) {
+	atoms, err := ctx.atomize(args[0])
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range atoms {
 		v := it.(*xdm.Atomic).String()
 		if !wantID {
 			want[v] = true

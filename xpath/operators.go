@@ -159,11 +159,11 @@ func (e *BinaryOp) evalValueComparison(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	la, err := xdm.AtomizeChecked(l)
+	la, err := ctx.atomizeChecked(l)
 	if err != nil {
 		return nil, err
 	}
-	ra, err := xdm.AtomizeChecked(r)
+	ra, err := ctx.atomizeChecked(r)
 	if err != nil {
 		return nil, err
 	}
@@ -220,11 +220,11 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	la, err := xdm.AtomizeChecked(l)
+	la, err := ctx.atomizeChecked(l)
 	if err != nil {
 		return nil, err
 	}
-	ra, err := xdm.AtomizeChecked(r)
+	ra, err := ctx.atomizeChecked(r)
 	if err != nil {
 		return nil, err
 	}
@@ -899,7 +899,7 @@ func bigInteger(ctx *Context, e Expr) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	atoms, err := xdm.AtomizeChecked(v)
+	atoms, err := ctx.atomizeChecked(v)
 	if err != nil {
 		return nil, err
 	}
@@ -948,11 +948,11 @@ func (e *BinaryOp) evalArithmetic(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	la, err := xdm.AtomizeChecked(l)
+	la, err := ctx.atomizeChecked(l)
 	if err != nil {
 		return nil, err
 	}
-	ra, err := xdm.AtomizeChecked(r)
+	ra, err := ctx.atomizeChecked(r)
 	if err != nil {
 		return nil, err
 	}
