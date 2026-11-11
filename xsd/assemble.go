@@ -44,6 +44,63 @@ type Options struct {
 	// Zero means DefaultMaxContentModelPositions.
 	MaxContentModelPositions int
 
+	// MaxUPAStateWidth bounds how many competing positions one state of a
+	// content model may hold for the Unique Particle Attribution check, which
+	// compares them pairwise. A model with a wider state is refused with an
+	// error wrapping xdm.ErrResourceLimit: its ambiguity is undecided, not
+	// known. The same width bounds the follow sets compiled at validation, so
+	// a schema validates under the width it was checked under.
+	//
+	// Zero or negative means DefaultMaxUPAStateWidth. There is no unlimited
+	// setting, as for MaxContentModelPositions: the scan costs the square of
+	// the width per state, and a dense model of width 2048 took 12 s, so
+	// raising it grants CPU to whoever wrote the schema. Name a number.
+	MaxUPAStateWidth int
+
+	// MaxUPAPairTests bounds the position-pair comparisons the Unique
+	// Particle Attribution check makes across all the states of one content
+	// model. Past it the schema is refused, as for MaxUPAStateWidth. The
+	// width bound alone does not bound the total: 8192 states of width 255
+	// each pass it and still cost ~260 million comparisons.
+	//
+	// Zero or negative means DefaultMaxUPAPairTests. There is no unlimited
+	// setting; raising it is a grant of CPU time, linear in the value.
+	MaxUPAPairTests int
+
+	// MaxSubsumptionStates bounds the automaton XSD 1.1 unrolls for each side
+	// of a restriction when it decides Content type restricts (Part 1
+	// §3.4.6.4) by language inclusion. Past it the exact check DECLINES and
+	// the XSD 1.0 structural table decides instead, which may reject a
+	// restriction the exact check would admit but never admits one it would
+	// reject. A rejection the table gives after such a decline wraps
+	// xdm.ErrResourceLimit: the restriction is undecided, not known to be
+	// invalid. XSD 1.0 schemas never reach it.
+	//
+	// Zero or negative means DefaultMaxSubsumptionStates. There is no
+	// unlimited setting: unrolling is exponential in the schema text and
+	// Load cannot be cancelled, so raising it grants memory and time to
+	// whoever wrote the schema.
+	MaxSubsumptionStates int
+
+	// MaxSubsumptionProduct bounds the pairs the same inclusion check visits
+	// while exploring the derived model against the determinised base. Past
+	// it the check declines, as for MaxSubsumptionStates. It is reached by an
+	// adversarially branchy model rather than a merely repetitive one.
+	//
+	// Zero or negative means DefaultMaxSubsumptionProduct. There is no
+	// unlimited setting, for the reason MaxSubsumptionStates gives.
+	MaxSubsumptionProduct int
+
+	// MaxRestrictionBranches bounds the branches XSD 1.1 enumerates through
+	// a model restricting an all group (the counting form of §3.4.6.4). The
+	// count is the product of the choice arities on a path, so it grows
+	// exponentially with nesting. Past it the check declines, as for
+	// MaxSubsumptionStates.
+	//
+	// Zero or negative means DefaultMaxRestrictionBranches. There is no
+	// unlimited setting, for the reason MaxSubsumptionStates gives.
+	MaxRestrictionBranches int
+
 	// Version selects XSD 1.0 or 1.1. The zero value is 1.0, because a
 	// schema written for 1.0 must not acquire 1.1's relaxations by
 	// accident — 1.1 changes which schemas are legal, not only which
@@ -88,6 +145,56 @@ type Options struct {
 func (o Options) checkOptions() CheckOptions {
 	return CheckOptions{LaxUPA: o.LaxUPA, Version: o.Version}
 }
+
+// Defaults for the Options budgets that a zero (or negative) field selects.
+// The measurements behind each are on the package variables they seed:
+// maxUPAStateWidth and maxUPAPairTests (upa.go), subsumeMaxStates and
+// subsumeMaxProduct (subsume.go) and branchLimit (restrict.go).
+const (
+	// DefaultMaxUPAStateWidth is 3.5 times the widest state any real schema
+	// in this tree produces (72).
+	DefaultMaxUPAStateWidth = 256
+
+	// DefaultMaxUPAPairTests is 4,194,304 comparisons per content model.
+	DefaultMaxUPAPairTests = 1 << 22
+
+	// DefaultMaxSubsumptionStates covers every occurrence range the suites
+	// and the production corpora spell (the largest is maxOccurs="10").
+	DefaultMaxSubsumptionStates = 4096
+
+	// DefaultMaxSubsumptionProduct bounds the inclusion check's product.
+	DefaultMaxSubsumptionProduct = 20000
+
+	// DefaultMaxRestrictionBranches bounds the all-group branch count.
+	DefaultMaxRestrictionBranches = 4096
+)
+
+// loadBudgets is what a Schema retains of the Options budgets, so that the
+// checks Load runs and the models validation compiles use the same values.
+// A field of zero or below reads the package variable at the point of use,
+// as Schema.maxPositions does, so tests that lower the variables still reach
+// every path.
+type loadBudgets struct {
+	upaWidth, upaPairs, subsumeStates, subsumeProduct, branches int
+}
+
+func (o Options) budgets() loadBudgets {
+	return loadBudgets{o.MaxUPAStateWidth, o.MaxUPAPairTests,
+		o.MaxSubsumptionStates, o.MaxSubsumptionProduct, o.MaxRestrictionBranches}
+}
+
+func budgetOr(n, def int) int {
+	if n > 0 {
+		return n
+	}
+	return def
+}
+
+func (b loadBudgets) width() int   { return budgetOr(b.upaWidth, maxUPAStateWidth) }
+func (b loadBudgets) pairs() int   { return budgetOr(b.upaPairs, maxUPAPairTests) }
+func (b loadBudgets) states() int  { return budgetOr(b.subsumeStates, subsumeMaxStates) }
+func (b loadBudgets) product() int { return budgetOr(b.subsumeProduct, subsumeMaxProduct) }
+func (b loadBudgets) branchN() int { return budgetOr(b.branches, branchLimit) }
 
 // DefaultMaxDocuments bounds an assembly that does not set MaxDocuments.
 const DefaultMaxDocuments = 512
@@ -150,6 +257,7 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	s.Version = opts.Version
 	s.xpathVersion = opts.XPathVersion
 	s.maxPositions = opts.MaxContentModelPositions
+	s.budgets = opts.budgets()
 	a := &assembler{
 		schema:    s,
 		opts:      opts,
@@ -422,6 +530,7 @@ func loadFiles(paths []string, opts Options, named map[int]instanceLocation) (*S
 	s.Version = opts.Version
 	s.xpathVersion = opts.XPathVersion
 	s.maxPositions = opts.MaxContentModelPositions
+	s.budgets = opts.budgets()
 	s.sourcePaths = append([]string(nil), paths...)
 	a := &assembler{
 		schema:    s,

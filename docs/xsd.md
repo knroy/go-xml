@@ -373,13 +373,18 @@ like any other:
 |---|---|---|
 | `Options.MaxDocuments` | 512 | documents one assembly may read |
 | `Options.MaxContentModelPositions` | 8192 | positions in one content model, ~3.3 MB |
+| `Options.MaxUPAStateWidth` | 256 | competing positions in one state the UPA check compares pairwise |
+| `Options.MaxUPAPairTests` | 4,194,304 | UPA pair comparisons per content model |
+| `Options.MaxSubsumptionStates` | 4096 | 1.1 restriction inclusion: unrolled states per side (declines to the 1.0 table) |
+| `Options.MaxSubsumptionProduct` | 20000 | 1.1 restriction inclusion: product pairs explored (declines to the 1.0 table) |
+| `Options.MaxRestrictionBranches` | 4096 | 1.1 all-group restriction: branches enumerated (declines to the 1.0 table) |
 | `Options.ParseOptions` | refuses DOCTYPE | entity expansion in schema documents |
 | `ParseOptions.MaxBytes` | 64 MB | the size of one document read |
 | `ParseOptions.MaxNodes` | 10,000,000 | the size of one tree, ~2 GB |
 | `ParseOptions.MaxDepth` | 1000 | nesting, and so parser stack use |
 | `ValidateOptions.MaxErrors` | 100 | failures collected before stopping |
 | `ValidateOptions.MaxDepth` | 1000 | validation recursion, and so its stack use |
-| `DefaultMaxMatchStates` | 4096 | simultaneous content-model readings per element |
+| `ValidateOptions.MaxMatchStates` | 4096 | simultaneous content-model readings per element |
 | *(fixed)* | 1000 | digits in one field of a date, time or duration value: the year, the fractional seconds, a duration field (Part 2 §5.4); a longer field is refused with `xdm.ErrResourceLimit`, not reported invalid |
 
 `MaxContentModelPositions` exists because a content model can be far larger
@@ -402,11 +407,14 @@ each, which helps nobody and costs memory proportional to the document.
 bounds memory. A node costs a fixed ~200 bytes whatever it holds, so a megabyte
 of `<a/>` elements measures 53 times the heap of a megabyte of text — a byte cap
 says little about what a document will cost. `MaxBytes` bounds the read;
-`MaxNodes` bounds what the read can allocate. Every limit takes `-1` to disable
-it, for input this process produced itself.
+`MaxNodes` bounds what the read can allocate. Both take `-1` to disable them,
+for input this process produced itself. The content-model budgets on `Options`
+(`MaxContentModelPositions`, the UPA and the restriction budgets) do not: they
+read a negative value as the default, because each bounds work exponential or
+quadratic in the schema text, so raising one means naming a number.
 
-`DefaultMaxMatchStates` is a constant rather than an option, because no schema
-anyone has measured comes close to it. Matching an element's children against a
+`ValidateOptions.MaxMatchStates` (default `DefaultMaxMatchStates`) is one no
+schema anyone has measured comes close to. Matching an element's children against a
 content model carries the *set* of readings the content admits — a position and
 a whole vector of occurrence counts each — since nested occurrence bounds cannot
 be decided one reading at a time; `xsd/nfa.go` has the argument. Merging

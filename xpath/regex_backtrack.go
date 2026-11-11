@@ -2,6 +2,7 @@ package xpath
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -68,6 +69,70 @@ func SetBacktrackingRegex(on bool) { backtrackingRegex.Store(on) }
 
 // BacktrackingRegexEnabled reports the current setting.
 func BacktrackingRegexEnabled() bool { return backtrackingRegex.Load() }
+
+// backtrackStepLimit and backtrackDepthLimit hold what SetBacktrackBudget and
+// SetBacktrackMaxDepth were given, zero when never called. They are read once
+// per match, in newMachine.
+var backtrackStepLimit, backtrackDepthLimit atomic.Int64
+
+// SetBacktrackBudget sets the match steps one call of the backtracking matcher
+// may take before it fails with XPDY0130 (wrapping xdm.ErrResourceLimit).
+//
+// Zero restores the default, backtrackBudget: 40,000,000 steps, about a fifth
+// of a second of work on the pathological "(a*)*\1b". A positive value is the
+// new budget. A negative value removes the step bound. That is for trusted
+// patterns only: an exponential pattern then runs until it finishes, which on
+// sixty characters is never, and the matcher has no cancellation, so nothing
+// stops it. The depth bound (SetBacktrackMaxDepth) still applies.
+//
+// Like SetBacktrackingRegex it is process-wide and safe to call at any time;
+// a match already in flight keeps the budget it started with. Nothing is
+// cached on it, so the next match uses the new value.
+func SetBacktrackBudget(steps int) { backtrackStepLimit.Store(int64(steps)) }
+
+// SetBacktrackMaxDepth sets how many matcher levels may be active at once
+// before the backtracking matcher fails with XPDY0130 (wrapping
+// xdm.ErrResourceLimit). It is what bounds the subject length: the default,
+// backtrackMaxDepth (50,000), is about 25,000 characters consumed under ".*"
+// and 12,500 under a repeated group.
+//
+// Zero or a negative value restores the default; there is no unlimited
+// setting, because each level is real Go stack and a stack overflow is fatal,
+// not recoverable. A positive value is the new bound, clamped to
+// backtrackDepthCeiling (500,000). Raising it trades a refusal for stack: a
+// level costs up to about 512 bytes, and at the ceiling the deepest shapes
+// measured ("(a*)b(c|d)*\1", "(a*)b.*\1", "(a*)b(c+)*\1" on 400,000
+// characters) ran and refused within a 256 MB maximum stack and overflowed a
+// 128 MB one: a quarter of Go's default 1 GB maximum. A host that lowers
+// runtime/debug.SetMaxStack must keep this below that maximum divided by 512
+// bytes (the default is measured safe under a 32 MB maximum).
+//
+// It is process-wide like SetBacktrackBudget, with the same concurrency.
+func SetBacktrackMaxDepth(depth int) { backtrackDepthLimit.Store(int64(depth)) }
+
+// backtrackDepthCeiling is the most SetBacktrackMaxDepth admits: measured to
+// need between 128 and 256 MB of stack, a quarter of Go's default 1 GB maximum
+// at most (see SetBacktrackMaxDepth).
+const backtrackDepthCeiling = 500_000
+
+// backtrackLimits resolves the two settings to the values one match uses.
+func backtrackLimits() (steps, depth int) {
+	switch s := backtrackStepLimit.Load(); {
+	case s == 0:
+		steps = backtrackBudget
+	case s < 0:
+		steps = math.MaxInt
+	default:
+		steps = int(min(s, math.MaxInt))
+	}
+	switch d := backtrackDepthLimit.Load(); {
+	case d <= 0:
+		depth = backtrackMaxDepth
+	default:
+		depth = int(min(d, backtrackDepthCeiling))
+	}
+	return steps, depth
+}
 
 // backtrackBudget is the number of match steps a single MatchString,
 // ReplaceAllString or FindAll call may take before it gives up with an error.
@@ -714,9 +779,9 @@ type btMachine struct {
 	caps   []int
 	steps  int
 	budget int
-	// depth is the number of match and matchRepeat calls active. See
-	// backtrackMaxDepth.
-	depth int
+	// depth is the number of match and matchRepeat calls active, and
+	// maxDepth the most allowed. See backtrackMaxDepth.
+	depth, maxDepth int
 	// multiline is the "m" flag: ^ and $ also match at line boundaries.
 	multiline bool
 	// overrun records that the budget ran out, so the caller can tell a
@@ -730,10 +795,10 @@ type btMachine struct {
 // blows up.
 //
 // It also enters one level of recursion, which the caller leaves through
-// leave once step has succeeded, and refuses a level past backtrackMaxDepth.
+// leave once step has succeeded, and refuses a level past maxDepth (backtrackMaxDepth unless raised).
 func (m *btMachine) step() bool {
 	m.steps++
-	if m.steps > m.budget || m.depth >= backtrackMaxDepth {
+	if m.steps > m.budget || m.depth >= m.maxDepth {
 		m.overrun = true
 		return false
 	}
@@ -986,10 +1051,12 @@ func (b *btRegexp) Err() error { return b.err }
 
 // newMachine builds a fresh machine with a fresh budget.
 func (b *btRegexp) newMachine(s []rune) *btMachine {
+	steps, depth := backtrackLimits()
 	return &btMachine{
 		in:        s,
 		caps:      newCaps(b.groups),
-		budget:    backtrackBudget,
+		budget:    steps,
+		maxDepth:  depth,
 		multiline: b.multiline,
 	}
 }

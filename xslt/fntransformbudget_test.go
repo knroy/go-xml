@@ -33,8 +33,9 @@ const runtimeFanoutSheet = `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.
   <xsl:template name="pad">PAD</xsl:template>
 </xsl:stylesheet>`
 
-// runFanout compiles and runs runtimeFanoutSheet with the given depth.
-func runFanout(t *testing.T, depth string) error {
+// runFanout compiles and runs runtimeFanoutSheet with the given depth, under
+// CompileOptions.MaxModuleNodes maxNodes.
+func runFanout(t *testing.T, depth string, maxNodes int) error {
 	t.Helper()
 	src := strings.Replace(runtimeFanoutSheet, "DEPTH", depth, 1)
 	src = strings.Replace(src, "PAD", strings.Repeat("<p/>", 1000), 1)
@@ -43,7 +44,7 @@ func runFanout(t *testing.T, depth string) error {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sheet, err := Compile(tree.Root, CompileOptions{Resolver: m, BaseURI: "main.xsl"})
+	sheet, err := Compile(tree.Root, CompileOptions{Resolver: m, BaseURI: "main.xsl", MaxModuleNodes: maxNodes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,12 +58,23 @@ func runFanout(t *testing.T, depth string) error {
 // distinct compiles (about 1.4 million module nodes) was bounded by time
 // alone. A shallow fan-out still runs.
 func TestRuntimeTransformFanoutIsBounded(t *testing.T) {
-	err := runFanout(t, "5")
+	err := runFanout(t, "5", 0)
 	if !errors.Is(err, xdm.ErrResourceLimit) || !strings.Contains(err.Error(), "module nodes") {
 		t.Fatalf("got %v, want the module-node resource limit", err)
 	}
-	if err := runFanout(t, "2"); err != nil {
+	if err := runFanout(t, "2", 0); err != nil {
 		t.Fatalf("20 nested transforms: %v", err)
+	}
+}
+
+// The compilations a transform's fn:transform calls start spend a budget
+// under the bound the stylesheet was compiled with, not the default: the 20
+// nested compiles of about 1,000 nodes each that run above are refused under
+// a MaxModuleNodes of 10,000.
+func TestRuntimeTransformKeepsCompileBound(t *testing.T) {
+	err := runFanout(t, "2", 10_000)
+	if !errors.Is(err, xdm.ErrResourceLimit) || !strings.Contains(err.Error(), "more than 10000 module nodes") {
+		t.Fatalf("got %v, want the module-node limit of 10000", err)
 	}
 }
 

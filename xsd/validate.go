@@ -121,6 +121,19 @@ type ValidateOptions struct {
 	// recurse that far — see validateElement for why exceeding it is fatal
 	// rather than recoverable.
 	MaxDepth int
+
+	// MaxMatchStates bounds the simultaneous content-model readings the
+	// validator carries while matching one element's children against a
+	// model with nested occurrence bounds. Past it the element fails with an
+	// error saying the model is too tangled to decide: the content is
+	// undecided, not known to be invalid. Real schemas stay at one or two.
+	//
+	// Zero means DefaultMaxMatchStates; a negative value means no limit, as
+	// for MaxErrors. The set is finite, so an unlimited walk ends, but its
+	// size is the product of the model's counter ranges: a hostile schema
+	// can make one element cost memory exponential in its nesting, and only
+	// ValidateContext's cancellation, checked per element, stops it.
+	MaxMatchStates int
 }
 
 // DefaultMaxErrors bounds a run that does not set MaxErrors.
@@ -1414,7 +1427,7 @@ func (v *validator) modelFor(t *ComplexType) (*contentModel, error) {
 		}
 		return m.(*contentModel), nil
 	}
-	m, err := compileContentModel(t.Particle, v.schema.maxPositions)
+	m, err := compileForChecks(t.Particle, v.schema.maxPositions, v.schema.budgets.width(), 0)
 	if err != nil {
 		v.schema.models.Store(t, err)
 		return nil, err
@@ -1543,7 +1556,7 @@ func (v *validator) matchSequence(el *xdm.Node, nkids int, m *contentModel, t *C
 	// executions which have converged are not carried twice.
 	keep := func() bool {
 		vectors, stepped = stepped, vectors[:0]
-		return len(vectors) <= DefaultMaxMatchStates
+		return v.withinMatchStates(len(vectors))
 	}
 
 	for kid := range el.Children() {

@@ -850,7 +850,7 @@ func (s *streamV) seqStep(w *svSeq, oc *OpenContent, el, kid *xdm.Node, name xdm
 	}
 	keep := func() bool {
 		w.vectors, w.stepped = w.stepped, w.vectors[:0]
-		return len(w.vectors) <= DefaultMaxMatchStates
+		return v.withinMatchStates(len(w.vectors))
 	}
 	next := -1
 	boundRefused := false
@@ -1021,8 +1021,8 @@ func (s *streamV) allEnd(w *svAll, el *xdm.Node) {
 }
 
 // streamReadingsBounded reports whether matchSequence over m cannot reach
-// DefaultMaxMatchStates readings on a stream unless it reaches them on the
-// tree too. A tree walk knows its child count and takes a bounded maximum
+// budget readings (ValidateOptions.MaxMatchStates, negative for none) on a
+// stream unless it reaches them on the tree too. A tree walk knows its child count and takes a bounded maximum
 // above it as unbounded (reachableInto), which merges the counts past the
 // minimum; a stream cannot, and keeps them apart. The readings at a position
 // differ only in the counters of its chain (the scopes left are reset), so
@@ -1031,7 +1031,14 @@ func (s *streamV) allEnd(w *svAll, el *xdm.Node) {
 // the same on both; one with a bounded counter is bounded when even the
 // larger of the two products is within the budget, and then neither walk
 // gives up.
-func streamReadingsBounded(m *contentModel) bool {
+func streamReadingsBounded(m *contentModel, budget int) bool {
+	if budget < 0 {
+		return true // neither walk gives up
+	}
+	over := budget // budget+1, which MaxInt cannot hold
+	if over < math.MaxInt {
+		over++
+	}
 	for _, p := range m.positions {
 		bounded, n := false, 1
 		for _, i := range p.counters {
@@ -1041,9 +1048,9 @@ func streamReadingsBounded(m *contentModel) bool {
 				bounded, r = true, max(r, c.max+1)
 			}
 			// Both at most the budget + 1 before the product: no overflow.
-			n = min(n*min(r, DefaultMaxMatchStates+1), DefaultMaxMatchStates+1)
+			n = min(n*min(r, over), over)
 		}
-		if bounded && n > DefaultMaxMatchStates {
+		if bounded && n > budget {
 			return false
 		}
 	}
@@ -1089,9 +1096,9 @@ func (s *Schema) streamRefusal() string {
 		}
 		seenT[t] = true
 		if !isAllGroup(ct.Particle) {
-			if m, err := mv.modelFor(ct); err == nil && !streamReadingsBounded(m) {
+			if m, err := mv.modelFor(ct); err == nil && !streamReadingsBounded(m, mv.matchStates()) {
 				return fmt.Sprintf("the content model of type %s may hold more than %d count readings on a stream",
-					showName(ct.Name), DefaultMaxMatchStates)
+					showName(ct.Name), mv.matchStates())
 			}
 		}
 		if w := part(ct.Particle); w != "" {

@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -431,5 +432,69 @@ func TestBacktrackCaseInsensitive(t *testing.T) {
 		if !bt.MatchString("xAbaB") {
 			t.Error(`(a.*?)\1 with "i" should match "xAbaB"`)
 		}
+	})
+}
+
+// withBacktrackLimits runs f with the two process-wide limits set and restores
+// them afterwards. Like withBacktracking it cannot run in parallel.
+func withBacktrackLimits(t *testing.T, steps, depth int, f func()) {
+	t.Helper()
+	ps, pd := backtrackStepLimit.Load(), backtrackDepthLimit.Load()
+	SetBacktrackBudget(steps)
+	SetBacktrackMaxDepth(depth)
+	defer func() { backtrackStepLimit.Store(ps); backtrackDepthLimit.Store(pd) }()
+	f()
+}
+
+// TestBacktrackLimitsResolve pins what each setting of SetBacktrackBudget and
+// SetBacktrackMaxDepth resolves to: zero is today's default exactly, a
+// negative budget is unbounded, a negative depth is the default (a stack
+// overflow is fatal, so there is no unlimited depth), and a depth over the
+// ceiling is clamped to it.
+func TestBacktrackLimitsResolve(t *testing.T) {
+	for _, c := range []struct{ steps, depth, wantSteps, wantDepth int }{
+		{0, 0, backtrackBudget, backtrackMaxDepth},
+		{-1, -1, math.MaxInt, backtrackMaxDepth},
+		{1, 1, 1, 1},
+		{80_000_000, 100_000, 80_000_000, 100_000},
+		{math.MaxInt, math.MaxInt, math.MaxInt, backtrackDepthCeiling},
+		{0, backtrackDepthCeiling + 1, backtrackBudget, backtrackDepthCeiling},
+	} {
+		withBacktrackLimits(t, c.steps, c.depth, func() {
+			if s, d := backtrackLimits(); s != c.wantSteps || d != c.wantDepth {
+				t.Errorf("SetBacktrackBudget(%d), SetBacktrackMaxDepth(%d): got (%d, %d), want (%d, %d)",
+					c.steps, c.depth, s, d, c.wantSteps, c.wantDepth)
+			}
+		})
+	}
+}
+
+// TestBacktrackLimitsTakeEffect checks that both settings reach a match
+// through fn:matches, lowered and raised: a 30,000-character subject under
+// ".*" is past the default depth (about 25,000 characters), so it is refused
+// by default and decided once the depth is raised, and a match the default
+// budget finishes is refused under a budget of ten steps.
+func TestBacktrackLimitsTakeEffect(t *testing.T) {
+	long := `matches('ab` + strings.Repeat("c", 30_000) + `a', '(a*)b.*\1')`
+	short := `matches('aabaa', '(a*)b\1')`
+	withBacktracking(t, func() {
+		withBacktrackLimits(t, 0, 0, func() {
+			if _, err := evalString(t, long); err == nil || !strings.Contains(err.Error(), "XPDY0130") {
+				t.Errorf("default depth: got %v, want XPDY0130", err)
+			}
+			if got, err := evalString(t, short); err != nil || got != "true" {
+				t.Errorf("default budget: got %q, %v, want true", got, err)
+			}
+		})
+		withBacktrackLimits(t, 0, 100_000, func() {
+			if got, err := evalString(t, long); err != nil || got != "true" {
+				t.Errorf("raised depth: got %q, %v, want true", got, err)
+			}
+		})
+		withBacktrackLimits(t, 10, 0, func() {
+			if _, err := evalString(t, short); err == nil || !strings.Contains(err.Error(), "XPDY0130") {
+				t.Errorf("lowered budget: got %v, want XPDY0130", err)
+			}
+		})
 	})
 }

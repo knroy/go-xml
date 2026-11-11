@@ -43,6 +43,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"math"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
@@ -300,8 +301,22 @@ var errMergeTree = errors.New("streaming: the merge runs on the tree")
 // merge that would take the count past it (a for-each-source of many URIs,
 // repeats included, or a merge run from the action of others that are
 // still open: transformState.mergeOpen) runs on the tree, which reads each
-// document once into its cache.
+// document once into its cache. It is the default of
+// TransformOptions.MaxMergeStreams; see mergeStreamsLimit.
 const mergeStreamsMax = 64
+
+// mergeStreamsLimit is TransformOptions.MaxMergeStreams resolved: zero is
+// mergeStreamsMax, and a negative value is no limit.
+func (rt *runtime) mergeStreamsLimit() int {
+	switch n := rt.opts.MaxMergeStreams; {
+	case n == 0:
+		return mergeStreamsMax
+	case n < 0:
+		return math.MaxInt
+	default:
+		return n
+	}
+}
 
 // errMergeStop ends the walk of an input the merge no longer reads.
 var errMergeStop = errors.New("streaming: merge input stopped")
@@ -440,7 +455,7 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 				}
 				return err
 			}
-			if rt.mergeOpenCount()+len(docs)+len(uris) > mergeStreamsMax {
+			if rt.mergeOpenCount()+len(docs)+len(uris) > rt.mergeStreamsLimit() {
 				return errMergeTree
 			}
 			base := src.baseURI

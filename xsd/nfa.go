@@ -54,7 +54,24 @@ import "errors"
 // it is reported as an error rather than guessed at: a matcher that silently
 // degraded to an approximation would do so precisely on the inputs where the
 // answer was hardest to get.
+//
+// It applies when ValidateOptions.MaxMatchStates is zero.
 const DefaultMaxMatchStates = 4096
+
+// matchStates is the run's ValidateOptions.MaxMatchStates, zero resolved to
+// DefaultMaxMatchStates; negative means no limit.
+func (v *validator) matchStates() int {
+	if v.opts.MaxMatchStates == 0 {
+		return DefaultMaxMatchStates
+	}
+	return v.opts.MaxMatchStates
+}
+
+// withinMatchStates reports whether n readings are inside matchStates.
+func (v *validator) withinMatchStates(n int) bool {
+	b := v.matchStates()
+	return b < 0 || n <= b
+}
 
 // errMatchStates reports that a content model needed more simultaneous states
 // than the budget allows. It is wrapped with the element's location by the

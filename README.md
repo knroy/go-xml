@@ -904,7 +904,11 @@ shapes of work.
 Every remote-reference mechanism is off unless you turn it on.
 
 * **`DOCTYPE` is rejected** by the parser unless `ParseOptions.AllowDOCTYPE` is
-  set. It is the entry point for both XXE and entity-expansion blowup.
+  set. It is the entry point for both XXE and entity-expansion blowup. With
+  it on, entity expansion stays bounded (`ParseOptions.MaxEntityDepth`,
+  `MaxEntityBytes`, `MaxTotalEntityBytes`, `MaxEntities`) and so are external
+  reads (`MaxExternalFetches`, `MaxExternalFetchBytes`, `MaxExternalDepth`);
+  zero keeps each default, see [docs/options.md](docs/options.md).
 * **`fn:doc` and `fn:document` fail closed** *as a library*. With no
   `DocumentResolver` configured, every URI is refused. The CLI is not
   fail-closed in the same sense: it always configures a resolver rooted at the
@@ -942,7 +946,8 @@ Every remote-reference mechanism is off unless you turn it on.
   open by `os.Root`, the same per-file byte limit, nothing outside the roots. This matters more here than
   elsewhere, because with XInclude it is the *source document* — the party the
   threat model already treats as hostile — that names what to read. The CLI
-  exposes it as `-xinclude`.
+  exposes it as `-xinclude`. A pass reads at most 200 resources nested at most
+  40 deep, which `XIncludeOptions.MaxFetches` and `MaxDepth` change.
 * **`xs:import` and `xs:include` fail closed**, via `xsd.Options.Resolver`.
   The default reads a schema beside the one it was given and **refuses a
   remote URL outright**; `xsdnet.HTTPResolver` is how you opt in to the network.
@@ -1422,7 +1427,8 @@ available behind `xpath.SetBacktrackingRegex(true)` (`-backtracking-regex` on
 the command line). It is off by default because it has no linear-time
 guarantee and patterns can come from document data; even enabled, a step
 budget bounds every match and exhausting it is an error rather than a silent
-"no match".
+"no match". `xpath.SetBacktrackBudget` and `xpath.SetBacktrackMaxDepth` change
+the step budget and the depth bound (see [options.md](docs/options.md)).
 
 Everything else about the XML Schema regex flavour *is* implemented, and most
 of it had to be, because RE2 silently disagrees rather than refusing: XML

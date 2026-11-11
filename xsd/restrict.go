@@ -145,7 +145,7 @@ func (p *parser) checkParticleRestriction() error {
 					"the restriction is undecided, not because it is known to be invalid: %w",
 				typeLabel(name, ct), limit, xdm.ErrResourceLimit)
 		}
-		if err := particleValidRestrictionVersion(ct.Particle, base.Particle, p.schema.Version); err != nil {
+		if err := particleValidRestrictionIn(ct.Particle, base.Particle, p.schema.Version, p.schema.budgets); err != nil {
 			// Returned at once, like the flattening refusal above, so
 			// the sentinel survives the list being rebuilt from text.
 			if errors.Is(err, xdm.ErrResourceLimit) {
@@ -290,7 +290,15 @@ func particleValidRestriction(r, b *Particle) error {
 // the package's form for "undecided" (see the UPA refusal in upa.go), so it is
 // never mistaken for "known to be invalid".
 func particleValidRestrictionVersion(r, b *Particle, v Version) error {
-	w := &restrictWalk{v: v, memo: map[restrictPair]error{}}
+	return particleValidRestrictionIn(r, b, v, loadBudgets{})
+}
+
+// particleValidRestrictionIn is particleValidRestrictionVersion under a
+// schema's retained budgets (Options.MaxSubsumptionStates and the rest). It is
+// the one decision point the comment above describes: a rejection that follows
+// a budget decline is wrapped with xdm.ErrResourceLimit here.
+func particleValidRestrictionIn(r, b *Particle, v Version, lb loadBudgets) error {
+	w := &restrictWalk{v: v, lb: lb, memo: map[restrictPair]error{}}
 	err := particleRestricts(r, b, false, w)
 	if err != nil && w.overBudget {
 		return fmt.Errorf("%v; the restriction is undecided, not known to be "+
@@ -313,6 +321,7 @@ func particleValidRestrictionVersion(r, b *Particle, v Version) error {
 // now decided once and the walk is bounded by the number of distinct pairs.
 type restrictWalk struct {
 	v    Version
+	lb   loadBudgets
 	memo map[restrictPair]error
 	// overBudget records that an exact 1.1 check declined for its budget
 	// somewhere in the walk, so a rejection is undecided rather than final.
@@ -425,7 +434,7 @@ func particleRestrictsOnce(r, b *Particle, expanded bool, w *restrictWalk) error
 	// approximation of the same inclusion, never wrong in the accepting
 	// direction.
 	if w.v >= Version11 {
-		if err, ok := allSubsumes(r, b); ok {
+		if err, ok := allSubsumes(r, b, w.lb); ok {
 			return err
 		} else if err != nil {
 			w.overBudget = true
@@ -434,7 +443,7 @@ func particleRestrictsOnce(r, b *Particle, expanded bool, w *restrictWalk) error
 		// language inclusion where the models can be unrolled exactly.
 		// It declines for an all group, a recursive model or a range
 		// too wide to unroll, and the table below then answers.
-		if err, ok := particleSubsumes(r, b); ok {
+		if err, ok := particleSubsumesIn(r, b, w.lb); ok {
 			return err
 		} else if err != nil {
 			w.overBudget = true
@@ -1870,7 +1879,7 @@ func sameElementDecl(a, b *Particle) bool {
 //
 // R is then included in B exactly when every branch through R produces counts
 // inside every budget. allBranchCounts enumerates the branches.
-func allSubsumes(r, b *Particle) (error, bool) {
+func allSubsumes(r, b *Particle, lb loadBudgets) (error, bool) {
 	bg, ok := b.Term.(*ModelGroup)
 	if !ok || bg.Compositor != CompositorAll {
 		return nil, false
@@ -1974,7 +1983,7 @@ func allSubsumes(r, b *Particle) (error, bool) {
 		}
 	}
 
-	branches, err := allBranchCounts(r)
+	branches, err := allBranchCountsIn(r, lb.branchN())
 	if err != nil {
 		// errBudgetDeclined reaches the caller; a shape it cannot count
 		// does not, as no budget would have decided it.
@@ -2201,11 +2210,17 @@ func (c branchCount) add(name xdm.QName, r occRange) {
 // all234 (one name split across two particles) come out right.
 //
 // The error is non-nil, and the slice nil, when the enumeration declines and
-// the caller falls back to the structural table: errBudgetDeclined when
-// branchLimit stopped it, errNotCountable when the model contains something
-// this counting cannot describe — a wildcard, or an element with no
+// the caller falls back to the structural table: errBudgetDeclined when the
+// branch budget (branchLimit, or Options.MaxRestrictionBranches through
+// allBranchCountsIn) stopped it, errNotCountable when the model contains
+// something this counting cannot describe — a wildcard, or an element with no
 // resolvable name.
 func allBranchCounts(p *Particle) ([]branchCount, error) {
+	return allBranchCountsIn(p, branchLimit)
+}
+
+// allBranchCountsIn is allBranchCounts with the branch budget given.
+func allBranchCountsIn(p *Particle, limit int) ([]branchCount, error) {
 	if p.MaxOccurs == 0 {
 		return []branchCount{{}}, nil
 	}
@@ -2216,7 +2231,7 @@ func allBranchCounts(p *Particle) ([]branchCount, error) {
 		return []branchCount{c}, nil
 
 	case *ModelGroup:
-		inner, err := groupBranchCounts(t)
+		inner, err := groupBranchCounts(t, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -2275,21 +2290,21 @@ var errNotCountable = errorString("the model has a term with no per-name count")
 // approximation. Enforced by TestRestrictionBudgetSoundness and TestBranchCountsDeclineIsNotAcceptance.
 //
 // It is a var only so tests may lower it; it is never assigned in production.
-var branchLimit = 4096
+var branchLimit = DefaultMaxRestrictionBranches
 
-func groupBranchCounts(g *ModelGroup) ([]branchCount, error) {
+func groupBranchCounts(g *ModelGroup, limit int) ([]branchCount, error) {
 	if g.Compositor == CompositorChoice {
 		if len(g.Particles) == 0 {
 			return []branchCount{{}}, nil
 		}
 		var out []branchCount
 		for _, child := range g.Particles {
-			brs, err := allBranchCounts(child)
+			brs, err := allBranchCountsIn(child, limit)
 			if err != nil {
 				return nil, err
 			}
 			out = append(out, brs...)
-			if len(out) > branchLimit {
+			if len(out) > limit {
 				declineBranchBudget()
 				return nil, errBudgetDeclined
 			}
@@ -2303,11 +2318,11 @@ func groupBranchCounts(g *ModelGroup) ([]branchCount, error) {
 	// the base is an all group, whose language is likewise order-blind.
 	out := []branchCount{{}}
 	for _, child := range g.Particles {
-		brs, err := allBranchCounts(child)
+		brs, err := allBranchCountsIn(child, limit)
 		if err != nil {
 			return nil, err
 		}
-		if len(out)*len(brs) > branchLimit {
+		if len(out)*len(brs) > limit {
 			declineBranchBudget()
 			return nil, errBudgetDeclined
 		}

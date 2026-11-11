@@ -79,6 +79,22 @@ type TransformOptions struct {
 	// bound whatever this says.
 	MaxItems int
 
+	// MaxMergeStreams bounds how many documents streamed xsl:merge reads at
+	// once, counted over every merge open at the time: a merge run from the
+	// action of another, and one in a transform fn:transform starts, share
+	// the count. Each streamed document holds its open resource (a file
+	// descriptor for a FileResolver), its cursor and a coroutine until its
+	// merge ends. Zero means 64; a negative value means no limit.
+	//
+	// It refuses nothing. A merge that would take the count past it reads
+	// its inputs on the tree instead, each document parsed once into memory,
+	// with the same result. Raising it trades that memory for open resources
+	// and goroutines, which a for-each-source naming many URIs can then ask
+	// for in proportion; lowering it trades the other way. A transform
+	// started by fn:transform keeps its caller's bound whatever this says,
+	// and one started from the static phase has the default.
+	MaxMergeStreams int
+
 	// MaxNodes bounds the result-tree and temporary-tree nodes the transform
 	// holds: zero is xpath.MaxNodes (2,000,000), negative is no bound, and
 	// past it the transform fails with XPDY0130 wrapping

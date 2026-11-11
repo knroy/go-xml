@@ -143,13 +143,13 @@ func countNestedAllStep() {
 // structural table. Enforced by TestSubsumeDeclineIsNotAcceptance.
 //
 // A var only so tests may lower it; never assigned in production.
-var subsumeMaxStates = 4096
+var subsumeMaxStates = DefaultMaxSubsumptionStates
 
 // subsumeMaxProduct caps the product exploration, which is the determinised
 // base's subset space against the derived NFA's states.
 // Exceeding it likewise DECLINES rather than accepting. A var only so tests
 // may lower it; never assigned in production.
-var subsumeMaxProduct = 20000
+var subsumeMaxProduct = DefaultMaxSubsumptionProduct
 
 // nfa is a plain nondeterministic automaton over particle positions, with
 // every occurrence range unrolled. Transitions carry the term they match
@@ -161,6 +161,8 @@ type nfa struct {
 	// accept[s] reports whether s is final.
 	accept []bool
 	start  int
+	// maxStates is the subsumeMaxStates budget in force for this build.
+	maxStates int
 }
 
 type nfaEdge struct {
@@ -185,16 +187,18 @@ func (n *nfa) addState() int {
 // the caller back to the 1.0 table; the error is errBudgetDeclined when the cap
 // was the reason and nil when the shape was.
 //
-// The cap is told from the shape by the state count alone: every addState is
-// checked against subsumeMaxStates at once and the build stops there, so a
-// failed build that ended above the cap ended because of it.
-func buildNFA(p *Particle) (*nfa, error, bool) {
-	n := &nfa{}
+// The cap is maxStates, the subsumeMaxStates budget in force for this build
+// (Options.MaxSubsumptionStates via loadBudgets.states). It is told from the
+// shape by the state count alone: every addState is checked against it at once
+// and the build stops there, so a failed build that ended above the cap ended
+// because of it.
+func buildNFA(p *Particle, maxStates int) (*nfa, error, bool) {
+	n := &nfa{maxStates: maxStates}
 	n.start = n.addState()
 	active := map[*ModelGroup]bool{}
 	end, ok := nfaParticle(n, p, n.start, active)
 	if !ok {
-		if len(n.trans) > subsumeMaxStates {
+		if len(n.trans) > n.maxStates {
 			return nil, errBudgetDeclined, false
 		}
 		return nil, nil, false
@@ -215,7 +219,7 @@ func nfaParticle(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]
 	if p == nil || p.Term == nil {
 		return []int{from}, true
 	}
-	if len(n.trans) > subsumeMaxStates {
+	if len(n.trans) > n.maxStates {
 		declineSubsumeBudget()
 		return nil, false
 	}
@@ -258,7 +262,7 @@ func nfaParticle(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]
 		// entry put the outer choice's epsilon-to-accept back in reach,
 		// and the base then accepted a lone d1 that it does not allow.
 		entry := n.addState()
-		if len(n.trans) > subsumeMaxStates {
+		if len(n.trans) > n.maxStates {
 			declineSubsumeBudget()
 			return nil, false
 		}
@@ -272,7 +276,7 @@ func nfaParticle(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]
 		// A copy that can finish in several places needs a join state,
 		// because the next copy must start from exactly one.
 		join := n.addState()
-		if len(n.trans) > subsumeMaxStates {
+		if len(n.trans) > n.maxStates {
 			declineSubsumeBudget()
 			return nil, false
 		}
@@ -297,7 +301,7 @@ func nfaOnce(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]int,
 	switch t := p.Term.(type) {
 	case *ElementDecl, *Wildcard:
 		to := n.addState()
-		if len(n.trans) > subsumeMaxStates {
+		if len(n.trans) > n.maxStates {
 			declineSubsumeBudget()
 			return nil, false
 		}
@@ -329,7 +333,7 @@ func nfaGroup(n *nfa, g *ModelGroup, from int, active map[*ModelGroup]bool) ([]i
 			entry := cur[0]
 			if len(cur) != 1 {
 				entry = n.addState()
-				if len(n.trans) > subsumeMaxStates {
+				if len(n.trans) > n.maxStates {
 					declineSubsumeBudget()
 					return nil, false
 				}
@@ -434,11 +438,16 @@ func (n *nfa) accepts(set map[int]bool) bool {
 // and TestSubsumeDeclineIsNotAcceptance, which run the comparison with both
 // budgets forced to zero so only the table answers.
 func particleSubsumes(r, b *Particle) (error, bool) {
-	rn, err, ok := buildNFA(r)
+	return particleSubsumesIn(r, b, loadBudgets{})
+}
+
+// particleSubsumesIn is particleSubsumes under a schema's retained budgets.
+func particleSubsumesIn(r, b *Particle, lb loadBudgets) (error, bool) {
+	rn, err, ok := buildNFA(r, lb.states())
 	if !ok {
 		return err, false
 	}
-	bn, err, ok := buildNFA(b)
+	bn, err, ok := buildNFA(b, lb.states())
 	if !ok {
 		return err, false
 	}
@@ -475,7 +484,7 @@ func particleSubsumes(r, b *Particle) (error, bool) {
 	seen[key{setKey(rstart), setKey(bstart)}] = true
 
 	for len(queue) > 0 {
-		if len(seen) > subsumeMaxProduct {
+		if len(seen) > lb.product() {
 			declineSubsumeBudget()
 			return errBudgetDeclined, false
 		}

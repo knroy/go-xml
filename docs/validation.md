@@ -98,7 +98,9 @@ Element and attribute names are matched as written, prefix included
 `Options.AllowUndeclared` skips undeclared attributes as well as elements.
 The content models go through
 the same Glushkov automaton the XSD validator uses — a DTD model is a strict
-subset of what an `xsd.Particle` expresses, so there is no second engine.
+subset of what an `xsd.Particle` expresses, so there is no second engine —
+under `Options.MaxContentModelPositions`, `MaxContentModelEdges` and
+`MaxMatchStates` (see [options.md](options.md#dtdoptions)).
 
 `dtd.Parse` reads the internal subset alone and fetches nothing. To validate
 against a DTD that lives in another file, use `dtd.Load`:
@@ -276,8 +278,11 @@ s, err := relaxng.CompileWithOptions(schema.Root, relaxng.Options{
 `Compile` supplies no resolver, so every `href` is refused with an error
 naming it. There is no default implementation: where a schema is allowed to
 reach is the caller's decision, not the schema author's. A cycle of includes is
-bounded — with a resolver reading from the network, that is a request loop
-rather than merely a hang.
+refused, and the fetches are bounded — with a resolver reading from the
+network, an unbounded set is a request loop rather than merely a hang. The
+bounds are `Options.MaxIncludeDepth` (40), `MaxSchemaFetches` (10,000) and
+`MaxFetchedNodes`/`MaxFetchedBytes` (xdm's single-document limits); see
+[options.md](options.md#relaxngoptions).
 
 `<parentRef>` needs no resolver, reaching only into the enclosing grammar, and
 always works.
@@ -297,7 +302,8 @@ always works.
   definition gets the same compiled pattern, so compilation is linear in the
   number of definitions: DocBook 5.2's `docbook.rng` (about 1,900
   definitions) compiles in about 0.5 s and 170 MB. A budget of 200,000
-  definition compilations remains as a guard, far above any real schema.
+  definition compilations (`Options.MaxRefExpansions`) remains as a guard,
+  far above any real schema.
 * **Large schemas can still exceed the derivative bound.** Validation does not
   intern patterns, so a deeply mixed content model can grow past
   `ValidateOptions.MaxPatternSize`, which ends validation with an error that
