@@ -64,7 +64,8 @@ type InstanceLocationPolicy struct {
 	Resolver Resolver
 
 	// MaxDocuments bounds how many documents the instance may pull in.
-	// Zero means DefaultMaxDocuments.
+	// A location that is fetched and then declined counts as one. Zero
+	// means DefaultMaxDocuments.
 	MaxDocuments int
 }
 
