@@ -3,6 +3,7 @@ package xdmstream
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 )
 
 // Tee is how several consumers read one document at once (xsl:fork, an
@@ -30,16 +31,34 @@ import (
 // fail with errTeeStopped at their next read. A panic in run is raised again
 // in the caller, the first in consumer order. Tee may be called only before
 // anything has been read from c; c is spent afterwards.
+//
+// A consumer may tee its own cursor (an xsl:fork in a fork's prong): its
+// consumers are then live beside every consumer of the tees it is under, so
+// the bound is on the consumers live at once across such nested tees,
+// maxTeeReaders, not on each tee. A tee that would pass it starts nothing
+// and fails every consumer with errTeeReaders, leaving c unread.
 func (c *Cursor) Tee(n int, run func(k int, sub *Cursor) error, swap func(k int, in bool)) []error {
 	errs := make([]error, n)
-	if !c.Fresh() {
+	fail := func(err error) []error {
 		for k := range errs {
-			errs[k] = errTeeRead
+			errs[k] = err
 		}
 		return errs
 	}
+	if !c.Fresh() {
+		return fail(errTeeRead)
+	}
+	live := new(atomic.Int64)
+	if r, ok := c.src.(*teeReader); ok {
+		live = r.t.live // a consumer's cursor: its tee's family
+	}
+	if live.Add(int64(n)) > maxTeeReaders {
+		live.Add(-int64(n))
+		return fail(errTeeReaders)
+	}
+	defer live.Add(-int64(n))
 	c.teed = true
-	t := &tee{ask: make(chan teeMsg), give: make([]chan teeBlock, n), panics: make([]any, n)}
+	t := &tee{ask: make(chan teeMsg), give: make([]chan teeBlock, n), panics: make([]any, n), live: live}
 	stopAfter := n
 	waiting := make([]int, 0, n)
 	turn := func(k int, b teeBlock, start bool) {
@@ -97,6 +116,15 @@ func (c *Cursor) Fresh() bool {
 // observers, which the cursors it would make could not carry.
 var errTeeRead = errors.New("xdmstream: Tee of a cursor already read")
 
+// maxTeeReaders bounds the consumers live at once across a tee and the tees
+// its consumers make, each a parse and a goroutine live for the whole
+// document. It is xslt's maxTeeParts, the bound one tee is planned under.
+const maxTeeReaders = 64
+
+// errTeeReaders is Tee's error past maxTeeReaders. It is no error of the
+// document: a streamed container that meets it runs again on the tree.
+var errTeeReaders = errors.New("xdmstream: more readers of the document at once than a tee runs")
+
 // errTeeStopped fails the cursors of the consumers after one that failed.
 var errTeeStopped = errors.New("xdmstream: another reader of the document failed first")
 
@@ -107,6 +135,9 @@ type tee struct {
 	ask    chan teeMsg     // a consumer's turn ended: it wants bytes, or is done
 	give   []chan teeBlock // the next block, to consumer k
 	panics []any
+	// live counts the consumers of this tee and of the tees around and
+	// within it (maxTeeReaders); the turns share it one at a time.
+	live *atomic.Int64
 }
 
 type teeMsg struct{ done bool }

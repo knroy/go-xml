@@ -79,6 +79,9 @@ func groundAccums(c *xdmstream.Cursor) (_ *xdm.Node, ok bool, _ error) {
 		return nil, false, nil
 	}
 	f := &sa.frames[d]
+	if err := sa.holdSlots(1); err != nil {
+		return nil, true, err
+	}
 	m := &mergeAccums{sa: sa, minD: d, open: []int{0}}
 	m.lists = []mergeAccumList{{top: f.ord, entries: []mergeAccumEntry{{ord: f.ord, before: append([]xdm.Sequence(nil), f.before...), beforeAt: f.beforeAt}}}}
 	prev := sa.onStep
@@ -118,6 +121,12 @@ func recordCopy(rt *runtime, c *xdmstream.Cursor, d int, build func() (*xdm.Node
 		return nil, false, nil
 	}
 	f := &sa.frames[d]
+	// Each node's values are charged as recorded (holdSlots); herr is the
+	// refusal, after which nothing is.
+	herr := sa.holdSlots(1)
+	if herr != nil {
+		return nil, true, herr
+	}
 	// es are the subtree's values in document order; open, per depth below
 	// d, the entry of the element open there.
 	es := []heldAccum{{sa: sa, before: slices.Clone(f.before), beforeAt: f.beforeAt}}
@@ -128,8 +137,13 @@ func recordCopy(rt *runtime, c *xdmstream.Cursor, d int, build func() (*xdm.Node
 			prev(n, nd, post, ord, cur)
 		}
 		k := nd - d
-		if k < 0 || k == 0 && !post {
+		if k < 0 || k == 0 && !post || herr != nil {
 			return
+		}
+		if !post {
+			if herr = sa.holdSlots(1); herr != nil {
+				return
+			}
 		}
 		vals, at := slices.Clone(cur), sa.rd.phase
 		switch el := n.Kind() == xdm.KindElement; {
@@ -146,6 +160,9 @@ func recordCopy(rt *runtime, c *xdmstream.Cursor, d int, build func() (*xdm.Node
 	}
 	g, err := build()
 	sa.onStep = prev
+	if err == nil {
+		err = herr
+	}
 	if err != nil {
 		return nil, true, err
 	}

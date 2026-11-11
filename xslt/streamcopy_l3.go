@@ -56,24 +56,22 @@ func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, str
 	// for.
 	var cur *outputBuilder
 	detached := 0
-	// The in-scope bindings of the open elements, an entry only where an
-	// element declares one: each copied element's come from its parent's
-	// and its own declarations, not from a walk up its ancestors, which made
-	// a deep copy quadratic.
-	var scopes []copyScope
-	start := func(top *outputBuilder, v *xdm.Node, depth int) error {
-		var all []nsBinding
-		switch {
-		case len(scopes) == 0:
-			all = scopeBindings(v, nil)
-			scopes = append(scopes, copyScope{depth, all})
-		case v.NumNamespaceDecls() > 0:
-			all = overlayScope(scopes[len(scopes)-1].all, v)
-			scopes = append(scopes, copyScope{depth, all})
-		default:
-			all = scopes[len(scopes)-1].all
+	// The top of the copy is given all its in-scope bindings, as the tree's
+	// copy-of gives its copy; an element below it only its own declarations:
+	// its parent's copy, in the same tree, supplies what it inherits (which
+	// addBindings would only note as supplied, at a scan of the parent's per
+	// binding: a copy of many elements under many bindings was quadratic).
+	start := func(top *outputBuilder, v *xdm.Node) error {
+		var arr, own [32]nsBinding
+		bs := ownBindings(v, own[:0])
+		if top == out {
+			n := len(bs)
+			bs = copyOfBindings(v, scopeBindings(v, nil), arr[:0])
+			if err := chargeInherited(rt.ctx, len(bs)-n); err != nil {
+				return err
+			}
 		}
-		sub, err := copyStart(rt, top, v, strip, all)
+		sub, err := copyStart(rt, top, v, strip, bs)
 		if err != nil {
 			return err
 		}
@@ -91,7 +89,7 @@ func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, str
 		if err != nil {
 			return err
 		}
-		if err := start(out, v, d); err != nil {
+		if err := start(out, v); err != nil {
 			return err
 		}
 	} else if err := rt.ctx.ChargeNodes(1); err != nil {
@@ -110,9 +108,6 @@ func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, str
 		case xdmstream.EndDocument:
 			return top.Refused()
 		case xdmstream.EndElement:
-			if n := len(scopes); n > 0 && scopes[n-1].depth == ev.Depth {
-				scopes = scopes[:n-1]
-			}
 			if err := top.Refused(); err != nil {
 				return err
 			}
@@ -139,7 +134,7 @@ func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, str
 				}
 				doc(v)
 			}
-			if err := start(top, ev.Node, ev.Depth); err != nil {
+			if err := start(top, ev.Node); err != nil {
 				return err
 			}
 		case xdmstream.Text:
@@ -158,13 +153,6 @@ func copyEvents(rt *runtime, out *outputBuilder, c *xdmstream.Cursor, d int, str
 			top.AppendNode(n)
 		}
 	}
-}
-
-// copyScope is the in-scope bindings (scopeBindings) of the open element at
-// depth, one that declares a namespace.
-type copyScope struct {
-	depth int
-	all   []nsBinding
 }
 
 // overlayScope is scopeBindings of v given its parent's, parent: v's own
@@ -188,17 +176,16 @@ func overlayScope(parent []nsBinding, v *xdm.Node) []nsBinding {
 
 // copyStart opens, in out, the copy of v, the element whose start tag the
 // cursor is at (its view, or the parse's node), as xsl:copy of an element
-// opens it (copyInstr), with its attributes; all is v's in-scope bindings.
-// The builder of its content is returned.
-func copyStart(rt *runtime, out *outputBuilder, v *xdm.Node, strip bool, all []nsBinding) (*outputBuilder, error) {
+// opens it (copyInstr), with its attributes and the bindings bs. The
+// builder of its content is returned.
+func copyStart(rt *runtime, out *outputBuilder, v *xdm.Node, strip bool, bs []nsBinding) (*outputBuilder, error) {
 	sub := out.StartElement(v.Name())
 	el := sub.Open()
 	if out.Open() == nil && el.BaseURI() == "" {
 		el.SetBaseURI(v.BaseURI())
 	}
 	copyTyping(el, v, strip)
-	var arr [32]nsBinding
-	addBindings(rt, sub, copyOfBindings(v, all, arr[:0]))
+	addBindings(rt, sub, bs)
 	for a := range v.Attrs() {
 		if err := sub.AddAttributeWithTyping(a.Name(), a.Value(), copiedTyping(a, strip)); err != nil {
 			return nil, err
@@ -229,6 +216,17 @@ func copyOfBindings(v *xdm.Node, all, buf []nsBinding) []nsBinding {
 	for _, b := range all {
 		if !slices.Contains(buf[:own], b) {
 			buf = append(buf, b)
+		}
+	}
+	return buf
+}
+
+// ownBindings appends to buf the bindings v declares itself, as
+// copyOfBindings gives them first: not xml, nor an undeclaration.
+func ownBindings(v *xdm.Node, buf []nsBinding) []nsBinding {
+	for p, u := range v.DeclaredNamespaces() {
+		if p != "xml" && u != "" {
+			buf = append(buf, nsBinding{p, u})
 		}
 	}
 	return buf
