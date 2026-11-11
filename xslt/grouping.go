@@ -1531,15 +1531,29 @@ type numberAnyMemo struct {
 // countAnyMemo answers countAny from the instruction's table, numbering the
 // tree first when the table is for another tree (or another kind and name).
 // One table is kept per instruction, so a stylesheet numbering many trees
-// holds the latest one only: 4 bytes a node of a tree already built, per
-// level="any" instruction, which is why it is not charged to a budget.
+// holds the latest one only. The stylesheet chooses how many instructions
+// there are, though, so the slots all tables hold are retained items, totalled
+// and checked against the item bound before a table is made. A table the bound
+// will not admit is not an error: the memo is only a speed-up, so that
+// execution walks the tree instead (countAnyWalk), which retains nothing.
 func (i *numberInstr) countAnyMemo(rt *runtime, root, stop, target *xdm.Node) (int64, error) {
 	m := rt.numberAny[i]
 	k := stop.Index() - root.Index()
 	if m == nil || m.root != root.Identity() || k >= len(m.at) ||
 		i.count == nil && (m.kind != target.Kind() || m.name != target.Name()) {
+		size := root.SubtreeEnd() - root.Index()
+		held := int64(size)
+		for j, o := range rt.numberAny {
+			if j != i { // i's own table is replaced, not kept
+				held += int64(len(o.at))
+			}
+		}
+		if rt.ctx.ItemsRefused(held) != nil {
+			delete(rt.numberAny, i)
+			return i.countAnyWalk(rt, root, stop, target, nil)
+		}
 		m = &numberAnyMemo{root: root.Identity(), kind: target.Kind(), name: target.Name(),
-			base: root.Index(), at: make([]uint32, root.SubtreeEnd()-root.Index())}
+			base: root.Index(), at: make([]uint32, size)}
 		if _, err := i.countAnyWalk(rt, root, nil, target, m); err != nil {
 			return 0, err
 		}
