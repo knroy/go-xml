@@ -182,7 +182,7 @@ func TestStreamPlanAgreesWithAnalysis(t *testing.T) {
 						continue
 					}
 					n.exprs++
-					a := &analyzer{ctxPosture: r.ctx, ctxAllowsChildren: r.ctxAllowsChildren, known: true,
+					a := &analyzer{ctxPosture: r.ctx, ctxAllowsChildren: r.ctxAllowsChildren, ctxType: r.ctxType, known: true,
 						funcs: tr.funcs, trust: tr, currentPosture: r.ctx,
 						currentAllowsChildren: r.ctxAllowsChildren, currentInScope: true}
 					if got := a.expr(e); got != r.props {
@@ -199,7 +199,7 @@ func TestStreamPlanAgreesWithAnalysis(t *testing.T) {
 					continue
 				}
 				n.instrs++
-				a := &instrAnalyzer{ctxPosture: r.ctx, ctxAllowsChildren: r.ctxAllowsChildren,
+				a := &instrAnalyzer{ctxPosture: r.ctx, ctxAllowsChildren: r.ctxAllowsChildren, ctxType: r.ctxType,
 					known: true, attrSets: tr.sets, funcs: tr.funcs, trust: tr}
 				if got := a.instruction(el); got != r.props {
 					t.Errorf("%s: <%s> re-analysed alone %v, map %v", name, el.Name().Local, got, r.props)
@@ -216,7 +216,7 @@ func TestStreamPlanAgreesWithAnalysis(t *testing.T) {
 					continue
 				}
 				n.sites++
-				a := &analyzer{ctxPosture: r.ctx, ctxAllowsChildren: r.ctxAllowsChildren, known: true,
+				a := &analyzer{ctxPosture: r.ctx, ctxAllowsChildren: r.ctxAllowsChildren, ctxType: r.ctxType, known: true,
 					decl: s.el, funcs: tr.funcs, trust: tr, currentPosture: r.ctx,
 					currentAllowsChildren: r.ctxAllowsChildren, currentInScope: true}
 				if got := a.expr(e); got != r.props {
@@ -416,13 +416,13 @@ func TestStreamPlanRules(t *testing.T) {
 		k := &xpath.Literal{}
 		for _, p := range []props{groundedMotionless, groundedMotionless} {
 			pl.enter()
-			pl.leave(k, p, postureStriding, true, true, false)
+			pl.leave(k, p, postureStriding, true, itemType{}, true, false)
 		}
 		if pl.rec(k) == nil {
 			t.Fatal("same result twice must stand")
 		}
 		pl.enter()
-		pl.leave(k, groundedMotionless, postureGrounded, true, true, false)
+		pl.leave(k, groundedMotionless, postureGrounded, true, itemType{}, true, false)
 		if pl.rec(k) != nil {
 			t.Fatal("a different focus must conflict")
 		}

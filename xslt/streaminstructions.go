@@ -387,7 +387,7 @@ func (a *instrAnalyzer) exprOperandIn(src string, el *xdm.Node, ctx posture, all
 	p := an.expr(expr)
 	kids := an.allowsChildren(expr)
 	if pl := a.trust.planOf(); pl != nil {
-		pl.site(el, src, expr, ctx, allowsChildren)
+		pl.site(el, src, expr, ctx, allowsChildren, a.ctxType)
 	}
 	a.known = a.known && an.known
 	a.unverified = a.unverified || an.unverified
