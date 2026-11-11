@@ -328,7 +328,7 @@ func (c *compiler) compileGrammar(g *xdm.Node) (pattern, error) {
 	if err != nil {
 		return nil, err
 	}
-	join := choice
+	join := choiceFold()
 	if startCombine == "interleave" {
 		join = interleave
 	}
@@ -651,7 +651,7 @@ func (c *compiler) compilePattern(n *xdm.Node) (pattern, error) {
 		return c.combine(n, interleave)
 
 	case "choice":
-		return c.combine(n, choice)
+		return c.combine(n, choiceFold())
 
 	case "optional":
 		p, err := c.compileChildren(n)
@@ -1245,7 +1245,7 @@ func (c *compiler) compileData(n *xdm.Node) (pattern, error) {
 			// excepting x, y and z admits nothing that matches any of them.
 			// compileChildren would group them instead, which excludes only
 			// the concatenation and so excludes nothing at all.
-			ex, err := c.combine(kid, choice)
+			ex, err := c.combine(kid, choiceFold())
 			if err != nil {
 				return nil, err
 			}

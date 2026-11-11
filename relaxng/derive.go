@@ -1,6 +1,10 @@
 package relaxng
 
-import "github.com/knroy/go-xml/v2/xdm"
+import (
+	"hash/maphash"
+
+	"github.com/knroy/go-xml/v2/xdm"
+)
 
 // The derivative algorithm.
 //
@@ -209,7 +213,11 @@ func textDeriv(p pattern, s string, ctx nsContext) pattern {
 }
 func startTagCloseDeriv(p pattern) pattern { return (*patBuilder)(nil).startTagCloseDeriv(p) }
 
-func (pb *patBuilder) choice(a, b pattern) pattern {
+func (pb *patBuilder) choice(a, b pattern) pattern { return pb.choiceIn(a, b, nil) }
+
+// choiceIn is choice, with ix describing a's alternatives when a is the
+// chain a fold is building (see altIndex); ix may be nil.
+func (pb *patBuilder) choiceIn(a, b pattern, ix *altIndex) pattern {
 	if _, ok := a.(notAllowedPat); ok {
 		return b
 	}
@@ -223,7 +231,7 @@ func (pb *patBuilder) choice(a, b pattern) pattern {
 	// alone. Equality is structural and conservative (see patEq), which
 	// catches the copies the derivative makes. It stays structural under
 	// patBuilder's interning; see there for why.
-	if patEq(a, b) || pb.inChoice(a, b) {
+	if patEq(a, b) || inChoice(a, b, ix) {
 		return a
 	}
 	// A choice on the right is merged alternative by alternative. Taking the
@@ -239,35 +247,90 @@ func (pb *patBuilder) choice(a, b pattern) pattern {
 	// ponytail: a fixed pair budget; a hash of the alternatives if a schema
 	// needs more.
 	if c, ok := b.(*choicePat); ok && altCount(a)*altCount(b) <= maxMergePairs {
-		return pb.choice(pb.choice(a, c.Left), c.Right)
+		return pb.choiceIn(pb.choiceIn(a, c.Left, ix), c.Right, ix)
 	}
+	var p pattern
 	if pb.on() {
-		return pb.mk(kChoice, a, b)
+		p = pb.mk(kChoice, a, b)
+	} else {
+		p = newChoicePat(a, b)
 	}
-	return newChoicePat(a, b)
+	ix.extend(a, b, p)
+	return p
+}
+
+// choiceFold returns choice for folding a list of alternatives left to
+// right, as one altIndex.
+func choiceFold() func(a, b pattern) pattern {
+	ix := &altIndex{}
+	return func(a, b pattern) pattern { return (*patBuilder)(nil).choiceIn(a, b, ix) }
+}
+
+// choiceMap is choice(f(c.Left), f(c.Right)) applied down the whole chain of
+// choices at c, as each derivative of a choice is. The recursion rebuilt the
+// chain one alternative at a time and inChoice walked what was built so far,
+// O(K²) for K alternatives; folding through one altIndex makes it O(K), and
+// iterating keeps the stack flat.
+//
+// The spine is followed through static wrappers (memo.go), which addMemoPoints
+// puts on every link of a long chain: stopping at each would make every link
+// a fold of its own. Their memos still answer at the top of the chain, where
+// the derivative enters through the wrapper.
+//
+// f also reports whether it changed its alternative; when none changed, c is
+// returned unbuilt, which startTagCloseDerivCh relies on.
+func (pb *patBuilder) choiceMap(c *choicePat, f func(pattern) (pattern, bool)) (pattern, bool) {
+	if _, ok := unstatic(c.Left).(*choicePat); !ok {
+		l, chl := f(c.Left)
+		r, chr := f(c.Right)
+		if !chl && !chr {
+			return c, false
+		}
+		return pb.choice(l, r), true
+	}
+	var spine []*choicePat
+	p := pattern(c)
+	for t, ok := p.(*choicePat); ok; t, ok = unstatic(p).(*choicePat) {
+		spine = append(spine, t)
+		p = t.Left
+	}
+	acc, changed := f(p)
+	ds := make([]pattern, len(spine))
+	for i := len(spine) - 1; i >= 0; i-- {
+		d, ch := f(spine[i].Right)
+		ds[i], changed = d, changed || ch
+	}
+	if !changed {
+		return c, false
+	}
+	var ix altIndex
+	for i := len(spine) - 1; i >= 0; i-- {
+		acc = pb.choiceIn(acc, ds[i], &ix)
+	}
+	return acc, true
 }
 
 // maxMergePairs bounds the pairs of alternatives choice compares when it
 // merges one chain into another.
 const maxMergePairs = 1 << 10
 
-// altCount is the number of alternatives in a chain of choices.
+// altCount is the number of alternatives in a chain of choices, fixed when
+// the chain was built.
 func altCount(p pattern) int {
-	n := 1
-	for {
-		c, ok := unstatic(p).(*choicePat)
-		if !ok {
-			return n
-		}
-		n += altCount(c.Right)
-		p = c.Left
+	if c, ok := unstatic(p).(*choicePat); ok {
+		return c.alts
 	}
+	return 1
 }
 
 // inChoice reports whether b is already one of a's alternatives. A chain of
 // choices is built leftwards, so the alternatives are the Right of each link
-// and the Left of the last.
-func (pb *patBuilder) inChoice(a, b pattern) bool {
+// and the Left of the last. ix, when not nil, is the index of the chain
+// being folded; a long chain is looked up there instead of walked.
+func inChoice(a, b pattern, ix *altIndex) bool {
+	if ix.covers(a) {
+		return ix.has(b)
+	}
 	// Equal patterns have equal sizes, so a size mismatch skips the walk.
 	sb := patternSize(b)
 	for {
@@ -280,6 +343,162 @@ func (pb *patBuilder) inChoice(a, b pattern) bool {
 		}
 		a = c.Left
 	}
+}
+
+// altIndex holds the alternatives of the choice chain a fold is building,
+// by patHash, so each new alternative is tested against the chain in O(1)
+// rather than by walking it. Without it a K-way choice, compiled or derived,
+// cost O(K²): 2.7 s to take one start-tag derivative of an 8000-way choice of
+// values.
+//
+// It belongs to one fold, never to a pattern: schema patterns are shared by
+// concurrent validations and are not written to. A chain shorter than
+// minIndexed is walked, which is cheaper than indexing it.
+type altIndex struct {
+	of pattern // the chain the index describes; nil until built
+	m  map[uint64][]pattern
+}
+
+const minIndexed = 16
+
+// covers reports whether ix can answer for chain a, indexing a first when it
+// is long enough and ix does not already describe it.
+func (ix *altIndex) covers(a pattern) bool {
+	if ix == nil {
+		return false
+	}
+	if ix.of != nil && ix.of == a {
+		return true
+	}
+	n := 0
+	for p := a; n < minIndexed; n++ {
+		c, ok := unstatic(p).(*choicePat)
+		if !ok {
+			return false
+		}
+		p = c.Left
+	}
+	ix.of, ix.m = a, map[uint64][]pattern{}
+	for p := a; ; {
+		c, ok := unstatic(p).(*choicePat)
+		if !ok {
+			ix.add(p)
+			return true
+		}
+		ix.add(c.Right)
+		p = c.Left
+	}
+}
+
+func (ix *altIndex) add(p pattern) {
+	if h := patHash(p); h != 0 {
+		ix.m[h] = append(ix.m[h], p)
+	}
+}
+
+// has reports whether b is patEq to an indexed alternative.
+func (ix *altIndex) has(b pattern) bool {
+	h := patHash(b)
+	if h == 0 {
+		return false
+	}
+	sb := patternSize(b)
+	for _, q := range ix.m[h] {
+		if patternSize(q) == sb && patEq(q, b) {
+			return true
+		}
+	}
+	return false
+}
+
+// extend records that p is the chain a with b appended.
+func (ix *altIndex) extend(a, b, p pattern) {
+	if ix != nil && ix.of != nil && ix.of == a {
+		ix.add(b)
+		ix.of = p
+	}
+}
+
+// The kinds patHash mixes in beyond the interned ones.
+const (
+	kList = kOneOrMore + 1 + iota
+	kElement
+	kAttribute
+	kRef
+	kEmpty
+	kText
+	kNotAllowed
+)
+
+var hashSeed = maphash.MakeSeed()
+
+// kindHash keys each kind by the process seed, so no pattern's hash is
+// predictable from the schema alone.
+var kindHash = func() (h [kNotAllowed + 1]uint64) {
+	for k := range h {
+		h[k] = maphash.Comparable(hashSeed, k)
+	}
+	return
+}()
+
+// patHash is a structural hash consistent with patEq: patterns patEq equates
+// hash alike. Zero marks a pattern patEq equates with nothing -- it holds a
+// value or data outside a definition reference -- which no index holds.
+func patHash(p pattern) uint64 {
+	switch t := p.(type) {
+	case *choicePat:
+		return t.hash
+	case *groupPat:
+		return t.hash
+	case *interleavePat:
+		return t.hash
+	case *afterPat:
+		return t.hash
+	case *oneOrMorePat:
+		return t.hash
+	case *listPat:
+		return t.hash
+	case *elementPat:
+		return mixHash(kElement, maphash.Comparable(hashSeed, t.Name), patHash(t.Pattern))
+	case *attributePat:
+		return mixHash(kAttribute, maphash.Comparable(hashSeed, t.Name), patHash(t.Pattern))
+	case *refPat:
+		if t.static != nil {
+			return patHash(t.cached)
+		}
+		return mixHash(kRef, maphash.Comparable(hashSeed, t), 1)
+	case *valuePat, *dataPat:
+		return 0
+	case emptyPat:
+		return kindHash[kEmpty] | 1
+	case textPat:
+		return kindHash[kText] | 1
+	}
+	return kindHash[kNotAllowed] | 1
+}
+
+func hash2(k uint8, l, r pattern) uint64 { return mixHash(k, patHash(l), patHash(r)) }
+
+// mixHash combines a kind with two operand hashes, in order. An operand of
+// hash zero makes the result zero, as patEq is false for the whole when it is
+// for a part.
+func mixHash(k uint8, a, b uint64) uint64 {
+	if a == 0 || b == 0 {
+		return 0
+	}
+	h := fmix64(kindHash[k] ^ a)
+	h = fmix64(h ^ (b*0x9e3779b97f4a7c15 + 0x632be59bd9b4e019))
+	return h | 1
+}
+
+// fmix64 is MurmurHash3's finalizer.
+func fmix64(h uint64) uint64 {
+	h ^= h >> 33
+	h *= 0xff51afd7ed558ccd
+	h ^= h >> 33
+	h *= 0xc4ceb9fe1a85ec53
+	h ^= h >> 33
+	return h
 }
 
 // patEq reports whether two patterns are structurally equal. It may answer
@@ -404,7 +623,8 @@ func (pb *patBuilder) startTagOpenDeriv(p pattern, name xdm.QName) pattern {
 	}
 	switch t := expand(p).(type) {
 	case *choicePat:
-		return pb.choice(pb.startTagOpenDeriv(t.Left, name), pb.startTagOpenDeriv(t.Right, name))
+		d, _ := pb.choiceMap(t, func(q pattern) (pattern, bool) { return pb.startTagOpenDeriv(q, name), true })
+		return d
 	case *elementPat:
 		if !t.Name.contains(name) {
 			return notAllowedPat{}
@@ -473,7 +693,8 @@ func (pb *patBuilder) applyAfter(f func(pattern) pattern, p pattern) pattern {
 	case *afterPat:
 		return pb.after(t.Left, f(t.Right))
 	case *choicePat:
-		return pb.choice(pb.applyAfter(f, t.Left), pb.applyAfter(f, t.Right))
+		d, _ := pb.choiceMap(t, func(q pattern) (pattern, bool) { return pb.applyAfter(f, q), true })
+		return d
 	case notAllowedPat:
 		return notAllowedPat{}
 	}
@@ -512,7 +733,8 @@ func (pb *patBuilder) attDeriv(p pattern, a attr, ctx nsContext) pattern {
 	case *afterPat:
 		return pb.after(pb.attDeriv(t.Left, a, ctx), t.Right)
 	case *choicePat:
-		return pb.choice(pb.attDeriv(t.Left, a, ctx), pb.attDeriv(t.Right, a, ctx))
+		d, _ := pb.choiceMap(t, func(q pattern) (pattern, bool) { return pb.attDeriv(q, a, ctx), true })
+		return d
 	case *groupPat:
 		return pb.choice(
 			pb.group(pb.attDeriv(t.Left, a, ctx), t.Right),
@@ -602,7 +824,8 @@ func (pb *patBuilder) textDeriv(p pattern, s string, ctx nsContext) pattern {
 	}
 	switch t := expand(p).(type) {
 	case *choicePat:
-		return pb.choice(pb.textDeriv(t.Left, s, ctx), pb.textDeriv(t.Right, s, ctx))
+		d, _ := pb.choiceMap(t, func(q pattern) (pattern, bool) { return pb.textDeriv(q, s, ctx), true })
+		return d
 	case *interleavePat:
 		return pb.choice(
 			pb.interleave(pb.textDeriv(t.Left, s, ctx), t.Right),
@@ -726,12 +949,11 @@ func (pb *patBuilder) startTagCloseDerivCh(p pattern) (pattern, bool) {
 		}
 		return pb.after(l, t.Right), true
 	case *choicePat:
-		l, chl := pb.startTagCloseDerivCh(t.Left)
-		r, chr := pb.startTagCloseDerivCh(t.Right)
-		if !chl && !chr {
+		d, ch := pb.choiceMap(t, pb.startTagCloseDerivCh)
+		if !ch {
 			return p, false
 		}
-		return pb.choice(l, r), true
+		return d, true
 	case *groupPat:
 		l, chl := pb.startTagCloseDerivCh(t.Left)
 		r, chr := pb.startTagCloseDerivCh(t.Right)
@@ -766,7 +988,8 @@ func (pb *patBuilder) startTagCloseDerivCh(p pattern) (pattern, bool) {
 func (pb *patBuilder) endTagDeriv(p pattern) pattern {
 	switch t := expand(p).(type) {
 	case *choicePat:
-		return pb.choice(pb.endTagDeriv(t.Left), pb.endTagDeriv(t.Right))
+		d, _ := pb.choiceMap(t, func(q pattern) (pattern, bool) { return pb.endTagDeriv(q), true })
+		return d
 	case *afterPat:
 		if t.Left.nullable() {
 			return t.Right
