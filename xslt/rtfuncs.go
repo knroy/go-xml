@@ -1278,7 +1278,12 @@ func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]*x
 	items := out.Sequence()
 	atoms := xdm.Atomize(items)
 	if len(atoms) == 0 {
-		return []*xdm.Atomic{xdm.NewString(out.ToTree().StringValue())}, nil
+		// ToTree latches a text-store refusal instead of panicking; report it.
+		root := out.ToTree()
+		if err := out.Refused(); err != nil {
+			return nil, err
+		}
+		return []*xdm.Atomic{xdm.NewString(root.StringValue())}, nil
 	}
 	vals := make([]*xdm.Atomic, 0, len(atoms))
 	for _, it := range atoms {
