@@ -665,6 +665,14 @@ func (p *includeProc) fetchText(target, base, encoding string) (*Node, error) {
 	}
 	holder := newHolder()
 	holder.AppendText(string(data))
+	// The text is charged like any other inclusion: the fetch count and the
+	// resolver's per-resource cap alone let 200 reads each add a whole
+	// resource, past MaxBytes, where the same reads as XML were refused.
+	if t := holder.FirstChild(); t != nil {
+		if err := p.charge([]*Node{t}); err != nil {
+			return nil, err
+		}
+	}
 	return holder, nil
 }
 

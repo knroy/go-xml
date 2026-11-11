@@ -122,3 +122,47 @@ func TestNamespaceSensitiveTypeReadsTheStylesheetsOwnSchema(t *testing.T) {
 			"(the stylesheet's own schema still restricts xs:QName)", err)
 	}
 }
+
+// A value built AS an imported schema type -- by a cast, a constructor call or
+// the as= conversion -- carried the annotation but no type environment, so
+// "instance of" walked its derivation chain in the process-global table. A
+// later xsd.Load of an unrelated schema redefining {urn:v09t}T over
+// xs:integer flipped every answer below to false for a stylesheet already
+// compiled. The values now carry the stylesheet's own schema environment.
+func TestSchemaTypedAtomicsCarryTheStylesheetsTypeEnv(t *testing.T) {
+	const sheet = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+   xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:t="urn:v09t" version="3.0">
+  <xsl:import-schema namespace="urn:v09t">
+    <xs:schema targetNamespace="urn:v09t" xmlns:t="urn:v09t">
+      <xs:simpleType name="Base"><xs:restriction base="xs:string"/></xs:simpleType>
+      <xs:simpleType name="T"><xs:restriction base="t:Base"/></xs:simpleType>
+    </xs:schema>
+  </xsl:import-schema>
+  <xsl:output method="text"/>
+  <xsl:template name="main">
+    <xsl:variable name="v" as="t:T" select="xs:untypedAtomic('a')"/>
+    <xsl:value-of select="('a' cast as t:T) instance of t:Base,
+      t:T('a') instance of t:Base, $v instance of t:Base"/>
+  </xsl:template>
+</xsl:stylesheet>`
+	s, err := Compile(parseSheet(t, sheet), CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "true true true"
+	if out, err := runMain(s, "main"); err != nil || out != want {
+		t.Fatalf("before the foreign load: %q, %v; want %q", out, err, want)
+	}
+	other, err := xdm.ParseString(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    targetNamespace="urn:v09t"><xs:simpleType name="T"><xs:restriction base="xs:integer"/></xs:simpleType></xs:schema>`,
+		xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := xsd.Load(other.Root, "", xsd.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runMain(s, "main"); err != nil || out != want {
+		t.Fatalf("after a foreign schema redefined t:T: %q, %v; want %q", out, err, want)
+	}
+}

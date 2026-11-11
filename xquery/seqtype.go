@@ -21,6 +21,10 @@ import (
 type sequenceType struct {
 	src   string
 	stype xpath.SequenceType
+	// env is the type environment of the schema stype.SchemaType came
+	// from, which a value converted to that type carries. See
+	// staticContext.SchemaTypeEnv.
+	env *xdm.TypeEnvironment
 }
 
 // parseSequenceType reads a SequenceType from the source at p.pos.
@@ -168,7 +172,11 @@ func (p *parser) compileSequenceType(src string) (*sequenceType, error) {
 	if !ok {
 		return nil, fmt.Errorf("XPST0051: invalid type %q", src)
 	}
-	return &sequenceType{src: src, stype: treat.Type}, nil
+	st := &sequenceType{src: src, stype: treat.Type}
+	if treat.Type.SchemaType != "" {
+		st.env = p.sc.SchemaTypeEnv()
+	}
+	return st, nil
 }
 
 // convert applies the function conversion rules of XPath 3.1 §3.1.5 to a
@@ -386,7 +394,11 @@ func (t *sequenceType) castOne(a *xdm.Atomic) (xdm.Item, error) {
 			return nil, verr
 		}
 	}
-	return c.WithDerived(t.stype.SchemaType), nil
+	c = c.WithDerived(t.stype.SchemaType)
+	if t.env != nil {
+		c = c.WithTypeEnv(t.env)
+	}
+	return c, nil
 }
 
 // promotes reports whether the conversion rules promote from to to.

@@ -153,6 +153,13 @@ func (sc *staticContext) SubstitutionGroupMembers(name xdm.QName) []xdm.QName {
 	return out
 }
 
+// SchemaTypeEnv is the type environment of the imported schemas, which a
+// value an expression annotates with one of their types carries. See
+// xdm.TypeEnvOfAtomic.
+func (sc *staticContext) SchemaTypeEnv() *xdm.TypeEnvironment {
+	return sc.schema.TypeEnv()
+}
+
 // ValidateSchemaValue implements xpath.SchemaTypes.
 //
 // "8 castable as hat:hatsize" is that question. The engine can cast to the

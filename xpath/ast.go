@@ -455,6 +455,13 @@ type SequenceType struct {
 	// the type codes here, and a derived type's identity is exactly its name.
 	SchemaType string
 
+	// schemaEnv is the type environment of the schema SchemaType came from,
+	// captured with SchemaValueValid. A value a cast annotates as SchemaType
+	// carries it, so "instance of" walks that schema's derivation chain and
+	// not the process-global table, which a later unrelated xsd.Load
+	// redefining the same name rewrites. nil when the resolver has none.
+	schemaEnv *xdm.TypeEnvironment
+
 	// SchemaValueValid checks a lexical value against the imported schema
 	// type SchemaType names, when that name is a simple type. It is captured
 	// at parse time, while the schema is still reachable through the

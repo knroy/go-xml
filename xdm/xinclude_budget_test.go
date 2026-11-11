@@ -349,3 +349,25 @@ func TestXIncludeContextCancels(t *testing.T) {
 		t.Fatalf("the resolver read %v after cancellation", res.reads)
 	}
 }
+
+// parse="text" read the resource and appended it uncharged, so 50 text
+// includes of a 1 MiB resource added 52 MB under MaxBytes 2 MiB where the
+// same includes as parse="xml" were refused. Text now shares the byte budget.
+func TestXIncludeTextInclusionsShareTheByteBudget(t *testing.T) {
+	files := map[string]string{"mem:/t": strings.Repeat("x", 4000)}
+	src := `<r xmlns:xi="http://www.w3.org/2001/XInclude">` +
+		strings.Repeat(`<a><xi:include href="t" parse="text"/></a>`, 5) + `</r>`
+	po := ParseOptions{MaxBytes: 16384}
+	tree := parseWithBase(t, "mem:/r.xml", src)
+	_, err := ProcessXInclude(tree, XIncludeOptions{Resolver: &mapResolver{files: files}, Parse: po})
+	if !errors.Is(err, ErrResourceLimit) || !strings.Contains(err.Error(), "16384 bytes") {
+		t.Fatalf("5 text includes of 4000 bytes under MaxBytes 16384: err = %v, want the byte budget", err)
+	}
+	// Three fit.
+	src = `<r xmlns:xi="http://www.w3.org/2001/XInclude">` +
+		strings.Repeat(`<a><xi:include href="t" parse="text"/></a>`, 3) + `</r>`
+	tree = parseWithBase(t, "mem:/r.xml", src)
+	if _, err := ProcessXInclude(tree, XIncludeOptions{Resolver: &mapResolver{files: files}, Parse: po}); err != nil {
+		t.Fatal(err)
+	}
+}

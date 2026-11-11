@@ -1538,11 +1538,20 @@ func (c *Context) digitLimit() int {
 	return c.ev().MaxDigits
 }
 
-// checkCastDigits refuses a string cast to xs:integer or xs:decimal whose text
-// is longer than the digit bound, before it is parsed.
+// checkCastDigits refuses a string cast whose text is longer than the digit
+// bound, before it is parsed, when the target parses a digit run through
+// big.Rat: xs:integer and xs:decimal, a duration's components, and the
+// fractional seconds of xs:time and xs:dateTime. That parse is quadratic in
+// the run's length, so the text is the thing to bound.
 func (c *Context) checkCastDigits(a *xdm.Atomic, target xdm.TypeCode) error {
-	if target != xdm.TypeInteger && target != xdm.TypeDecimal ||
-		a.Type != xdm.TypeString && a.Type != xdm.TypeUntypedAtomic {
+	switch target {
+	case xdm.TypeInteger, xdm.TypeDecimal, xdm.TypeDuration,
+		xdm.TypeYearMonthDuration, xdm.TypeDayTimeDuration,
+		xdm.TypeTime, xdm.TypeDateTime:
+	default:
+		return nil
+	}
+	if a.Type != xdm.TypeString && a.Type != xdm.TypeUntypedAtomic {
 		return nil
 	}
 	if lim := c.digitLimit(); lim >= 0 && len(a.Str()) > lim {

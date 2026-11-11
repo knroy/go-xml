@@ -23,7 +23,9 @@ import (
 // copies, so a view costs the element's own records and those of the
 // ancestors opened since the last view, not its depth. A batch is replaced
 // once it holds viewBatchRecords records, or four times the records of the
-// copies of the open path if that is more: what a retained view keeps alive
+// copies of the open path if that is more, a byte of value counting as a
+// record on both sides (a 64 KB attribute is one record, and a batch per
+// 4096 views copied it into each): what a retained view keeps alive
 // is bounded, and the ancestors a new batch copies again are paid for by the
 // views made in the old one. (Not four times all it ever copied for
 // ancestors: under ancestors that are not themselves viewed, each one new,
@@ -158,13 +160,17 @@ type viewBatch struct {
 	o *treeOrigin
 	// deep is the copy of the open element at depth n-1 (0: the document
 	// node), under the copies of its ancestors; gens[d] is the gen of the
-	// one at depth d, and recs[d] how many records the copies down to depth
-	// d hold. Runs (ordStack) and the copies' own parents, so that a deep
-	// view costs its ancestors' copies and nothing per level besides.
+	// one at depth d, and recs[d] the size of the copies down to depth d,
+	// counting a record and a byte of value alike. Runs (ordStack) and the
+	// copies' own parents, so that a deep view costs its ancestors' copies
+	// and nothing per level besides.
 	deep *Node
 	n    int
 	gens ordStack
 	recs ordStack
+	// bytes counts the value bytes copied into the batch, which its record
+	// count cannot see: one attribute of 64 KB is one record.
+	bytes int
 }
 
 // truncate keeps the copies above depth k.
@@ -195,7 +201,7 @@ func (b *burster) view() *Node {
 // ancestors of n, a node of the parse at depth d, and nothing below them.
 func (b *burster) viewUnder(n *Node, d int) *viewBatch {
 	vb := b.views
-	if vb == nil || int(vb.t.n) >= max(viewBatchRecords, 4*int(vb.recs.at(vb.n-1))) {
+	if vb == nil || int(vb.t.n)+vb.bytes >= max(viewBatchRecords, 4*int(vb.recs.at(vb.n-1))) {
 		vb = b.newViews(n.tree)
 	}
 	// The copies of the open elements this batch already has: a copy that
@@ -229,6 +235,7 @@ func (b *burster) viewUnder(n *Node, d int) *viewBatch {
 func (b *burster) leafView(n *Node, d int) *Node {
 	vb := b.viewUnder(n, d)
 	c := vb.deep.appendLeaf(n.Kind(), n.Name(), n.Value())
+	vb.bytes += len(n.Value())
 	vb.o.add(c.self, b.ordOf(n))
 	c.flags |= fOrigin
 	copyProps(c, n)
@@ -277,12 +284,15 @@ func (vb *viewBatch) push(s *Node, ord, gen uint64) {
 		c.setFrame(f)
 	}
 	copyProps(c, s)
+	size := 1 + s.NumAttrs()
 	for a := range s.Attrs() {
 		d := c.appendAttrFrom(a.Name(), a.Value(), nil)
 		d.flags |= fOrigin
 		copyProps(d, a)
+		size += len(a.Value())
 	}
-	vb.recs.push(vb.recs.at(vb.n-1) + 1 + uint64(s.NumAttrs()))
+	vb.bytes += size - 1 - s.NumAttrs()
+	vb.recs.push(vb.recs.at(vb.n-1) + uint64(size))
 	vb.deep, vb.n = c, vb.n+1
 	vb.gens.push(gen)
 }

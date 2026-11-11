@@ -304,7 +304,26 @@ func (e *InstanceOfExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 }
 
 // Eval implements Expr for "cast as" and "castable as".
+//
+// Every value the cast annotates with a schema type is given that schema's
+// type environment here, once for all of evalCast's result shapes.
 func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
+	out, err := e.evalCast(ctx)
+	if err != nil || e.Type.schemaEnv == nil {
+		return out, err
+	}
+	// A fresh slice: the result may share the operand's backing array.
+	res := make(xdm.Sequence, len(out))
+	for i, it := range out {
+		if a, ok := it.(*xdm.Atomic); ok {
+			it = withSchemaEnv(a, e.Type.schemaEnv)
+		}
+		res[i] = it
+	}
+	return res, nil
+}
+
+func (e *CastExpr) evalCast(ctx *Context) (xdm.Sequence, error) {
 	v, err := e.Operand.Eval(ctx)
 	if err != nil {
 		if e.Castable {

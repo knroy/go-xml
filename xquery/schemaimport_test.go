@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 	"github.com/knroy/go-xml/v2/xquery"
 	"github.com/knroy/go-xml/v2/xsd"
 )
@@ -638,5 +639,46 @@ func TestSchemaImportReadsXSD11(t *testing.T) {
 	}
 	if got != "true" {
 		t.Errorf("got %q, want true", got)
+	}
+}
+
+// A value cast or converted to an imported type carried no type environment,
+// so "instance of" walked the process-global derivation table, and an
+// unrelated xsd.Load redefining the same name flipped a compiled query's
+// answers to false. The values now carry the query's own schema environment.
+func TestSchemaTypedAtomicsCarryTheQuerysTypeEnv(t *testing.T) {
+	const ns = "urn:sl03q"
+	schema := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="` + ns + `" xmlns:t="` + ns + `">
+  <xs:simpleType name="Base"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="T"><xs:restriction base="t:Base"/></xs:simpleType></xs:schema>`
+	q, err := xquery.Compile(fmt.Sprintf(`import schema namespace t = %q;
+declare function local:f($x as xs:untypedAtomic) as t:T { $x };
+(('a' cast as t:T) instance of t:Base, t:T('a') instance of t:Base,
+ local:f(xs:untypedAtomic('a')) instance of t:Base)`, ns),
+		xquery.Options{Schemas: []xquery.Schema{{Namespace: ns, Source: schema}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eval := func() string {
+		seq, err := q.Eval(xpath.NewContext(nil, xpath.Builtins()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return render(seq)
+	}
+	const want = "truetruetrue"
+	if got := eval(); got != want {
+		t.Fatalf("before the foreign load: %q, want %q", got, want)
+	}
+	other, err := xdm.ParseString(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="`+ns+
+		`"><xs:simpleType name="T"><xs:restriction base="xs:integer"/></xs:simpleType></xs:schema>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := xsd.Load(other.Root, "", xsd.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := eval(); got != want {
+		t.Fatalf("after a foreign schema redefined t:T: %q, want %q", got, want)
 	}
 }

@@ -21,6 +21,10 @@ import (
 type sequenceType struct {
 	src   string
 	stype xpath.SequenceType
+	// env is the type environment of the schema stype.SchemaType came
+	// from, which a value converted to that type carries. See
+	// nsResolver.SchemaTypeEnv.
+	env *xdm.TypeEnvironment
 }
 
 // compileSequenceType parses an "as" attribute.
@@ -48,7 +52,11 @@ func compileSequenceType(src string, ns xpath.NamespaceResolver) (*sequenceType,
 	if !ok {
 		return nil, fmt.Errorf("invalid type %q", src)
 	}
-	return &sequenceType{src: src, stype: treat.Type}, nil
+	st := &sequenceType{src: src, stype: treat.Type}
+	if r, ok := ns.(*nsResolver); ok && treat.Type.SchemaType != "" {
+		st.env = r.SchemaTypeEnv()
+	}
+	return st, nil
 }
 
 // convert applies the function conversion rules to a value.
@@ -152,6 +160,9 @@ func (t *sequenceType) convertAsLazy(seq xdm.Sequence, what func() string, code 
 			// variable declared as a schema atomic type raised XTTE0570 on a
 			// value the rules had just converted for it.
 			conv = conv.WithDerived(t.stype.SchemaType)
+			if t.env != nil {
+				conv = conv.WithTypeEnv(t.env)
+			}
 		}
 		out = append(out, conv)
 	}
