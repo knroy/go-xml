@@ -21,6 +21,12 @@ package xslt
 // such a pair hand each other partial tables, whose answers depend on which
 // walk started first; that order is not the stream's.
 //
+// A read of an accumulator not stepped yet steps it then, nested in the
+// reader's step; a chain of such reads nests no deeper than accumReadNest:
+// there the reader's step is set aside, the one it read is stepped first
+// and the reader's made again (stepFirst), so the depth of Go's stack does
+// not follow the length of a chain the stylesheet declares.
+//
 // Errors (§18.2.5): a read fails when the value it reads depends on a
 // failed computation. The observer records at which step each accumulator
 // failed (accumRuleReads.errAt) and at which step each kept value was
@@ -38,6 +44,16 @@ import (
 // errAccumCircular is a rule's read of the value its accumulator is
 // computing; fnAccumulator words it as the tree does (XTDE3400).
 var errAccumCircular = errors.New("accumulator read circularly")
+
+// errAccumDeferred ends a rule's evaluation that read, at accumReadNest, an
+// accumulator not stepped yet (accumRuleReads.need); stepFirst makes the
+// step again once that one's is made. No rule's value or error is it.
+var errAccumDeferred = errors.New("accumulator read deferred")
+
+// accumReadNest is the depth of nested steps (a rule reading an
+// accumulator not stepped yet, whose rule reads another) past which a
+// step is set aside instead of nesting (stepFirst).
+const accumReadNest = 16
 
 // accumCircularError is the tree walk's XTDE3400, which is errAccumCircular.
 type accumCircularError struct{ msg string }
@@ -58,6 +74,7 @@ type accumRuleReads struct {
 	busy     []bool         // i's rules are being applied
 	at       int            // the accumulator whose rules are being applied, -1 none
 	prev     []int          // the ones whose rules read it, innermost last
+	need     int            // read at accumReadNest, not stepped yet: errAccumDeferred, -1 none
 	// errAt is the step at which i failed (0: its initial value), -1 none:
 	// a value recorded at an earlier step stands (§18.2.5), any other is
 	// i's error (valid).
@@ -69,7 +86,7 @@ func (rd *accumRuleReads) init(n int) {
 	for i := range rd.errAt {
 		rd.errAt[i] = -1
 	}
-	rd.at = -1
+	rd.at, rd.need = -1, -1
 }
 
 func (rd *accumRuleReads) begin(n *xdm.Node, post bool, before []xdm.Sequence, beforeAt uint64) {
@@ -131,11 +148,41 @@ func (sa *streamAccums) stepValue(j int, node *xdm.Node, post bool) (xdm.Sequenc
 	if !post && rd.post {
 		return sa.beforeOf(j)
 	}
-	sa.stepOne(j)
+	if rd.done[j] != rd.phase {
+		if len(rd.prev) >= accumReadNest {
+			rd.need = j
+			return nil, errAccumDeferred
+		}
+		sa.stepFirst(j)
+	}
 	if sa.errs[j] != nil {
 		return nil, sa.errs[j]
 	}
 	return sa.cur[j], nil
+}
+
+// stepFirst steps j as stepOne does. A step that read, at accumReadNest, an
+// accumulator not stepped yet is set aside, the rule's evaluation having
+// ended with errAccumDeferred: that one is stepped first, and the step made
+// again. What a rule computes depends on its node and the values it reads
+// only, so the step made again is the one nesting would have made. The
+// declarations' reads have no cycle (accumReadsWhy), so this ends.
+func (sa *streamAccums) stepFirst(j int) {
+	rd := &sa.rd
+	stack := []int{j}
+	for len(stack) > 0 {
+		t := stack[len(stack)-1]
+		rd.need = -1
+		sa.stepOne(t)
+		u := rd.need
+		if u < 0 {
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		// t had not failed, or its rules would not have run.
+		rd.need, rd.done[t], rd.errAt[t], sa.errs[t] = -1, 0, -1, nil
+		stack = append(stack, u)
+	}
 }
 
 // beforeOf is j's value at the step's node once its start rules have been
@@ -357,28 +404,37 @@ func (s *Stylesheet) accumReadsWhy(reads map[*accumulatorDef][]string) string {
 			}
 		}
 	}
-	// A cycle: a def reached again while its walk is on the stack.
+	// A cycle: a def reached again while its walk is on the stack, which is
+	// kept here, not on Go's: a chain of reads is as long as the stylesheet
+	// makes it.
 	state := map[*accumulatorDef]uint8{} // 1 on the stack, 2 done
-	var visit func(d *accumulatorDef) bool
-	visit = func(d *accumulatorDef) bool {
-		switch state[d] {
-		case 1:
-			return false
-		case 2:
-			return true
-		}
-		state[d] = 1
-		for _, t := range edges[d] {
-			if !visit(t) {
-				return false
-			}
-		}
-		state[d] = 2
-		return true
+	type walk struct {
+		d *accumulatorDef
+		i int // the next of edges[d]
 	}
+	var stack []walk
 	for def := range reads {
-		if !visit(def) {
-			return "accumulator " + def.name.Lexical() + ": rules of accumulators read each other"
+		if state[def] != 0 {
+			continue
+		}
+		state[def] = 1
+		stack = append(stack[:0], walk{d: def})
+		for len(stack) > 0 {
+			w := &stack[len(stack)-1]
+			if w.i == len(edges[w.d]) {
+				state[w.d] = 2
+				stack = stack[:len(stack)-1]
+				continue
+			}
+			t := edges[w.d][w.i]
+			w.i++
+			switch state[t] {
+			case 1:
+				return "accumulator " + def.name.Lexical() + ": rules of accumulators read each other"
+			case 0:
+				state[t] = 1
+				stack = append(stack, walk{d: t})
+			}
 		}
 	}
 	return ""
