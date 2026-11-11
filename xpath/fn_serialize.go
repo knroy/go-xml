@@ -2771,7 +2771,17 @@ func (s *serializeSink) noteText(v string) {
 // The writers recurse, so a value nested a million deep is a million Go stack
 // frames and a fatal stack overflow rather than an error. A caller that gets
 // nil must call leave when the level closes.
+//
+// A sink that has latched an error refuses every level too, with that error.
+// Every map and array a writer walks opens a level here, so this is where a
+// byte refusal or a cancelled context stops the walk: an array holds its
+// members by reference, and k charged doublings describe 2^k leaves that the
+// writers would otherwise go on visiting, writing nothing, long after the
+// refusal.
 func (s *serializeSink) enter() error {
+	if s.e != nil {
+		return s.e
+	}
 	if s.depth >= maxJSONDepth {
 		err := fmt.Errorf("XPDY0130: serialization nests maps and arrays more "+
 			"than %d levels deep: %w", maxJSONDepth, xdm.ErrResourceLimit)
@@ -2831,8 +2841,17 @@ func (s *serializeSink) charge(n int) bool {
 
 // chargeSlow draws a new block, or refuses. Split from charge so that the
 // common case stays inlinable.
+//
+// It is also where the evaluation's context is checked, once a block: a
+// serialization that runs past the host's deadline latches the context's
+// error, and enter stops the walk on it.
 func (s *serializeSink) chargeSlow(n int) bool {
 	if s.e != nil {
+		return false
+	}
+	if err := s.ctx.Err(); err != nil {
+		s.e = err
+		s.reserve = 0
 		return false
 	}
 	want := sinkReserveBlock

@@ -1182,7 +1182,7 @@ func permuteWith(state uint64, seq xdm.Sequence) xdm.Sequence {
 // A map or an array compared against anything else is simply unequal rather
 // than an error, which is the same rule the atomic branch follows for values
 // of incomparable types.
-func deepEqualMapArray(ctx *Context, x, y xdm.Item, depth int) (eq, handled bool, err error) {
+func deepEqualMapArray(ctx *Context, w *deepWalk, x, y xdm.Item, depth int) (eq, handled bool, err error) {
 	xm, xIsMap := x.(*xdm.MapItem)
 	ym, yIsMap := y.(*xdm.MapItem)
 	xa, xIsArr := x.(*xdm.ArrayItem)
@@ -1193,10 +1193,10 @@ func deepEqualMapArray(ctx *Context, x, y xdm.Item, depth int) (eq, handled bool
 	}
 	switch {
 	case xIsMap && yIsMap:
-		e, err := deepEqualMaps(ctx, xm, ym, depth)
+		e, err := deepEqualMaps(ctx, w, xm, ym, depth)
 		return e, true, err
 	case xIsArr && yIsArr:
-		e, err := deepEqualArrays(ctx, xa, ya, depth)
+		e, err := deepEqualArrays(ctx, w, xa, ya, depth)
 		return e, true, err
 	}
 	// One of the two is a map or an array and the other is not, so they
@@ -1205,7 +1205,7 @@ func deepEqualMapArray(ctx *Context, x, y xdm.Item, depth int) (eq, handled bool
 	return false, true, nil
 }
 
-func deepEqualArrays(ctx *Context, a, b *xdm.ArrayItem, depth int) (bool, error) {
+func deepEqualArrays(ctx *Context, w *deepWalk, a, b *xdm.ArrayItem, depth int) (bool, error) {
 	// Nested values recurse here; bound them like any other recursion.
 	if err := checkValueDepth(depth); err != nil {
 		return false, err
@@ -1218,7 +1218,7 @@ func deepEqualArrays(ctx *Context, a, b *xdm.ArrayItem, depth int) (bool, error)
 		// Members are sequences, so this is the sequence comparison rather
 		// than the item one: an array of one two-item member is not equal to
 		// an array of two one-item members.
-		eq, err := deepEqualAt(ctx, am[i], bm[i], depth+1)
+		eq, err := w.members(ctx, am[i], bm[i], depth+1)
 		if err != nil || !eq {
 			return false, err
 		}
@@ -1226,7 +1226,7 @@ func deepEqualArrays(ctx *Context, a, b *xdm.ArrayItem, depth int) (bool, error)
 	return true, nil
 }
 
-func deepEqualMaps(ctx *Context, a, b *xdm.MapItem, depth int) (bool, error) {
+func deepEqualMaps(ctx *Context, w *deepWalk, a, b *xdm.MapItem, depth int) (bool, error) {
 	// Nested values recurse here; bound them like any other recursion.
 	if err := checkValueDepth(depth); err != nil {
 		return false, err
@@ -1253,7 +1253,7 @@ func deepEqualMaps(ctx *Context, a, b *xdm.MapItem, depth int) (bool, error) {
 			equal = false
 			return nil
 		}
-		eq, err := deepEqualAt(ctx, value, other, depth+1)
+		eq, err := w.members(ctx, value, other, depth+1)
 		if err != nil {
 			return err
 		}
