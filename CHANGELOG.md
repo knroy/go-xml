@@ -521,6 +521,57 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Standalone and element-content validity facts the tree loses were never checked (xmlconf I4, I5) | xdm records them as it parses, at most 100, and `dtd.Validate` reports them (§2.9, §3 VC). | [`ca0d7be`][ca0d7be] |
 | A source rewritten for markup entities was parsed again against the internal subset only, losing external defaults and refusing undeclared entities | The second parse reuses the first parse's DTD; an undeclared entity in an ATTLIST default is dropped and recorded where every declaration was read. | [`2d60ddd`][2d60ddd] |
 | The PrivateFunctionsVisibleToEvaluate comment still said private visibility applied only inside a real xsl:package | It now says the field is a no-op and the rule applies to every stylesheet (§3.5, §10.4.1). | [`7e6845f`][7e6845f] |
+| XInclude `parse="text"` inclusions were not charged to the pass byte budget | The text node is charged like `parse="xml"`, against `Parse.MaxBytes`. | [`bd467ae`][bd467ae] |
+| Nested RELAX NG compact `div`/`include` blocks and chained `* - * - …` overflowed the stack (fatal) | Both charge the compact nesting bound and fail with its error. | [`e43cba2`][e43cba2] |
+| A RELAX NG `<param name="pattern">` was recompiled for every value checked | It is compiled once with the schema; an invalid pattern still fails at the value. | [`5ca44f5`][5ca44f5] |
+| The RELAX NG §7.3/7.4 competition check compared name classes pairwise, n² per two branches | Single names intersect through a set; only open classes are tested one by one. | [`d75f52e`][d75f52e] |
+| `dtd` duplicate checks, `;` searches and attribute checks rescanned per token, byte or element | Sets and indexes make the scans linear; refused models are cached; IGNORE-reduced PEs charge their text. | [`bae3d32`][bae3d32] |
+| `xsl:merge` entries retained across anchors, and a streamed source's implicit snapshot, were uncharged | Entries are totalled against `MaxItems`; the snapshot is charged to the node budget first. | [`aa6ac52`][aa6ac52] |
+| Every constructed fragment shared one accumulator table (nil `Tree`), and the tables were uncharged | Tables are keyed by root identity (§18.2) and their slots charged against `MaxItems`. | [`bf6cedd`][bf6cedd] |
+| The streamability analyser recursed per `let`/`for`/`some` clause (fatal) and copied scope per binding | Clauses are walked in a loop over one scoped environment; results unchanged (§19.8.8). | [`d685d75`][d685d75] |
+| An XQuery direct constructor followed by an operator was reparsed about 3^d times for d levels | A per-module memo keyed by source offset parses each constructor once (§3.9.1). | [`cbb2d1d`][cbb2d1d] |
+| XSD assertion and type-alternative scope copies charged child nodes only | Every copied attribute and namespace binding is charged to the run's node budget. | [`7a194ca`][7a194ca] |
+| Effective Total Range and particle emptiability walked a shared group DAG once per path (exponential) | The group-level answer is memoised per `*ModelGroup` (§3.8.6, §3.9.6). | [`4e4ce7f`][4e4ce7f] |
+| A cast to an imported schema type read the process-global type table, which a later `xsd.Load` rewrites | The value carries its schema's type environment; `instance of` and `treat as` use it (XPath 3.1 §2.5.5). | [`93fd8d5`][93fd8d5] |
+| c14n's XPath Filter input held one namespace node per element and binding at once, uncharged | The input is walked lazily in document order, each namespace node charged to `MaxItems`. | [`795af54`][795af54] |
+| Instructions that build their own buffer (`xsl:try`, `xsl:perform-sort`, …) skipped the item bound | `execSequenceBody` checks `MaxItems` after every instruction, beside the node budget. | [`f068f13`][f068f13] |
+| Duration and fractional-second casts bypassed `MaxDigits`: a 1e6-digit `dayTimeDuration` took 1.7 s | The same text bound applies to them, refused as FOCA0003 with `ErrResourceLimit`. | [`35cd6bf`][35cd6bf] |
+| A streamed view batch was replaced by record count only, so a 64 KB root attribute was copied per 4096 views | Batches count value bytes too, so total copying stays linear in the input. | [`edd10a6`][edd10a6] |
+| Copying M children of a root declaring K prefixes was K² per copy (30 s, 48 GB at K=1000, M=2000) | `scopeBindings` sorts once and binds in one call; inherited bindings are charged to the byte budget. | [`53a70a1`][53a70a1] |
+| Exclusive C14N considered every PrefixList entry at every element | The PrefixList is a set, with differing bindings tracked as inclusive mode does; output unchanged. | [`759ba94`][759ba94] |
+| XQuery copied the prefix and constructor-namespace maps per direct element: K×N retained entries | A declaring element links a scope to its parent's; the rest read the parent's (§3.9.1.2). | [`ae84d0b`][ae84d0b] |
+| A `FileResolver` waiter got the loader's entity-budget failure, failing every concurrent `fn:doc` | A waiter under another budget loads the path again under its own. | [`2695815`][2695815] |
+| A deeply nested DTD content model overflowed the stack (fatal), and nested IGNORE skips were Θ(k²) | Groups and INCLUDE sections are read on heap stacks; `ignoreSectEnd` is one forward pass. | [`4e9d70f`][4e9d70f] |
+| UTF-16 input was read whole and held about ten copies before the tokeniser saw a byte | Only the XML declaration is held; the rest is decoded in 32 KiB chunks (§4.3.3 unchanged). | [`ef129c5`][ef129c5] |
+| Each INCLUDE section recopied the subset's tail (7.4 GB for 32,000), and `baseAt` scanned every span | One forward pass resolves sections; spans are shifted per reference and searched by binary search. | [`119a290`][119a290] |
+| An empty-leaf entity ladder (`aN = &aN-1;&aN-1;`) expanded 2^N times uncharged | Each nested reference and markup substitution charges the entity budget. | [`2745346`][2745346] |
+| Long `for`/`some`/`every` binding lists overflowed the stack, and overlapping steps held N² nodes | Bindings run on a frame stack; steps dedupe past 4096 entries; free-variable walks are O(k). | [`a3bdff3`][a3bdff3], [`2023aef`][2023aef] |
+| An `xs:redefine` group was checked before its element types were bound, and attribute wildcards never | The check runs after fixups and compares wildcards (src-redefine 6.2.2, 7.2.2). | [`470c573`][470c573] |
+| Nested `(?:` groups and `-[` class subtractions recursed without bound (fatal with the backtracker) | Both count against a depth of 1000 and fail FORX0002 wrapping `ErrResourceLimit`. | [`835d67f`][835d67f] |
+| `xsl:number level="any"` walked every earlier node per execution, uncancellable | Name-only patterns number the tree once per instruction; every walk polls the context. | [`18f6233`][18f6233] |
+| The `fn:transform` cache keyed resolvers by address, so zero-size resolvers collided | The key carries each resolver's dynamic type too. | [`a5885ce`][a5885ce] |
+| Nested streamed `xsl:result-document` held one host writer open per level | Past 16 open writers a nested one is built as a tree and written once complete. | [`e75f9f1`][e75f9f1] |
+| C14N 1.0 deduplicated inherited `xml:*` attributes by linear scans, K² per apex | Local names are kept in a set; output unchanged (§2.4). | [`a544525`][a544525] |
+| UCA `contains` and kin re-keyed the needle per span and never polled the context (cubic) | The needle is keyed once, spans are cut 32 bytes past it, and each span polls `Env.Ctx`. | [`da4780a`][da4780a] |
+| `map:merge` with `duplicates: combine` recopied each value per duplicate, uncharged | Values grow in place, are charged to `MaxItems`, and each input map polls the context. | [`dbc271b`][dbc271b] |
+| A DTD choice of N identical alternatives cost N² per child in `matchNames` (0.8 s at N=4096) | Positions that step alike are classed at build; one live state per class is walked. | [`63fb23b`][63fb23b] |
+| The `FromXPathFilter` comment claimed the item budget bounds total work | Both legacy forms say they bound what is held, not time, and point at the Context forms. | [`3a78c1c`][3a78c1c] |
+| XSLT static declarations rescanned each other (O(V²), no ctx), and import occurrences were uncharged | Static variables are indexed, ctx is checked, and each occurrence is charged to `MaxModuleNodes`. | [`11393c5`][11393c5] |
+| `fn:parse-xml` and `fn:parse-xml-fragment` results were not charged to `MaxNodes` | The returned tree is charged; an overrun is XPDY0130. | [`1594bc4`][1594bc4] |
+| `format-number` rounded at 10^maxFrac, so a wide picture was superlinear even for 0.1 | A value with fewer places is returned as is; digits are padded, not scaled. | [`432cd6a`][432cd6a] |
+| An html/xhtml comment opening with `>` or `->` let its text become live markup; HTML5 wrote two `xmlns` | Such a comment is SERE0003; a displaced default declaration is no longer written. | [`df6517f`][df6517f] |
+| A long map constructor or `xsl:fork` teed one parse and goroutine per reading part, unbounded | Over 64 reading parts the construct runs on the tree, with the same result. | [`f41fadc`][f41fadc] |
+| An instance-supplied `FILE:///abs/p` was checked as a relative path, then opened as `/abs/p` | The scheme is normalised first, and the checked path is the one opened. | [`1dd4163`][1dd4163] |
+| `href="host.xml#m"` searched the whole host document per include occurrence (N×K) | Each host's IDs are indexed once per compilation; first in document order wins. | [`8fd2d46`][8fd2d46] |
+| Declined XSD instance locations cost a resolver call each, past `MaxDocuments` | Each declined fetch counts as a document read. | [`ef95910`][ef95910] |
+| XQuery tuples copied every binding per clause: V `let` clauses allocated O(V²) | The owning extension writes in place; copies double capacity, so a chain is O(V). | [`ac050c8`][ac050c8] |
+| `fn:load-xquery-module` compiled afresh per call, each with a full module budget | One cache per evaluation; distinct calls spend `MaxModules`/`MaxModuleBytes` cumulatively. | [`1dd0db1`][1dd0db1] |
+| The serializer scanned its namespace scope per declaration: K² (13 s at K=128,000) | Past 32 bindings a prefix index is kept; K=128,000 serializes in 16 ms. | [`9599531`][9599531] |
+| `xsl:use-package` walked the whole package tree per hidden or absent component (C×N) | One scan indexes every name mentioned; references are answered from it. | [`f757efb`][f757efb] |
+| Implicit atomization flattened each shared-member array uncharged, and `Expr.Eval` could panic | One charged `FlattenContext` per sequence; the refusal is returned as an error. | [`83a0b0e`][83a0b0e] |
+| `deep-equal` and `fn:serialize` walked every leaf of shared-member arrays past refusal and deadline | Equal member pairs are remembered, `Env.Ctx` is polled, and a failed sink stops every walker. | [`27282ba`][27282ba] |
+| `fn:serialize` html wrote a PI's content unchecked, so `>` ended it early | It raises SERE0015, as the `xsl:output` html serializer does; xhtml is exempt. | [`25e8d08`][25e8d08] |
+| `Result.Serialize`, `xslt.Serialize` and `Pattern.Matches` let a resource refusal panic in the host | They recover it as an error; a refusal is no longer a silent non-match. | [`08560cc`][08560cc] |
 
 ### Changed — behaviour
 
@@ -584,6 +635,21 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `dtd.Validate` reports more validity errors | A DTD repeating an element type across subsets, or a document breaking the new VCs, is invalid now. | [`72903d9`][72903d9], [`8c47532`][8c47532], [`ca0d7be`][ca0d7be] |
 | An internal-only DOCTYPE that references an external PE needs a resolver | `dtd.Load` returns `ErrNoResolver`, as for an external subset; `InternalSubsetOnly` leaves it unread. | [`4bab79c`][4bab79c] |
 | Ill-formed DTD and entity forms are refused | The WFC fixes above make documents that parsed fail; all were ill-formed. | [`cb762f7`][cb762f7], [`af26eb4`][af26eb4], [`243a7af`][243a7af], [`43ca8b3`][43ca8b3], [`9753ec8`][9753ec8], [`12b68fa`][12b68fa], [`dabed51`][dabed51] |
+| XInclude `parse="text"` counts against `Parse.MaxBytes` | A pass whose text inclusions exceed it is refused, as `parse="xml"` already was. | [`bd467ae`][bd467ae] |
+| Duration, `xs:time` and `xs:dateTime` casts are bounded by `MaxDigits` | Over-long component text is FOCA0003 wrapping `ErrResourceLimit`, before parsing. | [`35cd6bf`][35cd6bf] |
+| `xsl:merge` entries, implicit snapshots, accumulator tables and inherited namespaces are charged | Large merges or copies can now raise XPDY0130 under the item, node or byte budget. | [`aa6ac52`][aa6ac52], [`bf6cedd`][bf6cedd], [`53a70a1`][53a70a1] |
+| Sequence-constructor output is bounded per instruction | `xsl:try`, as-typed templates, `xsl:perform-sort` and kin inside a loop can raise XPDY0130. | [`f068f13`][f068f13] |
+| A type alternative whose test the budget refuses stops XSD validation | A resource-limit failure, where the test was taken as false and a later alternative chosen. | [`7a194ca`][7a194ca] |
+| `xs:redefine` checks more | A redefined group retyping an element, or an attribute group widening its wildcard, is refused. | [`470c573`][470c573] |
+| Regex group and class-subtraction nesting over 1000 is refused | FORX0002 wrapping `ErrResourceLimit`, the depth RE2 refuses. | [`835d67f`][835d67f] |
+| `fn:parse-xml`, `map:merge` combine, `array:join` and atomization are charged | They count against `MaxNodes` or `MaxItems`, so large results can raise XPDY0130. | [`1594bc4`][1594bc4], [`dbc271b`][dbc271b], [`83a0b0e`][83a0b0e] |
+| html/xhtml comments opening with `>` or `->` are SERE0003; `fn:serialize` html PIs with `>` are SERE0015 | Such output used to be written; the xml method is unchanged. | [`df6517f`][df6517f], [`25e8d08`][25e8d08] |
+| A map constructor or `xsl:fork` of over 64 reading parts runs on the tree | Output is unchanged; memory is the tree's. | [`f41fadc`][f41fadc] |
+| Past 16 open writers a nested `xsl:result-document` is written once complete | The same bytes reach the `SecondaryOutput` later, not while its body runs. | [`e75f9f1`][e75f9f1] |
+| `fn:load-xquery-module` calls in one evaluation share the module budget | Distinct calls spend `MaxModules`/`MaxModuleBytes` cumulatively; a repeat reuses the compile or error. | [`1dd0db1`][1dd0db1] |
+| Declined XSD instance locations count against `MaxDocuments` | Many unresolvable locations can now refuse the load. | [`ef95910`][ef95910] |
+| `Expr.Eval` and `Pattern.Matches` return resource refusals as errors | No xdmlimit panic escapes; a refused or cancelled pattern match is an error, not false. | [`83a0b0e`][83a0b0e], [`08560cc`][08560cc] |
+| Each XSLT import occurrence is charged to `MaxModuleNodes` in the static phase | A stylesheet importing one module many times is refused before the work, not after. | [`11393c5`][11393c5] |
 
 ## v2.2.0 — 2026-11-01
 
@@ -3001,3 +3067,55 @@ here so every entry in this file sits under a release.
 [f6079cf]: https://github.com/knroy/go-xml/commit/f6079cf
 [f856400]: https://github.com/knroy/go-xml/commit/f856400
 [fce2d5e]: https://github.com/knroy/go-xml/commit/fce2d5e
+[bd467ae]: https://github.com/knroy/go-xml/commit/bd467ae
+[e43cba2]: https://github.com/knroy/go-xml/commit/e43cba2
+[5ca44f5]: https://github.com/knroy/go-xml/commit/5ca44f5
+[d75f52e]: https://github.com/knroy/go-xml/commit/d75f52e
+[bae3d32]: https://github.com/knroy/go-xml/commit/bae3d32
+[aa6ac52]: https://github.com/knroy/go-xml/commit/aa6ac52
+[bf6cedd]: https://github.com/knroy/go-xml/commit/bf6cedd
+[d685d75]: https://github.com/knroy/go-xml/commit/d685d75
+[cbb2d1d]: https://github.com/knroy/go-xml/commit/cbb2d1d
+[7a194ca]: https://github.com/knroy/go-xml/commit/7a194ca
+[4e4ce7f]: https://github.com/knroy/go-xml/commit/4e4ce7f
+[93fd8d5]: https://github.com/knroy/go-xml/commit/93fd8d5
+[795af54]: https://github.com/knroy/go-xml/commit/795af54
+[f068f13]: https://github.com/knroy/go-xml/commit/f068f13
+[35cd6bf]: https://github.com/knroy/go-xml/commit/35cd6bf
+[edd10a6]: https://github.com/knroy/go-xml/commit/edd10a6
+[53a70a1]: https://github.com/knroy/go-xml/commit/53a70a1
+[759ba94]: https://github.com/knroy/go-xml/commit/759ba94
+[ae84d0b]: https://github.com/knroy/go-xml/commit/ae84d0b
+[2695815]: https://github.com/knroy/go-xml/commit/2695815
+[4e9d70f]: https://github.com/knroy/go-xml/commit/4e9d70f
+[ef129c5]: https://github.com/knroy/go-xml/commit/ef129c5
+[119a290]: https://github.com/knroy/go-xml/commit/119a290
+[2745346]: https://github.com/knroy/go-xml/commit/2745346
+[a3bdff3]: https://github.com/knroy/go-xml/commit/a3bdff3
+[2023aef]: https://github.com/knroy/go-xml/commit/2023aef
+[470c573]: https://github.com/knroy/go-xml/commit/470c573
+[835d67f]: https://github.com/knroy/go-xml/commit/835d67f
+[18f6233]: https://github.com/knroy/go-xml/commit/18f6233
+[a5885ce]: https://github.com/knroy/go-xml/commit/a5885ce
+[e75f9f1]: https://github.com/knroy/go-xml/commit/e75f9f1
+[a544525]: https://github.com/knroy/go-xml/commit/a544525
+[da4780a]: https://github.com/knroy/go-xml/commit/da4780a
+[dbc271b]: https://github.com/knroy/go-xml/commit/dbc271b
+[63fb23b]: https://github.com/knroy/go-xml/commit/63fb23b
+[3a78c1c]: https://github.com/knroy/go-xml/commit/3a78c1c
+[11393c5]: https://github.com/knroy/go-xml/commit/11393c5
+[1594bc4]: https://github.com/knroy/go-xml/commit/1594bc4
+[432cd6a]: https://github.com/knroy/go-xml/commit/432cd6a
+[df6517f]: https://github.com/knroy/go-xml/commit/df6517f
+[f41fadc]: https://github.com/knroy/go-xml/commit/f41fadc
+[1dd4163]: https://github.com/knroy/go-xml/commit/1dd4163
+[8fd2d46]: https://github.com/knroy/go-xml/commit/8fd2d46
+[ef95910]: https://github.com/knroy/go-xml/commit/ef95910
+[ac050c8]: https://github.com/knroy/go-xml/commit/ac050c8
+[1dd0db1]: https://github.com/knroy/go-xml/commit/1dd0db1
+[9599531]: https://github.com/knroy/go-xml/commit/9599531
+[f757efb]: https://github.com/knroy/go-xml/commit/f757efb
+[83a0b0e]: https://github.com/knroy/go-xml/commit/83a0b0e
+[27282ba]: https://github.com/knroy/go-xml/commit/27282ba
+[25e8d08]: https://github.com/knroy/go-xml/commit/25e8d08
+[08560cc]: https://github.com/knroy/go-xml/commit/08560cc

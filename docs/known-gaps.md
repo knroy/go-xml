@@ -121,9 +121,11 @@ Found by the third memory audit (2026-11-01) and not fixed, each with the reason
   merge fixed `(a?){n} a{n}` up to about n = 30. At n = 50 and 100 the cap is
   reached again, though in 20–300 ms rather than 19.9 s. Hash-consing
   derivatives would close it.
-- **`xsl:number level="any"` is quadratic in CPU** (40k items 44 s). A cached
-  prefix count is not valid, since `count` and `from` patterns may use
-  `current()` or per-call variables.
+- **`xsl:number level="any"` with predicate patterns is O(N) per execution**,
+  so quadratic over a whole document. Since round SL a `count`/`from` pair
+  that tests only names numbers the tree once per instruction, and every walk
+  polls the context; a cached prefix count is not valid for predicate
+  patterns, since they may use `current()` or per-call variables.
 - **`fold-left` appending one item a step is quadratic in allocation**
   (40k items 12.4 GB, all garbage). Appending in place is unsound while other
   references may share the prefix.
@@ -196,12 +198,13 @@ a backstop that only a spine of tens of thousands of attributes over large
 bursts reaches. These remain, each with the reason:
 
 - **Other `xdm.Flatten` and `AtomizeChecked` callers take no context and are
-  bounded by xdm's ceiling, not the host's `MaxItems`**: XSLT serialization
-  and stream paths, general comparisons, and `xquery/eval.go`'s
-  `appendSequence`. `array:flatten`, `fn:data`, `xsl:copy-of`,
-  `xsl:value-of` and `xsl:attribute` flatten under the evaluation's context.
-- **`scopeBindings` and `declares` in `xslt/instructions.go` are quadratic in
-  an element's in-scope namespaces** (time only, no retention).
+  bounded by xdm's ceiling, not the host's `MaxItems`**: XSLT stream paths
+  and run-time helpers, `xquery/eval.go`'s `appendSequence`, and the xpath
+  argument helpers (`argString` and kin, below). Since round SL every xpath
+  atomization with a `Context` in scope is charged (`flattenCharged`), and
+  XSLT serialization uses `FlattenContext` and returns XPDY0130 instead of
+  panicking; `array:flatten`, `fn:data`, `xsl:copy-of`, `xsl:value-of` and
+  `xsl:attribute` already flattened under the evaluation's context.
 - **XSD 1.1 subsumption on a long group-ref chain still costs about 1 s per
   restriction type** after the sort fix.
 - **Query-side `fn:transform` gets a fresh compile budget per top-level
@@ -220,11 +223,51 @@ bursts reaches. These remain, each with the reason:
   members linear, but not this shape; it is bounded by the 2²⁰ representation
   budget (`maxSequenceMatcherEdges`, `dtd.Options.MaxContentModelEdges`
   since round SK), so a wide one is refused, not slow.
-- **Withheld and deferred from run-3, still open:** the NT `\??\` prefix fix
-  is untested on a Windows host (string-level tests only); the run-3 deferred
-  units (RELAX NG compact parser and `dtd.Parse` panic review, array walkers
-  in serialize and deep-equal, UTF-16 decoding, RELAX NG XSD-datatype pattern
-  recompile) need a run-4.
+- **Withheld from run-3, still open:** the NT `\??\` prefix fix is untested
+  on a Windows host (string-level tests only). The run-3 deferred units were
+  hunted in run-4 and fixed in round SL: RELAX NG compact nesting, the array
+  walkers in serialize and deep-equal, UTF-16 decoding and the RELAX NG
+  pattern recompile; `scopeBindings` and `declares` are linear since then.
+
+### Security audit run-4 at `7ee173ed`: what round SL left open (security, resource limits)
+
+Run-4's 71 confirmed and 2 needs-validation findings were fixed in round SL
+(see the changelog and the Twenty-eighth pass in [security](security.md)),
+and so were the two units the run deferred (duration casts, streamed view
+batches). These remain, each with the reason:
+
+- **The legacy `c14n.FromXPath` and `FromXPathFilter` bound what is held, not
+  time.** Path, union and quantifier iteration charge nothing, so only a
+  deadline bounds them; untrusted filters should go through
+  `FromXPathContext`/`FromXPathFilterContext` with one. Closing it needs xpath
+  to charge iteration. Relatedly, `XPath10` mode still accepts XPath 2.0
+  syntax such as `some`, `for` and `to` (see the c14n entry below).
+- **UCA substring residuals.** A long needle that keeps matching costs
+  O(n·m²), and a haystack of primary-ignorable characters defeats the
+  `ucaSpanSlack` cut; both are now cancellable through `Env.Ctx`, not bounded.
+- **`fn:load-xquery-module` from an XPath or XSLT host has no cache**: each
+  call compiles afresh with its own module budget. Only an XQuery evaluation
+  carries the per-evaluation cache.
+- **The xpath argument helpers (`argString` and kin) atomize uncharged**,
+  under xdm's `Flatten` ceiling rather than the host's `MaxItems`.
+- **XSD validation of very long `xs:decimal` and duration text is
+  unbudgeted**; the `MaxDigits` bound covers XPath casts, not the validator.
+- **The exported `xdm.CastToDerived` and `CastAtomic` skip `MaxDigits`**, as
+  they take no context.
+- **`internal/fileuri.ToPath` matches `file:` case-sensitively.** The xsd
+  instance-location path now normalises the scheme before calling it; other
+  callers rely on `url.Parse` having done so.
+- **XQuery window clauses copy bindings in `extendN`** (`xquery/window.go`),
+  where FLWOR tuples now extend in place.
+- **`if (1) then <a>{1}</a> = 1 else 0` is XPST0003**, a parse defect that
+  predates round SL's constructor memo.
+- **`fn:serialize`'s comment writer lacks the leading-`>` and `--` checks**
+  `xsl:output` has, and closes an html PI with `?>` where the html method
+  writes `>`.
+- **The `xsl:key` cache may share one nil-tree key across fragments**, the
+  shape round SL fixed for accumulators; unverified.
+- **`dtd.Validate` takes no context**, so a validation cannot be cancelled;
+  its scans are linear since round SL.
 
 ### Memory: what the footprint round left open (performance)
 
@@ -401,7 +444,8 @@ Since the completion round L (L1–L7) the core also takes:
   the element, at most the tree's memory, the copy carrying the document's
   DTD; a variable's map constructor at the document node whose entries each
   read is a tee of its entries; an `xsl:fork` with several reading prongs in
-  an `xsl:try`; `base-uri()`, `document-uri()`, `. instance of
+  an `xsl:try` (since round SL a map or fork of over 64 reading parts runs on
+  the tree instead, one parse and goroutine per part being the tee's cost); `base-uri()`, `document-uri()`, `. instance of
   document-node()` and `unparsed-entity-uri()` at the document node (the
   stand-in has the document's URIs and DOCTYPE);
 - **stylesheet functions**: bodies that climb, a body with instructions

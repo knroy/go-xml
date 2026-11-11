@@ -943,7 +943,10 @@ for it only where whatever runs is trusted with the process's own secrets.
 `xquery.MapModuleResolver`) satisfies. Nil reads nothing and every call is
 `FOQM0002`. A query sets it from its own `Options.Modules` and
 `Options.ModuleResolver` unless the caller already did. The function needs the
-program to import `xquery`; without it the call is `FOQM0006`. See
+program to import `xquery`; without it the call is `FOQM0006`. Under an XQuery evaluation the compiled
+module is cached per evaluation, keyed by base URI and import source, and
+distinct calls spend one `MaxModules`/`MaxModuleBytes` budget between them;
+an XPath or XSLT host compiles afresh per call. See
 [xquery.md](xquery.md#loading-a-module-at-run-time).
 
 ### xslt.FileResolver
