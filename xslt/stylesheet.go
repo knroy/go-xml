@@ -566,6 +566,9 @@ type compileEnv struct {
 	// names="p:*", and reading the attribute at compile time called it
 	// private.
 	composedVisibility map[*xdm.Node]visibility
+	// sheetJudges memoise the judgement of calls on stylesheet functions,
+	// by table (compiler.sheetJudge, streamcall.go).
+	sheetJudges map[sheetJudgeKey]*sheetJudge
 }
 
 func newCompileEnv() *compileEnv {

@@ -86,6 +86,11 @@ func sheetCallOf(x *xpath.FuncCall) (sheetCall, bool) {
 
 // markSheetCalls marks the calls in e on stylesheet functions of fns.
 func markSheetCalls(e xpath.Expr, fns map[funcKey]*streamFunc) {
+	markSheetCallsBy(e, newSheetJudge(fns))
+}
+
+// markSheetCallsBy is markSheetCalls with the judgements j has made.
+func markSheetCallsBy(e xpath.Expr, j *sheetJudge) {
 	exprWalk(reflect.ValueOf(&e).Elem(), func(v reflect.Value) {
 		if v.Kind() != reflect.Interface {
 			return
@@ -94,10 +99,42 @@ func markSheetCalls(e xpath.Expr, fns map[funcKey]*streamFunc) {
 		if !ok || !stylesheetFn(x.Name) {
 			return
 		}
-		if sc, ok := judgeSheetCall(x, fns); ok {
+		if sc, ok := j.judge(x); ok {
 			noteSheetCall(x, sc)
 		}
 	})
+}
+
+// sheetJudge is judgeSheetCall over one table, each function judged once.
+// A judgement parses and walks every body the function reaches, and depends
+// on nothing else, so judging it again at each call site made N sites cost
+// N times the closure.
+type sheetJudge struct {
+	fns  map[funcKey]*streamFunc
+	memo map[*streamFunc]sheetJudged
+}
+
+type sheetJudged struct {
+	sc sheetCall
+	ok bool
+}
+
+func newSheetJudge(fns map[funcKey]*streamFunc) *sheetJudge {
+	return &sheetJudge{fns: fns, memo: map[*streamFunc]sheetJudged{}}
+}
+
+// judge is judgeSheetCall(x, j.fns), made once per function.
+func (j *sheetJudge) judge(x *xpath.FuncCall) (sheetCall, bool) {
+	f := j.fns[keyOf(x.Name, len(x.Args))]
+	if f == nil {
+		return sheetCall{}, false
+	}
+	r, seen := j.memo[f]
+	if !seen {
+		r.sc, r.ok = judgeSheetCall(x, j.fns)
+		j.memo[f] = r
+	}
+	return r.sc, r.ok
 }
 
 // judgeSheetCall decides x's mark.

@@ -42,6 +42,7 @@ package xslt
 // fails, so XTDE3530 would not be raised alike.
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 
@@ -238,7 +239,23 @@ func (s *streamSplit) failing() int {
 
 // besideFails reports whether an operand of e, a part of base, that is not
 // on the way to $v may fail. Unknown expressions are taken to.
+//
+// Which operands are on the way is marked once, in one walk of e
+// (readersOf), not asked of each operand as the descent meets it: asking
+// re-optimised and re-walked the operand's whole subtree at every level, so
+// a long chain of operators cost the square of its height.
 func besideFails(base *xpath.Compiled, e xpath.Expr, v xdm.QName) bool {
+	readers := readersOf(e, v)
+	reads := func(k xpath.Expr) bool {
+		if readers == nil {
+			return refersTo(base, k, v)
+		}
+		return readers[k]
+	}
+	return besideFailsIn(e, reads)
+}
+
+func besideFailsIn(e xpath.Expr, reads func(xpath.Expr) bool) bool {
 	var kids []xpath.Expr
 	switch x := e.(type) {
 	case *xpath.VarRef:
@@ -263,16 +280,16 @@ func besideFails(base *xpath.Compiled, e xpath.Expr, v xdm.QName) bool {
 		// The left is evaluated whole, then the right per item (xpath
 		// SimpleMap.Eval): after every error of the path's items, in the
 		// tree as in the stream, which evaluates the outer at the end.
-		if refersTo(base, x.Left, v) {
-			return besideFails(base, x.Left, v)
+		if reads(x.Left) {
+			return besideFailsIn(x.Left, reads)
 		}
 		return !tryCannotFail(e)
 	default:
 		return !tryCannotFail(e)
 	}
 	for _, k := range kids {
-		if refersTo(base, k, v) {
-			if besideFails(base, k, v) {
+		if reads(k) {
+			if besideFailsIn(k, reads) {
 				return true
 			}
 		} else if !tryCannotFail(k) {
@@ -285,6 +302,73 @@ func besideFails(base *xpath.Compiled, e xpath.Expr, v xdm.QName) bool {
 // refersTo reports whether e, a part of base, reads the variable v.
 func refersTo(base *xpath.Compiled, e xpath.Expr, v xdm.QName) bool {
 	return slices.Contains(xpathleaf.WithExpr(base, e).(*xpath.Compiled).FreeVariables(), v)
+}
+
+// readersOf returns the expressions of e that hold a reference to v: each
+// reference and every expression on the way down to it. e is the compiled
+// part's own expression, already optimised, so that is the answer refersTo
+// gives of each of them -- unless a name like v is bound somewhere in e, where
+// a reference need not be to v; readersOf then returns nil, and the caller
+// asks refersTo.
+func readersOf(e xpath.Expr, v xdm.QName) map[xpath.Expr]bool {
+	set := map[xpath.Expr]bool{}
+	if _, rebound := markReaders(reflect.ValueOf(&e).Elem(), v, set); rebound {
+		return nil
+	}
+	return set
+}
+
+var (
+	qnameType  = reflect.TypeFor[xdm.QName]()
+	varRefType = reflect.TypeFor[xpath.VarRef]()
+)
+
+// markReaders is readersOf's walk over the AST value rv (as exprWalk walks
+// it): whether rv holds a reference to v, and whether it holds any other
+// name with v's expanded name -- a binding of it, say.
+func markReaders(rv reflect.Value, v xdm.QName, set map[xpath.Expr]bool) (reads, rebound bool) {
+	const pkg = "github.com/knroy/go-xml/v2/xpath"
+	switch rv.Kind() {
+	case reflect.Interface:
+		if rv.IsNil() {
+			return false, false
+		}
+		reads, rebound = markReaders(rv.Elem(), v, set)
+		if x, ok := rv.Interface().(xpath.Expr); ok && reads {
+			set[x] = true
+		}
+	case reflect.Pointer:
+		if !rv.IsNil() && rv.Type().Elem().PkgPath() == pkg {
+			return markReaders(rv.Elem(), v, set)
+		}
+	case reflect.Struct:
+		if rv.Type().PkgPath() != pkg {
+			return false, false
+		}
+		for i := range rv.NumField() {
+			if !rv.Type().Field(i).IsExported() {
+				continue
+			}
+			f := rv.Field(i)
+			if f.Type() == qnameType {
+				q := f.Interface().(xdm.QName)
+				if rv.Type() == varRefType {
+					reads = reads || q == v
+				} else if q.URI == v.URI && q.Local == v.Local {
+					rebound = true
+				}
+				continue
+			}
+			r, b := markReaders(f, v, set)
+			reads, rebound = reads || r, rebound || b
+		}
+	case reflect.Slice:
+		for i := range rv.Len() {
+			r, b := markReaders(rv.Index(i), v, set)
+			reads, rebound = reads || r, rebound || b
+		}
+	}
+	return reads, rebound
 }
 
 // tryCannotFail is splitCannotFail, also admitting a comparison of

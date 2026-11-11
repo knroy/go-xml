@@ -43,6 +43,11 @@ type streamPlan struct {
 	// (declTrust.local): a motionless check may read a call as its body
 	// (inlinedSafe, streamlast_mm2.go).
 	funcs map[funcKey]*streamFunc
+	// sets and modFns are each module's attribute sets and functions, by
+	// its document element, made on first use for every construct planned
+	// from this record (streamcall.go useSets, streamview_leafcall.go).
+	sets   map[*xdm.Node]map[xdm.QName][]*xdm.Node
+	modFns map[*xdm.Node]map[funcKey]*streamFunc
 }
 
 // planRec is what the analysis computed for one construct.

@@ -158,17 +158,7 @@ func (pb *popBuilder) pop(e xpath.Expr) *streamPop {
 	}
 	switch x := e.(type) {
 	case *xpath.IfExpr:
-		if !pb.motionless(x.Cond) {
-			return nil
-		}
-		if p := pb.choiceOfStreams(x); p != nil { // streampop_l6.go
-			return p
-		}
-		t, f := pb.pop(x.Then), pb.pop(x.Else)
-		if t == nil || f == nil {
-			return nil
-		}
-		return &streamPop{cond: pb.part(x.Cond), then: t, els: f, off: t.off || f.off}
+		return pb.ifPop(x) // streampop_l6.go
 	case *xpath.BinaryOp:
 		if p := pb.unionPop(x); p != nil { // streampop_l6.go
 			return p

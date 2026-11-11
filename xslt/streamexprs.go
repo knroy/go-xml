@@ -457,8 +457,30 @@ func quantifiedProps(p props) props {
 type varScope struct {
 	m map[xdm.QName]props
 	// streamed counts the entries whose posture is not grounded, the only
-	// ones inlineFunction has to look at.
+	// ones inlineFunction has to look at; byName counts them by expanded
+	// name (prefix dropped), so that inlineFunction asks of each reference
+	// in the body whether it names one, in one walk of the body whatever the
+	// number of bindings in scope.
 	streamed int
+	byName   map[xdm.QName]int
+}
+
+// note adjusts the streamed counts for name bound to p, by d.
+func (s *varScope) note(name xdm.QName, p props, d int) {
+	if p.posture == postureGrounded {
+		return
+	}
+	s.streamed += d
+	k := xdm.QName{URI: name.URI, Local: name.Local}
+	if s.byName[k] += d; s.byName[k] == 0 {
+		delete(s.byName, k)
+	}
+}
+
+// streamedRef reports whether v refers, by expanded name, to a binding in
+// scope whose posture is not grounded.
+func (s *varScope) streamedRef(v *xpath.VarRef) bool {
+	return s.byName[xdm.QName{URI: v.Name.URI, Local: v.Name.Local}] > 0
 }
 
 // savedVar is what bind displaced, for unbind to put back.
@@ -472,16 +494,14 @@ type savedVar struct {
 // displaced.
 func (a *analyzer) bind(name xdm.QName, p props) savedVar {
 	if a.vars == nil {
-		a.vars = &varScope{m: map[xdm.QName]props{}}
+		a.vars = &varScope{m: map[xdm.QName]props{}, byName: map[xdm.QName]int{}}
 	}
 	s := a.vars
 	old, had := s.m[name]
-	if had && old.posture != postureGrounded {
-		s.streamed--
+	if had {
+		s.note(name, old, -1)
 	}
-	if p.posture != postureGrounded {
-		s.streamed++
-	}
+	s.note(name, p, 1)
 	s.m[name] = p
 	return savedVar{name, old, had}
 }
@@ -490,17 +510,13 @@ func (a *analyzer) bind(name xdm.QName, p props) savedVar {
 func (s *varScope) unbind(saved []savedVar) {
 	for i := len(saved) - 1; i >= 0; i-- {
 		v := saved[i]
-		if s.m[v.name].posture != postureGrounded {
-			s.streamed--
-		}
+		s.note(v.name, s.m[v.name], -1)
 		if !v.had {
 			delete(s.m, v.name)
 			continue
 		}
 		s.m[v.name] = v.old
-		if v.old.posture != postureGrounded {
-			s.streamed++
-		}
+		s.note(v.name, v.old, 1)
 	}
 }
 
@@ -551,18 +567,11 @@ func (s *varScope) bound(name xdm.QName) bool {
 // not have and the second on a gap in its rules.
 func (a *analyzer) inlineFunction(x *xpath.InlineFunctionExpr) props {
 	// Only a binding that is not grounded can be closed over; the count
-	// spares the scan when every binding in scope is grounded.
-	if a.vars != nil && a.vars.streamed > 0 {
-		for name, p := range a.vars.m {
-			if p.posture == postureGrounded {
-				continue
-			}
-			b := *a
-			b.hasStreamParam, b.streamingParam = true, name
-			if b.bodyMentionsStreamingParam(x.Body) != mentionNo {
-				return a.unknown()
-			}
-		}
+	// spares the scan when every binding in scope is grounded. One walk of
+	// the body asks of each reference whether it names such a binding, so
+	// the cost is the body's, not the body's times the bindings in scope.
+	if a.vars != nil && a.vars.streamed > 0 && refMention(x.Body, a.vars.streamedRef) != mentionNo {
+		return a.unknown()
 	}
 	if !a.hasStreamParam {
 		// With no streaming parameter in scope there is nothing the body
@@ -609,12 +618,18 @@ const (
 // the reference is present, not what is done with it, so posture and sweep
 // play no part and no context is threaded.
 func (a *analyzer) bodyMentionsStreamingParam(e xpath.Expr) mention {
+	return refMention(e, func(v *xpath.VarRef) bool { return a.isStreamingParamRef(v) })
+}
+
+// refMention is bodyMentionsStreamingParam with the question asked of each
+// variable reference given as ref.
+func refMention(e xpath.Expr, ref func(*xpath.VarRef) bool) mention {
 	switch x := e.(type) {
 	case nil:
 		return mentionNo
 
 	case *xpath.VarRef:
-		if a.isStreamingParamRef(x) {
+		if ref(x) {
 			return mentionYes
 		}
 		return mentionNo
@@ -629,10 +644,10 @@ func (a *analyzer) bodyMentionsStreamingParam(e xpath.Expr) mention {
 	case *xpath.ArgumentPlaceholder:
 		return mentionNo
 	case *xpath.StringConcat:
-		return a.mentionAny([]xpath.Expr{x.Left, x.Right})
+		return mentionAny([]xpath.Expr{x.Left, x.Right}, ref)
 	// A unary lookup's operand is the context item, as for ".".
 	case *xpath.LookupExpr:
-		return a.mentionAny([]xpath.Expr{x.Base, x.Expr})
+		return mentionAny([]xpath.Expr{x.Base, x.Expr}, ref)
 
 	// A name, not a reference to a variable -- except fn:current#0, which
 	// reaches the creating context's current item as a call does.
@@ -646,14 +661,14 @@ func (a *analyzer) bodyMentionsStreamingParam(e xpath.Expr) mention {
 	// Stopping here would let through exactly the closure the section's note
 	// says the rule exists to prevent.
 	case *xpath.InlineFunctionExpr:
-		return a.bodyMentionsStreamingParam(x.Body)
+		return refMention(x.Body, ref)
 
 	case *xpath.LetExpr:
-		return a.mentionAny(append(bindingExprs(x.Bindings), x.Return))
+		return mentionAny(append(bindingExprs(x.Bindings), x.Return), ref)
 	case *xpath.ForExpr:
-		return a.mentionAny(append(bindingExprs(x.Bindings), x.Return))
+		return mentionAny(append(bindingExprs(x.Bindings), x.Return), ref)
 	case *xpath.QuantifiedExpr:
-		return a.mentionAny(append(bindingExprs(x.Bindings), x.Test))
+		return mentionAny(append(bindingExprs(x.Bindings), x.Test), ref)
 
 	case *xpath.FuncCall:
 		// See inlineFunction: no variable reference, and still a streamed
@@ -661,39 +676,39 @@ func (a *analyzer) bodyMentionsStreamingParam(e xpath.Expr) mention {
 		if x.Name.URI == fnNS && x.Name.Local == "current" {
 			return mentionUnknown
 		}
-		return a.mentionAny(x.Args)
+		return mentionAny(x.Args, ref)
 	case *xpath.DynamicCall:
-		return a.mentionAny(append([]xpath.Expr{x.Target}, x.Args...))
+		return mentionAny(append([]xpath.Expr{x.Target}, x.Args...), ref)
 
 	case *xpath.BinaryOp:
-		return a.mentionAny([]xpath.Expr{x.Left, x.Right})
+		return mentionAny([]xpath.Expr{x.Left, x.Right}, ref)
 	case *xpath.UnaryOp:
-		return a.mentionAny([]xpath.Expr{x.Operand})
+		return mentionAny([]xpath.Expr{x.Operand}, ref)
 	case *xpath.SimpleMap:
-		return a.mentionAny([]xpath.Expr{x.Left, x.Right})
+		return mentionAny([]xpath.Expr{x.Left, x.Right}, ref)
 	case *xpath.IfExpr:
-		return a.mentionAny([]xpath.Expr{x.Cond, x.Then, x.Else})
+		return mentionAny([]xpath.Expr{x.Cond, x.Then, x.Else}, ref)
 
 	case *xpath.InstanceOfExpr:
-		return a.bodyMentionsStreamingParam(x.Operand)
+		return refMention(x.Operand, ref)
 	case *xpath.CastExpr:
-		return a.bodyMentionsStreamingParam(x.Operand)
+		return refMention(x.Operand, ref)
 	case *xpath.TreatExpr:
-		return a.bodyMentionsStreamingParam(x.Operand)
+		return refMention(x.Operand, ref)
 
 	case *xpath.PathExpr:
-		return a.mentionAny(x.Steps)
+		return mentionAny(x.Steps, ref)
 	case *xpath.Step:
-		return a.mentionAny(x.Predicates)
+		return mentionAny(x.Predicates, ref)
 	case *xpath.FilterExpr:
-		return a.mentionAny(append([]xpath.Expr{x.Base}, x.Predicates...))
+		return mentionAny(append([]xpath.Expr{x.Base}, x.Predicates...), ref)
 	case *xpath.SequenceExpr:
-		return a.mentionAny(x.Items)
+		return mentionAny(x.Items, ref)
 
 	case *xpath.MapConstructor:
-		return a.mentionAny(append(append([]xpath.Expr{}, x.Keys...), x.Values...))
+		return mentionAny(append(append([]xpath.Expr{}, x.Keys...), x.Values...), ref)
 	case *xpath.ArrayConstructor:
-		return a.mentionAny(x.Members)
+		return mentionAny(x.Members, ref)
 	}
 	return mentionUnknown
 }
@@ -709,13 +724,13 @@ func bindingExprs(bs []xpath.Binding) []xpath.Expr {
 	return es
 }
 
-// mentionAny is bodyMentionsStreamingParam over a list, with unknown winning
+// mentionAny is refMention over a list, with unknown winning
 // over no: one unrecognised subexpression makes the whole answer unreliable,
 // but a definite reference anywhere settles it regardless.
-func (a *analyzer) mentionAny(es []xpath.Expr) mention {
+func mentionAny(es []xpath.Expr, ref func(*xpath.VarRef) bool) mention {
 	worst := mentionNo
 	for _, e := range es {
-		switch a.bodyMentionsStreamingParam(e) {
+		switch refMention(e, ref) {
 		case mentionYes:
 			return mentionYes
 		case mentionUnknown:

@@ -61,12 +61,46 @@ func (c *compiler) streamFuncs() map[funcKey]*streamFunc {
 	return c.streamFns
 }
 
+// sheetJudgeKey names a table of stylesheet functions within one compile:
+// a package frame's (streampkgframe_l7.go) or the stylesheet's, with the
+// used packages' functions (pkgStreamFuncs) or without (streamFuncs).
+type sheetJudgeKey struct {
+	frame *pkgFrameState
+	pkg   bool
+}
+
+// sheetJudge is the judge of calls over the table pkg selects, one per
+// compile and frame, so that each function is judged once whatever the
+// number of calls on it (streamsplit_calls.go).
+func (c *compiler) sheetJudge(pkg bool) *sheetJudge {
+	k := sheetJudgeKey{c.l7PkgCur, pkg}
+	var j *sheetJudge
+	if c.env != nil {
+		j = c.env.sheetJudges[k]
+	}
+	if j == nil {
+		fns := c.streamFuncs()
+		if pkg {
+			fns = c.pkgStreamFuncs()
+		}
+		j = newSheetJudge(fns)
+		if c.env == nil {
+			return j
+		}
+		if c.env.sheetJudges == nil {
+			c.env.sheetJudges = map[sheetJudgeKey]*sheetJudge{}
+		}
+		c.env.sheetJudges[k] = j
+	}
+	return j
+}
+
 // inlineCalls rewrites, in e, the calls on stylesheet functions that are
 // their bodies exactly, and the simple maps that are paths.
 func (c *compiler) inlineCalls(e xpath.Expr) xpath.Expr {
-	e = c.inline.apply(e)                 // streamfn_inline.go
-	markSheetCalls(e, c.pkgStreamFuncs()) // streamsplit_calls.go; streampkgfn_l7.go: and the used packages' (marked, never inlined)
-	markSheetRefs(e, c.streamFuncs())     // streamfn_refs.go
+	e = c.inline.apply(e)                   // streamfn_inline.go
+	markSheetCallsBy(e, c.sheetJudge(true)) // streamsplit_calls.go; streampkgfn_l7.go: and the used packages' (marked, never inlined)
+	markSheetRefs(e, c.sheetJudge(false))   // streamfn_refs.go
 	return rewriteCalls(e, c.streamFuncs())
 }
 
@@ -444,8 +478,22 @@ func (b *streamBuilder) useSets(el, a *xdm.Node, f vfocus) bool {
 		!lre && (n.URI != "" || !isXSL(el, "element") && !isXSL(el, "copy")) {
 		return false
 	}
-	sets := attributeSetDeclarations(documentElementOf(el))
-	return b.setsOK(el, a.Value(), f, sets, map[xdm.QName]bool{})
+	return b.setsOK(el, a.Value(), f, b.pl.attrSets(el), map[xdm.QName]bool{})
+}
+
+// attrSets is the attribute sets of el's module, collected once per plan:
+// collecting them for each use made N uses cost N times the module.
+func (pl *streamPlan) attrSets(el *xdm.Node) map[xdm.QName][]*xdm.Node {
+	root := documentElementOf(el)
+	sets, ok := pl.sets[root]
+	if !ok {
+		sets = attributeSetDeclarations(root)
+		if pl.sets == nil {
+			pl.sets = map[*xdm.Node]map[xdm.QName][]*xdm.Node{}
+		}
+		pl.sets[root] = sets
+	}
+	return sets
 }
 
 func (b *streamBuilder) setsOK(el *xdm.Node, names string, f vfocus, sets map[xdm.QName][]*xdm.Node, seen map[xdm.QName]bool) bool {

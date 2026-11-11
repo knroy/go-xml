@@ -61,6 +61,12 @@ type declTrust struct {
 	// xmodeSt caches crossModeStates and xstreamable crossStreamableModes.
 	xmodeSt     map[string]crossModeSt
 	xstreamable map[string]bool
+
+	// tmpls and accums index each module's named templates and
+	// accumulators by name, built on first use: a walk of the module per
+	// reference made N references cost N times the module.
+	tmpls  templateIndex
+	accums map[*xdm.Node]map[xdm.QName]*xdm.Node
 }
 
 type trustState int8
@@ -79,6 +85,40 @@ func newDeclTrust(root *xdm.Node, shared bool) *declTrust {
 		funcs:  withPkgFuncs(collectStreamFuncs(root), root), // streampkgfn_l7.go
 		state:  map[any]trustState{},
 	}
+}
+
+// templates is t's template index (instrAnalyzer.templates).
+func (t *declTrust) templates() templateIndex {
+	if t.tmpls == nil {
+		t.tmpls = templateIndex{}
+	}
+	return t.tmpls
+}
+
+// accumulator is the first xsl:accumulator named want in the module of at,
+// or nil.
+func (t *declTrust) accumulator(at *xdm.Node, want xdm.QName) *xdm.Node {
+	root := documentElementOf(at)
+	byName, ok := t.accums[root]
+	if !ok {
+		byName = map[xdm.QName]*xdm.Node{}
+		walkElements(root, func(d *xdm.Node) bool {
+			if !isXSL(d, "accumulator") {
+				return true
+			}
+			if n, e := resolveQNameAttr(d, d.AttrValue("name")); e == nil {
+				if _, dup := byName[n]; !dup {
+					byName[n] = d
+				}
+			}
+			return false
+		})
+		if t.accums == nil {
+			t.accums = map[*xdm.Node]map[xdm.QName]*xdm.Node{}
+		}
+		t.accums[root] = byName
+	}
+	return byName[want]
 }
 
 // reachesOtherModules reports whether a module pulls in another.
@@ -118,6 +158,16 @@ func (t *declTrust) verified(key any, check func() bool) bool {
 	case trustVerified:
 		return true
 	case trustUnverified:
+		return false
+	}
+	if t.depth >= DefaultMaxDepth {
+		// A chain of declarations each resting on the next -- function on
+		// function, mode on mode -- is checked by recursion, a level of the
+		// whole analysis per link, and the stylesheet sets its length. Past
+		// the bound the declaration is left unverified, which only refuses
+		// trust: no verdict changes, and the construct runs as the tree runs
+		// it instead of overflowing the stack.
+		t.failed = true
 		return false
 	}
 	t.state[key] = trustInProgress
@@ -183,16 +233,7 @@ func (t *declTrust) accumulatorVerified(at *xdm.Node, nameArg xpath.Expr) bool {
 	if err != nil {
 		return false
 	}
-	var acc *xdm.Node
-	walkElements(documentElementOf(at), func(d *xdm.Node) bool {
-		if acc == nil && isXSL(d, "accumulator") {
-			if n, e := resolveQNameAttr(d, d.AttrValue("name")); e == nil && n == want {
-				acc = d
-			}
-			return false
-		}
-		return acc == nil
-	})
+	acc := t.accumulator(at, want)
 	if acc == nil {
 		return false
 	}
