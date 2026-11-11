@@ -156,6 +156,15 @@ func (p countPolicy) CountNodes(n int) error {
 	return err
 }
 
+// ChargeBytes passes a copy's byte charge through to the wrapped policy, so
+// that wrapping it for a try does not hide its byteCharger.
+func (p countPolicy) ChargeBytes(n int) error {
+	if bc, ok := p.Policy.(byteCharger); ok {
+		return bc.ChargeBytes(n)
+	}
+	return nil
+}
+
 func init() {
 	xdmsink.Try = func(out any, p any, rollback bool) any {
 		o := out.(*Builder)

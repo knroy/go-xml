@@ -195,6 +195,9 @@ type compiledExpr struct {
 	// compile the rest. Each one is reached through a "local:xq-stepN()"
 	// call installed before xpc is evaluated. See substituteOperands.
 	ops []liftedOperand
+	// spine is the extra recursion depth evaluating xpc costs, charged by
+	// bind. See spineDepth.
+	spine int32
 }
 
 // inspect returns the compiled expression for STATIC ANALYSIS ONLY — reading
@@ -222,10 +225,21 @@ func (e *compiledExpr) inspect() *xpath.Compiled {
 // case; the library is only built for an expression compileExpr had to
 // rewrite.
 func (e *compiledExpr) bind(ctx *evalContext) (*xpath.Context, error) {
-	if len(e.ops) == 0 {
-		return ctx.xp, nil
+	xp := ctx.xp
+	if e.spine > 0 {
+		// A tall expression costs extra levels while it runs; Descend
+		// refuses past the limit and adds the last one.
+		sub := *xp
+		sub.Depth += e.spine - 1
+		var err error
+		if xp, err = sub.Descend(); err != nil {
+			return nil, err
+		}
 	}
-	return bindLifted(ctx.xp, e.ops, ctx), nil
+	if len(e.ops) == 0 {
+		return xp, nil
+	}
+	return bindLifted(xp, e.ops, ctx), nil
 }
 
 // evalIn evaluates the xpath half in a context derived from the bound one.
@@ -696,7 +710,8 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		c = c.WithDefaultCollationURI(coll,
 			resolveBase(p.sc.baseURI, p.sc.defaultCollation))
 	}
-	return &compiledExpr{src: src, xpc: c, sc: p.sc, ops: opsOut}, nil
+	return &compiledExpr{src: src, xpc: c, sc: p.sc, ops: opsOut,
+		spine: spineLevels(c)}, nil
 }
 
 // rejectNamespaceAxis refuses the namespace axis, which XQuery does not have.
