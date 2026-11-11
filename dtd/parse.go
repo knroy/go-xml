@@ -202,6 +202,12 @@ func newDTD() *DTD {
 // A declaration that breaks a validity constraint of its own is recorded in
 // declErrs rather than returned, so that the DTD is still read and applied.
 func declarationsInto(d *DTD, subset string) error {
+	// bound keys the attributes already bound, element then name, and ids
+	// the first ID attribute of each element. Scanning d.Attributes for
+	// either cost the square of an element's attributes, 1.7 s for one
+	// 40,000-attribute ATTLIST.
+	bound := map[[2]string]struct{}{}
+	ids := map[string]string{}
 	for _, decl := range declarations(subset) {
 		switch {
 		case strings.HasPrefix(decl, "ELEMENT"):
@@ -237,10 +243,15 @@ func declarationsInto(d *DTD, subset string) error {
 				// rest are ignored. With the internal subset placed first
 				// that is exactly §2.8's precedence, so the two rules are
 				// one line of code. An ignored definition is not checked.
-				if attrDeclared(d.Attributes[a.Element], a.Name) {
+				key := [2]string{a.Element, a.Name}
+				if _, dup := bound[key]; dup {
 					continue
 				}
-				d.declErrs = append(d.declErrs, attributeDeclFaults(a, d.Attributes[a.Element])...)
+				bound[key] = struct{}{}
+				d.declErrs = append(d.declErrs, attributeDeclFaults(a, ids[a.Element])...)
+				if a.Type == "ID" && ids[a.Element] == "" {
+					ids[a.Element] = a.Name
+				}
 				d.Attributes[a.Element] = append(d.Attributes[a.Element], a)
 			}
 		case strings.HasPrefix(decl, "NOTATION"):
@@ -260,15 +271,6 @@ func declarationsInto(d *DTD, subset string) error {
 		}
 	}
 	return nil
-}
-
-func attrDeclared(decls []*Attribute, name string) bool {
-	for _, a := range decls {
-		if a.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 // splitSubset separates the DOCTYPE head from the bracketed internal subset.

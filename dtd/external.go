@@ -384,6 +384,9 @@ type loader struct {
 	// first occurrence of each only, for Validate to report. See
 	// nestingViolation.
 	nesting []string
+	// nestingSeen is the set of nesting, for violation's once-per-message
+	// rule. Scanning the list instead cost the square of the messages.
+	nestingSeen map[string]struct{}
 
 	// sections counts the INCLUDE sections currently being expanded, for
 	// maxSections.
@@ -771,7 +774,14 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 		// expands to nothing is not free: a ladder of rungs "%aN;%aN;" over
 		// an empty a0 doubles its calls a rung while producing no bytes, and
 		// without this floor the budget never moved.
-		if err := l.chargeExpansion(max(len(text), j+1)); err != nil {
+		//
+		// An internal entity is charged at least its raw replacement text
+		// too, which was scanned to produce text: at declaration level an
+		// IGNORE section reduces any amount of it to nothing, and a ladder
+		// of references to one scanned seconds of text per few bytes
+		// charged. A fetched one was charged its raw text by fetch, and
+		// p.text is empty for it.
+		if err := l.chargeExpansion(max(len(text), len(p.text), j+1)); err != nil {
 			return "", err
 		}
 		if l.inDecl {
@@ -813,8 +823,20 @@ func (l *loader) conditional(sb *strings.Builder, s, base string, depth int, dec
 	// the section is still read.
 	var kwb strings.Builder
 	open, extra := 0, ""
+	// semi is the first ';' at or after the last search, len(rest) when
+	// there is none. Searching at every byte cost the square of the
+	// keyword; searching only at a '%' it has passed keeps the searches
+	// disjoint, as in expand.
+	semi := -1
 	for open < len(rest) && rest[open] != '[' {
-		if j := strings.IndexByte(rest[open:], ';'); rest[open] == '%' && j > 0 {
+		if rest[open] == '%' && semi < open {
+			if semi = strings.IndexByte(rest[open:], ';'); semi < 0 {
+				semi = len(rest)
+			} else {
+				semi += open
+			}
+		}
+		if j := semi - open; rest[open] == '%' && semi < len(rest) && j > 0 {
 			t, err := l.expand(rest[open:open+j+1], base, depth+1, declLevel)
 			if err != nil {
 				return 0, err
@@ -875,11 +897,13 @@ func (l *loader) conditional(sb *strings.Builder, s, base string, depth int, dec
 // violation records a PE nesting validity error, once per message.
 func (l *loader) violation(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	for _, m := range l.nesting {
-		if m == msg {
-			return
-		}
+	if _, dup := l.nestingSeen[msg]; dup {
+		return
 	}
+	if l.nestingSeen == nil {
+		l.nestingSeen = map[string]struct{}{}
+	}
+	l.nestingSeen[msg] = struct{}{}
 	l.nesting = append(l.nesting, msg)
 }
 
