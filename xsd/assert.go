@@ -346,7 +346,9 @@ func (v *validator) assertionValue(el *xdm.Node, t *ComplexType) xdm.Sequence {
 // Every node copied is charged to the episode's node budget (xpath.MaxNodes).
 // Nested asserted elements each copy their own subtree, so the copying is
 // depth times nodes, and the instance author controls both factors; the
-// charge is what bounds the product. The error is the budget's refusal.
+// charge is what bounds the product. Attributes and namespace bindings travel
+// with every copy too, and are charged one apiece for the same reason. The
+// error is the budget's refusal.
 func (v *validator) scopeForAssertion(el *xdm.Node) (*xdm.Node, error) {
 	clone := xdm.NewNode(xdm.KindElement, el.Name(), el.Value())
 	clone.SetBaseURI(el.BaseURI())
@@ -369,11 +371,14 @@ func (v *validator) scopeForAssertion(el *xdm.Node) (*xdm.Node, error) {
 			pairs = append(pairs, prefix, uri)
 		}
 	}
-	clone.AddNamespaces(pairs...)
+	// Each binding is charged like a node: the set is rebuilt for every
+	// asserted element, so bindings declared once on an ancestor are
+	// copied once per asserted descendant.
 	ctx := v.assertEpisode()
-	if err := ctx.ChargeNodes(1); err != nil {
+	if err := ctx.ChargeNodes(1 + len(pairs)/2); err != nil {
 		return nil, err
 	}
+	clone.AddNamespaces(pairs...)
 	if err := v.fillScopeCopy(ctx, clone, el); err != nil {
 		return nil, err
 	}
@@ -411,6 +416,9 @@ func (v *validator) scopeForAssertion(el *xdm.Node) (*xdm.Node, error) {
 // holding all of them.
 func (v *validator) fillScopeCopy(ctx *xpath.Context, dst, src *xdm.Node) error {
 	for a := range v.attrs(src) {
+		if err := ctx.ChargeNodes(1); err != nil {
+			return err
+		}
 		dst.AppendAttr(a.Name(), a.Value()).ApplyTyping(v.typingOf(a))
 	}
 	for c := range src.Children() {
@@ -425,6 +433,9 @@ func (v *validator) fillScopeCopy(ctx *xpath.Context, dst, src *xdm.Node) error 
 		var pairs []string
 		for ns := range v.namespaceDecls(c) {
 			pairs = append(pairs, ns.prefix, ns.uri)
+		}
+		if err := ctx.ChargeNodes(len(pairs) / 2); err != nil {
+			return err
 		}
 		cc.AddNamespaces(pairs...)
 		if err := v.fillScopeCopy(ctx, cc, c); err != nil {
@@ -458,7 +469,13 @@ func isCommentOrPI(n *xdm.Node) bool {
 // Reusing the assertion scope gave the test the element's children and its
 // PSVI annotation, so string() returned the content and the untyped test
 // failed; every alternative then fell through to the xs:error default.
-func (v *validator) scopeForAlternative(el *xdm.Node) *xdm.Node {
+//
+// The copy is charged to the episode's node budget, one for the element and
+// one per attribute and namespace binding, as scopeForAssertion's is: every
+// element with alternatives copies the whole in-scope set, so bindings
+// declared once on an ancestor are copied once per descendant. The error is
+// the budget's refusal.
+func (v *validator) scopeForAlternative(el *xdm.Node) (*xdm.Node, error) {
 	// Built parentless for the reason an assertion's copy is: the element
 	// must be its own root, which is what makes (. is root()) hold and "//"
 	// select nothing.
@@ -483,6 +500,10 @@ func (v *validator) scopeForAlternative(el *xdm.Node) *xdm.Node {
 	for prefix, uri := range v.inScopeNamespaces(el) {
 		pairs = append(pairs, prefix, uri)
 	}
+	if err := v.assertEpisode().ChargeNodes(1 + len(pairs)/2 +
+		el.NumAttrs() + len(v.inherited)); err != nil {
+		return nil, err
+	}
 	clone.AddNamespaces(pairs...)
 	// An inheritable attribute from an ancestor is visible to the test, but
 	// only where the element does not carry one of the same name: the
@@ -493,7 +514,7 @@ func (v *validator) scopeForAlternative(el *xdm.Node) *xdm.Node {
 		}
 		clone.AppendAttr(a.Name(), a.Value())
 	}
-	return clone
+	return clone, nil
 }
 
 // selectAlternativeType applies conditional type assignment (cvc-type-alt).
@@ -507,7 +528,13 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 	if len(decl.Alternatives) == 0 {
 		return decl.Type
 	}
-	scoped := v.scopeForAlternative(el)
+	scoped, err := v.scopeForAlternative(el)
+	if err != nil {
+		v.failLimit(el,
+			"the type alternatives could not be evaluated: %v", err)
+		v.stopped = true
+		return decl.Type
+	}
 
 	for _, alt := range decl.Alternatives {
 		if alt.Test == nil {
@@ -520,6 +547,17 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 		ctx := v.assertContext(scoped).WithStaticBaseURI(alt.staticBaseURI)
 		ok, err := alt.Test.EvalBool(ctx)
 		if err != nil && v.checkCancelled() {
+			return decl.Type
+		}
+		// A resource refusal is no verdict, as in checkAssertions: taking
+		// it for a false test would choose a later alternative the schema
+		// gave for elements this test does not hold for, so an instance
+		// could escape an xs:error alternative by exhausting the budget.
+		// The run stops, as the depth and error limits stop it.
+		if errors.Is(err, xdm.ErrResourceLimit) {
+			v.failLimit(el,
+				"alternative %q could not be evaluated: %v", alt.Source, err)
+			v.stopped = true
 			return decl.Type
 		}
 		if err != nil || !ok {

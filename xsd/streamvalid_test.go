@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -520,5 +521,26 @@ func TestNilledElementKeepsIdentityConstraints(t *testing.T) {
 		if (gerr != nil) != r.bad {
 			t.Errorf("%s: stream error %v, want invalid %v", r.doc, gerr, r.bad)
 		}
+	}
+}
+
+// The streamed validator's assertions are charged for their in-scope bindings
+// as the tree's are, and at the same point: the copy checkAssertions makes of
+// the held element, which carries them all. 20,000 bindings under 101
+// asserted children are refused, and under 90 are not.
+func TestStreamAssertionBindingsAreBudgeted(t *testing.T) {
+	s := svLoad(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">`+
+		`<xs:element name="r"><xs:complexType><xs:sequence>`+
+		`<xs:element name="c" maxOccurs="unbounded"><xs:complexType>`+
+		`<xs:assert test="true()"/></xs:complexType></xs:element>`+
+		`</xs:sequence></xs:complexType></xs:element></xs:schema>`)
+	doc := func(n int) string {
+		return `<r` + nsDecls(20000) + `>` + strings.Repeat("<c/>", n) + `</r>`
+	}
+	if _, err := svRun(t, s, doc(90), xsdstream.Mode{}, false); err != nil {
+		t.Fatalf("90 children under 20,000 bindings were refused: %v", err)
+	}
+	if _, err := svRun(t, s, doc(101), xsdstream.Mode{}, false); !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Fatalf("stream = %v, want the node budget's refusal", err)
 	}
 }
