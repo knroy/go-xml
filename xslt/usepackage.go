@@ -196,7 +196,7 @@ func packageComponents(root *xdm.Node) ([]*component, error) {
 			// if the parameter is non-static", so an xsl:override may supply
 			// one. Only a child of xsl:override is read as a component here,
 			// and the used package's matching declaration is found by name;
-			// see usedPackageParam. override-v-015.
+			// see usedPackageParams. override-v-015.
 			if !isXSL(root, "override") {
 				continue
 			}
@@ -1142,6 +1142,7 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 	// xsl:accept lists explicitly *and* an xsl:override declares an error,
 	// so the override's names have to be known before the accepts are read.
 	overridden := map[string]*xdm.Node{}
+	var params map[string]*xdm.Node
 	for _, ov := range u.overrides {
 		comps, err := packageComponents(ov)
 		if err != nil {
@@ -1159,7 +1160,10 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 				// additional property that its value can be supplied by the
 				// caller", and fixes its visibility as "public if the
 				// parameter is non-static". override-v-015 overrides one.
-				if el := usedPackageParam(u.root, oc.sym); el != nil {
+				if oc.sym.kind == kindVariable && params == nil {
+					params = usedPackageParams(u.root)
+				}
+				if el := params[oc.sym.name.Clark()]; oc.sym.kind == kindVariable && el != nil {
 					target = &component{
 						sym: oc.sym, el: el,
 						declared: visPublic, vis: visPublic,
@@ -2796,15 +2800,17 @@ func duplicateOverrideError(oc *component, prev *xdm.Node) error {
 		oc.sym)
 }
 
-// usedPackageParam finds the top-level xsl:param a symbolic name refers to.
+// usedPackageParams indexes the top-level xsl:params of a used package by
+// expanded name, the first declaration of a name answering for it.
 //
-// Only a non-static parameter answers. 9.5 fixes a static parameter's
+// Only a non-static parameter is indexed. 9.5 fixes a static parameter's
 // visibility as private, so it is not a component another package can see,
 // let alone override.
-func usedPackageParam(root *xdm.Node, sym symbolicName) *xdm.Node {
-	if sym.kind != kindVariable {
-		return nil
-	}
+//
+// It is built once per xsl:use-package, so that each overridden parameter is a
+// lookup rather than a walk of every top-level declaration.
+func usedPackageParams(root *xdm.Node) map[string]*xdm.Node {
+	out := map[string]*xdm.Node{}
 	for _, el := range root.ChildElements() {
 		if !isXSL(el, "param") || yesAttr(el, "static") {
 			continue
@@ -2813,11 +2819,11 @@ func usedPackageParam(root *xdm.Node, sym symbolicName) *xdm.Node {
 		if err != nil {
 			continue
 		}
-		if qn.Clark() == sym.name.Clark() {
-			return el
+		if _, dup := out[qn.Clark()]; !dup {
+			out[qn.Clark()] = el
 		}
 	}
-	return nil
+	return out
 }
 
 // ncNameByte reports whether a byte may appear inside an NCName -- an

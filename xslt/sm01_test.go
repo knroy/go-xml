@@ -145,13 +145,11 @@ func TestSM01StaticEvalSharesNamespaces(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var before, after goruntime.MemStats
-		goruntime.ReadMemStats(&before)
-		if _, err := Compile(tree.Root, CompileOptions{}); err != nil {
-			t.Fatal(err)
-		}
-		goruntime.ReadMemStats(&after)
-		return after.TotalAlloc - before.TotalAlloc
+		return totalAlloc(func() {
+			if _, err := Compile(tree.Root, CompileOptions{}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 	small, large := alloc(300), alloc(1200)
 	if large > 8*small {
@@ -208,5 +206,111 @@ func TestSM01PackageReadOncePerResolvedPackage(t *testing.T) {
 	}
 	if pc.probes != 1 {
 		t.Errorf("package urn:p went through %d static phases, want 1", pc.probes)
+	}
+}
+
+// totalAlloc answers the bytes f allocates.
+func totalAlloc(f func()) uint64 {
+	var before, after goruntime.MemStats
+	goruntime.ReadMemStats(&before)
+	f()
+	goruntime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// linearGrowth fails t when quadrupling n multiplies what build(n) allocates
+// by more than 8: linear work gives about 4, a scan per declaration 16.
+func linearGrowth(t *testing.T, what string, build func(n int)) {
+	t.Helper()
+	small := totalAlloc(func() { build(500) })
+	large := totalAlloc(func() { build(2000) })
+	if large > 8*small {
+		t.Errorf("%s: allocation grew %d -> %d bytes for 4x the declarations: quadratic",
+			what, small, large)
+	}
+}
+
+// TestSM01OverriddenParamsIndexed: a used package whose stylesheet parameters
+// are every one overridden. Finding each by a walk of the package's top-level
+// declarations resolves n*n names; an index built once resolves n. The
+// override of the last one must still take effect.
+func TestSM01OverriddenParamsIndexed(t *testing.T) {
+	const xsl = `xmlns:xsl="http://www.w3.org/1999/XSL/Transform"`
+	linearGrowth(t, "overridden parameters", func(n int) {
+		var pkg, ovr strings.Builder
+		pkg.WriteString(`<xsl:package ` + xsl + ` name="urn:p" package-version="1.0.0" version="3.0">
+			<xsl:template name="go" visibility="public"><r><xsl:value-of select="$p` +
+			fmt.Sprint(n-1) + `"/></r></xsl:template>`)
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(&pkg, `<xsl:param name="p%d" select="'orig'"/>`, i)
+			fmt.Fprintf(&ovr, `<xsl:param name="p%d" select="'over'"/>`, i)
+		}
+		pkg.WriteString(`</xsl:package>`)
+		tree, err := xdm.ParseString(`<xsl:package `+xsl+` name="urn:top" package-version="1.0.0" version="3.0">
+			<xsl:output omit-xml-declaration="yes"/>
+			<xsl:use-package name="urn:p" package-version="1.0.0"><xsl:override>`+ovr.String()+
+			`</xsl:override></xsl:use-package>
+			<xsl:template name="xsl:initial-template" visibility="public"><xsl:call-template name="go"/></xsl:template>
+		</xsl:package>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Compile(tree.Root, CompileOptions{PackageResolver: fixedPackages{"urn:p": pkg.String()}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := s.Transform(context.Background(), nil,
+			TransformOptions{InitialTemplate: "initial-template", InitialTemplateURI: xdm.NSXSL})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := res.String(); got != "<r>over</r>" {
+			t.Errorf("got %q, want <r>over</r>", got)
+		}
+	})
+}
+
+// TestSM01DuplicateDeclarationScansIndexed: the XTSE0630 check over global
+// variables and the XTSE0580 checks over a template's and a function's
+// parameters compared each new name with every one before it. The names are
+// in a namespace long enough that every comparison built its Clark names on
+// the heap. The errors
+// themselves must still be reported.
+func TestSM01DuplicateDeclarationScansIndexed(t *testing.T) {
+	sheet := func(body string) string {
+		return `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+			xmlns:q="urn:sm01:a-namespace-longer-than-the-stack-concatenation-buffer">` + body + `<xsl:template match="/"/></xsl:stylesheet>`
+	}
+	compileSrc := func(src string) error {
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Compile(tree.Root, CompileOptions{})
+		return err
+	}
+	decls := func(n int, f string) string {
+		var b strings.Builder
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(&b, f, i)
+		}
+		return b.String()
+	}
+	for _, c := range []struct{ what, wrap, decl string }{
+		{"globals", "%s", `<xsl:variable name="q:g%d" select="1"/>`},
+		{"template params", `<xsl:template name="t">%s</xsl:template>`, `<xsl:param name="q:p%d"/>`},
+		{"function params", `<xsl:function name="q:f">%s<xsl:sequence select="1"/></xsl:function>`,
+			`<xsl:param name="q:p%d"/>`},
+	} {
+		linearGrowth(t, c.what, func(n int) {
+			if err := compileSrc(sheet(fmt.Sprintf(c.wrap, decls(n, c.decl)))); err != nil {
+				t.Fatalf("%s: %v", c.what, err)
+			}
+		})
+		dup := decls(1, c.decl) + decls(1, c.decl)
+		err := compileSrc(sheet(fmt.Sprintf(c.wrap, dup)))
+		if err == nil || !strings.Contains(err.Error(), "XTSE0") {
+			t.Errorf("%s: a duplicate name compiled, got %v", c.what, err)
+		}
 	}
 }
