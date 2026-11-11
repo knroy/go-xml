@@ -1056,6 +1056,18 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		sb.WriteString(n.Value())
 		sb.WriteString("-->")
 	case xdm.KindPI:
+		// Serialization 3.1 §7.3: the html method ends a processing
+		// instruction at the first ">", so a ">" in its content is SERE0015
+		// rather than something to write: there is no escape for it, and
+		// what followed it would be read as markup. The tree serializer in
+		// package xslt makes the same check. XHTML is XML and is exempt.
+		if opts.method == "html" && strings.Contains(n.Value(), ">") {
+			if sb.e == nil {
+				sb.latch(fmt.Errorf("SERE0015: a processing instruction " +
+					"contains '>', which ends it in the html output method"))
+			}
+			return
+		}
 		sb.WriteString("<?")
 		sb.WriteString(n.Name().Local)
 		if n.Value() != "" {

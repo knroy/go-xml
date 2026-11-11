@@ -151,3 +151,29 @@ func TestSerializeHTMLIslandSelfCloses(t *testing.T) {
 		}
 	}
 }
+
+// TestSerializeHTMLRefusesGTInPI: the html method ends a processing
+// instruction at the first ">", so one in the content is SERE0015
+// (Serialization 3.1 §7.3) rather than text that a browser reads as markup.
+// fn:serialize wrote it, where the xsl:output html serializer refused it.
+// XHTML is XML, and keeps it.
+func TestSerializeHTMLRefusesGTInPI(t *testing.T) {
+	const doc = `parse-xml('<p><?pi x><img src=x onerror=alert(1)>?></p>')`
+	for _, params := range []string{
+		`map{'method': 'html'}`,
+		`map{'method': 'json', 'json-node-output-method': 'html'}`,
+	} {
+		_, err := evalSerialize(t, `serialize(`+doc+`, `+params+`)`)
+		if err == nil || !strings.HasPrefix(err.Error(), "SERE0015") {
+			t.Errorf("%s: got %v, want SERE0015", params, err)
+		}
+	}
+	got, err := evalSerialize(t, `serialize(`+doc+`, map{'method': 'xhtml'})`)
+	if err != nil || !strings.Contains(got, "<?pi x><img src=x onerror=alert(1)>?>") {
+		t.Errorf("xhtml: got %q, %v", got, err)
+	}
+	if got, err := evalSerialize(t, `serialize(parse-xml('<p><?pi x?></p>'), map{'method': 'html'})`); err != nil ||
+		!strings.Contains(got, "<?pi x") {
+		t.Errorf("html PI without '>': got %q, %v", got, err)
+	}
+}
