@@ -159,3 +159,54 @@ func TestSM01StaticEvalSharesNamespaces(t *testing.T) {
 			"expressions under 4x the namespaces: quadratic", small, large)
 	}
 }
+
+// probeCounter is a package and document resolver that counts how often a
+// static expression asked for probe.xml: once per static phase over the
+// package that asks.
+type probeCounter struct {
+	fixedPackages
+	probes int
+}
+
+func (p *probeCounter) ResolveModule(href, base string) (*xdm.Node, string, error) {
+	return nil, "", errNoSuchTestPackage
+}
+
+func (p *probeCounter) ResolveDocument(uri, base string) (*xdm.Tree, error) {
+	if strings.HasSuffix(uri, "probe.xml") {
+		p.probes++
+	}
+	return xdm.ParseString(`<probe/>`, xdm.ParseOptions{})
+}
+
+// TestSM01PackageReadOncePerResolvedPackage: A and B both use P, spelling its
+// version range differently. Both spellings resolve to the same package, which
+// must be read -- static phase and copy -- once, not once per spelling.
+func TestSM01PackageReadOncePerResolvedPackage(t *testing.T) {
+	const xsl = `xmlns:xsl="http://www.w3.org/1999/XSL/Transform"`
+	pc := &probeCounter{fixedPackages: fixedPackages{
+		"urn:p": `<xsl:package ` + xsl + ` name="urn:p" package-version="1.0.0" version="3.0">
+			<xsl:variable name="v" use-when="doc-available('probe.xml')" select="1"/>
+		</xsl:package>`,
+		"urn:a": `<xsl:package ` + xsl + ` name="urn:a" package-version="1.0.0" version="3.0">
+			<xsl:use-package name="urn:p" package-version="1.0.0"/>
+		</xsl:package>`,
+		"urn:b": `<xsl:package ` + xsl + ` name="urn:b" package-version="1.0.0" version="3.0">
+			<xsl:use-package name="urn:p" package-version="*"/>
+		</xsl:package>`,
+	}}
+	tree, err := xdm.ParseString(`<xsl:package `+xsl+` name="urn:top" package-version="1.0.0" version="3.0">
+		<xsl:use-package name="urn:a" package-version="1.0.0"/>
+		<xsl:use-package name="urn:b" package-version="1.0.0"/>
+		<xsl:template name="xsl:initial-template" visibility="public"><ok/></xsl:template>
+	</xsl:package>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Compile(tree.Root, CompileOptions{PackageResolver: pc, Resolver: pc}); err != nil {
+		t.Fatal(err)
+	}
+	if pc.probes != 1 {
+		t.Errorf("package urn:p went through %d static phases, want 1", pc.probes)
+	}
+}

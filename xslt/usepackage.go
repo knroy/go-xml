@@ -948,10 +948,13 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 	// Compile however many paths reach the package. comps is clipped so that
 	// acceptComponents appending to it cannot write into the shared array.
 	memo := u.name + "\x00" + u.versions
-	if r, ok := c.packageReads[memo]; ok {
+	reuse := func(r *usePackageDecl) *usePackageDecl {
 		u.key, u.doc, u.root, u.staticVars = r.key, r.doc, r.root, r.staticVars
 		u.comps, u.inherited = slices.Clip(r.comps), r.inherited
-		return u, nil
+		return u
+	}
+	if r, ok := c.packageReads[memo]; ok {
+		return reuse(r), nil
 	}
 	if err := c.visitModule(el, u.name); err != nil {
 		return nil, err
@@ -967,6 +970,15 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 		return nil, fmt.Errorf("XTSE3000: the package named %s is empty", u.name)
 	}
 	u.key = packageKey(u.root, u.name)
+	// A different spelling of the version range can resolve to a package
+	// already read. Reading it again would copy it again through a fresh
+	// static phase, before any of those copies is charged as compiled.
+	// A read is recorded only once it is finished, so a hit here is never
+	// the package still being read: that is the XTSE3005 cycle below.
+	if r, ok := c.packageReadsByKey[u.key]; ok {
+		c.packageReads[memo] = r
+		return reuse(r), nil
+	}
 	leave, err := c.enterPackage(u.key)
 	if err != nil {
 		return nil, err
@@ -1037,8 +1049,13 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 	if c.packageReads == nil {
 		c.packageReads = map[string]*usePackageDecl{}
 	}
-	c.packageReads[memo] = &usePackageDecl{key: u.key, doc: u.doc, root: u.root,
+	r := &usePackageDecl{key: u.key, doc: u.doc, root: u.root,
 		staticVars: u.staticVars, comps: slices.Clip(comps), inherited: inherited}
+	c.packageReads[memo] = r
+	if c.packageReadsByKey == nil {
+		c.packageReadsByKey = map[string]*usePackageDecl{}
+	}
+	c.packageReadsByKey[u.key] = r
 	return u, nil
 }
 

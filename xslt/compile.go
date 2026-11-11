@@ -74,6 +74,10 @@ type compiler struct {
 	// used on several paths is resolved and read once. Only the part that
 	// depends on the package alone is kept; see readUsePackage.
 	packageReads map[string]*usePackageDecl
+	// packageReadsByKey holds the same reads keyed by packageKey, so that
+	// version ranges spelled differently that resolve to one package read
+	// it once rather than once per spelling.
+	packageReadsByKey map[string]*usePackageDecl
 	// schemaHoisted records that the xsl:import-schema pre-pass has run, so
 	// that the recursion for each included module does not repeat it from a
 	// root that sees less than the first one did.
