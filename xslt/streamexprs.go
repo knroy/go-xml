@@ -283,65 +283,75 @@ func isDocumentNodeWithContent(st xpath.SequenceType) bool {
 // let. Only the first binding is in scope for the second, which is what the
 // nesting expresses.
 func (a *analyzer) letExpr(x *xpath.LetExpr) props {
-	if len(x.Bindings) == 0 {
+	n := len(x.Bindings)
+	if n == 0 {
 		return a.unknown()
 	}
-	seq := a.operandOf(x.Bindings[0].Seq, usageNavigation)
-	ret := x.Return
-	if len(x.Bindings) > 1 {
-		ret = &xpath.LetExpr{Bindings: x.Bindings[1:], Return: x.Return}
+	// The clauses are walked in a loop, not by recursing on the rest of the
+	// let: recursion made the Go stack depth the binding count, and a stack
+	// overflow is fatal to the process. The props are then folded from the
+	// innermost clause outward, which is the nesting described above.
+	seqs := make([]operand, n)
+	saved := make([]savedVar, n)
+	for i, b := range x.Bindings {
+		seqs[i] = a.operandOf(b.Seq, usageNavigation)
+		// The variable is recorded as grounded, which is what §19.8.8.12
+		// gives it anyway, so that a declared variable it shadows is not
+		// consulted.
+		saved[i] = a.bind(b.Var, groundedMotionless)
 	}
-	// The variable is recorded as grounded, which is what §19.8.8.12 gives
-	// it anyway, so that a declared variable it shadows is not consulted.
-	inner := a.withVar(x.Bindings[0].Var, groundedMotionless)
-	p := a.combine([]operand{
-		seq,
-		inner.operandOf(ret, usageTransmission),
-	}, false)
-	a.known = a.known && inner.known
-	a.unverified = a.unverified || inner.unverified
-	return p
+	ret := a.operandOf(x.Return, usageTransmission)
+	a.vars.unbind(saved)
+	for i := n - 1; i > 0; i-- {
+		ret = operand{
+			props:          combine([]operand{seqs[i], ret}, false),
+			usage:          usageTransmission,
+			allowsChildren: true,
+			src:            &xpath.LetExpr{Bindings: x.Bindings[i:], Return: x.Return},
+		}
+	}
+	return a.combine([]operand{seqs[0], ret}, false)
 }
 
+// forExpr applies §19.8.8.1. A multi-clause for is the nesting letExpr
+// describes, walked the same way: in a loop, so the Go stack does not grow
+// with the clause count. Every clause after the first, and the return, sits
+// in a higher-order operand, so they are assessed with the one analyzer
+// higherOrderAnalyzer gives.
 func (a *analyzer) forExpr(x *xpath.ForExpr) props {
-	if len(x.Bindings) == 0 {
+	n := len(x.Bindings)
+	if n == 0 {
 		return a.unknown()
 	}
-	seq := a.operandOf(x.Bindings[0].Seq, usageNavigation)
-	ret := x.Return
-	if len(x.Bindings) > 1 {
-		ret = &xpath.ForExpr{Bindings: x.Bindings[1:], Return: x.Return}
-	}
+	seqs := make([]operand, n)
+	saved := make([]savedVar, n)
+	seqs[0] = a.operandOf(x.Bindings[0].Seq, usageNavigation)
 	// Recorded as grounded for the reason letExpr gives.
-	inner := a.withVar(x.Bindings[0].Var, groundedMotionless)
-	p := a.combine([]operand{
-		seq,
-		inner.higherOrderOperand(ret, usageTransmission),
-	}, false)
-	a.known = a.known && inner.known
-	a.unverified = a.unverified || inner.unverified
-	return p
+	saved[0] = a.bind(x.Bindings[0].Var, groundedMotionless)
+	h := a.higherOrderAnalyzer()
+	for i := 1; i < n; i++ {
+		seqs[i] = h.operandOf(x.Bindings[i].Seq, usageNavigation)
+		saved[i] = h.bind(x.Bindings[i].Var, groundedMotionless)
+	}
+	ret := h.higherOrderOperand(x.Return, usageTransmission)
+	a.vars.unbind(saved)
+	for i := n - 1; i > 0; i-- {
+		ret = operand{
+			props:          combine([]operand{seqs[i], ret}, false),
+			usage:          usageTransmission,
+			allowsChildren: true,
+			higherOrder:    true,
+			src:            &xpath.ForExpr{Bindings: x.Bindings[i:], Return: x.Return},
+		}
+	}
+	a.known = a.known && h.known
+	a.unverified = a.unverified || h.unverified
+	return a.combine([]operand{seqs[0], ret}, false)
 }
 
-// quantifiedExpr applies §19.8.8.2 to "some|every $v in S satisfies C".
-//
-// Unlike the for rule, there is no separate "S must be grounded" test: the
-// general rules apply directly, with S carrying usage navigation -- and
-// navigation from any non-grounded posture is free-ranging (§19.8.1), which
-// reaches the same place by the route the spec chose. C is a higher-order
-// operand with usage inspection.
-//
-// "some $i in X, $j in Y satisfies C" is rewritten as nested quantified
-// expressions, which §19.8.8.2 asks for in as many words.
 func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
 	if len(x.Bindings) == 0 {
 		return a.unknown()
-	}
-	test := x.Test
-	if len(x.Bindings) > 1 {
-		test = &xpath.QuantifiedExpr{
-			Every: x.Every, Bindings: x.Bindings[1:], Test: x.Test,
-		}
 	}
 	// §19.8.8.2 makes S a navigation operand, and navigation from a
 	// non-grounded posture is free-ranging (§19.8.1). Transcribed literally
@@ -376,18 +386,59 @@ func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
 	// through §19.8.1's arithmetic, which is what keeps the limit of one
 	// potentially-consuming operand honest, and the RESULT is forced
 	// grounded below: no streamed node can leave a "some" or an "every".
-	seq := a.operandOf(x.Bindings[0].Seq, usageTransmission)
-	if !seq.props.streamable() {
+	//
+	// The clauses are walked in a loop, as letExpr explains, and folded from
+	// the innermost outward. A clause whose binding is not streamable makes
+	// its level roaming and free-ranging, and the clauses inside it are not
+	// assessed, exactly as the nested rewrite returned there.
+	n := len(x.Bindings)
+	seqs := make([]operand, 0, n)
+	saved := make([]savedVar, 0, n)
+	b, h := a, (*analyzer)(nil)
+	for _, bd := range x.Bindings {
+		seq := b.operandOf(bd.Seq, usageTransmission)
+		if !seq.props.streamable() {
+			break
+		}
+		seqs = append(seqs, seq)
+		// A grounded binding is recorded too: its entry gives §19.8.8.12's
+		// plain answer, and it is what tells staticallyNumeric and
+		// dynamicCallUsages that the name no longer refers to a declared
+		// xsl:variable or xsl:param.
+		saved = append(saved, b.bind(bd.Var, seq.props))
+		if h == nil {
+			h = a.higherOrderAnalyzer()
+			b = h
+		}
+	}
+	if len(seqs) == 0 {
 		return roamingFreeRanging
 	}
-	// A grounded binding is recorded too: its entry gives §19.8.8.12's plain
-	// answer, and it is what tells staticallyNumeric and dynamicCallUsages
-	// that the name no longer refers to a declared xsl:variable or xsl:param.
-	inner := a.withVar(x.Bindings[0].Var, seq.props)
-	op := inner.higherOrderOperand(test, usageInspection)
-	a.known = a.known && inner.known
-	a.unverified = a.unverified || inner.unverified
-	p := a.combine([]operand{seq, op}, false)
+	var op operand
+	if len(seqs) == n {
+		op = h.higherOrderOperand(x.Test, usageInspection)
+	} else {
+		op = operand{props: roamingFreeRanging, usage: usageInspection, allowsChildren: true, higherOrder: true,
+			src: &xpath.QuantifiedExpr{Every: x.Every, Bindings: x.Bindings[len(seqs):], Test: x.Test}}
+	}
+	a.vars.unbind(saved)
+	for i := len(seqs) - 1; i > 0; i-- {
+		op = operand{
+			props:          quantifiedProps(combine([]operand{seqs[i], op}, false)),
+			usage:          usageInspection,
+			allowsChildren: true,
+			higherOrder:    true,
+			src:            &xpath.QuantifiedExpr{Every: x.Every, Bindings: x.Bindings[i:], Test: x.Test},
+		}
+	}
+	a.known = a.known && h.known
+	a.unverified = a.unverified || h.unverified
+	return quantifiedProps(a.combine([]operand{seqs[0], op}, false))
+}
+
+// quantifiedProps is the result of one clause of a quantified expression whose
+// operands combine to p.
+func quantifiedProps(p props) props {
 	if !p.streamable() {
 		return roamingFreeRanging
 	}
@@ -396,21 +447,77 @@ func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
 	return props{postureGrounded, p.sweep}
 }
 
-// withVar returns a copy of the analyzer with one more binding in the
-// data-flow environment.
-//
-// The map is copied rather than mutated so that a binding cannot outlive the
+// varScope is the data-flow environment of one walk (analyzer.vars), shared
+// by every analyzer of it. A binding is added where its scope opens and
+// removed, in reverse, where it closes, so that it cannot outlive the
 // expression that introduced it: "some $t in a satisfies P" and a sibling
 // "some $t in b satisfies Q" must not see each other's $t, and neither must
-// anything after them.
-func (a *analyzer) withVar(name xdm.QName, p props) *analyzer {
-	b := *a
-	b.vars = make(map[xdm.QName]props, len(a.vars)+1)
-	for k, v := range a.vars {
-		b.vars[k] = v
+// anything after them. It replaces a copy of the whole map per binding, which
+// made k bindings quadratic in live memory.
+type varScope struct {
+	m map[xdm.QName]props
+	// streamed counts the entries whose posture is not grounded, the only
+	// ones inlineFunction has to look at.
+	streamed int
+}
+
+// savedVar is what bind displaced, for unbind to put back.
+type savedVar struct {
+	name xdm.QName
+	old  props
+	had  bool
+}
+
+// bind records name with props p in the environment and returns what it
+// displaced.
+func (a *analyzer) bind(name xdm.QName, p props) savedVar {
+	if a.vars == nil {
+		a.vars = &varScope{m: map[xdm.QName]props{}}
 	}
-	b.vars[name] = p
-	return &b
+	s := a.vars
+	old, had := s.m[name]
+	if had && old.posture != postureGrounded {
+		s.streamed--
+	}
+	if p.posture != postureGrounded {
+		s.streamed++
+	}
+	s.m[name] = p
+	return savedVar{name, old, had}
+}
+
+// unbind undoes the binds that returned saved, most recent first.
+func (s *varScope) unbind(saved []savedVar) {
+	for i := len(saved) - 1; i >= 0; i-- {
+		v := saved[i]
+		if s.m[v.name].posture != postureGrounded {
+			s.streamed--
+		}
+		if !v.had {
+			delete(s.m, v.name)
+			continue
+		}
+		s.m[v.name] = v.old
+		if v.old.posture != postureGrounded {
+			s.streamed++
+		}
+	}
+}
+
+// lookup returns the props name is bound to within the expression being
+// analysed, and whether it is bound there.
+func (s *varScope) lookup(name xdm.QName) (props, bool) {
+	if s == nil {
+		return props{}, false
+	}
+	p, ok := s.m[name]
+	return p, ok
+}
+
+// bound reports whether name is bound within the expression being analysed.
+func (s *varScope) bound(name xdm.QName) bool {
+	_, ok := s.lookup(name)
+	return ok
 }
 
 // inlineFunction applies §19.8.8.16 to an inline function declaration:
@@ -443,14 +550,18 @@ func (a *analyzer) withVar(name xdm.QName, p props) *analyzer {
 // rather than refused, because the first rests on data flow the spec does
 // not have and the second on a gap in its rules.
 func (a *analyzer) inlineFunction(x *xpath.InlineFunctionExpr) props {
-	for name, p := range a.vars {
-		if p.posture == postureGrounded {
-			continue
-		}
-		b := *a
-		b.hasStreamParam, b.streamingParam = true, name
-		if b.bodyMentionsStreamingParam(x.Body) != mentionNo {
-			return a.unknown()
+	// Only a binding that is not grounded can be closed over; the count
+	// spares the scan when every binding in scope is grounded.
+	if a.vars != nil && a.vars.streamed > 0 {
+		for name, p := range a.vars.m {
+			if p.posture == postureGrounded {
+				continue
+			}
+			b := *a
+			b.hasStreamParam, b.streamingParam = true, name
+			if b.bodyMentionsStreamingParam(x.Body) != mentionNo {
+				return a.unknown()
+			}
 		}
 	}
 	if !a.hasStreamParam {
@@ -782,7 +893,7 @@ func (a *analyzer) varSignatureUsages(v *xpath.VarRef) []usage {
 	if a.decl == nil {
 		return nil
 	}
-	if _, bound := a.vars[v.Name]; bound {
+	if a.vars.bound(v.Name) {
 		// Bound inside the expression, where the declaration walk cannot
 		// see it; whatever shares its name outside is not this variable.
 		return nil
@@ -951,7 +1062,7 @@ func (a *analyzer) staticallyNumeric(e xpath.Expr) bool {
 	case *xpath.FilterExpr:
 		return a.staticallyNumeric(x.Base)
 	case *xpath.VarRef:
-		if _, bound := a.vars[x.Name]; bound || a.decl == nil {
+		if a.vars.bound(x.Name) || a.decl == nil {
 			return false
 		}
 		as, ok := declaredTypeOf(a.decl, x.Name)

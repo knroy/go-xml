@@ -651,7 +651,7 @@ type usePackageDecl struct {
 	// staticVars are the static variables the used package's own static phase
 	// evaluated. They belong to that package and not to the using one, so
 	// they are reinstated only while it compiles; see compileUsedPackage.
-	staticVars []staticVar
+	staticVars map[string]*staticVar
 	// assignedVis records which of those an xsl:accept actually named, as
 	// against inheriting the used package's own answer. XTSE3080 turns on the
 	// difference; see compileUsePackages.
@@ -1736,6 +1736,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		return err
 	}
 	e := pkgEdits{}
+	idx := &mentionIndex{root: u.root, e: e}
 	keep := map[*xdm.Node]bool{}
 	for _, comp := range u.comps {
 		if comp.sym.kind == kindMode &&
@@ -1823,15 +1824,16 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		if comp.declared == visAbstract &&
 			u.overriding[comp.sym.key()] == nil &&
 			!(u.hiddenByAccept[comp.sym.key()] &&
-				!referencedWithin(c.env, e, u.root, comp)) {
+				!referencedWithin(c.env, idx, comp)) {
 			e.markAbstract(comp.el, comp.sym.String())
+			idx.note(comp.el, comp.sym.String())
 			keep[comp.el] = true
 			continue
 		}
 		if (v == visHidden || v == visAbsent) &&
 			u.overriding[comp.sym.key()] == nil &&
 			(u.hiddenByAccept[comp.sym.key()] ||
-				!referencedWithin(c.env, e, u.root, comp)) {
+				!referencedWithin(c.env, idx, comp)) {
 			// A component the using package cannot see is deleted, so that a
 			// reference to it fails as XPST0017 or XTSE0650 rather than
 			// quietly binding -- which is what use-package-003 asks for.
@@ -2042,7 +2044,11 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 // spelling the same name counts -- but it errs towards keeping a declaration,
 // and keeping one the package does not use costs nothing while deleting one
 // it does use breaks the package outright.
-func referencedWithin(env *compileEnv, e pkgEdits, root *xdm.Node, comp *component) bool {
+//
+// It is answered from idx, which one walk of the tree builds for every
+// component of the package: walking the tree once per component made C
+// components of an N-node package cost C*N.
+func referencedWithin(env *compileEnv, idx *mentionIndex, comp *component) bool {
 	name := comp.el.AttrValue("name")
 	if name == "" {
 		return false
@@ -2063,24 +2069,66 @@ func referencedWithin(env *compileEnv, e pkgEdits, root *xdm.Node, comp *compone
 	//
 	// Keeping a declaration nothing uses costs nothing, which is the same
 	// trade the lexical scan already makes.
-	if makesDynamicReference(env, root) {
+	if makesDynamicReference(env, idx.root) {
 		return true
 	}
-	local := name
+	local := strings.TrimSpace(name)
 	if i := strings.IndexByte(local, ':'); i >= 0 {
 		local = local[i+1:]
 	}
-	var walk func(n *xdm.Node) bool
-	walk = func(n *xdm.Node) bool {
-		if n == comp.el {
-			return false
+	for i := 0; i < len(local); i++ {
+		if !ncNameByte(local[i]) {
+			// Not a name the scan can find (an EQName, say): kept, which is
+			// the direction the scan errs in.
+			return true
 		}
-		if n.Kind() == xdm.KindElement {
-			for _, a := range e.attrList(n) {
-				if mentionsComponent(n, a.value, local, comp) {
-					return true
-				}
-			}
+	}
+	sp, ok := idx.spans()[mentionKey{local, comp.sym.name.URI}]
+	if !ok {
+		return false
+	}
+	// Mentions inside the declaration itself do not count. Its subtree is
+	// one interval of the tree's numbering, so a mention outside it exists
+	// exactly when the first or the last one is outside.
+	el := comp.el
+	if el.Tree() != idx.root.Tree() {
+		return true
+	}
+	return sp[0] < el.Index() || sp[1] >= el.SubtreeEnd()
+}
+
+// mentionIndex records, for one used package's tree, every name written in
+// its attribute values and text: by local name and the namespace its prefix
+// (or its absence) resolves to where it is written, the first and the last
+// tree index at which it is. See add for what counts as a mention, and
+// referencedWithin for what it answers.
+type mentionIndex struct {
+	root *xdm.Node
+	e    pkgEdits
+	span map[mentionKey][2]int
+	// uris memoises lookupPrefix by scope element and prefix while the index
+	// is built.
+	uris map[scopedPrefix]string
+}
+
+type mentionKey struct{ local, uri string }
+
+type scopedPrefix struct {
+	scope  *xdm.Node
+	prefix string
+}
+
+// spans builds the index on first use. e is read as composition has left it
+// by then; an attribute it adds later is added with note.
+func (x *mentionIndex) spans() map[mentionKey][2]int {
+	if x.span != nil {
+		return x.span
+	}
+	x.span = map[mentionKey][2]int{}
+	x.uris = map[scopedPrefix]string{}
+	x.root.Walk(func(n *xdm.Node) bool {
+		for _, a := range x.e.attrList(n) {
+			x.add(n, n, a.value)
 		}
 		// Text content counts as much as an attribute value. A text value
 		// template -- xsl:expand-text="yes" and a {...} in element content --
@@ -2091,18 +2139,79 @@ func referencedWithin(env *compileEnv, e pkgEdits, root *xdm.Node, comp *compone
 		// inside a TVT, and scanning attributes alone judged the function
 		// unreferenced and deleted it, leaving the package's own call to
 		// fail as XPST0017.
-		if n.Kind() == xdm.KindText &&
-			mentionsComponent(n.Parent(), n.Value(), local, comp) {
-			return true
-		}
 		for ch := range n.Children() {
-			if walk(ch) {
-				return true
+			if ch.Kind() == xdm.KindText {
+				x.add(ch, n, ch.Value())
 			}
 		}
-		return false
+		return true
+	})
+	x.uris = nil
+	return x.span
+}
+
+// note records an attribute composition added to el after the index was
+// built.
+func (x *mentionIndex) note(el *xdm.Node, value string) {
+	if x.span == nil || el.Tree() != x.root.Tree() ||
+		el.Index() < x.root.Index() || el.Index() >= x.root.SubtreeEnd() {
+		return
 	}
-	return walk(root)
+	x.uris = map[scopedPrefix]string{}
+	x.add(el, el, value)
+	x.uris = nil
+}
+
+// add records the names text mentions, written at node at and resolved in the
+// scope of the element scope.
+//
+// A mention is a whole NCName, not a substring of a longer one, and the
+// prefix written in front of it -- or the absence of one -- is resolved where
+// it is written. A bare substring test ignored namespaces, and a package that
+// declares p:f2 and q:f2 has two components whose local names are equal and
+// whose symbolic identifiers are not. expose-A is exactly that: q:f2 is
+// exposed private and must be pruned, and the unrelated p:f2 kept it alive,
+// so the using package's call to q:f2() bound instead of failing as XPST0017.
+// That is still lexical, and deliberately so: it errs towards keeping a
+// declaration.
+func (x *mentionIndex) add(at, scope *xdm.Node, text string) {
+	if scope == nil || scope.Kind() != xdm.KindElement {
+		return
+	}
+	pos := at.Index()
+	for i := 0; i < len(text); {
+		if !ncNameByte(text[i]) {
+			i++
+			continue
+		}
+		start := i
+		for i < len(text) && ncNameByte(text[i]) {
+			i++
+		}
+		prefix := ""
+		if start > 0 && text[start-1] == ':' {
+			k := start - 1
+			for k > 0 && ncNameByte(text[k-1]) {
+				k--
+			}
+			prefix = text[k : start-1]
+			if prefix == "" {
+				continue
+			}
+		}
+		sp := scopedPrefix{scope, prefix}
+		uri, ok := x.uris[sp]
+		if !ok {
+			uri = lookupPrefix(scope, prefix)
+			x.uris[sp] = uri
+		}
+		k := mentionKey{text[start:i], uri}
+		if old, seen := x.span[k]; seen {
+			x.span[k] = [2]int{min(old[0], pos), max(old[1], pos)}
+		} else {
+			x.span[k] = [2]int{pos, pos}
+		}
+	}
 }
 
 // makesDynamicReference reports whether a package's tree contains anything
@@ -2692,56 +2801,6 @@ func usedPackageParam(root *xdm.Node, sym symbolicName) *xdm.Node {
 		}
 	}
 	return nil
-}
-
-// mentionsComponent reports whether a piece of stylesheet text names the
-// component, as against merely containing its local name.
-//
-// The bare substring test this replaces ignored namespaces, and a package that
-// declares p:f2 and q:f2 has two components whose local names are equal and
-// whose symbolic identifiers are not. expose-A is exactly that: q:f2 is
-// exposed private and must be pruned, and the unrelated p:f2 kept it alive,
-// so the using package's call to q:f2() bound instead of failing as XPST0017.
-//
-// Every occurrence of the local name is examined, and the prefix written in
-// front of it -- or the absence of one -- is resolved in the scope of the
-// element the text belongs to. Only an occurrence whose namespace is the
-// component's counts. That is still lexical, and deliberately so: it errs
-// towards keeping a declaration, and keeping one the package does not use
-// costs nothing while deleting one it does use breaks the package.
-func mentionsComponent(scope *xdm.Node, text, local string, comp *component) bool {
-	if scope == nil {
-		return false
-	}
-	for i := 0; ; {
-		j := strings.Index(text[i:], local)
-		if j < 0 {
-			return false
-		}
-		at := i + j
-		i = at + len(local)
-		// A longer name that merely ends in this one is not this name.
-		if at > 0 && ncNameByte(text[at-1]) && text[at-1] != ':' {
-			continue
-		}
-		if i < len(text) && ncNameByte(text[i]) {
-			continue
-		}
-		prefix := ""
-		if at > 0 && text[at-1] == ':' {
-			k := at - 1
-			for k > 0 && ncNameByte(text[k-1]) {
-				k--
-			}
-			prefix = text[k : at-1]
-			if prefix == "" {
-				continue
-			}
-		}
-		if lookupPrefix(scope, prefix) == comp.sym.name.URI {
-			return true
-		}
-	}
 }
 
 // ncNameByte reports whether a byte may appear inside an NCName -- an

@@ -1,6 +1,10 @@
 package xslt
 
 import (
+	"fmt"
+	goruntime "runtime"
+	"runtime/debug"
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xpath"
@@ -90,8 +94,9 @@ func TestQuantifiedOverAGroundedBindingIsUnchanged(t *testing.T) {
 }
 
 func TestARangeVariableDoesNotEscapeItsQuantifiedExpression(t *testing.T) {
-	// The environment is copied per binding rather than mutated, so a range
-	// variable is invisible outside the expression that introduced it. Were
+	// A binding is removed from the environment where its expression ends,
+	// so a range variable is invisible outside the expression that
+	// introduced it. Were
 	// it to leak, the second "$t" below -- which is a different, grounded
 	// variable -- would be read as striding and the whole sequence would
 	// come back roaming.
@@ -136,4 +141,68 @@ func TestAVariableOutsideTheEnvironmentIsStillGrounded(t *testing.T) {
 	p, known := quantProps(t, `$anything`)
 	wantProps(t, p, known, postureGrounded, sweepMotionless,
 		"a variable reference outside any range binding")
+}
+
+// clauses returns a let, for, some or every expression of k clauses, each
+// binding a distinct name, whose return or test reads the last of them.
+func clauses(head, bind, tail string, k int) string {
+	var b strings.Builder
+	b.WriteString(head)
+	for i := 0; i < k; i++ {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, bind, i)
+	}
+	fmt.Fprintf(&b, tail, k-1)
+	return b.String()
+}
+
+var manyClauseForms = []struct{ head, bind, tail string }{
+	{"let ", "$v%d := 1", " return $v%d"},
+	{"for ", "$v%d in 1", " return $v%d"},
+	{"some ", "$v%d in 1", " satisfies $v%d"},
+	{"every ", "$v%d in 1", " satisfies $v%d"},
+}
+
+func analyzeClauses(t *testing.T, head, bind, tail string, k int) {
+	t.Helper()
+	e, err := xpath.ParseVersion(clauses(head, bind, tail, k), nil, xpath.XPath31)
+	if err != nil {
+		t.Fatalf("%s of %d clauses: parse failed", head, k)
+	}
+	p, known := analyzeExpr(e, postureStriding)
+	if !known || !p.streamable() {
+		t.Errorf("%s of %d clauses: got %v and %v, known %v; want streamable",
+			head, k, p.posture, p.sweep, known)
+	}
+}
+
+func TestManyClausesDoNotGrowTheStack(t *testing.T) {
+	// A clause list is flat in the parse, so no depth limit bounds it. The
+	// analysis once recursed per clause, about 2 KB of stack each, and a
+	// stack overflow is fatal to the process rather than an error. At a
+	// 16 MiB stack, 20,000 clauses overflowed.
+	old := debug.SetMaxStack(16 << 20)
+	defer debug.SetMaxStack(old)
+	for _, f := range manyClauseForms {
+		analyzeClauses(t, f.head, f.bind, f.tail, 20000)
+	}
+}
+
+func TestManyClausesKeepOneEnvironment(t *testing.T) {
+	// Each clause once copied the whole environment and every copy stayed
+	// live until the walk unwound: k(k+1)/2 entries, about 900 MB at 4,000
+	// clauses. One scoped environment holds k.
+	const k = 4000
+	for _, f := range manyClauseForms {
+		var before, after goruntime.MemStats
+		goruntime.ReadMemStats(&before)
+		analyzeClauses(t, f.head, f.bind, f.tail, k)
+		goruntime.ReadMemStats(&after)
+		if got := after.TotalAlloc - before.TotalAlloc; got > 64<<20 {
+			t.Errorf("%s of %d clauses allocated %d MB; want under 64 MB",
+				f.head, k, got>>20)
+		}
+	}
 }

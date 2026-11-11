@@ -194,12 +194,16 @@ type compiler struct {
 	// once every template is known.
 	calls []*callTemplateInstr
 	// staticVars holds the value of every static variable and parameter in
-	// the stylesheet, in tree order, as computed by the static phase; see
+	// the stylesheet, by Clark name, as computed by the static phase; see
 	// static.go. staticDone records the module trees that phase already
 	// walked, so that compileModule does not repeat conditional inclusion
 	// over one and evaluate its use-when expressions a second time.
-	staticVars []staticVar
+	staticVars map[string]*staticVar
 	staticDone map[*xdm.Node]*xdm.Node
+	// moduleIDs indexes, by ID, the elements of each host document an
+	// xsl:include or xsl:import fragment has been looked up in; see
+	// embeddedModule.
+	moduleIDs map[*xdm.Node]map[string]*xdm.Node
 	// l7Alias caches the scan streamMayAlias reads, made over l7AliasN modules (streamalias_l7.go).
 	l7Alias  *aliasScan
 	l7AliasN int
@@ -1975,7 +1979,7 @@ func (c *compiler) hoistImportSchema(root *xdm.Node) error {
 				continue
 			}
 			c.schemaSeen[resolved] = true
-			sub := c.prunedModule(embeddedModule(doc, fragment))
+			sub := c.prunedModule(c.embeddedModule(doc, fragment))
 			if sub == nil {
 				continue
 			}
@@ -1998,6 +2002,11 @@ func (c *compiler) compileInclude(el *xdm.Node, precedence int) error {
 }
 
 func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecedence bool) error {
+	// Each occurrence is a unit of the compile walk, as it is of the static
+	// phase's, and both stop when the CompileContext caller gives up.
+	if err := c.goCtx().Err(); err != nil {
+		return err
+	}
 	href := el.AttrValue("href")
 	if href == "" {
 		return fmt.Errorf("%s requires an href attribute", el.Name().Lexical())
@@ -2051,7 +2060,7 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 	defer delete(c.seen, resolved)
 
 	if fragment != "" {
-		if sub := embeddedModule(doc, fragment); sub != nil {
+		if sub := c.embeddedModule(doc, fragment); sub != nil {
 			doc = sub
 		}
 	}
@@ -2266,7 +2275,7 @@ func (c *compiler) numberIncludedImports(root *xdm.Node) error {
 		if c.seen[resolved] {
 			continue
 		}
-		sub := c.prunedModule(embeddedModule(doc, fragment))
+		sub := c.prunedModule(c.embeddedModule(doc, fragment))
 		if sub == nil {
 			continue
 		}
@@ -2317,31 +2326,40 @@ func (c *compiler) numberIncludedImports(root *xdm.Node) error {
 // is looser than the spec, but a stylesheet naming a fragment that is not an
 // ID is already malformed, and the host documents in the suite use one
 // spelling each.
-func embeddedModule(doc *xdm.Node, id string) *xdm.Node {
+//
+// A host document is indexed once per compilation, on its first fragment
+// lookup (c.moduleIDs): every walk reaches every occurrence of an
+// xsl:include or xsl:import, and searching the host on each of them made N
+// occurrences of a K-node host cost N*K, of which only the selected subtree
+// is charged to maxModuleNodes.
+func (c *compiler) embeddedModule(doc *xdm.Node, id string) *xdm.Node {
 	if id == "" {
 		return firstElement(doc)
 	}
-	var walk func(n *xdm.Node) *xdm.Node
-	walk = func(n *xdm.Node) *xdm.Node {
-		if n.Kind() == xdm.KindElement {
+	ids, ok := c.moduleIDs[doc]
+	if !ok {
+		ids = map[string]*xdm.Node{}
+		doc.Walk(func(n *xdm.Node) bool {
+			if n.Kind() != xdm.KindElement {
+				return true
+			}
 			for a := range n.Attrs() {
-				if a.Value() != id {
+				if a.Name().Local != "id" || (a.Name().URI != "" && a.Name().URI != xdm.NSXML) {
 					continue
 				}
-				if a.Name().Local == "id" &&
-					(a.Name().URI == "" || a.Name().URI == xdm.NSXML) {
-					return n
+				// The first in document order wins, as the search did.
+				if _, dup := ids[a.Value()]; !dup {
+					ids[a.Value()] = n
 				}
 			}
+			return true
+		})
+		if c.moduleIDs == nil {
+			c.moduleIDs = map[*xdm.Node]map[string]*xdm.Node{}
 		}
-		for k := range n.Children() {
-			if got := walk(k); got != nil {
-				return got
-			}
-		}
-		return nil
+		c.moduleIDs[doc] = ids
 	}
-	if got := walk(doc); got != nil {
+	if got := ids[id]; got != nil {
 		return got
 	}
 	// A fragment that names nothing falls back to the document element, so

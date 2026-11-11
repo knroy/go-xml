@@ -768,7 +768,7 @@ func firstParamName(fn *xdm.Node) (xdm.QName, bool) {
 // See analyzer.vars and quantifiedExpr. A variable not in that environment is
 // grounded, exactly as before.
 func (a *analyzer) varRef(x *xpath.VarRef) props {
-	if p, ok := a.vars[x.Name]; ok {
+	if p, ok := a.vars.lookup(x.Name); ok {
 		// The sweep stays motionless whatever the binding's own sweep was:
 		// naming a value already bound reads nothing further. What the
 		// posture carries is where the nodes SIT, which is what the steps

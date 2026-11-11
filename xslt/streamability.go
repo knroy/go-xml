@@ -147,7 +147,11 @@ type analyzer struct {
 	// says and what every reference got before. So the map can only make a
 	// reference LESS grounded, never a construct more streamable, and a
 	// construct whose binding this analysis cannot assess never enters it.
-	vars map[xdm.QName]props
+	//
+	// It is one scope shared by every analyzer of a walk (varScope), not a
+	// map per binding: a binding is added where its scope opens and removed
+	// where it closes, so k bindings cost O(k) rather than k copies.
+	vars *varScope
 
 	// accumAfter describes the position of this expression within its
 	// enclosing sequence constructor, which is what §19.8.9.1 needs to give
@@ -362,7 +366,25 @@ func (a *analyzer) exprRule(e xpath.Expr) props {
 // body, which for the absorbing, shallow-descent and deep-descent categories
 // turns that reference roaming.
 func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
-	inner := &analyzer{
+	inner := a.higherOrderAnalyzer()
+	p := inner.expr(e)
+	a.known = a.known && inner.known
+	a.unverified = a.unverified || inner.unverified
+	return operand{
+		props:          p,
+		usage:          u,
+		allowsChildren: inner.allowsChildren(e),
+		higherOrder:    true,
+		src:            e,
+	}
+}
+
+// higherOrderAnalyzer returns the analyzer a higher-order operand of a is
+// assessed with. It is idempotent: the analyzer for a higher-order operand of
+// a higher-order operand is the same as for the first, which is what lets
+// forExpr and quantifiedExpr walk their clauses with one of them.
+func (a *analyzer) higherOrderAnalyzer() *analyzer {
+	return &analyzer{
 		ctxPosture:            a.ctxPosture,
 		ctxAllowsChildren:     a.ctxAllowsChildren,
 		ctxType:               a.ctxType,
@@ -383,16 +405,6 @@ func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
 		currentInScope:        a.currentInScope,
 		vars:                  a.vars,
 		decl:                  a.decl,
-	}
-	p := inner.expr(e)
-	a.known = a.known && inner.known
-	a.unverified = a.unverified || inner.unverified
-	return operand{
-		props:          p,
-		usage:          u,
-		allowsChildren: inner.allowsChildren(e),
-		higherOrder:    true,
-		src:            e,
 	}
 }
 
