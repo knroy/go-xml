@@ -146,19 +146,21 @@ func chargeCopies(ctx *xpath.Context, args []xdm.Sequence, spine bool) error {
 	if err != nil {
 		return nil
 	}
-	n, inherited := 0, 0
+	n, b, inherited := 0, 0, 0
 	for _, it := range in {
 		v, ok := it.(*xdm.Node)
 		if !ok {
 			continue
 		}
 		n += countSubtree(v)
+		b += copiedBytes(v)
 		if v.Kind() == xdm.KindDocument {
 			continue
 		}
 		for a := v.Parent(); a != nil; a = a.Parent() {
 			if spine {
 				n += 1 + a.NumAttrs() + a.NumNamespaceDecls()
+				b += ownCopiedBytes(a)
 			} else if v.Kind() == xdm.KindElement {
 				inherited += a.NumNamespaceDecls()
 			}
@@ -167,7 +169,54 @@ func chargeCopies(ctx *xpath.Context, args []xdm.Sequence, spine bool) error {
 	if err := ctx.ChargeNodes(n); err != nil {
 		return err
 	}
+	if err := ctx.ChargeBytes(b); err != nil {
+		return err
+	}
 	return chargeInherited(ctx, inherited)
+}
+
+// chargeCopy charges a deep copy of v before it is made: its nodes to the node
+// budget and the values it duplicates to the byte budget. Charging nodes alone
+// let a node carrying kilobytes of attribute values be copied any number of
+// times for one node's charge each.
+func chargeCopy(ctx *xpath.Context, v *xdm.Node) error {
+	if err := ctx.ChargeNodes(countSubtree(v)); err != nil {
+		return err
+	}
+	return ctx.ChargeBytes(copiedBytes(v))
+}
+
+// copiedValueBelow is the length below which a copy duplicates a value's
+// bytes into its own tree. It mirrors xdm's textOwnFrom: a value at least that
+// long is kept by reference, so a copy of it costs no bytes.
+const copiedValueBelow = 8 << 10
+
+// copiedBytes is the value bytes a deep copy of n duplicates.
+func copiedBytes(n *xdm.Node) int {
+	b := ownCopiedBytes(n)
+	for d := range n.Descendants() { // iterative: the depth is the input's
+		b += ownCopiedBytes(d)
+	}
+	return b
+}
+
+// ownCopiedBytes is the value bytes a copy of n alone duplicates: an
+// element's attribute values, or a leaf node's own value.
+func ownCopiedBytes(n *xdm.Node) int {
+	b := 0
+	switch n.Kind() {
+	case xdm.KindElement:
+		for a := range n.Attrs() {
+			if l := len(a.Value()); l < copiedValueBelow {
+				b += l
+			}
+		}
+	case xdm.KindText, xdm.KindComment, xdm.KindPI, xdm.KindAttribute:
+		if l := len(n.Value()); l < copiedValueBelow {
+			b += l
+		}
+	}
+	return b
 }
 
 // copyItem is internal:copy-item: a deep copy of a node, anything else
