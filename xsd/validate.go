@@ -2099,9 +2099,8 @@ func (v *validator) openContentWithSiblings(t *ComplexType) *OpenContent {
 		}
 	}
 
-	w := *t.OpenContent.Wildcard
-	w.siblingNames = names
-	oc := &OpenContent{Mode: t.OpenContent.Mode, Wildcard: &w}
+	oc := &OpenContent{Mode: t.OpenContent.Mode,
+		Wildcard: t.OpenContent.Wildcard.withSiblingNames(names)}
 	v.openContents[t] = oc
 	return oc
 }
