@@ -323,6 +323,8 @@ type restrictWalk struct {
 	v    Version
 	lb   loadBudgets
 	memo map[restrictPair]error
+	// inlined memoises inlineSameCompositor per group for the walk.
+	inlined map[*ModelGroup][]*Particle
 	// overBudget records that an exact 1.1 check declined for its budget
 	// somewhere in the walk, so a rejection is undecided rather than final.
 	overBudget bool
@@ -657,10 +659,24 @@ func stripPointless(p *Particle, keepChoice bool) *Particle {
 // Only a wrapper with the *same* compositor is inlined. A choice inside a
 // sequence orders nothing the sequence orders and flattening it would change
 // the language; the clause names only the matching pair.
-func inlineSameCompositor(g *ModelGroup) []*Particle {
+//
+// memo holds each group's result for the walk: group refs share their
+// definition's *ModelGroup, so a DAG of groups each holding two refs to the
+// next is reached by 2^n paths, and an empty leaf keeps the inlinedTooLong
+// gate at zero however many there are. Callers only read the result.
+func inlineSameCompositor(g *ModelGroup, memo map[*ModelGroup][]*Particle) []*Particle {
 	if g.Compositor != CompositorSequence && g.Compositor != CompositorChoice {
 		return g.Particles
 	}
+	if out, ok := memo[g]; ok {
+		return out
+	}
+	out := inlineSameCompositorOnce(g, memo)
+	memo[g] = out
+	return out
+}
+
+func inlineSameCompositorOnce(g *ModelGroup, memo map[*ModelGroup][]*Particle) []*Particle {
 	changed := false
 	for _, p := range g.Particles {
 		if inlinable(p, g.Compositor) {
@@ -674,7 +690,7 @@ func inlineSameCompositor(g *ModelGroup) []*Particle {
 	out := make([]*Particle, 0, len(g.Particles))
 	for _, p := range g.Particles {
 		if inlinable(p, g.Compositor) {
-			out = append(out, inlineSameCompositor(p.Term.(*ModelGroup))...)
+			out = append(out, inlineSameCompositor(p.Term.(*ModelGroup), memo)...)
 			continue
 		}
 		out = append(out, p)
@@ -1304,8 +1320,11 @@ func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded 
 	// Clause 2.2 again, this time on the member lists: a same-compositor
 	// wrapper among the members is pointless, and leaving it in place makes
 	// the walk compare one side's elements against the other's groups.
-	rps := inlineSameCompositor(rg)
-	bps := inlineSameCompositor(bg)
+	if w.inlined == nil {
+		w.inlined = map[*ModelGroup][]*Particle{}
+	}
+	rps := inlineSameCompositor(rg, w.inlined)
+	bps := inlineSameCompositor(bg, w.inlined)
 	bi := 0
 	for _, rp := range rps {
 		matched := false
