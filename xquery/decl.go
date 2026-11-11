@@ -140,11 +140,9 @@ func (p *parser) parseVarDecl(private bool) error {
 	if err := checkReservedNamespace(name, "variable"); err != nil {
 		return err
 	}
-	for _, prev := range p.vars {
-		if prev.name.Clark() == name.Clark() {
-			return p.errorf("XQST0049: the variable %q is declared twice",
-				name.Lexical())
-		}
+	if p.varNames[declKeyOf(name, 0)] {
+		return p.errorf("XQST0049: the variable %q is declared twice",
+			name.Lexical())
 	}
 	d := &varDecl{name: name, private: private}
 	p.skipSpaceAndComments()
@@ -178,8 +176,21 @@ func (p *parser) parseVarDecl(private bool) error {
 			":=", "external")
 	}
 	p.vars = append(p.vars, d)
+	if p.varNames == nil {
+		p.varNames = map[declKey]bool{}
+	}
+	p.varNames[declKeyOf(name, 0)] = true
 	return nil
 }
+
+// declKey identifies a declaration by expanded name, and for a function by
+// arity too; the prefix is not part of it.
+type declKey struct {
+	uri, local string
+	arity      int
+}
+
+func declKeyOf(n xdm.QName, arity int) declKey { return declKey{n.URI, n.Local, arity} }
 
 // parseDeclBody parses the right-hand side of a variable declaration or the
 // initialiser of a context item.
@@ -347,14 +358,17 @@ func (p *parser) parseFunctionDeclBody(private bool) error {
 	// XQST0034: two functions may not share a name and arity. Unlike XSLT
 	// there is no import precedence to break the tie, so any repeat is an
 	// error.
-	for _, prev := range p.funcs {
-		if prev.name.Clark() == d.name.Clark() && len(prev.params) == len(d.params) {
-			return p.errorf(
-				"XQST0034: the function %s#%d is declared twice",
-				d.name.Lexical(), len(d.params))
-		}
+	key := declKeyOf(d.name, len(d.params))
+	if p.funcNames[key] {
+		return p.errorf(
+			"XQST0034: the function %s#%d is declared twice",
+			d.name.Lexical(), len(d.params))
 	}
 	p.funcs = append(p.funcs, d)
+	if p.funcNames == nil {
+		p.funcNames = map[declKey]bool{}
+	}
+	p.funcNames[key] = true
 	return nil
 }
 
@@ -516,6 +530,7 @@ func (p *parser) skipAnnotationLiteral() error {
 // opening parenthesis.
 func (p *parser) parseParamList() ([]funcParam, error) {
 	var out []funcParam
+	var seen map[declKey]bool // by name, for XQST0039
 	p.skipSpaceAndComments()
 	if p.consume(")") {
 		return nil, nil
@@ -535,12 +550,15 @@ func (p *parser) parseParamList() ([]funcParam, error) {
 		}
 		// XQST0039: two parameters of one function may not share a name,
 		// because the second binding would silently shadow the first.
-		for _, prev := range out {
-			if prev.name.Clark() == name.Clark() {
-				return nil, p.errorf(
-					"XQST0039: the parameter %q appears twice", name.Lexical())
-			}
+		key := declKeyOf(name, 0)
+		if seen[key] {
+			return nil, p.errorf(
+				"XQST0039: the parameter %q appears twice", name.Lexical())
 		}
+		if seen == nil {
+			seen = map[declKey]bool{}
+		}
+		seen[key] = true
 		param := funcParam{name: name}
 		p.skipSpaceAndComments()
 		if p.consumeKeyword("as") {
@@ -1170,7 +1188,7 @@ func (b *varBinder) visit(d *varDecl) error {
 		// K2-InternalVariablesWithout-1b run at all; a cycle among them is
 		// simply skipped here, because whether it is an error depends on which
 		// branches the evaluation takes.
-		for _, ref := range q.reachableVars(nil, d.calls()) {
+		for _, ref := range q.reachableVars(d) {
 			if dep, ok := byName[ref]; ok && dep != d {
 				if state[dep.name.Clark()] != unvisitedState {
 					continue
@@ -1299,28 +1317,71 @@ const (
 // Function recursion is not itself an error, so a function already visited is
 // simply not re-entered: only a variable that reaches itself is a cycle worth
 // reporting, and bindVariables makes that judgement.
-func (q *Query) reachableVars(vars, calls []string) []string {
-	seenFn := map[string]bool{}
-	out := map[string]bool{}
-	for _, v := range vars {
-		out[v] = true
+//
+// The answer for a declared variable is the one buildCallGraph computed at
+// compile time: a Query is immutable, and walking the graph again for every
+// variable of every evaluation -- with a scan of every function per call
+// name and a fresh lexing of each body it matched -- was V x F^2 per Eval,
+// before any budget was held.
+func (q *Query) reachableVars(d *varDecl) []string {
+	if r, ok := q.calls.byVar[d]; ok {
+		return r
 	}
+	return q.calls.closure(d.calls(), make([]int, len(q.calls.refs)), 1)
+}
+
+// callGraph is the call graph over a query's declared functions.
+type callGraph struct {
+	// byName maps a call name as written to the functions it may name;
+	// sameFuncName decides the match, so the key is the declaration's own
+	// lexical name.
+	byName map[string][]int
+	// refs and calls are each function's references and calls, lexed once.
+	refs, calls [][]string
+	// byVar is reachableVars for each declared variable.
+	byVar map[*varDecl][]string
+}
+
+// buildCallGraph indexes q.funcs and closes each declared variable's calls
+// over them: O(V x (F + E)) once, for V variables and E call edges.
+func (q *Query) buildCallGraph() *callGraph {
+	g := &callGraph{byName: map[string][]int{},
+		refs: make([][]string, len(q.funcs)), calls: make([][]string, len(q.funcs))}
+	for i, fd := range q.funcs {
+		name := fd.name.Local
+		if fd.name.Prefix != "" {
+			name = fd.name.Prefix + ":" + name
+		}
+		g.byName[name] = append(g.byName[name], i)
+		g.refs[i], g.calls[i] = fd.references(), fd.calls()
+	}
+	all := q.allVars()
+	g.byVar = make(map[*varDecl][]string, len(all))
+	seen := make([]int, len(q.funcs))
+	for i, d := range all {
+		g.byVar[d] = g.closure(d.calls(), seen, i+1)
+	}
+	return g
+}
+
+// closure is the sorted set of variables the functions reachable from calls
+// reference. seen marks a visited function with stamp, so one slice serves
+// every walk.
+func (g *callGraph) closure(calls []string, seen []int, stamp int) []string {
+	out := map[string]bool{}
 	queue := append([]string(nil), calls...)
 	for len(queue) > 0 {
-		name := queue[0]
-		queue = queue[1:]
-		if seenFn[name] {
-			continue
-		}
-		seenFn[name] = true
-		for _, fd := range q.funcs {
-			if fd.name.Local != localOf(name) || !sameFuncName(fd.name, name) {
+		name := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		for _, i := range g.byName[name] {
+			if seen[i] == stamp {
 				continue
 			}
-			for _, v := range fd.references() {
+			seen[i] = stamp
+			for _, v := range g.refs[i] {
 				out[v] = true
 			}
-			queue = append(queue, fd.calls()...)
+			queue = append(queue, g.calls[i]...)
 		}
 	}
 	res := make([]string, 0, len(out))

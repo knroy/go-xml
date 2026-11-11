@@ -62,6 +62,9 @@ type moduleCache struct {
 	queries map[string]loadedModule
 	modules int
 	bytes   int64
+	// schemaBytes is the schema text every load of the evaluation has read,
+	// held to one MaxSchemaBytes across them.
+	schemaBytes int64
 }
 
 // loadedModule is one cached compile: the query, or the error it raised,
@@ -233,22 +236,18 @@ func compileLoadedModule(ctx *xpath.Context, cache *moduleCache, src string,
 
 // compileAndCharge is compileLoadedModule's compile and spend, with
 // cache.mu held when cache is set.
+//
+// With a cache, the refusal comes before the work: a load once MaxModules is
+// spent is refused without compiling, a failed compile still counts as one
+// module, and the schema text every compile reads is one MaxSchemaBytes
+// across the evaluation. Each call's distinct location hints are a distinct
+// source, so counting only successes, after compiling, let every call
+// compile in full against a fresh schema allowance.
+//
+// The schema text a compile read is charged to the byte budget with the
+// module text: the compiled schema is held as long as the module is.
 func compileAndCharge(ctx *xpath.Context, cache *moduleCache, src string,
 	opts Options) (*Query, error) {
-	q, err := Compile(src, opts)
-	if err != nil {
-		return nil, err
-	}
-	var n int64
-	for _, m := range q.modules {
-		n += int64(len(m.src))
-	}
-	if err := ctx.ChargeBytes(int(n)); err != nil {
-		return nil, err
-	}
-	if cache == nil {
-		return q, nil
-	}
 	maxMods, maxBytes := opts.MaxModules, opts.MaxModuleBytes
 	if maxMods == 0 {
 		maxMods = DefaultMaxModules
@@ -256,11 +255,39 @@ func compileAndCharge(ctx *xpath.Context, cache *moduleCache, src string,
 	if maxBytes == 0 {
 		maxBytes = DefaultMaxModuleBytes
 	}
+	modulesRefused := func() error {
+		return fmt.Errorf("the modules loaded by fn:load-xquery-module "+
+			"exceed %d (Options.MaxModules): %w", maxMods, xdm.ErrResourceLimit)
+	}
+	schema := new(int64)
+	if cache != nil {
+		if cache.modules >= maxMods {
+			return nil, modulesRefused()
+		}
+		schema = &cache.schemaBytes
+	}
+	before := *schema
+	q, err := compile(src, opts, schema)
+	if err != nil {
+		if cache != nil {
+			cache.modules++
+		}
+		return nil, err
+	}
+	var n int64
+	for _, m := range q.modules {
+		n += int64(len(m.src))
+	}
+	if err := ctx.ChargeBytes(int(n + *schema - before)); err != nil {
+		return nil, err
+	}
+	if cache == nil {
+		return q, nil
+	}
 	cache.modules += len(q.modules)
 	cache.bytes += n
 	if cache.modules > maxMods {
-		return nil, fmt.Errorf("the modules loaded by fn:load-xquery-module "+
-			"exceed %d (Options.MaxModules): %w", maxMods, xdm.ErrResourceLimit)
+		return nil, modulesRefused()
 	}
 	if cache.bytes > maxBytes {
 		return nil, fmt.Errorf("the modules loaded by fn:load-xquery-module "+

@@ -428,9 +428,12 @@ func (p *parser) parseBracedExprSingle() (*enclosed, error) {
 	if strings.TrimSpace(body) == "" {
 		return &enclosed{}, nil
 	}
-	inner := &parser{src: body, sc: p.sc, version: p.version, memo: m,
-		base: base}
-	items, err := inner.parseQueryBody()
+	inner, err := p.nestedParser(body)
+	if err != nil {
+		return nil, err
+	}
+	inner.memo, inner.base = m, base
+	items, err := inner.parseMemoBody(false)
 	if err != nil {
 		return nil, err
 	}

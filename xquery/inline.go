@@ -133,10 +133,13 @@ func (p *parser) parseInlineFunc() (node, bool, error) {
 		// and mistakes it for a parse that produced nothing.
 		return n, true, nil
 	}
+	if err := p.descend(); err != nil {
+		return nil, true, err
+	}
 	sub := &parser{src: src, sc: p.sc, version: p.version,
 		declaredNS: p.declaredNS, funcs: p.funcs, vars: p.vars,
 		depth: p.depth + 1, memo: bodyMemo, base: bodyBase}
-	if n.body, err = sub.parseBodyItems(); err != nil {
+	if n.body, err = sub.parseMemoBody(true); err != nil {
 		return nil, true, err
 	}
 	return n, true, nil
@@ -149,7 +152,7 @@ func (n *inlineFunc) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 // sequence builds the function item.

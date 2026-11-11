@@ -99,6 +99,12 @@ type parser struct {
 	// name needs everything seen so far.
 	vars  []*varDecl
 	funcs []*funcDecl
+	// varNames and funcNames index vars and funcs by expanded name (and,
+	// for a function, arity), so the XQST0049 and XQST0034 checks are a
+	// lookup: a scan of every earlier declaration was quadratic in the
+	// prolog, with two Clark strings built per comparison.
+	varNames  map[declKey]bool
+	funcNames map[declKey]bool
 
 	// contextItem is "declare context item", when the prolog made one.
 	contextItem *contextItemDecl

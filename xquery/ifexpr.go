@@ -103,7 +103,7 @@ func (n *ifExpr) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 func (n *ifExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {

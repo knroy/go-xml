@@ -108,10 +108,13 @@ func (p *parser) parseParenExpr() (*enclosed, error) {
 		return nil, err
 	}
 	body := p.src[p.pos+1 : end]
-	inner := &parser{src: body, sc: p.sc, version: p.version}
+	inner, err := p.nestedParser(body)
+	if err != nil {
+		return nil, err
+	}
 	inner.memo, inner.base = p.memoAt(p.pos + 1)
 	p.pos = end + 1
-	items, err := inner.parseQueryBody()
+	items, err := inner.parseMemoBody(false)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +136,7 @@ func (n *switchExpr) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 func (n *switchExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {

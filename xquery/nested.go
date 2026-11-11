@@ -14,6 +14,46 @@ import (
 // than exhausting the goroutine stack.
 const maxNestDepth = 200
 
+// descend reports the refusal for going one nesting level below p: past
+// maxNestDepth, or once any read of this source has been refused.
+//
+// The latch is what keeps a refusal linear. Probes and fallbacks read a
+// construct whose parse failed as something else, and a refusal they
+// swallowed sent every level of the nest down each alternative again; once
+// one read is refused, every later attempt to nest is refused at once.
+func (p *parser) descend() error {
+	if p.depth+1 > maxNestDepth || (p.memo != nil && p.memo.refused != nil) {
+		return p.depthRefusal()
+	}
+	return nil
+}
+
+// depthRefusal is the XPDY0130 refusal for nesting past maxNestDepth, latched
+// in the memo the module's parsers share.
+func (p *parser) depthRefusal() error {
+	m, _ := p.memoAt(0)
+	if m.refused == nil {
+		m.refused = fmt.Errorf("%s: %w", p.errorf(
+			"XPDY0130: expressions nested more than %d deep", maxNestDepth),
+			xdm.ErrResourceLimit)
+	}
+	return m.refused
+}
+
+// nestedParser returns a parser over src, the body of a bracketed expression
+// at p, one nesting level below p, or the refusal past maxNestDepth.
+//
+// Every sub-parser that reads a body back through parseQueryBody carries the
+// depth down: one starting again at zero let try, if, switch and the
+// computed constructors nest each other without bound, on the Go stack and
+// rescanning the remaining body once per level.
+func (p *parser) nestedParser(src string) (*parser, error) {
+	if err := p.descend(); err != nil {
+		return nil, err
+	}
+	return &parser{src: src, sc: p.sc, version: p.version, depth: p.depth + 1}, nil
+}
+
 // parseNestedExpr parses an expression this parser has to read itself,
 // returning the items its value is the concatenation of.
 //
@@ -33,17 +73,16 @@ const maxNestDepth = 200
 // rather than guessing is also what makes the recursion terminate: every path
 // that recurses does so on a strictly shorter substring.
 func (p *parser) parseNestedExpr() ([]node, error) {
-	if p.depth++; p.depth > maxNestDepth {
+	if err := p.descend(); err != nil {
 		// The query is not malformed: it is well-formed and merely nested
 		// deeper than this parser will read, which is what XPath 3.1 §2.3.1
 		// gives XPDY0130 for. The sentinel is wrapped in alongside so a
 		// caller can tell a refusal from every other error. See
 		// xdm.ErrResourceLimit. errorf appends its own offset suffix, so
 		// the wrap goes outside it rather than into the format.
-		return nil, fmt.Errorf("%s: %w", p.errorf(
-			"XPDY0130: expressions nested more than %d deep", maxNestDepth),
-			xdm.ErrResourceLimit)
+		return nil, err
 	}
+	p.depth++
 	defer func() { p.depth-- }()
 
 	p.skipSpaceAndComments()
@@ -298,7 +337,7 @@ func (n *nestedCall) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 // pathOver rewrites "E S" — a value this parser had to read, followed by a
@@ -409,5 +448,5 @@ func (n *parenPath) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }

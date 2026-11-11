@@ -205,6 +205,11 @@ type Query struct {
 	// modules: its own module store and resolver, installed on the context
 	// by prepare. Nil when the query was given neither.
 	modSrc xpath.ModuleResolver
+
+	// calls is the function-call graph over funcs and, per declared
+	// variable, the variables reachable through the functions it calls,
+	// built once at compile time; see Query.reachableVars.
+	calls *callGraph
 }
 
 // Compile compiles a query.
@@ -229,6 +234,13 @@ type Query struct {
 // "validate" are all judged against it. Nothing is fetched unless a resolver
 // was configured -- see Options.SchemaResolver.
 func Compile(src string, opts Options) (*Query, error) {
+	return compile(src, opts, nil)
+}
+
+// compile is Compile spending schema text against schemaBytes, a running
+// MaxSchemaBytes total shared with earlier compilations, or a fresh one when
+// nil. fn:load-xquery-module shares one across an evaluation's loads.
+func compile(src string, opts Options, schemaBytes *int64) (*Query, error) {
 	sc := newStaticContext()
 	sc.baseURI = opts.BaseURI
 	sc.declBase = opts.DeclarationBaseURI
@@ -256,7 +268,7 @@ func Compile(src string, opts Options) (*Query, error) {
 	// declared XQuery version implies -- the default until parseVersionDecl
 	// says otherwise, which it does before anything else is read.
 	p := &parser{src: src, sc: sc, version: sc.xqVersion.xpathVersion(),
-		declaredNS: map[string]bool{}, opts: opts}
+		declaredNS: map[string]bool{}, opts: opts, schemaBytes: schemaBytes}
 	// The version declaration, the prolog and the body are read in that order
 	// because each changes how the next is read: a version declaration can
 	// refuse the whole query, and every prolog declaration is applied to the
@@ -314,6 +326,7 @@ func Compile(src string, opts Options) (*Query, error) {
 	if err := q.checkStaticCalls(); err != nil {
 		return nil, err
 	}
+	q.calls = q.buildCallGraph()
 	return q, nil
 }
 

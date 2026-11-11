@@ -236,9 +236,12 @@ func (p *parser) parseStringConstructor() (node, error) {
 				sc.parts = append(sc.parts, &enclosed{})
 				continue
 			}
-			inner := &parser{src: body, sc: p.sc, version: p.version,
-				memo: bodyMemo, base: bodyBase}
-			items, err := inner.parseQueryBody()
+			inner, err := p.nestedParser(body)
+			if err != nil {
+				return nil, err
+			}
+			inner.memo, inner.base = bodyMemo, bodyBase
+			items, err := inner.parseMemoBody(false)
 			if err != nil {
 				return nil, err
 			}
@@ -256,7 +259,7 @@ func (n *stringConstructor) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 func (n *stringConstructor) sequence(ctx *evalContext) (xdm.Sequence, error) {
@@ -389,7 +392,7 @@ func (n *validateExpr) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {

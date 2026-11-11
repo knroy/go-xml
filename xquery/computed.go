@@ -196,10 +196,13 @@ func (p *parser) parseBracedContent() ([]node, error) {
 	if err != nil {
 		return nil, err
 	}
-	inner := &parser{src: p.src[p.pos+1 : end], sc: p.sc, version: p.version}
+	inner, err := p.nestedParser(p.src[p.pos+1 : end])
+	if err != nil {
+		return nil, err
+	}
 	inner.memo, inner.base = p.memoAt(p.pos + 1)
 	p.pos = end + 1
-	body, err := inner.parseQueryBody()
+	body, err := inner.parseMemoBody(false)
 	if err != nil {
 		return nil, err
 	}
