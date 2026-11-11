@@ -2,6 +2,7 @@ package xpath
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -153,5 +154,32 @@ func TestSM05ClosureSpendsTheCallersBudget(t *testing.T) {
 	}
 	if err := call(parse, "<r/>", nodes); err != nil {
 		t.Fatalf("nodes control: %v", err)
+	}
+}
+
+// TestSM05TallBodyChargesRecursionDepth: an inline function whose recursive
+// call sits under a long operator chain is charged extra depth per call, so
+// chain height times call depth stays bounded; a short body is not.
+func TestSM05TallBodyChargesRecursionDepth(t *testing.T) {
+	run := func(body string, n int) error {
+		q := "let $f := function($f, $n) { if ($n le 0) then 0 else " + body +
+			" } return $f($f, " + strconv.Itoa(n) + ")"
+		c, err := CompileWith(q, CompileOptions{Version: XPath31})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.Eval(NewContext(nil, Builtins()))
+		return err
+	}
+	tall := "$f($f, $n - 1)" + strings.Repeat(" + 1", 999)
+	if err := run(tall, 200); err == nil || !errors.Is(err, xdm.ErrResourceLimit) ||
+		!strings.Contains(err.Error(), "XPDY0001") {
+		t.Fatalf("tall body at depth 200: %v, want an XPDY0001 resource limit", err)
+	}
+	if err := run(tall, 20); err != nil {
+		t.Fatalf("tall body at depth 20: %v", err)
+	}
+	if err := run("$f($f, $n - 1) + 1", 400); err != nil {
+		t.Fatalf("short body at depth 400: %v", err)
 	}
 }

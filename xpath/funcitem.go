@@ -389,7 +389,13 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			// count, and taking MaxDepth with it keeps a caller that raised
 			// its own bound from having the package default reimposed inside
 			// a closure written before it was set.
-			s.Depth = c.Depth
+			//
+			// A tall body costs extra levels, bounded by maxChainLength
+			// (so at most 50): see spineDepth.
+			s.Depth = c.Depth + int32(e.spine/spineDepth)
+			if lim := s.depthLimit(); int(s.Depth) > lim {
+				return nil, depthRefusal(lim)
+			}
 			sub = &s
 		}
 		for i, p := range e.Params {

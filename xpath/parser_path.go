@@ -1028,6 +1028,8 @@ func (p *Parser) parseInlineFunction() (Expr, error) {
 	// checked against it as usual, which is why an empty body under
 	// "as xs:integer" is XPTY0004 rather than an accepted empty sequence.
 	var body Expr
+	outer := p.spine
+	p.spine = 0
 	if p.version.atLeast31() && p.peekIs(TokOp, "}") {
 		body = &SequenceExpr{}
 	} else {
@@ -1036,10 +1038,12 @@ func (p *Parser) parseInlineFunction() (Expr, error) {
 			return nil, err
 		}
 	}
+	spine := p.spine
+	p.spine = max(outer, spine)
 	if err := p.expectOp("}"); err != nil {
 		return nil, err
 	}
-	return &InlineFunctionExpr{Params: params, Result: result, Body: body}, nil
+	return &InlineFunctionExpr{Params: params, Result: result, Body: body, spine: spine}, nil
 }
 
 func (p *Parser) parseFunctionCall() (Expr, error) {

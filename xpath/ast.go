@@ -318,6 +318,10 @@ type InlineFunctionExpr struct {
 	Result *SequenceType
 	Body   Expr
 
+	// spine is the height of the body's tallest operator chain, charged to
+	// the recursion depth on every call. See spineDepth.
+	spine int
+
 	// needs is what closureNeeds found, computed on first evaluation.
 	needs atomic.Pointer[closureVars]
 }
