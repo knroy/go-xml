@@ -435,9 +435,9 @@ func Func(root *xdm.Node, f func(*xdm.Node) bool) NodeSet { return funcSet{root,
 // as a node set rooted at the top of doc's tree.
 //
 // ns supplies prefix bindings for the expression, which is compiled as
-// XPath 2.0 and evaluated in XPath 1.0 compatibility mode, so a 1.0
-// transform expression yields the 1.0 node set (relational comparisons
-// convert to numbers, for instance). Namespace nodes the expression returns are ignored; see the package
+// XPath 1.0 (xpath.CompileOptions.XPath10), so a 1.0 transform expression
+// yields the 1.0 node set: relational comparisons convert to numbers,
+// number("1e3") is NaN and string(1 div 0) is "Infinity", for instance. Namespace nodes the expression returns are ignored; see the package
 // documentation. ExcludeSubtree is faster and should be preferred where it
 // applies.
 func FromXPath(doc *xdm.Node, expr string, ns map[string]string) (NodeSet, error) {
@@ -459,11 +459,12 @@ func FromXPathHere(ctx context.Context, doc, here *xdm.Node, expr string, ns map
 	if err != nil {
 		return nil, err
 	}
-	c, err := xpath.Compile(expr, prefixMap(ns))
+	// XML-DSig transforms are XPath 1.0.
+	c, err := xpath.CompileWith(expr, xpath.CompileOptions{
+		Namespaces: prefixMap(ns), XPath10: true})
 	if err != nil {
 		return nil, err
 	}
-	c = c.WithCompatMode(true) // XML-DSig transforms are XPath 1.0
 	seq, err := c.Eval(filterContext(ctx, doc, here))
 	if err != nil {
 		return nil, err
@@ -505,9 +506,8 @@ type NamespaceSet interface {
 // Because namespace nodes are filtered like any other, the result is a
 // NamespaceSet and may keep part of an element's namespace axis. FromXPath,
 // by contrast, takes the nodes an expression returns and lets namespace
-// declarations follow their elements. The filter is compiled as XPath 2.0
-// and evaluated in XPath 1.0 compatibility mode, with ns supplying its prefix
-// bindings; the XML-DSig here() function is not provided, and
+// declarations follow their elements. The filter is compiled as XPath 1.0
+// (xpath.CompileOptions.XPath10), with ns supplying its prefix bindings; the XML-DSig here() function is not provided, and
 // FromXPathFilterHere is the form that provides it.
 //
 // The filter is compiled once, and every per-node evaluation spends one
@@ -541,11 +541,12 @@ func FromXPathFilterHere(ctx context.Context, doc, here *xdm.Node, filter string
 	if err != nil {
 		return nil, err
 	}
-	c, err := xpath.Compile(filter, prefixMap(ns))
+	// XML-DSig transforms are XPath 1.0.
+	c, err := xpath.CompileWith(filter, xpath.CompileOptions{
+		Namespaces: prefixMap(ns), XPath10: true})
 	if err != nil {
 		return nil, err
 	}
-	c = c.WithCompatMode(true) // XML-DSig transforms are XPath 1.0
 	root := top(doc)
 	// One context for the whole filter: the per-node evaluations are focus
 	// changes on it, so they share its cancellation and, held, its item and

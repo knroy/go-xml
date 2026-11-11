@@ -595,10 +595,10 @@ func TestXPathTransformsUseXPath10Comparison(t *testing.T) {
 
 // The XPath 1.0 behaviours an XML-DSig filter relies on (XPath 1.0 §3.4
 // comparisons, §4.2 number(), §4.3 boolean(), §4.1 count(), §5.4 namespace
-// nodes per element), under the XPath 2.0 compatibility-mode evaluation
-// FromXPathFilter uses. Each want is xmlsec1 1.2.41's pre-digest output for
-// the same ds:Reference (enveloped signature, this filter, C14N 1.0), so a
-// difference here is a difference from libxml2's XPath 1.0 engine.
+// nodes per element), under the XPath 1.0 evaluation FromXPathFilter uses.
+// Each want is xmlsec1 1.2.41's pre-digest output for the same ds:Reference
+// (enveloped signature, this filter, C14N 1.0), so a difference here is a
+// difference from libxml2's XPath 1.0 engine.
 func TestXPathFilterXPath10Semantics(t *testing.T) {
 	const src = `<r xmlns:a="urn:a" xmlns:b="urn:b"><x n="10">5</x><y n="abc"/><z/></r>`
 	for _, tc := range []struct{ filter, want string }{
@@ -629,9 +629,8 @@ func TestXPathFilterXPath10Semantics(t *testing.T) {
 // expression a filter can reach whose value under FromXPathFilter is the XPath
 // 1.0 value: the compatibility rules for comparisons (§3.5.2, boolean and
 // relational operands), arithmetic as xs:double, and the 1.0 rounding,
-// substring and mod rules. The rows that still differ are listed after the
-// table; they are not asserted, because fixing them needs an XPath 1.0 number
-// model that 2.0 compatibility mode must not use.
+// substring and mod rules. They held under compatibility mode alone and must
+// still hold under the 1.0 number model the filters now use.
 func TestXPathFilterCompatModeAgreesWithXPath10(t *testing.T) {
 	doc := parse(t, `<r n="abc"/>`)
 	r := doc.ChildElements()[0]
@@ -663,17 +662,63 @@ func TestXPathFilterCompatModeAgreesWithXPath10(t *testing.T) {
 			t.Errorf("%s is false; XPath 1.0 says true", ex)
 		}
 	}
-	// Not asserted: where compatibility mode still gives a value XPath 1.0
-	// does not. Each changes a filter's node-set silently:
-	//   number("+1") = 1, number("1e3") = 1000, number("INF") = INF; 1.0 gives
-	//     NaN for all three (§4.4 Number production; libxml2 agrees except
-	//     that it reads 1e3 as 1000), and @a > 5 follows the same conversion
-	//   string(10000 * 1000) = "1.0E7", string(1 div 0) = "INF",
-	//     string(0 * -1) = "-0"; 1.0 gives "10000000", "Infinity", "0" (§4.2)
-	//   string(12345678901234567890) keeps the integer; 1.0 has only doubles
-	// These fail closed instead, with an error rather than a node-set:
-	//   sum() over a non-numeric string is FORG0001 (1.0: NaN), and
-	//   "1 < 2 < 3" and "10div 2" are XPST0003 (1.0 parses both).
+	// The rows where compatibility mode and XPath 1.0 differ are asserted by
+	// TestXPathFilterXPath10NumberModel, which the filters now compile with
+	// xpath.CompileOptions.XPath10.
+}
+
+// The rows where XPath 2.0 compatibility mode differs from XPath 1.0, which
+// the filters now evaluate by the 1.0 number model (xpath.CompileOptions.
+// XPath10). Sections are XPath 1.0's, from memory. Each row was a different
+// node-set or an error before.
+func TestXPathFilterXPath10NumberModel(t *testing.T) {
+	doc := parse(t, `<r n="abc" p="+1" e="1e3"/>`)
+	r := doc.ChildElements()[0]
+	for _, ex := range []string{
+		// §4.2 number(): optional whitespace, optional "-", a Number, optional
+		// whitespace; "any other string is converted to NaN".
+		`string(number("+1")) = "NaN"`,
+		`string(number("1e3")) = "NaN"`,
+		`string(number("INF")) = "NaN"`,
+		`not(@p > 0) and not(@e > 5)`, // the same conversion inside a comparison
+		`number(" -.5 ") = -0.5`,
+		// §4.2 string(): an integer has no decimal point and no exponent,
+		// infinities are "Infinity"/"-Infinity", negative zero is "0", and a
+		// non-integer is decimal with only as many digits as distinguish it.
+		`string(10000 * 1000) = "10000000"`,
+		`string(1 div 0) = "Infinity"`,
+		`string(-1 div 0) = "-Infinity"`,
+		`string(0 * -1) = "0"`,
+		`string(1 div 10000000) = "0.0000001"`,
+		`concat(1 div 0, "") = "Infinity"`,
+		`string-length(10000 * 1000) = 8`,
+		// §3.7 Number ::= Digits ('.' Digits?)? | '.' Digits: every number is a
+		// double, so a large integer literal is the nearest double.
+		`string(12345678901234567890) = "12345678901234567168"`,
+		// §4.4 sum(): each node's string-value converted to a number.
+		`string(sum(@n)) = "NaN"`,
+		// §3.4: relational operators are left-associative and convert both
+		// operands to numbers, a boolean included: (1 < 2) < 3 is 1 < 3.
+		`1 < 2 < 3`,
+		`not(3 > 2 > 1)`,
+		`true() > 0.5`,
+		`not(0 = 1 < 2)`, // = binds looser than <: 0 = (1 < 2), not (0 = 1) < 2
+		// §3.7: an OperatorName may follow a Number without whitespace.
+		`10div 2 = 5`,
+	} {
+		set, err := FromXPathFilter(doc, `self::r and (`+ex+`)`, nil)
+		if err != nil {
+			t.Errorf("%s: %v", ex, err)
+			continue
+		}
+		if !set.Contains(r) {
+			t.Errorf("%s is false; XPath 1.0 says true", ex)
+		}
+	}
+	// FromXPath compiles the same way.
+	if _, err := FromXPath(doc, `//*[1 < 2 < 3]`, nil); err != nil {
+		t.Errorf("FromXPath: %v", err)
+	}
 }
 
 func TestFromXPathErrors(t *testing.T) {

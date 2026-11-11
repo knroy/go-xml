@@ -241,7 +241,7 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 		// fragment is a document node, which is true however empty its string
 		// value is, and backwards-030 compares exactly such a fragment against
 		// true().
-		if cl, cr, ok := compatGeneralCompare(l, r, la, ra, e.Op); ok {
+		if cl, cr, ok := compatGeneralCompare(l, r, la, ra, e.Op, ctx.xpath10()); ok {
 			la, ra = cl, cr
 		}
 	}
@@ -971,7 +971,8 @@ func (e *BinaryOp) evalArithmetic(ctx *Context) (xdm.Sequence, error) {
 		// the operand is not already numeric. 1.0 had one numeric type, so
 		// "1 + 1" is an xs:double there and an xs:integer in 2.0;
 		// backwards-027 asks the result directly with "instance of xs:double".
-		ln, rn := compatNumberSeq(la), compatNumberSeq(ra)
+		x10 := ctx.xpath10()
+		ln, rn := compatNumberSeq(la, x10), compatNumberSeq(ra, x10)
 		res, err := arithmetic(ln, rn, e.Op)
 		if err != nil {
 			return nil, err

@@ -432,6 +432,9 @@ type staticContext struct {
 	// It defaults to false and is set only by a Compiled that was given it, so
 	// ordinary 2.0 evaluation never sees it.
 	compat bool
+	// xpath10 is the XPath 1.0 number model, set only by a Compiled
+	// compiled with CompileOptions.XPath10. It implies compat.
+	xpath10 bool
 }
 
 // zeroEnv and zeroStatic are what a Context with no environment or static
@@ -512,6 +515,9 @@ func (c *Context) StaticNamespaces() NamespaceResolver { return c.st().ns }
 
 // Compat reports XPath 1.0 compatibility mode; see Compiled.WithCompatMode.
 func (c *Context) Compat() bool { return c.st().compat }
+
+// xpath10 reports the XPath 1.0 number model; see CompileOptions.XPath10.
+func (c *Context) xpath10() bool { return c.st().xpath10 }
 
 // WithVersion returns a copy of c whose expressions evaluate as version v
 // until a compiled expression installs its own. It is for a caller evaluating

@@ -38,6 +38,11 @@ func registerNumericFuncs(l *Library) {
 			}
 			a = atoms[0].(*xdm.Atomic)
 		}
+		// XPath 1.0's number() reads a string by the Number production
+		// alone; see number10.
+		if ctx.xpath10() {
+			return xdm.One(compatNumber(a, true)), nil
+		}
 		// fn:number is the one place a failed numeric conversion yields NaN
 		// instead of an error: it exists precisely to be lenient, unlike
 		// "cast as xs:double".
