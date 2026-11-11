@@ -207,8 +207,9 @@ func TestOverlapAcrossIsNotPairwise(t *testing.T) {
 		a = append(a, qnamePat{Name: xdm.QName{Local: "a" + itoa(i)}})
 		b = append(b, qnamePat{Name: xdm.QName{Local: "b" + itoa(i)}})
 	}
+	as, bs := classesOf(a...), classesOf(b...)
 	allocs := testing.AllocsPerRun(1, func() {
-		if s := overlapAcross(a, b); s != "" {
+		if s := overlapAcross(as, bs); s != "" {
 			t.Fatalf("disjoint names reported overlapping at %s", s)
 		}
 	})
@@ -227,12 +228,12 @@ func TestOverlapAcrossIsNotPairwise(t *testing.T) {
 		{anyNamePat{}, nsNamePat{Ns: "v"}},
 	}
 	for i, c := range cases {
-		if overlapAcross([]nameClass{c.a}, []nameClass{c.b}) == "" {
+		if overlapAcross(classesOf(c.a), classesOf(c.b)) == "" {
 			t.Errorf("case %d: overlap not found", i)
 		}
 	}
-	if s := overlapAcross([]nameClass{nsNamePat{Ns: "u", Except: qnamePat{x}}},
-		[]nameClass{qnamePat{x}}); s != "" {
+	if s := overlapAcross(classesOf(nsNamePat{Ns: "u", Except: qnamePat{x}}),
+		classesOf(qnamePat{x})); s != "" {
 		t.Errorf("an excepted name was reported overlapping at %s", s)
 	}
 }

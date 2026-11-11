@@ -71,8 +71,9 @@ type Options struct {
 	// (xsd.DefaultMaxMatchStates) — and a negative value means no limit, for
 	// a DTD the caller produced itself.
 	//
-	// They bound what one declaration can cost: a model past the first two
-	// is reported as a validity error on every element that uses it, and an
+	// They bound what one declaration can cost, and since Validate holds
+	// one compiled model at a time, what one call holds: a model past the
+	// first two is reported as a validity error on every element that uses it, and an
 	// element whose children need more states than MaxMatchStates is
 	// reported as not matching. Raising them admits denser models at the
 	// cost of memory and time that grow with the model (quadratically in
@@ -145,12 +146,10 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 		max = DefaultMaxErrors
 	}
 	v := &validator{
-		dtd:         d,
-		max:         max,
-		allowUndec:  opts.AllowUndeclared,
-		matchers:    map[string]*xsd.SequenceMatcher{},
-		matcherErrs: map[string]error{},
-		attrIdx:     map[string]*attrIndex{},
+		dtd:        d,
+		max:        max,
+		allowUndec: opts.AllowUndeclared,
+		attrIdx:    map[string]*attrIndex{},
 		matcherOpts: xsd.SequenceMatcherOptions{
 			MaxPositions:   opts.MaxContentModelPositions,
 			MaxEdges:       opts.MaxContentModelEdges,
@@ -237,6 +236,7 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 		}
 	}
 	v.walk(root)
+	v.matchContent()
 	v.checkIDRefs()
 	if len(v.errs) == 0 {
 		return nil
@@ -249,15 +249,13 @@ type validator struct {
 	max        int
 	allowUndec bool
 	errs       []*Error
-	matchers   map[string]*xsd.SequenceMatcher
-	// matcherErrs holds the models that failed to compile, so a refused
-	// model is compiled once per Validate like a good one. Uncached, every
-	// <r/> rebuilt a model the edge budget refuses: 28 ms and 97 MB each.
-	matcherErrs map[string]error
+	// pending are the elements whose element-only content model is still
+	// to be matched; see matchContent.
+	pending []contentCheck
 	// attrIdx holds, per element name, what checkAttributes looks up in
 	// that element's ATTLIST; see attrIndexFor.
 	attrIdx map[string]*attrIndex
-	// matcherOpts bounds every matcher compiled into matchers.
+	// matcherOpts bounds every matcher matchContent compiles.
 	matcherOpts xsd.SequenceMatcherOptions
 	names       []xdm.QName // child-name buffer reused across elements
 	// ids are every ID value seen, for uniqueness and for resolving IDREF.
@@ -283,10 +281,20 @@ type idref struct {
 	el    *xdm.Node
 }
 
+// full reports that MaxErrors failures are recorded, so nothing more can be.
+func (v *validator) full() bool {
+	return v.max > 0 && len(v.errs) >= v.max
+}
+
 func (v *validator) fail(el *xdm.Node, format string, args ...any) {
-	if v.max > 0 && len(v.errs) >= v.max {
+	if v.full() {
 		return
 	}
+	v.errs = append(v.errs, v.newError(el, format, args...))
+}
+
+// newError builds the failure fail records.
+func (v *validator) newError(el *xdm.Node, format string, args ...any) *Error {
 	// A #FIXED or enumerated value comes from the DTD or the document and
 	// may be megabytes; 200 mismatches against a 1 MB #FIXED value kept
 	// 105 MB. Arguments are clipped before formatting, the message after.
@@ -298,7 +306,7 @@ func (v *validator) fail(el *xdm.Node, format string, args ...any) {
 			args[i] = clip(x.Error())
 		}
 	}
-	v.errs = append(v.errs, &Error{Path: v.pathOf(el), Message: clip(fmt.Sprintf(format, args...))})
+	return &Error{Path: v.pathOf(el), Message: clip(fmt.Sprintf(format, args...))}
 }
 
 // clip shortens s to 1 KB, marking the cut with "..." as the xsd package
@@ -327,6 +335,11 @@ func (v *validator) pathOf(el *xdm.Node) string {
 }
 
 func (v *validator) walk(el *xdm.Node) {
+	// Past MaxErrors nothing more can be reported, and walking on cost
+	// every remaining element its full #REQUIRED list.
+	if v.full() {
+		return
+	}
 	v.checkContent(el)
 	v.checkAttributes(el)
 	for c := range el.Children() {
@@ -382,43 +395,101 @@ func (v *validator) checkContent(el *xdm.Node) {
 				break
 			}
 		}
-		m, err := v.matcherFor(decl)
+		if !v.full() {
+			v.pending = append(v.pending, contentCheck{el, decl, len(v.errs)})
+		}
+	}
+}
+
+// contentCheck is an element whose content model matchContent applies.
+type contentCheck struct {
+	el   *xdm.Node
+	decl *Element
+	// at is len(errs) when the walk reached el: where its failure belongs
+	// among the others, so the order is the document's.
+	at int
+}
+
+// contentFault is a failed contentCheck, kept small until it is known to
+// fall within MaxErrors.
+type contentFault struct {
+	i     int    // index in pending
+	err   error  // the model did not compile
+	child string // the first child not permitted; "" when content ended early
+}
+
+// matchContent applies the element-only content models checkContent
+// deferred, one declaration at a time, and slots each failure in where the
+// walk reached its element.
+//
+// Holding every compiled model for the whole call let a 4 KB declaration
+// keep 54 MB live, with nothing bounding the sum across declarations. Grouped
+// by declaration, each model is still compiled once, and only one is live at
+// a time, so the per-model budgets bound the call.
+func (v *validator) matchContent() {
+	if len(v.pending) == 0 {
+		return
+	}
+	order := make([]int, len(v.pending))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortStableFunc(order, func(a, b int) int {
+		return strings.Compare(v.pending[a].decl.Name, v.pending[b].decl.Name)
+	})
+	var faults []contentFault
+	var m *xsd.SequenceMatcher
+	var err error
+	for k, i := range order {
+		decl := v.pending[i].decl
+		if k == 0 || decl != v.pending[order[k-1]].decl {
+			m, err = xsd.NewSequenceMatcherWith(decl.Particle, v.matcherOpts)
+		}
 		if err != nil {
-			v.fail(el, "content model of %s: %v", name, err)
-			return
+			faults = append(faults, contentFault{i: i, err: err})
+			continue
 		}
 		names := v.names[:0]
-		for c := range el.Children() {
+		for c := range v.pending[i].el.Children() {
 			if c.Kind() == xdm.KindElement {
 				names = append(names, xdm.QName{Local: c.Name().Lexical()})
 			}
 		}
 		v.names = names
 		if ok, at := m.Match(names); !ok {
+			f := contentFault{i: i}
 			if at < len(names) {
-				v.fail(el, "element %s is not permitted here in the "+
-					"content of %s", names[at].Local, name)
-			} else {
-				v.fail(el, "the content of %s is incomplete", name)
+				f.child = names[at].Local
 			}
+			faults = append(faults, f)
 		}
 	}
-}
-
-func (v *validator) matcherFor(decl *Element) (*xsd.SequenceMatcher, error) {
-	if m, ok := v.matchers[decl.Name]; ok {
-		return m, nil
+	if len(faults) == 0 {
+		v.pending = nil
+		return
 	}
-	if err, ok := v.matcherErrs[decl.Name]; ok {
-		return nil, err
+	slices.SortFunc(faults, func(a, b contentFault) int { return a.i - b.i })
+	errs := v.errs
+	v.errs = make([]*Error, 0, len(errs))
+	j := 0
+	for e := 0; e <= len(errs) && !v.full(); e++ {
+		for ; j < len(faults) && v.pending[faults[j].i].at == e && !v.full(); j++ {
+			f, c := faults[j], v.pending[faults[j].i]
+			switch {
+			case f.err != nil:
+				v.fail(c.el, "content model of %s: %v", c.decl.Name, f.err)
+			case f.child != "":
+				v.fail(c.el, "element %s is not permitted here in the "+
+					"content of %s", f.child, c.decl.Name)
+			default:
+				v.fail(c.el, "the content of %s is incomplete", c.decl.Name)
+			}
+		}
+		if e < len(errs) && !v.full() {
+			v.errs = append(v.errs, errs[e])
+		}
 	}
-	m, err := xsd.NewSequenceMatcherWith(decl.Particle, v.matcherOpts)
-	if err != nil {
-		v.matcherErrs[decl.Name] = err
-		return nil, err
-	}
-	v.matchers[decl.Name] = m
-	return m, nil
+	v.pending = nil
 }
 
 // checkAttributes applies the ATTLIST declarations for an element, and
@@ -460,8 +531,10 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 	present := make(map[string]string, len(attrs))
 	// The declarations to visit, in declaration order: those present, and
 	// those that report when absent. Walking every declaration for every
-	// element cost elements times declarations.
-	visit := slices.Clone(idx.always)
+	// element cost elements times declarations; so did walking idx.always
+	// when every one of them is present, which is the only case that can
+	// skip it, since an absent one is a failure.
+	var visit []int
 	for _, a := range attrs {
 		present[a.name] = a.value
 		if i, ok := idx.pos[a.name]; ok {
@@ -470,8 +543,22 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 	}
 	slices.Sort(visit)
 	visit = slices.Compact(visit)
+	held := 0
+	for _, i := range visit {
+		if decls[i].Default == AttrRequired {
+			held++
+		}
+	}
+	if held < len(idx.always) {
+		visit = append(visit, idx.always...)
+		slices.Sort(visit)
+		visit = slices.Compact(visit)
+	}
 
 	for _, i := range visit {
+		if v.full() {
+			return
+		}
 		d, c := decls[i], &idx.attrs[i]
 		val, have := present[d.Name]
 		switch d.Default {
