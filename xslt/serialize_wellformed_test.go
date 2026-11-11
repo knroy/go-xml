@@ -76,3 +76,63 @@ func TestSerializeBindsElementPrefixOnce(t *testing.T) {
 		t.Errorf("Serialize wrote %q, want the element's own binding", got2)
 	}
 }
+
+// TestSerializeRejectsHTMLCommentBreakout: an HTML parser ends a comment that
+// opens with ">" or "->" right there, as "<!-->" or "<!--->", so what follows
+// is live markup. The html and xhtml methods refuse such a comment; the xml
+// method writes it, and a ">" elsewhere in a comment is ordinary text.
+func TestSerializeRejectsHTMLCommentBreakout(t *testing.T) {
+	for _, c := range []struct {
+		text, method string
+		refuse       bool
+	}{
+		{"><img src=x onerror=alert(1)> ", "html", true},
+		{"->x", "html", true},
+		{">x", "xhtml", true},
+		{"->x", "xhtml", true},
+		{">x", "xml", false},
+		{" >x", "html", false},
+		{"a->b", "html", false},
+	} {
+		doc, err := xdm.ParseString(`<p><!--`+c.text+`--></p>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		err = Serialize(&out, xdm.Sequence{doc.Root}, OutputSettings{Method: c.method, OmitXMLDecl: true}, nil)
+		if refused := err != nil && strings.Contains(err.Error(), "SERE0003"); refused != c.refuse {
+			t.Errorf("%s comment %q: wrote %q, err = %v; want refused %v", c.method, c.text, out.String(), err, c.refuse)
+		}
+	}
+}
+
+// TestSerializeHTML5DefaultNamespaceOnce: HTML5 prefix normalisation writes
+// <svg:svg> unprefixed, with a default namespace for SVG. A default
+// declaration the element carries for another URI is the binding that name
+// displaces, as a prefixed one is: writing both put two xmlns attributes on
+// one start tag. The child in that other namespace re-declares it.
+func TestSerializeHTML5DefaultNamespaceOnce(t *testing.T) {
+	doc, err := xdm.ParseString(`<svg:svg xmlns:svg="http://www.w3.org/2000/svg" xmlns="urn:x"><y/></svg:svg>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []OutputSettings{
+		{Method: "xhtml", HTMLVersion: "5.0", OmitXMLDecl: true},
+		{Method: "html", OmitXMLDecl: true},
+	} {
+		var out bytes.Buffer
+		if err := Serialize(&out, xdm.Sequence{doc.Root}, o, nil); err != nil {
+			t.Fatal(err)
+		}
+		got := out.String()
+		if !strings.Contains(got, `<svg xmlns="http://www.w3.org/2000/svg">`) ||
+			!strings.Contains(got, `<y xmlns="urn:x"`) {
+			t.Errorf("%s: wrote %q", o.Method, got)
+		}
+		if o.Method == "xhtml" {
+			if _, err := xdm.ParseString(got, xdm.ParseOptions{}); err != nil {
+				t.Errorf("xhtml output does not parse: %v", err)
+			}
+		}
+	}
+}

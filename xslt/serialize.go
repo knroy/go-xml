@@ -620,6 +620,16 @@ func (s *serializer) validateComment(text string) error {
 	if strings.Contains(text, "--") || strings.HasSuffix(text, "-") {
 		return fmt.Errorf("SERE0003: comment content contains a forbidden hyphen sequence")
 	}
+	// An HTML parser ends a comment that opens with ">" or "->" at once --
+	// "<!-->" and "<!--->" are abruptly closed empty comments -- so the rest
+	// of the text is read as live markup. Serialization 3.1 assigns this no
+	// code; it is refused as the hyphen sequences are, and as SERE0015
+	// refuses the ">" that would end a processing instruction early. The
+	// xhtml method is covered too: its output is written to be read as HTML.
+	if s.html && (strings.HasPrefix(text, ">") || strings.HasPrefix(text, "->")) {
+		return fmt.Errorf("SERE0003: comment content starts with %q, which "+
+			"ends the comment in an HTML parser", text[:strings.IndexByte(text, '>')+1])
+	}
 	return s.validateXMLLiteral(text)
 }
 
@@ -1243,8 +1253,14 @@ func (s *serializer) ownNamespaceDecl(n *xdm.Node, base int, prefix, uri string)
 	// namespace-alias-2620 shows -- is dropped here rather than written
 	// beside the one added below, which produced two xmlns:y attributes
 	// on one element and output that is not well-formed XML.
-	if prefix != "" && prefix == s.elemPrefix(n) &&
-		n.Name().URI != "" && uri != n.Name().URI {
+	//
+	// The default namespace is covered as well: HTML5 normalisation writes
+	// <svg:svg> unprefixed (elemPrefix), and a default declaration the
+	// element carries for another URI is then the binding its name
+	// displaces. Requiring a non-empty prefix here wrote that one and the
+	// SVG default openTag adds, two xmlns on one start tag. A descendant in
+	// the displaced namespace re-declares it, through openTag's check.
+	if prefix == s.elemPrefix(n) && n.Name().URI != "" && uri != n.Name().URI {
 		return
 	}
 	// An element binds each prefix at most once. A node list can hold the
