@@ -354,6 +354,13 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 			}
 			r = append(r, it)
 		}
+		// R is materialised here whatever out is, so the item bound is
+		// checked on its running length after each instruction, as the plain
+		// path checks between instructions; waiting for the body to finish
+		// let any number of siblings overshoot it.
+		if err := rt.ctx.ItemsRefused(int64(len(r))); err != nil {
+			return err
+		}
 	}
 
 	if !f && onEmpty != nil {
