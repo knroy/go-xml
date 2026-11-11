@@ -319,3 +319,50 @@ func TestSecondaryOutputErrors(t *testing.T) {
 		t.Errorf("nested transform: %q (%v), want %q (%v), opened %v", got, gerr, want, werr, w.order)
 	}
 }
+
+// countWriters is a SecondaryOutput that counts the writers open at once.
+type countWriters struct {
+	open, most, made int
+}
+
+type countWriter struct {
+	bytes.Buffer
+	c *countWriters
+}
+
+func (w *countWriter) Close() error { w.c.open--; return nil }
+
+func (c *countWriters) opener(string) (io.WriteCloser, error) {
+	c.open++
+	c.made++
+	c.most = max(c.most, c.open)
+	return &countWriter{c: c}, nil
+}
+
+// A recursive template nests a result-document per level: each one's writer
+// stayed open while its body ran, so a host held as many as the stylesheet
+// nested. Past maxOpenSecondary the rest are built and written complete.
+func TestSecondaryOutputNestedWritersBounded(t *testing.T) {
+	sd, err := xdm.ParseString(`<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+	  <xsl:template name="main"><xsl:call-template name="r"><xsl:with-param name="n" select="40"/></xsl:call-template><done/></xsl:template>
+	  <xsl:template name="r"><xsl:param name="n"/>
+	    <xsl:if test="$n gt 0"><xsl:result-document href="r{$n}.xml"><v n="{$n}"/>
+	      <xsl:call-template name="r"><xsl:with-param name="n" select="$n - 1"/></xsl:call-template>
+	    </xsl:result-document></xsl:if>
+	  </xsl:template></xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := Compile(sd.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c countWriters
+	if _, err := st.Transform(context.Background(), nil, TransformOptions{
+		InitialTemplate: "main", SecondaryOutput: c.opener}); err != nil {
+		t.Fatal(err)
+	}
+	if c.made != 40 || c.open != 0 || c.most > maxOpenSecondary+1 {
+		t.Fatalf("made %d, left open %d, at most %d open at once", c.made, c.open, c.most)
+	}
+}

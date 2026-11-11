@@ -138,6 +138,7 @@ func (b *streamBuilder) prongs(el *xdm.Node, prongs []*xdm.Node, f vfocus) bool 
 		return b.refuse(elName(el) + ": several prongs consume an element")
 	}
 	op := &streamOp{x: b.x, el: el, doc: true, fork: true}
+	readers := 0
 	for _, p := range prongs {
 		var ops []*streamOp
 		pb := &streamBuilder{pl: b.pl, x: b.x, ops: &ops, kinds: b.kinds, key: b.key}
@@ -151,6 +152,12 @@ func (b *streamBuilder) prongs(el *xdm.Node, prongs []*xdm.Node, f vfocus) bool 
 			}
 		}
 		op.prongs = append(op.prongs, ops)
+		if len(ops) > 0 {
+			readers++
+		}
+	}
+	if readers > maxTeeParts { // the tee's consumers (fork)
+		return b.refuse(elName(el) + ": more prongs read the document than a tee runs")
 	}
 	b.x.ops[el] = op
 	*b.ops = append(*b.ops, op)

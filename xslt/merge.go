@@ -641,12 +641,13 @@ func (i *mergeInstr) executeTree(rt *runtime, out *outputBuilder) error {
 	// entries' order is the sort's tie-break (source, anchor, position),
 	// not the order they are collected in.
 	var entries []mergeEntry
+	var held int64 // the entries retained across sources: mergeSource.collect
 	for pass := range 2 {
 		for s, src := range i.sources {
 			if onCursor := src.streamed && src.sourceURIs != nil; onCursor != (pass == 1) {
 				continue
 			}
-			got, err := src.collect(rt, s, resolved[s], colls[s])
+			got, err := src.collect(rt, s, resolved[s], colls[s], &held)
 			if err != nil {
 				return err
 			}
@@ -910,8 +911,13 @@ func mergeKeysEqual(a, b []sortValue) bool {
 }
 
 // collect evaluates one merge source into entries carrying their keys.
+//
+// Eval gives each anchor's select a fresh item allowance, so the entries the
+// merge retains across anchors and sources are totalled in *held, which the
+// caller shares across its sources, and checked against the item limit as
+// group-by checks what its groups retain.
 func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
-	colls []xpath.Collation) ([]mergeEntry, error) {
+	colls []xpath.Collation, held *int64) ([]mergeEntry, error) {
 	anchors, err := s.anchorItems(rt)
 	if err != nil {
 		return nil, err
@@ -927,6 +933,10 @@ func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
 		}
 		seq, err := s.sel.Eval(sub.ctx)
 		if err != nil {
+			return nil, err
+		}
+		*held += int64(len(seq))
+		if err := rt.ctx.ItemsRefused(*held); err != nil {
 			return nil, err
 		}
 		// 15.4: with streamable="yes" the select expression "is implicitly
@@ -947,6 +957,11 @@ func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
 		// $g/ancestor::record[1]//temp from the action; a snapshot keeps the
 		// ancestors but none of their other children, so that step is empty.
 		if s.streamed {
+			// The snapshots are copies, charged before they are made as
+			// fn:snapshot charges its own (copyfuncs.go).
+			if err := chargeCopies(rt.ctx, []xdm.Sequence{seq}, true); err != nil {
+				return nil, err
+			}
 			snap := make(xdm.Sequence, len(seq))
 			for j, it := range seq {
 				snap[j] = noteCopy(rt, it, snapshotItem(it))

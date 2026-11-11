@@ -534,6 +534,9 @@ func (p *Pattern) predicateFree() bool {
 	return true
 }
 
+// predicateFreeOrNil is predicateFree, true for an absent pattern too.
+func (p *Pattern) predicateFreeOrNil() bool { return p == nil || p.predicateFree() }
+
 // mayMatch is a necessary condition for a match that evaluates no predicate:
 // some alternative's last step must accept node on its axis and node test.
 // Every path through patternAlt.matches tests exactly that before any

@@ -255,6 +255,12 @@ type transformState struct {
 	accumValues map[accumCacheKey]*accumulatorValues
 
 	accumBuilding map[accumCacheKey]*accumulatorValues
+	// accumSlots is the number of per-node slots accumValues holds.
+	accumSlots int64
+
+	// numberAny is each level="any" xsl:number's table over the tree it last
+	// numbered (numberInstr.countAnyMemo).
+	numberAny map[*numberInstr]*numberAnyMemo
 
 	// accumOrigin maps a node produced by a copy-accumulators="yes" copy to
 	// the node it was copied from, which is the only thing that can say what

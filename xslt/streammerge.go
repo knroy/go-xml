@@ -419,6 +419,7 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 	// collects them (executeTree); the inputs stay in source order, the
 	// order of the merge's ties.
 	bySrc := make([][]*mergeInput, len(i.sources))
+	var held int64 // the collected sources' entries: mergeSource.collect
 	var docs []*mergeDoc
 	defer func() {
 		for _, d := range docs {
@@ -431,7 +432,7 @@ func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()
 				continue
 			}
 			if pass == 0 {
-				got, err := src.collect(rt, s, resolved[s], colls[s])
+				got, err := src.collect(rt, s, resolved[s], colls[s], &held)
 				if err != nil {
 					return mergePreRead{err} // nothing read: the tree's first error
 				}

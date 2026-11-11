@@ -325,7 +325,9 @@ type TransformOptions struct {
 	// inside an xsl:try body is written when it completes, and one inside a
 	// streamed xsl:source-document or xsl:merge when that ends (a failure
 	// re-runs it on the tree). Results whose output settings need the whole
-	// result (those Output lists, validation) are written when they complete.
+	// result (those Output lists, validation) are written when they complete,
+	// and so is a result-document nested inside 16 others being written, so
+	// that at most 16 writers are open at once.
 	//
 	// An error the function returns, a serialization error, and an error
 	// from Close are the transform's error. Errors are otherwise those of

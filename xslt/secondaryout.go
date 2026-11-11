@@ -21,6 +21,10 @@ package xslt
 //     result that was being made half written, where the tree has none. A
 //     result-document that completes inside a try is kept by the tree, caught
 //     error or not, so it is written when it completes;
+//   - beyond maxOpenSecondary writers open at once: a result-document nested
+//     deeper than that in others being written is built and written when it
+//     completes, so a host's writers (files, sockets) open at once stay few
+//     however deep the stylesheet nests them;
 //   - when the output needs the whole result (validation, build-tree="no",
 //     an item-separator; and streamOut's own fallbacks, which it holds to
 //     its end), or the URI is already produced, read, or being written
@@ -32,6 +36,12 @@ import (
 
 	"github.com/knroy/go-xml/v2/internal/xdmsink"
 )
+
+// maxOpenSecondary bounds the SecondaryOutput writers a transform holds open
+// at once. Only nesting opens more than one, and a result-document nested
+// deeper is built as tree mode builds it and written once complete, which
+// gives the same bytes (XSLT 3.0 section 25.1 places no limit on nesting).
+const maxOpenSecondary = 16
 
 // secondaryOutput is SecondaryOutput's state for one transform.
 type secondaryOutput struct {
@@ -124,7 +134,8 @@ func (i *resultDocumentInstr) stream(rt *runtime, href, resolved string, setting
 	so := rt.secondaryOut
 	key := resultKey(href, resolved)
 	if so.hold > 0 || rt.inTry || !i.validation.isDefault() || !settings.buildsTree() ||
-		settings.ItemSeparator != nil || so.opened[key] || (*rt.resultHrefs)[href] ||
+		settings.ItemSeparator != nil || so.opened[key] || len(so.opened) >= maxOpenSecondary ||
+		(*rt.resultHrefs)[href] ||
 		resolved != "" && (rt.writtenDocs != nil && (*rt.writtenDocs)[resolved] ||
 			rt.readDocs != nil && hasDoc(*rt.readDocs, resolved)) {
 		return false, nil

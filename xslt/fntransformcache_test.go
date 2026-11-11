@@ -12,6 +12,7 @@ import (
 
 	"github.com/knroy/go-xml/v2/internal/fileuri"
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // cacheInner reports its static parameter, so a stale cache hit across
@@ -274,4 +275,51 @@ func TestTransformCache(t *testing.T) {
 			t.Errorf("entries=%d, want 3", e)
 		}
 	})
+}
+
+// zeroAllow and zeroDeny are zero-size resolvers, so Go gives every value of
+// either one address: the nested cache keyed on the address alone handed the
+// sheet zeroAllow compiled to a transform whose resolver refuses its module.
+type zeroAllow struct{}
+
+func (zeroAllow) ResolveDocument(string, string) (*xdm.Tree, error) {
+	return nil, fmt.Errorf("no documents")
+}
+
+func (zeroAllow) ResolveModule(href, base string) (*xdm.Node, string, error) {
+	d, err := xdm.ParseString(`<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+	  <xsl:template name="xsl:initial-template"><leak/></xsl:template></xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		return nil, "", err
+	}
+	return d.Root, "http://example.com/m.xsl", nil
+}
+
+type zeroDeny struct{}
+
+func (zeroDeny) ResolveDocument(string, string) (*xdm.Tree, error) {
+	return nil, fmt.Errorf("no documents")
+}
+
+func (zeroDeny) ResolveModule(string, string) (*xdm.Node, string, error) {
+	return nil, "", fmt.Errorf("module denied by policy")
+}
+
+func TestTransformCacheZeroSizeResolvers(t *testing.T) {
+	inner := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+	  <xsl:include href="http://example.com/m.xsl"/></xsl:stylesheet>`
+	st := compileCacheOuter(t, "1", "true()")
+	run := func(r xpath.DocumentResolver) error {
+		_, err := st.Transform(context.Background(), nil, TransformOptions{
+			InitialTemplate: "go", Documents: r,
+			Params: map[string]xdm.Sequence{"inner": {xdm.NewString(inner)}},
+		})
+		return err
+	}
+	if err := run(&zeroAllow{}); err != nil {
+		t.Fatalf("allow: %v", err)
+	}
+	if err := run(&zeroDeny{}); err == nil || !strings.Contains(err.Error(), "denied by policy") {
+		t.Fatalf("deny after allow: %v, want the resolver's refusal", err)
+	}
 }
