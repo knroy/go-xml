@@ -144,6 +144,41 @@ func (policy) DropEmptyText() bool { return true }
 // unbounded, which is what a policy built without one gets.
 func (p policy) CountNodes(n int) error { return p.xp.ChargeNodes(n) }
 
+// ChargeBytes charges the value bytes a copy the builder makes duplicates
+// against the evaluation's byte budget, as the node count is charged above.
+func (p policy) ChargeBytes(n int) error { return p.xp.ChargeBytes(n) }
+
+// copiedValueBelow is the length below which a copy duplicates a value's
+// bytes into its own tree; a value at least that long is kept by reference
+// (xdm's textOwnFrom). xdmbuild and xslt count copies the same way.
+const copiedValueBelow = 8 << 10
+
+// copiedBytes is the value bytes a deep copy of n duplicates: attribute
+// values and leaf values below copiedValueBelow.
+func copiedBytes(n *xdm.Node) int {
+	own := func(n *xdm.Node) int {
+		b := 0
+		switch n.Kind() {
+		case xdm.KindElement:
+			for a := range n.Attrs() {
+				if l := len(a.Value()); l < copiedValueBelow {
+					b += l
+				}
+			}
+		case xdm.KindText, xdm.KindComment, xdm.KindPI, xdm.KindAttribute:
+			if l := len(n.Value()); l < copiedValueBelow {
+				b += l
+			}
+		}
+		return b
+	}
+	b := own(n)
+	for d := range n.Descendants() { // iterative: the depth is the input's
+		b += own(d)
+	}
+	return b
+}
+
 func (n *literalText) eval(out *builderRef, ctx *evalContext) error {
 	out.b.AppendText(n.text)
 	return nil
@@ -213,6 +248,9 @@ func (n *enclosed) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	for _, it := range n.items {
 		if err := it.eval(ref, ctx); err != nil {
 			return nil, err
+		}
+		if err := inner.Refused(); err != nil {
+			return nil, err // latched by a builder call with no error return
 		}
 	}
 	return inner.Sequence(), nil
@@ -365,6 +403,9 @@ func appendSequence(out *builderRef, seq xdm.Sequence, ctx *evalContext) error {
 					return err
 				}
 				if err := ctx.xp.ChargeNodes(xdmbuild.CountSubtree(v)); err != nil {
+					return err
+				}
+				if err := ctx.xp.ChargeBytes(copiedBytes(v)); err != nil {
 					return err
 				}
 				out.b.AppendCopyOf(v)
@@ -938,6 +979,9 @@ func (a *attribute) eval(out *builderRef, ctx *evalContext) error {
 				inner := xdmbuild.New(policy{sc: ctx.sc, xp: ctx.xp})
 				if err := v.eval(&builderRef{b: inner}, ctx); err != nil {
 					return err
+				}
+				if err := inner.Refused(); err != nil {
+					return err // latched by a builder call with no error return
 				}
 				seq = append(seq, inner.Sequence()...)
 			}

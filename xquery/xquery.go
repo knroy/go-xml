@@ -385,6 +385,12 @@ func (q *Query) Eval(ctx *xpath.Context) (_ xdm.Sequence, err error) {
 		if err := n.eval(ref, ec); err != nil {
 			return nil, err
 		}
+		// AppendText, StartElement and the builder calls with no error return
+		// latch a refusal (the node budget, the text-store ceiling) rather than
+		// panic: returned here, so that no result is silently truncated.
+		if err := out.Refused(); err != nil {
+			return nil, err
+		}
 	}
 	return out.Sequence(), nil
 }

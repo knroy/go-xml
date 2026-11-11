@@ -934,6 +934,9 @@ func (q *Query) evalBody(body []node, expr *compiledExpr, ctx *xpath.Context,
 		if err := n.eval(ref, ec); err != nil {
 			return nil, err
 		}
+		if err := out.Refused(); err != nil {
+			return nil, err // latched by a builder call with no error return
+		}
 	}
 	return out.Sequence(), nil
 }
