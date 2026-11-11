@@ -2170,21 +2170,31 @@ func effectiveValue(el *xdm.Node, decl *ElementDecl) string {
 // apply to the group as a unit, which is a different thing from applying them
 // to each member, and the members' own bounds could not express it.
 func flattenAll(g *ModelGroup) []*Particle {
-	return flattenAllSeen(g, map[*ModelGroup]bool{})
+	return flattenAllSeen(g, map[*ModelGroup]bool{}, map[*ModelGroup]int{})
 }
 
-// flattenAllSeen carries the set of groups already entered.
+// flattenAllSeen carries the set of groups currently entered and the number
+// of times each group has been inlined.
 //
 // A group definition whose content references itself is a cycle, and following
 // it would recurse until the stack is gone. Stopping at a repeat drops the
 // self-reference rather than looping; the schema is ill-formed either way, and
 // the content-model compiler reports it.
-func flattenAllSeen(g *ModelGroup, seen map[*ModelGroup]bool) []*Particle {
-	if seen[g] {
+//
+// A group shared through two references is inlined twice: that duplicate is
+// what the Unique Particle Attribution check reports (two particles that match
+// the same element). A third copy adds nothing that check does not already
+// see, and copying a shared group once per path is what made a DAG of shared
+// all groups expand exponentially before any position bound was consulted.
+// Inlining each group at most twice keeps the output linear in the size of
+// the group graph.
+func flattenAllSeen(g *ModelGroup, active map[*ModelGroup]bool, inlined map[*ModelGroup]int) []*Particle {
+	if active[g] || inlined[g] >= 2 {
 		return nil
 	}
-	seen[g] = true
-	defer delete(seen, g)
+	active[g] = true
+	inlined[g]++
+	defer delete(active, g)
 
 	nested := false
 	for _, p := range g.Particles {
@@ -2199,7 +2209,7 @@ func flattenAllSeen(g *ModelGroup, seen map[*ModelGroup]bool) []*Particle {
 	var out []*Particle
 	for _, p := range g.Particles {
 		if inner := allGroupOf(p); inner != nil {
-			out = append(out, flattenAllSeen(inner, seen)...)
+			out = append(out, flattenAllSeen(inner, active, inlined)...)
 			continue
 		}
 		out = append(out, p)
