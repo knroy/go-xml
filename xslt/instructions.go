@@ -185,11 +185,16 @@ func (i *sequenceInstr) appendItem(rt *runtime, out *outputBuilder, it xdm.Item)
 			// The copy is made once, straight into dest, and given the
 			// bindings there: a detached copy appended afterwards was
 			// copied a second time by the builder.
+			// Each copy is O(K) for K bindings in scope, and one select
+			// can copy any number of them, so the deadline is checked per
+			// copy rather than only between instructions.
+			if err := rt.ctx.Err(); err != nil {
+				return err
+			}
 			if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
 				return err
 			}
-			inheritNamespacesAt(rt, out.AppendCopyOf(v), v, dest)
-			return nil
+			return chargeInherited(rt.ctx, inheritNamespacesAt(rt, out.AppendCopyOf(v), v, dest))
 		}
 		// An attribute or namespace node under an open element is added by the
 		// builder call AppendNode would make, so that one after content raises
@@ -407,6 +412,11 @@ func (i *copyOfInstr) copyItem(rt *runtime, out *outputBuilder, it xdm.Item) err
 		// own copy first -- so the builder's charge never sees this
 		// node, and copying a large subtree once per node of a large
 		// document would otherwise build the cross product uncharged.
+		// The deadline is checked per copy, as xsl:sequence does: each one
+		// is O(K) for K bindings in scope.
+		if err := rt.ctx.Err(); err != nil {
+			return err
+		}
 		if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
 			return err
 		}
@@ -423,7 +433,9 @@ func (i *copyOfInstr) copyItem(rt *runtime, out *outputBuilder, it xdm.Item) err
 				(i.validation.mode == validatePreserve && !i.validation.constructsElement ||
 					i.validation.mode == validateStrip && !v.TreeHasTyping())) {
 			if c := out.AppendCopyOf(v); c != nil && c.Kind() == xdm.KindElement {
-				inheritNamespaces(c, v)
+				if err := chargeInherited(rt.ctx, inheritNamespaces(c, v)); err != nil {
+					return err
+				}
 				if i.copyAccumulators {
 					rt.noteCopiedAccumulators(v, c)
 				}
@@ -452,7 +464,9 @@ func (i *copyOfInstr) copyItem(rt *runtime, out *outputBuilder, it xdm.Item) err
 				// it is being lifted away from are added here. Without
 				// them a copied subtree loses the binding its own prefix
 				// depends on.
-				inheritNamespaces(c, v)
+				if err := chargeInherited(rt.ctx, inheritNamespaces(c, v)); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -598,29 +612,48 @@ func copyDocumentNode(n *xdm.Node) *xdm.Node {
 	return tree.Root
 }
 
-// inheritNamespaces gives a detached copy the bindings it used to inherit.
+// inheritNamespaces gives a detached copy the bindings it used to inherit,
+// and reports how many it added.
 //
 // Declarations the element already carries are left alone: they are the
 // nearest ones, and an inherited binding for the same prefix is masked.
-func inheritNamespaces(dst, src *xdm.Node) {
-	var arr [32]nsBinding
-	for _, b := range scopeBindings(src, arr[:0]) {
-		if !declares(dst, b.prefix) {
-			dst.AddNamespace(b.prefix, b.uri)
-		}
-	}
+// The bindings are added in one call, so the copy's frame is built and
+// interned once: added one at a time, every copy after the first re-copied
+// its frame per binding, K^2 per copied element.
+func inheritNamespaces(dst, src *xdm.Node) int {
+	return inheritNamespacesWhere(dst, src, nil)
 }
 
 // inheritNamespacesAt is inheritNamespaces for a copy about to be attached to
 // dest: of the bindings src inherited, only those dest does not already
 // supply are written on the copy.
-func inheritNamespacesAt(rt *runtime, dst, src, dest *xdm.Node) {
+func inheritNamespacesAt(rt *runtime, dst, src, dest *xdm.Node) int {
+	return inheritNamespacesWhere(dst, src, func(b nsBinding) bool {
+		return !suppliedAt(rt, dest, b.prefix, b.uri)
+	})
+}
+
+// inheritNamespacesWhere adds to dst the bindings src has in scope that dst
+// does not declare and keep, when given, accepts.
+func inheritNamespacesWhere(dst, src *xdm.Node, keep func(nsBinding) bool) int {
 	var arr [32]nsBinding
+	var own [32]string
+	declared := own[:0]
+	for prefix := range dst.DeclaredNamespaces() {
+		declared = append(declared, prefix)
+	}
+	slices.Sort(declared)
+	var pairs []string
 	for _, b := range scopeBindings(src, arr[:0]) {
-		if !declares(dst, b.prefix) && !suppliedAt(rt, dest, b.prefix, b.uri) {
-			dst.AddNamespace(b.prefix, b.uri)
+		if _, found := slices.BinarySearch(declared, b.prefix); found {
+			continue
+		}
+		if keep == nil || keep(b) {
+			pairs = append(pairs, b.prefix, b.uri)
 		}
 	}
+	dst.AddNamespaces(pairs...)
+	return len(pairs) / 2
 }
 
 // declares reports whether el carries a namespace node for prefix.
@@ -633,47 +666,61 @@ func declares(el *xdm.Node, prefix string) bool {
 	return false
 }
 
+// inheritedBindingBytes is what the byte budget is charged for each binding
+// a copy inherits: one nsBinding, two string headers, held in the copy's
+// namespace frame. Every copy of an element carries the K bindings its
+// source inherited, so copying M children of a root declaring K prefixes
+// writes K x M of them -- quadratic in a document of a few tens of KB -- and
+// the node budget charges each copy as one node.
+const inheritedBindingBytes = 32
+
+// chargeInherited charges n inherited bindings to the byte budget.
+func chargeInherited(ctx *xpath.Context, n int) error {
+	if n == 0 {
+		return nil
+	}
+	return ctx.ChargeBytes(n * inheritedBindingBytes)
+}
+
 // scopeBindings appends to buf the bindings n.InScopeNamespaces() holds,
 // less xml, sorted by prefix. It reads the ancestors directly rather than
 // building the map: the copies that call it run once per copied element, and
 // the map was most of what they allocated.
+//
+// Each element's declarations are appended in reverse, innermost element
+// first, and stably sorted by prefix, so the first binding for each prefix is
+// the one the map's overwrites would have kept: an inner element shadows an
+// outer one, and within one element the last declaration wins. A scan of the
+// bindings so far per declaration, and an insertion sort, made this K^2 for
+// K prefixes in scope.
 func scopeBindings(n *xdm.Node, buf []nsBinding) []nsBinding {
 	start := len(buf)
 	for cur := n; cur != nil; cur = cur.Parent() {
 		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		// Within one element the last declaration wins, as the map's
-		// overwrites resolve it; an inner element shadows an outer one.
-		// Bindings from buf[start:own] came from inner elements.
 		own := len(buf)
-	next:
 		for prefix, uri := range cur.DeclaredNamespaces() {
-			if prefix == "xml" {
-				continue
+			if prefix != "xml" {
+				buf = append(buf, nsBinding{prefix, uri})
 			}
-			for k := start; k < len(buf); k++ {
-				if buf[k].prefix == prefix {
-					if k >= own {
-						buf[k].uri = uri
-					}
-					continue next
-				}
-			}
-			buf = append(buf, nsBinding{prefix, uri})
 		}
+		slices.Reverse(buf[own:])
 	}
-	// Drop undeclarations, which only served to shadow, and sort.
+	slices.SortStableFunc(buf[start:], func(a, b nsBinding) int {
+		return strings.Compare(a.prefix, b.prefix)
+	})
+	// Keep the first of each prefix, then drop undeclarations, which only
+	// served to shadow.
 	out := buf[:start]
-	for _, b := range buf[start:] {
+	prev := ""
+	for k, b := range buf[start:] {
+		if k > 0 && b.prefix == prev {
+			continue
+		}
+		prev = b.prefix
 		if b.uri != "" {
 			out = append(out, b)
-		}
-	}
-	s := out[start:]
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j].prefix < s[j-1].prefix; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
 		}
 	}
 	return out
