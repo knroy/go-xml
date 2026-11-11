@@ -60,7 +60,7 @@ func (v *windowVars) bind(t tuple, seq xdm.Sequence, i int, x *nameExt) tuple {
 		k++
 	}
 	for _, n := range nm[:k] {
-		if slices.Contains(t.names, n) { // rebinding replaces; the slow path
+		if t.has(n) { // rebinding replaces; the slow path
 			for j := 0; j < k; j++ {
 				t = t.bind(nm[j], vs[j])
 			}
@@ -70,10 +70,15 @@ func (v *windowVars) bind(t tuple, seq xdm.Sequence, i int, x *nameExt) tuple {
 	if k == 0 {
 		return t
 	}
+	if t.shares() {
+		// Each window of a wide tuple shares its bindings; see tuple.
+		return tuple{up: x.frameOf(t), names: x.extendN(nil, nm[:k]),
+			vals: slices.Clone(vs[:k])}
+	}
 	vals := make([]xdm.Sequence, len(t.vals)+k)
 	copy(vals, t.vals)
 	copy(vals[len(t.vals):], vs[:k])
-	return tuple{names: x.extendN(t.names, nm[:k]), vals: vals}
+	return tuple{up: t.up, names: x.extendN(t.names, nm[:k]), vals: vals}
 }
 
 // extendN is extend for several names at once.
