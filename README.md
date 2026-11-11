@@ -909,6 +909,9 @@ Every remote-reference mechanism is off unless you turn it on.
   `MaxEntityBytes`, `MaxTotalEntityBytes`, `MaxEntities`) and so are external
   reads (`MaxExternalFetches`, `MaxExternalFetchBytes`, `MaxExternalDepth`);
   zero keeps each default, see [docs/options.md](docs/options.md).
+  `xslt.FileResolver` has the same seven fields; as a transform's `Documents`
+  they also bind `fn:parse-xml` and a nested `fn:transform`'s
+  `stylesheet-text`.
 * **`fn:doc` and `fn:document` fail closed** *as a library*. With no
   `DocumentResolver` configured, every URI is refused. The CLI is not
   fail-closed in the same sense: it always configures a resolver rooted at the
