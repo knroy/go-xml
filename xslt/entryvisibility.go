@@ -92,7 +92,7 @@ func (c *compiler) recordTemplateVisibility(el *xdm.Node, name xdm.QName) {
 		// the manifest, which is what the sentence says: an explicit value on
 		// the declaration is the one that stands, and a manifest that
 		// disagrees with it is XTSE3010 rather than an override.
-		if v := exposedVisibility(el); v != "" {
+		if v := c.exposedVisibility(el); v != "" {
 			vis = string(v)
 		} else {
 			vis = "private"
@@ -294,25 +294,31 @@ func (s *Stylesheet) eligibleInitialFunction(name xdm.QName, arity int) bool {
 // so a declaration in an included module simply finds no rules here -- which
 // is the same answer walking up to the package would give for a manifest that
 // listed it by a name it does not have.
-func exposedVisibility(el *xdm.Node) visibility {
+//
+// The answer is per package, not per declaration: the package's components and
+// its xsl:expose rules are resolved once, on the first declaration asked
+// about, and every declaration of that package is then a lookup. Resolving
+// them per declaration was quadratic in the package's size.
+func (c *compiler) exposedVisibility(el *xdm.Node) visibility {
 	root := el.Parent()
 	if root == nil || !isXSL(root, "package") {
 		return ""
 	}
-	comps, err := packageComponents(root)
-	if err != nil {
-		return ""
-	}
-	var target *component
-	for _, comp := range comps {
-		if comp.el == el {
-			target = comp
-			break
+	vis, ok := c.exposedVis[root]
+	if !ok {
+		vis = packageExposedVisibility(root)
+		if c.exposedVis == nil {
+			c.exposedVis = map[*xdm.Node]map[*xdm.Node]visibility{}
 		}
+		c.exposedVis[root] = vis
 	}
-	if target == nil {
-		return ""
-	}
+	return vis[el]
+}
+
+// packageExposedVisibility answers, by declaration element, the visibility the
+// package's xsl:expose declarations give each of its components. It is nil
+// where the package has no xsl:expose or its manifest does not resolve.
+func packageExposedVisibility(root *xdm.Node) map[*xdm.Node]visibility {
 	var exposes []*exposeRule
 	order := 0
 	for _, ch := range root.ChildElements() {
@@ -321,21 +327,31 @@ func exposedVisibility(el *xdm.Node) visibility {
 		}
 		r, err := parseExposeRule(ch, order)
 		if err != nil {
-			return ""
+			return nil
 		}
 		order++
 		exposes = append(exposes, r)
 	}
 	if len(exposes) == 0 {
-		return ""
+		return nil
+	}
+	comps, err := packageComponents(root)
+	if err != nil {
+		return nil
 	}
 	if err := applyExpose(comps, exposes); err != nil {
-		return ""
+		return nil
 	}
 	// applyExpose leaves a component no rule matched at its declared
 	// visibility, which for a declaration with no attribute is the private
 	// default -- the same answer the caller falls back to.
-	return target.vis
+	out := make(map[*xdm.Node]visibility, len(comps))
+	for _, comp := range comps {
+		if _, dup := out[comp.el]; !dup {
+			out[comp.el] = comp.vis
+		}
+	}
+	return out
 }
 
 // packageScopedLibrary is the function library the runtime evaluates against.

@@ -12,6 +12,9 @@ import (
 
 // compiler holds state while compiling a stylesheet and its included modules.
 type compiler struct {
+	// exposedVis memoises, per xsl:package element, the visibility its
+	// xsl:expose declarations give each declaration; see exposedVisibility.
+	exposedVis map[*xdm.Node]map[*xdm.Node]visibility
 	// env is the state this compilation shares with code that has no
 	// compiler in scope; see compileEnv.
 	env *compileEnv
@@ -1833,7 +1836,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 			vis = strings.TrimSpace(el.AttrValue("visibility"))
 		}
 		if vis == "" {
-			if v := exposedVisibility(el); v != "" {
+			if v := c.exposedVisibility(el); v != "" {
 				vis = string(v)
 			} else {
 				vis = "private"

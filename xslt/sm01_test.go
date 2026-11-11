@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -87,5 +88,38 @@ func TestSM01DeferChainLinear(t *testing.T) {
 		if !g.deferred {
 			t.Fatalf("%s not deferred", g.Name.Local)
 		}
+	}
+}
+
+// TestSM01ExposeResolvedOncePerPackage: 4000 named templates with no
+// visibility of their own, made public by one xsl:expose. Resolving the
+// package's components and expose rules per declaration is 16M component
+// matches; once per package it is 4000. The expose must still make "main" an
+// entry point.
+func TestSM01ExposeResolvedOncePerPackage(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+		name="urn:p" package-version="1.0.0" version="3.0">
+		<xsl:output omit-xml-declaration="yes"/>
+		<xsl:expose component="template" names="*" visibility="public"/>
+		<xsl:template name="main"><ok/></xsl:template>`)
+	for i := 0; i < 4000; i++ {
+		fmt.Fprintf(&b, `<xsl:template name="t%d"/>`, i)
+	}
+	b.WriteString(`</xsl:package>`)
+	tree, err := xdm.ParseString(b.String(), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Compile(tree.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.String(); got != "<ok/>" {
+		t.Errorf("got %q, want <ok/>", got)
 	}
 }
