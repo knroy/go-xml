@@ -2,7 +2,6 @@ package xpath
 
 import (
 	"errors"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -33,17 +32,4 @@ var resourceRefusalCases = []struct{ name, expr string }{
 	{"backtrack depth budget", `matches(concat("b", string-join((1 to 50000) ! "c", "")), "(a*)b.*\1")`},
 	{"program size", `matches("a", string-join((1 to 150) ! "\pL{1000}", ""))`},
 	{"array flatten steps", `Q{http://www.w3.org/2005/xpath-functions/array}flatten(fold-left(1 to 25, [], function($a, $i) { [$a, $a] }))`},
-}
-
-// The backreference analysis bound is a limit on a valid pattern too.
-func TestBackrefAnalysisRefusalIsXPDY0130(t *testing.T) {
-	var g, r strings.Builder
-	for i := 1; i <= 4000; i++ {
-		g.WriteString("(a)")
-		r.WriteString(`\` + strconv.Itoa(i))
-	}
-	_, err := buildBackrefRegexp(g.String()+r.String(), "", XPath31)
-	if got := xdm.ErrorCode(err); got != "XPDY0130" {
-		t.Fatalf("ErrorCode = %q, want XPDY0130 (err %v)", got, err)
-	}
 }

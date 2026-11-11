@@ -164,285 +164,6 @@ func firstBackref(p string) int {
 	return -1
 }
 
-// fixedWidthGroup reports whether group n in pattern p matches a fixed number
-// of characters.
-//
-// The analysis is deliberately conservative: it returns false for anything it
-// does not recognise, and a false answer only means the pattern is refused,
-// never that a wrong answer is given. A group is fixed-width when it contains
-// no quantifier, no alternation of differing widths, and no nested group that
-// is itself variable.
-func fixedWidthGroup(p string, n int) bool {
-	body, ok := groupBody(p, n)
-	if !ok {
-		return false
-	}
-	w, ok := fixedWidth(body)
-	return ok && w >= 0
-}
-
-// groupEnd returns the offset just past the nth capturing group's closing
-// paren, together with any quantifier applied to the group itself.
-//
-// This is what decides whether capture-and-compare is sound. RE2 hands back
-// one submatch assignment — the greedy or lazy one its own semantics chose —
-// and the comparison cannot ask for a different one. That is only harmless
-// when nothing between the group and the backreference could have absorbed
-// text the backreference needed. "(a)(b)\1" is safe because "(b)" matches one
-// width and no other split exists; "(['\"])(.*?)\1" is not, because ".*?"
-// stops at the first opportunity and the correct match needs it to run on.
-func groupEnd(p string, n int) (int, bool) {
-	count := 0
-	for i := 0; i < len(p); i++ {
-		switch p[i] {
-		case '\\':
-			i++
-		case '[':
-			for i++; i < len(p); i++ {
-				if p[i] == '\\' {
-					i++
-					continue
-				}
-				if p[i] == ']' {
-					break
-				}
-			}
-		case '(':
-			capturing := !strings.HasPrefix(p[i:], "(?")
-			if capturing {
-				count++
-			}
-			if capturing && count == n {
-				depth, j := 1, i+1
-				for ; j < len(p) && depth > 0; j++ {
-					switch p[j] {
-					case '\\':
-						j++
-					case '[':
-						for j++; j < len(p); j++ {
-							if p[j] == '\\' {
-								j++
-								continue
-							}
-							if p[j] == ']' {
-								break
-							}
-						}
-					case '(':
-						depth++
-					case ')':
-						depth--
-					}
-				}
-				if depth != 0 {
-					return 0, false
-				}
-				return j, true
-			}
-		}
-	}
-	return 0, false
-}
-
-// betweenIsFixed reports whether the text from the end of group n to the end
-// of head always matches the same number of characters.
-//
-// A quantifier on the referenced group itself counts as intervening: "(ki){2}"
-// leaves RE2 free to place group 1 on either repetition, and only the last one
-// is reported, so a backreference comparing against it is comparing against a
-// choice it did not get to make.
-func betweenIsFixed(head string, n int) bool {
-	end, ok := groupEnd(head, n)
-	if !ok {
-		return false
-	}
-	rest := head[end:]
-	// A quantifier directly on the group makes the captured occurrence
-	// ambiguous even when the text after it is fixed.
-	if rest != "" && strings.ContainsRune("*+?{", rune(rest[0])) {
-		return false
-	}
-	w, ok := fixedWidth(rest)
-	return ok && w >= 0
-}
-
-// groupBody returns the text inside the nth capturing group.
-func groupBody(p string, n int) (string, bool) {
-	count := 0
-	for i := 0; i < len(p); i++ {
-		switch p[i] {
-		case '\\':
-			i++
-		case '[':
-			// A class may contain an unescaped "(", so it is skipped whole.
-			for i++; i < len(p); i++ {
-				if p[i] == '\\' {
-					i++
-					continue
-				}
-				if p[i] == ']' {
-					break
-				}
-			}
-		case '(':
-			capturing := !strings.HasPrefix(p[i:], "(?")
-			if capturing {
-				count++
-			}
-			if capturing && count == n {
-				depth, j := 1, i+1
-				for ; j < len(p) && depth > 0; j++ {
-					switch p[j] {
-					case '\\':
-						j++
-					case '[':
-						for j++; j < len(p); j++ {
-							if p[j] == '\\' {
-								j++
-								continue
-							}
-							if p[j] == ']' {
-								break
-							}
-						}
-					case '(':
-						depth++
-					case ')':
-						depth--
-					}
-				}
-				if depth != 0 {
-					return "", false
-				}
-				return p[i+1 : j-1], true
-			}
-		}
-	}
-	return "", false
-}
-
-// fixedWidth returns the number of characters body always matches.
-//
-// It handles the constructs a fixed-width group can be built from: literals,
-// escapes, character classes, nested groups, and alternations whose branches
-// agree. Anything else — any quantifier, any assertion — makes it variable, so
-// the pattern is refused rather than guessed at.
-func fixedWidth(body string) (int, bool) {
-	// An alternation is fixed only if every branch has the same width.
-	if branches := splitAlternation(body); len(branches) > 1 {
-		w, ok := fixedWidth(branches[0])
-		if !ok {
-			return 0, false
-		}
-		for _, b := range branches[1:] {
-			w2, ok := fixedWidth(b)
-			if !ok || w2 != w {
-				return 0, false
-			}
-		}
-		return w, true
-	}
-
-	w := 0
-	for i := 0; i < len(body); i++ {
-		switch c := body[i]; c {
-		case '\\':
-			if i+1 >= len(body) {
-				return 0, false
-			}
-			// A multi-character escape still matches exactly one character.
-			i++
-			w++
-		case '[':
-			j := i + 1
-			for ; j < len(body); j++ {
-				if body[j] == '\\' {
-					j++
-					continue
-				}
-				if body[j] == ']' {
-					break
-				}
-			}
-			if j >= len(body) {
-				return 0, false
-			}
-			i = j
-			w++
-		case '(':
-			depth, j := 1, i+1
-			for ; j < len(body) && depth > 0; j++ {
-				switch body[j] {
-				case '\\':
-					j++
-				case '(':
-					depth++
-				case ')':
-					depth--
-				}
-			}
-			if depth != 0 {
-				return 0, false
-			}
-			inner := body[i+1 : j-1]
-			inner = strings.TrimPrefix(inner, "?:")
-			iw, ok := fixedWidth(inner)
-			if !ok {
-				return 0, false
-			}
-			w += iw
-			i = j - 1
-		case '*', '+', '?', '{':
-			// Any quantifier makes the width variable.
-			return 0, false
-		case '.':
-			w++
-		case '^', '$':
-			// An anchor inside a group is not something this analysis models.
-			return 0, false
-		default:
-			// A multi-byte character is one character, not one byte.
-			_, size := utf8.DecodeRuneInString(body[i:])
-			i += size - 1
-			w++
-		}
-	}
-	return w, true
-}
-
-// splitAlternation splits body on top-level "|".
-func splitAlternation(body string) []string {
-	var out []string
-	depth, start := 0, 0
-	for i := 0; i < len(body); i++ {
-		switch body[i] {
-		case '\\':
-			i++
-		case '[':
-			for i++; i < len(body); i++ {
-				if body[i] == '\\' {
-					i++
-					continue
-				}
-				if body[i] == ']' {
-					break
-				}
-			}
-		case '(':
-			depth++
-		case ')':
-			depth--
-		case '|':
-			if depth == 0 {
-				out = append(out, body[start:i])
-				start = i + 1
-			}
-		}
-	}
-	out = append(out, body[start:])
-	return out
-}
-
 // MatchString reports whether s matches the pattern, backreferences included.
 //
 // Every match of stripped spans exactly width characters, so each start
@@ -672,13 +393,9 @@ func buildBackrefRegexp(pattern, flags string, v Version) (*backrefRegexp, error
 		return nil, regexCompileError(original, err)
 	}
 	// There is deliberately no ceiling on the group count: 65 groups is valid
-	// under both regex grammars. What is bounded is the analysis itself. Each
-	// group's checks rescan the head, once per nesting level, so they are run
-	// once per distinct group and their total is capped. Unbounded, "(a)" 16000
-	// times with every group referenced took 13 s, and 500 nested groups around
-	// a 20 KB class took 9 s, in one call that never checks its context.
-	analysed := map[int]bool{}
-	cost := int64(len(head)+1) * int64(parenDepth(head)+1)
+	// under both regex grammars. Admission is decided once, on the parsed
+	// tree below, in time linear in the pattern.
+	refd := make(map[int]bool, len(refs))
 	for i := range refs {
 		// A backreference number is greedy: "\11" is group 11 when eleven
 		// groups exist, and group 1 followed by a literal "1" otherwise.
@@ -691,47 +408,20 @@ func buildBackrefRegexp(pattern, flags string, v Version) (*backrefRegexp, error
 			refs[i].group = g
 			refs[i].literal = lit
 		}
-		// Both checks depend only on the head and the group.
-		if analysed[refs[i].group] {
-			continue
-		}
-		analysed[refs[i].group] = true
-		if int64(len(analysed))*cost > backrefAnalysisMax {
-			return nil, fmt.Errorf(
-				"XPDY0130: regular expression %q: backreference analysis exceeds %d steps: %w",
-				original, backrefAnalysisMax, xdm.ErrResourceLimit)
-		}
-		if !fixedWidthGroup(head, refs[i].group) {
-			return nil, fmt.Errorf(
-				"FORX0002: backreference \\%d names a group of variable width, "+
-					"which RE2 cannot resolve", refs[i].group)
-		}
-		// A fixed-width group is not enough on its own. If anything between
-		// that group and the backreference can vary in width, RE2's single
-		// assignment is one of several and the comparison cannot reach the
-		// others — so the pattern must be refused rather than answered from
-		// the wrong split. Without this check "(['\"])(.*?)\\1" compiled and
-		// returned false for text it matches.
-		if !betweenIsFixed(head, refs[i].group) {
-			return nil, fmt.Errorf(
-				"FORX0002: backreference \\%d is separated from its group by a "+
-					"variable-width expression, which RE2 cannot resolve",
-				refs[i].group)
-		}
+		refd[refs[i].group] = true
 	}
-	// The checks above look at each group and what follows it. They miss
-	// what comes before: "a*(a)\\1" against "aa" needs a* to give one "a"
-	// back, and RE2's greedy split never does, so the answer came out false.
-	// The whole head must have one width and every referenced group one
-	// place in it, or the pattern goes to the backtracker or is refused.
+	// Every referenced group must have one width and one place, and so must
+	// everything around it: "(['\"])(.*?)\\1" needs .*? to run on, and
+	// "a*(a)\\1" against "aa" needs a* to give one "a" back, and RE2's one
+	// assignment reaches neither. The whole head must have one width and
+	// every referenced group one place in it, or the pattern goes to the
+	// backtracker or is refused.
 	tree, err := syntax.Parse(translated, syntax.Perl)
 	if err != nil {
 		return nil, regexCompileError(original, err)
 	}
 	atStart := startsWithBeginText(tree)
-	refd := make(map[int]bool, len(analysed))
 	for i, r := range refs {
-		refd[r.group] = true
 		// A "\\N*" is greedy-exact only as the last thing: a later
 		// backreference may need fewer copies. Unanchored with "$", every start
 		// would re-run it to the end of the input, so that shape goes too.
@@ -825,29 +515,6 @@ func fixedShape(re *syntax.Regexp, refd map[int]bool, guarded bool) (int, bool) 
 	}
 	// Star, plus, quest, anchors and no-match.
 	return 0, false
-}
-
-// backrefAnalysisMax bounds the fixed-width analysis of one pattern, in bytes
-// scanned: distinct referenced groups times head length times paren depth.
-// Real patterns need a few thousand.
-const backrefAnalysisMax = 1 << 22
-
-// parenDepth is the deepest paren nesting in p, counted the way fixedWidth
-// counts it: escapes skipped, classes not.
-func parenDepth(p string) int {
-	d, deepest := 0, 0
-	for i := 0; i < len(p); i++ {
-		switch p[i] {
-		case '\\':
-			i++
-		case '(':
-			d++
-			deepest = max(deepest, d)
-		case ')':
-			d = max(d-1, 0)
-		}
-	}
-	return deepest
 }
 
 // splitGreedyRef re-reads "\NM" as group N followed by the literal digits M
