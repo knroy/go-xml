@@ -1170,7 +1170,7 @@ func (b *varBinder) visit(d *varDecl) error {
 		// K2-InternalVariablesWithout-1b run at all; a cycle among them is
 		// simply skipped here, because whether it is an error depends on which
 		// branches the evaluation takes.
-		for _, ref := range q.reachableVars(nil, d.calls()) {
+		for _, ref := range q.reachableVars(d) {
 			if dep, ok := byName[ref]; ok && dep != d {
 				if state[dep.name.Clark()] != unvisitedState {
 					continue
@@ -1299,28 +1299,71 @@ const (
 // Function recursion is not itself an error, so a function already visited is
 // simply not re-entered: only a variable that reaches itself is a cycle worth
 // reporting, and bindVariables makes that judgement.
-func (q *Query) reachableVars(vars, calls []string) []string {
-	seenFn := map[string]bool{}
-	out := map[string]bool{}
-	for _, v := range vars {
-		out[v] = true
+//
+// The answer for a declared variable is the one buildCallGraph computed at
+// compile time: a Query is immutable, and walking the graph again for every
+// variable of every evaluation -- with a scan of every function per call
+// name and a fresh lexing of each body it matched -- was V x F^2 per Eval,
+// before any budget was held.
+func (q *Query) reachableVars(d *varDecl) []string {
+	if r, ok := q.calls.byVar[d]; ok {
+		return r
 	}
+	return q.calls.closure(d.calls(), make([]int, len(q.calls.refs)), 1)
+}
+
+// callGraph is the call graph over a query's declared functions.
+type callGraph struct {
+	// byName maps a call name as written to the functions it may name;
+	// sameFuncName decides the match, so the key is the declaration's own
+	// lexical name.
+	byName map[string][]int
+	// refs and calls are each function's references and calls, lexed once.
+	refs, calls [][]string
+	// byVar is reachableVars for each declared variable.
+	byVar map[*varDecl][]string
+}
+
+// buildCallGraph indexes q.funcs and closes each declared variable's calls
+// over them: O(V x (F + E)) once, for V variables and E call edges.
+func (q *Query) buildCallGraph() *callGraph {
+	g := &callGraph{byName: map[string][]int{},
+		refs: make([][]string, len(q.funcs)), calls: make([][]string, len(q.funcs))}
+	for i, fd := range q.funcs {
+		name := fd.name.Local
+		if fd.name.Prefix != "" {
+			name = fd.name.Prefix + ":" + name
+		}
+		g.byName[name] = append(g.byName[name], i)
+		g.refs[i], g.calls[i] = fd.references(), fd.calls()
+	}
+	all := q.allVars()
+	g.byVar = make(map[*varDecl][]string, len(all))
+	seen := make([]int, len(q.funcs))
+	for i, d := range all {
+		g.byVar[d] = g.closure(d.calls(), seen, i+1)
+	}
+	return g
+}
+
+// closure is the sorted set of variables the functions reachable from calls
+// reference. seen marks a visited function with stamp, so one slice serves
+// every walk.
+func (g *callGraph) closure(calls []string, seen []int, stamp int) []string {
+	out := map[string]bool{}
 	queue := append([]string(nil), calls...)
 	for len(queue) > 0 {
-		name := queue[0]
-		queue = queue[1:]
-		if seenFn[name] {
-			continue
-		}
-		seenFn[name] = true
-		for _, fd := range q.funcs {
-			if fd.name.Local != localOf(name) || !sameFuncName(fd.name, name) {
+		name := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		for _, i := range g.byName[name] {
+			if seen[i] == stamp {
 				continue
 			}
-			for _, v := range fd.references() {
+			seen[i] = stamp
+			for _, v := range g.refs[i] {
 				out[v] = true
 			}
-			queue = append(queue, fd.calls()...)
+			queue = append(queue, g.calls[i]...)
 		}
 	}
 	res := make([]string, 0, len(out))

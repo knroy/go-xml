@@ -205,6 +205,11 @@ type Query struct {
 	// modules: its own module store and resolver, installed on the context
 	// by prepare. Nil when the query was given neither.
 	modSrc xpath.ModuleResolver
+
+	// calls is the function-call graph over funcs and, per declared
+	// variable, the variables reachable through the functions it calls,
+	// built once at compile time; see Query.reachableVars.
+	calls *callGraph
 }
 
 // Compile compiles a query.
@@ -314,6 +319,7 @@ func Compile(src string, opts Options) (*Query, error) {
 	if err := q.checkStaticCalls(); err != nil {
 		return nil, err
 	}
+	q.calls = q.buildCallGraph()
 	return q, nil
 }
 
