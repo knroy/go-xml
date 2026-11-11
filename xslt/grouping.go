@@ -1483,75 +1483,128 @@ func (i *numberInstr) countAny(rt *runtime, node *xdm.Node) (int64, error) {
 		stop, extra = node.Parent(), node
 	}
 
-	// The candidate set in document order: everything from the root up to
-	// and including the node, minus the descendants of the node itself, is
-	// exactly preceding::node() plus ancestor-or-self::node().
-	var candidates []*xdm.Node
-	var reached bool
-	var walk func(cur *xdm.Node)
-	walk = func(cur *xdm.Node) {
-		if reached {
-			return
-		}
-		candidates = append(candidates, cur)
-		if cur == stop {
-			reached = true
-			return
-		}
-		for ch := range cur.Children() {
-			walk(ch)
-			if reached {
-				return
-			}
-		}
+	// The candidate set is the tree's nodes in document order from the root
+	// up to and including stop: preceding::node() plus ancestor-or-self.
+	// $F is the last of them matching @from (the root always does), and the
+	// answer is the number matching @count from $F on. Patterns that test
+	// only names give the same answer at every execution, so the whole tree
+	// is numbered once per transform and each execution looks it up
+	// (numberAnyMemo); a pattern with predicates may read variables or the
+	// dynamic context, so its walk is made per execution.
+	memo := i.from.predicateFreeOrNil() && i.count.predicateFreeOrNil()
+	var n int64
+	var err error
+	if memo {
+		n, err = i.countAnyMemo(rt, root, stop, node)
+	} else {
+		n, err = i.countAnyWalk(rt, root, stop, node, nil)
 	}
-	walk(root)
-	if !reached {
+	if err != nil || extra == nil {
+		return n, err
+	}
+	// The attribute or namespace node is the last candidate.
+	if ok, err := i.matchesFrom(rt, extra); err != nil {
+		return 0, err
+	} else if ok {
+		n = 0
+	}
+	if ok, err := i.matchesCount(rt, extra, node); err != nil {
+		return 0, err
+	} else if ok {
+		n++
+	}
+	return n, nil
+}
+
+// numberAnyMemo is the level="any" count of every node of one tree, for one
+// xsl:number whose patterns test only names: at[k] is the count at the node
+// with index base+k. With no @count the pattern is the numbered node's kind
+// and name, so those are part of what the table answers for.
+type numberAnyMemo struct {
+	root xdm.IdentityKey
+	kind xdm.NodeKind
+	name xdm.QName
+	base int
+	at   []uint32
+}
+
+// countAnyMemo answers countAny from the instruction's table, numbering the
+// tree first when the table is for another tree (or another kind and name).
+// One table is kept per instruction, so a stylesheet numbering many trees
+// holds the latest one only: 4 bytes a node of a tree already built, per
+// level="any" instruction, which is why it is not charged to a budget.
+func (i *numberInstr) countAnyMemo(rt *runtime, root, stop, target *xdm.Node) (int64, error) {
+	m := rt.numberAny[i]
+	k := stop.Index() - root.Index()
+	if m == nil || m.root != root.Identity() || k >= len(m.at) ||
+		i.count == nil && (m.kind != target.Kind() || m.name != target.Name()) {
+		m = &numberAnyMemo{root: root.Identity(), kind: target.Kind(), name: target.Name(),
+			base: root.Index(), at: make([]uint32, root.SubtreeEnd()-root.Index())}
+		if _, err := i.countAnyWalk(rt, root, nil, target, m); err != nil {
+			return 0, err
+		}
+		if rt.numberAny == nil {
+			rt.numberAny = map[*numberInstr]*numberAnyMemo{}
+		}
+		rt.numberAny[i] = m
+	}
+	if k < 0 || k >= len(m.at) {
 		return 0, fmt.Errorf(
 			"xsl:number: the context node is not in the tree being walked")
 	}
-	if extra != nil {
-		candidates = append(candidates, extra)
-	}
+	return int64(m.at[k]), nil
+}
 
-	// $F: the last of them matching @from. With no @from every candidate
-	// qualifies, which is the same as starting at the beginning.
-	from := -1
-	if i.from != nil {
-		for k, c := range candidates {
+// countAnyWalk walks root's tree in document order, keeping the count from
+// the last @from match, and returns it at stop; with m it walks the whole
+// tree and records the count at every node instead.
+func (i *numberInstr) countAnyWalk(rt *runtime, root, stop, target *xdm.Node,
+	m *numberAnyMemo) (int64, error) {
+	var count int64
+	step := func(c *xdm.Node) error {
+		if err := rt.ctx.Err(); err != nil {
+			return err
+		}
+		if i.from != nil {
 			ok, err := i.matchesFrom(rt, c)
 			if err != nil {
-				return 0, err
+				return err
 			}
 			if ok {
-				from = k
+				count = 0
 			}
 		}
-		if from < 0 {
-			// No node matches @from at all. Read literally, $F is then empty
-			// and so is $AF, which would make the result the empty sequence.
-			// Both the conformance suite and this package's own tests say
-			// otherwise: counting runs from the start of the document, as if
-			// @from were absent. Taking the literal reading cost five suite
-			// cases and broke a unit test that was right.
-			from = 0
-		}
-	}
-
-	var count int64
-	for k, c := range candidates {
-		if k < from {
-			continue
-		}
-		ok, err := i.matchesCount(rt, c, node)
+		ok, err := i.matchesCount(rt, c, target)
 		if err != nil {
-			return 0, err
+			return err
 		}
 		if ok {
 			count++
 		}
+		if m != nil {
+			m.at[c.Index()-m.base] = uint32(count) // indices are uint32
+		}
+		return nil
 	}
-	return count, nil
+	if err := step(root); err != nil {
+		return 0, err
+	}
+	if root == stop {
+		return count, nil
+	}
+	for c := range root.Descendants() {
+		if err := step(c); err != nil {
+			return 0, err
+		}
+		if c == stop {
+			return count, nil
+		}
+	}
+	if m != nil {
+		return count, nil
+	}
+	return 0, fmt.Errorf(
+		"xsl:number: the context node is not in the tree being walked")
 }
 
 // positionAmongSiblings counts how many preceding siblings the count pattern
@@ -1562,6 +1615,9 @@ func (i *numberInstr) positionAmongSiblings(rt *runtime, n, target *xdm.Node) (i
 	}
 	var count int64
 	for sib := range n.Parent().Children() {
+		if err := rt.ctx.Err(); err != nil {
+			return 0, err
+		}
 		ok, err := i.matchesCount(rt, sib, target)
 		if err != nil {
 			return 0, err
