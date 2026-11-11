@@ -79,10 +79,16 @@ const (
 )
 
 func newDeclTrust(root *xdm.Node, shared bool) *declTrust {
+	return newDeclTrustOf((*moduleTabs)(nil).of(root), shared)
+}
+
+// newDeclTrustOf is newDeclTrust over the module tables m (streamplan.go),
+// which it shares: nothing writes a declTrust's sets or funcs.
+func newDeclTrustOf(m *moduleTab, shared bool) *declTrust {
 	return &declTrust{
-		shared: shared || reachesOtherModules(root),
-		sets:   attributeSetDeclarations(root),
-		funcs:  withPkgFuncs(collectStreamFuncs(root), root), // streampkgfn_l7.go
+		shared: shared || m.reachesOthers(),
+		sets:   m.attrSets(),
+		funcs:  m.trustFuncs(),
 		state:  map[any]trustState{},
 	}
 }

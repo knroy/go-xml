@@ -28,6 +28,9 @@ type compiler struct {
 	stream *streamExec
 	// streamFns are the stylesheet's functions, for the split (streamcall.go).
 	streamFns map[funcKey]*streamFunc
+	// streamTabs are the module tables every streamed container of the
+	// compile is analysed with (streamplan.go).
+	streamTabs moduleTabs
 	// ruleExecs are the plans of the template rule whose body is being
 	// compiled, rulePlans the walks they are made from, by module, and
 	// streamLinks the containers whose plans apply templates, linked once
@@ -1767,7 +1770,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	entry := xpath.Function{
 		Name:      qn,
 		Arity:     len(params),
-		Call:      fn.call,
+		Call:      fn.charged(el), // functions_depth.go
 		Signature: declaredSignature(fn.returns, params),
 	}
 	c.sheet.funcs.Add(entry)

@@ -77,7 +77,7 @@ func (b *streamBuilder) prunedPopulation(el *xdm.Node) *prunedPop {
 	switch leaf, elem := testKinds(last.Test); {
 	case last.Axis == xpath.AxisAttribute:
 		p.attr = true
-	case last.Axis == xpath.AxisChild && !leaf && elem && heldByKey(el) && !copyFreeBody(el):
+	case last.Axis == xpath.AxisChild && !leaf && elem && heldByKey(el) && !copyFreeBody(el, &b.pl.tabs):
 		// Elements held for a group-by or a sort, whose body reaches more
 		// than a parentless copy has: the matches, with their ancestors.
 		p.self, p.k = true, p.k+1
@@ -92,7 +92,7 @@ func (b *streamBuilder) prunedPopulation(el *xdm.Node) *prunedPop {
 	if p.self {
 		up--
 	}
-	if !prunedInstrOK(el, true, up) {
+	if !prunedInstrOK(el, true, up, &b.pl.tabs) {
 		return nil
 	}
 	return &p
@@ -329,7 +329,7 @@ var prunedFns = map[string]bool{"generate-id": true, "root": true, "path": true,
 // says n is the grouping itself, whose select is the population's own. A
 // template applied is checked too: every rule of the stylesheet module,
 // which must import or include nothing.
-func prunedInstrOK(n *xdm.Node, top bool, up int) bool {
+func prunedInstrOK(n *xdm.Node, top bool, up int, tabs *moduleTabs) bool {
 	rules := false
 	ok := true
 	var check func(n *xdm.Node, top bool)
@@ -355,7 +355,7 @@ func prunedInstrOK(n *xdm.Node, top bool, up int) bool {
 			return
 		case xsl && (local == "apply-templates" || local == "next-match" || local == "apply-imports"):
 			rules = true
-		case xsl && local == "sequence" && n.Attr("", "select") != nil && !leafAtomic(n) && !inElement(n) &&
+		case xsl && local == "sequence" && n.Attr("", "select") != nil && !leafAtomic(n, tabs) && !inElement(n) &&
 			!mapOfAtomics(n): // streamgroup_mm5.go
 			ok = false // it could hand a member on as the node itself
 			return

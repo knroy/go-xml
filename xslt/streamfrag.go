@@ -85,9 +85,9 @@ func hasID(el *xdm.Node, id string) bool {
 
 // fragmentBody reports whether nothing in the body of el, an
 // xsl:source-document, can tell a copy of its context from the node.
-func fragmentBody(el *xdm.Node) bool {
+func fragmentBody(el *xdm.Node, tabs *moduleTabs) bool {
 	for ch := range el.Children() {
-		if !copyFreeBody(ch) {
+		if !copyFreeBody(ch, tabs) {
 			return false
 		}
 	}

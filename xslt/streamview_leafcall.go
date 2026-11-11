@@ -9,10 +9,7 @@ package xslt
 // call: when that body reads of the leaf only what the copy has, so does
 // the call. One level: a call in the inlined body is checked as a call.
 
-import (
-	"github.com/knroy/go-xml/v2/xdm"
-	"github.com/knroy/go-xml/v2/xpath"
-)
+import "github.com/knroy/go-xml/v2/xpath"
 
 // leafInlinedSafe reports whether x, a call on a stylesheet function with
 // the focus a leaf, is safe as its inlined body is.
@@ -31,17 +28,9 @@ func (vc viewCheck) leafInlinedSafe(x *xpath.FuncCall, f vfocus) bool {
 // moduleFuncs is the function table of vc.globals' module, collected once per
 // plan: collecting it for each call made N calls cost N times the module.
 func (vc viewCheck) moduleFuncs() map[funcKey]*streamFunc {
-	root := documentElementOf(vc.globals)
-	if vc.pl == nil {
-		return collectStreamFuncs(root)
+	var tabs *moduleTabs
+	if vc.pl != nil {
+		tabs = &vc.pl.tabs
 	}
-	fns, ok := vc.pl.modFns[root]
-	if !ok {
-		fns = collectStreamFuncs(root)
-		if vc.pl.modFns == nil {
-			vc.pl.modFns = map[*xdm.Node]map[funcKey]*streamFunc{}
-		}
-		vc.pl.modFns[root] = fns
-	}
-	return fns
+	return tabs.of(documentElementOf(vc.globals)).funcs()
 }

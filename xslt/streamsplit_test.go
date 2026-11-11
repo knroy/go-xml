@@ -730,7 +730,7 @@ func splitSuiteSites(t *testing.T) []splitSuiteSite {
 			return nil
 		}
 		for _, sd := range streamableContainers(tree.Root) {
-			pl := buildStreamPlan(sd, false)
+			pl := buildStreamPlan(nil, sd, false)
 			if !pl.trusted() {
 				continue
 			}

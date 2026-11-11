@@ -93,7 +93,7 @@ type burstResolver interface {
 // burstVerdict reports whether the §19.8 verdict on sd is one execution may
 // trust: known, unverified clear, and grounded (streamplan.go).
 func burstVerdict(sd *xdm.Node, shared bool) bool {
-	return buildStreamPlan(sd, shared).trusted()
+	return buildStreamPlan(nil, sd, shared).trusted()
 }
 
 // endsInAttribute reports whether the path p ends in a step on the

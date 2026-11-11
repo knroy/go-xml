@@ -43,11 +43,77 @@ type streamPlan struct {
 	// (declTrust.local): a motionless check may read a call as its body
 	// (inlinedSafe, streamlast_mm2.go).
 	funcs map[funcKey]*streamFunc
-	// sets and modFns are each module's attribute sets and functions, by
-	// its document element, made on first use for every construct planned
-	// from this record (streamcall.go useSets, streamview_leafcall.go).
-	sets   map[*xdm.Node]map[xdm.QName][]*xdm.Node
-	modFns map[*xdm.Node]map[funcKey]*streamFunc
+	// sets are each module's attribute sets, by its document element, made
+	// on first use for every construct planned from this record
+	// (streamcall.go useSets); tabs its other tables (moduleTabs), shared
+	// with the compile when the plan is a container's (planStream).
+	sets map[*xdm.Node]map[xdm.QName][]*xdm.Node
+	tabs moduleTabs
+}
+
+// moduleTabs holds what the streamed-container analysis reads of a module
+// as a whole, by its document element, each made on first use. One table
+// serves a compile's containers (compiler.streamTabs): a walk of the module
+// per container, or per xsl:sequence in one, made the analysis cost their
+// number times the module (round SM-b).
+type moduleTabs map[*xdm.Node]*moduleTab
+
+type moduleTab struct {
+	root  *xdm.Node
+	fns   map[funcKey]*streamFunc // collectStreamFuncs
+	trust map[funcKey]*streamFunc // fns with the used packages' (withPkgFuncs)
+	sets  map[xdm.QName][]*xdm.Node
+	other int8 // reachesOtherModules: 0 not asked, 1 no, 2 yes
+}
+
+// of is root's table; a fresh one, kept nowhere, when m is nil.
+func (m *moduleTabs) of(root *xdm.Node) *moduleTab {
+	if m == nil {
+		return &moduleTab{root: root}
+	}
+	if *m == nil {
+		*m = moduleTabs{}
+	}
+	t := (*m)[root]
+	if t == nil {
+		t = &moduleTab{root: root}
+		(*m)[root] = t
+	}
+	return t
+}
+
+func (t *moduleTab) funcs() map[funcKey]*streamFunc {
+	if t.fns == nil {
+		t.fns = collectStreamFuncs(t.root)
+	}
+	return t.fns
+}
+
+// trustFuncs is withPkgFuncs of the module's functions. The used packages'
+// are noted before the module's own declarations compile (compileUsePackages),
+// so before any container in it asks.
+func (t *moduleTab) trustFuncs() map[funcKey]*streamFunc {
+	if t.trust == nil {
+		t.trust = withPkgFuncs(t.funcs(), t.root) // streampkgfn_l7.go
+	}
+	return t.trust
+}
+
+func (t *moduleTab) attrSets() map[xdm.QName][]*xdm.Node {
+	if t.sets == nil {
+		t.sets = attributeSetDeclarations(t.root)
+	}
+	return t.sets
+}
+
+func (t *moduleTab) reachesOthers() bool {
+	if t.other == 0 {
+		t.other = 1
+		if reachesOtherModules(t.root) {
+			t.other = 2
+		}
+	}
+	return t.other == 2
 }
 
 // planRec is what the analysis computed for one construct.
@@ -123,13 +189,18 @@ type planFrame struct {
 }
 
 // buildStreamPlan runs the trusting walk of burstVerdict over the streamable
-// xsl:source-document sd, recording as it goes.
-func buildStreamPlan(sd *xdm.Node, shared bool, xmods ...*xdm.Node) *streamPlan {
-	t := newDeclTrust(documentElementOf(sd), shared)
+// xsl:source-document sd, recording as it goes; tabs, when not nil, are the
+// compile's module tables.
+func buildStreamPlan(tabs *moduleTabs, sd *xdm.Node, shared bool, xmods ...*xdm.Node) *streamPlan {
+	mt := tabs.of(documentElementOf(sd))
+	t := newDeclTrustOf(mt, shared)
 	t.xmods = xmods // streamtrust_xmod_l7.go
 	t.plan = &streamPlan{recs: map[any]*planRec{}, sites: map[planSite][]planRoot{}}
+	if tabs != nil {
+		t.plan.tabs = *tabs
+	}
 	if t.local() {
-		t.plan.funcs = collectStreamFuncs(documentElementOf(sd))
+		t.plan.funcs = mt.funcs()
 	}
 	p, known, unverified := sequenceConstructorVerdict(sd, postureStriding, t.sets, t.funcs, t)
 	t.plan.verdict = planRec{props: p, known: known, unverified: unverified}
