@@ -221,7 +221,7 @@ func (b *burster) viewUnder(n *Node, d int) *viewBatch {
 	}
 	for i, a := range anc {
 		vb.push(a, b.ords.at(k+i), b.gens.at(k+i))
-		b.viewCopies += 1 + a.NumAttrs()
+		b.viewCopies += 1 + a.NumAttrs() + len(a.frame())
 	}
 	return vb
 }
@@ -280,11 +280,16 @@ func (vb *viewBatch) push(s *Node, ord, gen uint64) {
 	ct := c.tree
 	c.name = ct.intern(s.Name())
 	c.flags |= fShallow | fOrigin
+	size := 1 + s.NumAttrs()
 	if f := s.frame(); len(f) > 0 {
 		c.setFrame(f)
+		// The declarations are copied into every batch the element is
+		// re-pushed into, so they count toward the path size as attribute
+		// values do: a batch then outlasts its copied ancestors, and the
+		// copying stays linear in the input.
+		size += len(f)
 	}
 	copyProps(c, s)
-	size := 1 + s.NumAttrs()
 	for a := range s.Attrs() {
 		d := c.appendAttrFrom(a.Name(), a.Value(), nil)
 		d.flags |= fOrigin
