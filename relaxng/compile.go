@@ -877,7 +877,7 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 	// The further definitions of this name are joined by the method they all
 	// declared. Combining is what makes a grammar extensible: a schema may
 	// add an alternative to a definition it did not write.
-	join := choice
+	join := choiceFold()
 	if c.how[name] == "interleave" {
 		join = interleave
 	}
