@@ -186,6 +186,10 @@ type loadCall struct {
 	done chan struct{}
 	tree *xdm.Tree
 	err  error
+	// budget is the entity budget the loader parsed under. A failure is
+	// shared only with waiters under the same one: it may be the loader's
+	// drained allowance, which says nothing about a waiter's own.
+	budget *xdm.EntityBudget
 }
 
 // resolverCacheMax bounds the parsed documents a resolver retains.
@@ -716,15 +720,19 @@ func (r *FileResolver) loadTracked(
 			// result rather than duplicating the work and the tree.
 			r.mu.Unlock()
 			<-c.done
-			if c.err != nil {
+			if c.err != nil && c.budget == b {
 				return nil, c.err
 			}
+			// A failure under another evaluation's entity budget may be
+			// that budget's refusal, which the parser reports as a
+			// malformed reference, so the waiter loads the path again
+			// under its own: errors are not cached, and the key is gone.
 			// Re-check the cache rather than trusting c.tree directly: the
 			// loop re-applies the positions rule above, so a waiter that needs
 			// positions is not handed a tree parsed without them.
 			continue
 		}
-		call := &loadCall{done: make(chan struct{})}
+		call := &loadCall{done: make(chan struct{}), budget: b}
 		if r.inflight == nil {
 			r.inflight = map[string]*loadCall{}
 		}
