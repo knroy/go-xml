@@ -102,6 +102,11 @@ type instrAnalyzer struct {
 	// parameter is not singular (§19.8.5.2).
 	param       *streamParam
 	higherOrder bool
+
+	// tmpls resolves named templates for xsl:call-template (calledTemplate),
+	// built on first use and shared by every analyzer derived from this one
+	// and, with a trust, by every analyzer of that trust.
+	tmpls templateIndex
 }
 
 // streamParam is a declared-streamable function's streaming parameter.
@@ -276,7 +281,20 @@ func (a *instrAnalyzer) sub(ctx posture, allowsChildren bool) *instrAnalyzer {
 		funcs:             a.funcs,
 		param:             a.param,
 		higherOrder:       a.higherOrder,
+		tmpls:             a.templates(),
 	}
+}
+
+// templates is a's template index, made if a has none yet.
+func (a *instrAnalyzer) templates() templateIndex {
+	if a.tmpls == nil {
+		if a.trust != nil {
+			a.tmpls = a.trust.templates()
+		} else {
+			a.tmpls = templateIndex{}
+		}
+	}
+	return a.tmpls
 }
 
 // subFocus is sub for the body of a focus-changing construct nested INSIDE an
@@ -958,7 +976,7 @@ func (a *instrAnalyzer) instructionRule(el *xdm.Node) props {
 		// target, defaulting to item()*; plus the xsl:with-param children,
 		// whose types come from the with-param or from the target's own
 		// xsl:param declarations.
-		target := calledTemplate(el)
+		target := a.templates().called(el)
 		if target == nil {
 			// The target was not found -- another package, or a name this
 			// scan does not resolve. Its declarations decide the usages, so
@@ -1250,13 +1268,20 @@ func contextItemAbsent(ci *xdm.Node) bool {
 	return false
 }
 
-// calledTemplate finds the named template an xsl:call-template refers to, whose
+// templateIndex maps each module, by its document element, to its named
+// templates by name, for calledTemplate.
+type templateIndex map[*xdm.Node]map[xdm.QName]*xdm.Node
+
+// called finds the named template an xsl:call-template refers to, whose
 // xsl:context-item and xsl:param declarations §19.8.4.9 needs.
 //
 // It returns nil when the template is not in this stylesheet -- declared in
 // another package, say. The caller treats that as unmodelled rather than
 // assuming a default, because those declarations are what decide the usages.
-func calledTemplate(el *xdm.Node) *xdm.Node {
+//
+// The module's templates are indexed on its first call and looked up after:
+// walking the module for each call made N calls cost N times the module.
+func (ix templateIndex) called(el *xdm.Node) *xdm.Node {
 	raw := strings.TrimSpace(el.AttrValue("name"))
 	if raw == "" {
 		return nil
@@ -1269,23 +1294,25 @@ func calledTemplate(el *xdm.Node) *xdm.Node {
 	if root == nil {
 		return nil
 	}
-	var found *xdm.Node
-	walkElements(root, func(d *xdm.Node) bool {
-		if !isXSL(d, "template") {
+	byName, ok := ix[root]
+	if !ok {
+		byName = map[xdm.QName]*xdm.Node{}
+		walkElements(root, func(d *xdm.Node) bool {
+			if !isXSL(d, "template") {
+				return true
+			}
+			nm := strings.TrimSpace(d.AttrValue("name"))
+			if nm == "" {
+				return true
+			}
+			if got, err := resolveQNameAttr(d, nm); err == nil {
+				byName[got] = d // the last of a name, as the walk per call found
+			}
 			return true
-		}
-		nm := strings.TrimSpace(d.AttrValue("name"))
-		if nm == "" {
-			return true
-		}
-		got, err := resolveQNameAttr(d, nm)
-		if err != nil || got != want {
-			return true
-		}
-		found = d
-		return false
-	})
-	return found
+		})
+		ix[root] = byName
+	}
+	return byName[want]
 }
 
 // bodyCallsAny reports whether any XPath expression held in an attribute of el
