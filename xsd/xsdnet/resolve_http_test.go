@@ -151,7 +151,10 @@ func TestInstanceLocationsUnderHTTPResolverStayRooted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, loc := range []string{evil, "../outside/evil.xsd", fileuri.Of(evil)} {
+	// The file: scheme is case-insensitive, and an upper-case spelling was
+	// checked as a relative path and opened as the absolute one.
+	u := fileuri.Of(evil)
+	for _, loc := range []string{evil, "../outside/evil.xsd", u, "FILE" + u[4:], "fIlE" + u[4:]} {
 		tree, err := xdm.ParseString(`<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`+
 			` xsi:noNamespaceSchemaLocation="`+loc+`"><x>1</x></doc>`, xdm.ParseOptions{})
 		if err != nil {

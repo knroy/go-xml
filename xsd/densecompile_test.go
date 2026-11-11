@@ -234,3 +234,34 @@ func TestFollowPiecesMatchFollowSets(t *testing.T) {
 		}
 	}
 }
+
+// A DTD may write a repeated choice of identical alternatives, which compiles
+// shared and is legal: <!ELEMENT r (a|a|...|a)*>. Its N alternatives are N
+// live states after every <a/>, and each walked the same N-wide follow run,
+// N² per child: 0.8 s per child at N=4096. Each run is walked once per child
+// now, as the walk's result does not depend on which state reached it.
+func TestSequenceMatcherIdenticalAlternativesLinear(t *testing.T) {
+	const n, kids = 4096, 4
+	ps := make([]*Particle, n)
+	for i := range ps {
+		ps[i] = &Particle{MinOccurs: 1, MaxOccurs: 1,
+			Term: &ElementDecl{Name: xdm.QName{Local: "a"}}}
+	}
+	sm, err := NewSequenceMatcher(&Particle{MinOccurs: 0, MaxOccurs: Unbounded,
+		Term: &ModelGroup{Compositor: CompositorChoice, Particles: ps}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := slices.Repeat([]xdm.QName{{Local: "a"}}, kids)
+	var ok bool
+	stats := withStats(func() { ok, _ = sm.Match(names) })
+	if !ok {
+		t.Fatal("four <a/> match (a|a|...|a)*")
+	}
+	if got := stats.MatchSteps.Load(); got > 4*n*kids {
+		t.Errorf("matching %d children examined %d follow members, want at most %d", kids, got, 4*n*kids)
+	}
+	if ok, at := sm.Match([]xdm.QName{{Local: "a"}, {Local: "b"}}); ok || at != 1 {
+		t.Errorf("Match(a b) = %v at %d, want a rejection at 1", ok, at)
+	}
+}

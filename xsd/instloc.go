@@ -64,7 +64,8 @@ type InstanceLocationPolicy struct {
 	Resolver Resolver
 
 	// MaxDocuments bounds how many documents the instance may pull in.
-	// Zero means DefaultMaxDocuments.
+	// A location that is fetched and then declined counts as one. Zero
+	// means DefaultMaxDocuments.
 	MaxDocuments int
 }
 
@@ -200,19 +201,26 @@ func (s *Schema) WithInstanceLocations(root *xdm.Node, policy InstanceLocationPo
 // locations through an unrooted FileResolver, and every path LoadFiles is
 // given resolves against an empty base, so its refusal of a local location
 // under a remote base never applies. A remote location is the resolver's to
-// judge. A file: URL is passed on as written and checked as the path it names.
+// judge.
+//
+// What is returned is the path that was checked, never the location as
+// written, so that no second reading of the text can name another file. A
+// file: URL is converted with its scheme in any case, which RFC 3986 §3.1
+// makes case-insensitive: url.Parse lowercases it, fileuri.ToPath does not,
+// and passing "FILE:///etc/x" on as written had it checked as a relative path
+// under base and opened by an unrooted resolver as the absolute one.
 func instanceLocalPath(loc, base string, dirs []string) (string, error) {
 	if isRemote(loc) {
 		return loc, nil
 	}
-	p, full := loc, ""
+	p := loc
 	if u, err := url.Parse(loc); err == nil && u.Scheme == "file" {
 		if u.Host != "" && u.Host != "localhost" {
 			return "", fmt.Errorf(
 				"schemaLocation %q names the remote host %q; only local "+
 					"files are permitted", loc, u.Host)
 		}
-		p, full = fileuri.ToPath(loc), loc
+		p = fileuri.ToPath("file" + loc[len("file"):])
 	}
 	// A network spelling is refused as written as well as once joined: on
 	// Unix `\\host\share` is relative and the join hides it, and deciding it
@@ -221,15 +229,12 @@ func instanceLocalPath(loc, base string, dirs []string) (string, error) {
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(base, p)
 	}
-	if full == "" {
-		full = p
-	}
 	if foreign || !insideDirs(p, dirs) {
 		return "", fmt.Errorf(
 			"schemaLocation %q in the instance resolves outside the "+
 				"directories the schema was loaded from: %w", loc, errRefusedByPolicy)
 	}
-	return full, nil
+	return p, nil
 }
 
 // insideDirs reports whether p lies inside one of dirs once both are resolved,

@@ -540,6 +540,11 @@ func loadFiles(paths []string, opts Options, named map[int]instanceLocation) (*S
 		p:         &parser{schema: s, attrsDone: map[*ComplexType]bool{}, assembled: true},
 	}
 
+	// A declined instance location is charged to MaxDocuments as a
+	// document read, which is what it cost: a resolver call, and a parse
+	// when the namespace is wrong. It never enters the queue admitFetch
+	// counts, so without the charge an instance naming N locations cost N
+	// fetches whatever the bound.
 	for i, path := range paths {
 		if err := a.admitFetch(); err != nil {
 			return nil, err
@@ -552,6 +557,7 @@ func loadFiles(paths []string, opts Options, named map[int]instanceLocation) (*S
 			if rc != nil {
 				rc.Close()
 			}
+			a.count++
 			continue
 		}
 		if err != nil {
@@ -575,6 +581,7 @@ func loadFiles(paths []string, opts Options, named map[int]instanceLocation) (*S
 		// document is declined like a namespace the policy refuses.
 		if isInst {
 			if got, has := targetNSOf(tree.Root); has != (inst.namespace != "") || got != inst.namespace {
+				a.count++
 				continue
 			}
 		}

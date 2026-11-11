@@ -738,15 +738,33 @@ func inlinable(p *Particle, outer Compositor) bool {
 // not the same as being ·emptiable·: an optional element is emptiable but is
 // still a particle the table has a row for, and collapsing it here would
 // discard the name check that makes a restriction meaningful.
+//
+// Whether a group's members are all ignorable depends on the group alone, so
+// it is decided once per *ModelGroup, as effectiveTotalRange's total is.
 func particleIgnorable(p *Particle) bool {
+	return particleIgnorableIn(p, map[*ModelGroup]bool{})
+}
+
+func particleIgnorableIn(p *Particle, memo map[*ModelGroup]bool) bool {
 	g, ok := p.Term.(*ModelGroup)
 	if !ok {
 		return false
 	}
-	for _, child := range g.Particles {
-		if !particleIgnorable(child) {
-			return false
+	members, done := memo[g]
+	if !done {
+		memo[g] = false // a cycle is reported elsewhere; do not follow it
+		countRangeStep()
+		members = true
+		for _, child := range g.Particles {
+			if !particleIgnorableIn(child, memo) {
+				members = false
+				break
+			}
 		}
+		memo[g] = members
+	}
+	if !members {
+		return false
 	}
 	// A <choice> with no alternatives matches nothing at all rather than
 	// the empty sequence, so the spec erases it only when the containing
@@ -1732,19 +1750,66 @@ func particleEmptiable(p *Particle) bool {
 // The distinction from the particle's own occurrence range is the point: a
 // sequence of three elements repeated twice contributes six, and it is that
 // total — not the two — that a wildcard restriction must accommodate.
+//
+// A group's total before its own occurrence range depends on the group alone,
+// so it is computed once per *ModelGroup: named groups are shared, and a walk
+// per particle visits a group once per path to it, 2^(n-1) times for n groups
+// that each reference the next twice.
 func effectiveTotalRange(p *Particle) occRange {
+	return effectiveTotalRangeIn(p, map[*ModelGroup]groupTotal{})
+}
+
+// groupTotal is the part of a group's Effective Total Range its particle's
+// occurrence range does not touch.
+type groupTotal struct {
+	acc                         occRange
+	maxUnbounded, anyNonZeroMax bool
+}
+
+func effectiveTotalRangeIn(p *Particle, memo map[*ModelGroup]groupTotal) occRange {
 	g, ok := p.Term.(*ModelGroup)
 	if !ok {
 		return occursOf(p)
 	}
+	// An empty group contributes nothing, whatever its occurrence range.
+	if len(g.Particles) == 0 {
+		return occRange{}
+	}
+	tot, done := memo[g]
+	if !done {
+		memo[g] = groupTotal{} // a cycle is reported elsewhere; do not follow it
+		countRangeStep()
+		tot = groupTotalOf(g, memo)
+		memo[g] = tot
+	}
+	acc, maxUnbounded, anyNonZeroMax := tot.acc, tot.maxUnbounded, tot.anyNonZeroMax
 
+	out := occRange{}
+	out.min, out.eMin = mulExact(acc.min, acc.eMin, p.MinOccurs, p.exactMin)
+	switch {
+	case maxUnbounded:
+		out.max = Unbounded
+	case p.MaxOccurs == Unbounded:
+		if anyNonZeroMax {
+			out.max = Unbounded
+		} else {
+			out.max = 0
+		}
+	default:
+		out.max, out.eMax = mulExact(acc.max, acc.eMax, p.MaxOccurs, p.exactMax)
+	}
+	return out
+}
+
+// groupTotalOf folds g's members' Effective Total Ranges.
+func groupTotalOf(g *ModelGroup, memo map[*ModelGroup]groupTotal) groupTotal {
 	var acc occRange
 	first := true
 	maxUnbounded := false
 	anyNonZeroMax := false
 
 	for _, child := range g.Particles {
-		c := effectiveTotalRange(child)
+		c := effectiveTotalRangeIn(child, memo)
 		if c.max == Unbounded {
 			maxUnbounded = true
 			anyNonZeroMax = true
@@ -1772,26 +1837,7 @@ func effectiveTotalRange(p *Particle) occRange {
 		}
 		first = false
 	}
-	// An empty group contributes nothing, whatever its occurrence range.
-	if len(g.Particles) == 0 {
-		return occRange{}
-	}
-
-	out := occRange{}
-	out.min, out.eMin = mulExact(acc.min, acc.eMin, p.MinOccurs, p.exactMin)
-	switch {
-	case maxUnbounded:
-		out.max = Unbounded
-	case p.MaxOccurs == Unbounded:
-		if anyNonZeroMax {
-			out.max = Unbounded
-		} else {
-			out.max = 0
-		}
-	default:
-		out.max, out.eMax = mulExact(acc.max, acc.eMax, p.MaxOccurs, p.exactMax)
-	}
-	return out
+	return groupTotal{acc, maxUnbounded, anyNonZeroMax}
 }
 
 // asSubstitutionChoice expands an element declaration particle into the choice

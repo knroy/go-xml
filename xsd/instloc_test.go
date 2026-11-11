@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -297,7 +298,11 @@ func TestInstanceLocationConfinedWhateverResolver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, loc := range []string{evil, rel, fileuri.Of(evil)} {
+	// The scheme is case-insensitive (RFC 3986 §3.1). An upper-case one
+	// was checked as a relative path under the schema directory and then
+	// opened, by the unrooted resolver, as the absolute file it names.
+	u := fileuri.Of(evil)
+	for _, loc := range []string{evil, rel, u, "FILE" + u[4:], "File" + u[4:]} {
 		doc := `<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"` +
 			` xsi:noNamespaceSchemaLocation="` + loc + `"><x>1</x></doc>`
 		tree, err := xdm.ParseString(doc, xdm.ParseOptions{})
@@ -369,6 +374,16 @@ func TestInstanceLocalPathRefusesNetworkPaths(t *testing.T) {
 	if got, err := instanceLocalPath("a.xsd", dirs[0], dirs); err != nil ||
 		got != filepath.Join(dirs[0], "a.xsd") {
 		t.Errorf("instanceLocalPath(a.xsd) = %q, %v", got, err)
+	}
+	// The path checked is the path returned, whatever the scheme's case.
+	in := filepath.Join(dirs[0], "a.xsd")
+	for _, loc := range []string{fileuri.Of(in), "FILE" + fileuri.Of(in)[4:]} {
+		if got, err := instanceLocalPath(loc, dirs[0], dirs); err != nil || got != in {
+			t.Errorf("instanceLocalPath(%q) = %q, %v, want %q", loc, got, err, in)
+		}
+	}
+	if _, err := instanceLocalPath("FILE://host/share/x.xsd", dirs[0], dirs); err == nil {
+		t.Error("instanceLocalPath(FILE://host/...) was admitted")
 	}
 	if got, err := instanceLocalPath("https://e.example/a.xsd", dirs[0], dirs); err != nil ||
 		got != "https://e.example/a.xsd" {
@@ -450,5 +465,49 @@ func TestInstanceOriginErrorsQuoteOnlyLocations(t *testing.T) {
 	_, err = LoadFiles([]string{filepath.Join(dir, "inc.xsd")}, Options{})
 	if err == nil || !leaks(err.Error()) {
 		t.Errorf("the caller's own load should keep the resolved path: %v", err)
+	}
+}
+
+// Every location an instance offers is a fetch, and MaxDocuments bounds the
+// fetches whether or not the document is then taken. A declined location
+// never entered the queue the bound counts, so 200 locations that each fail
+// to resolve, or each name the wrong namespace, cost 200 resolver calls
+// under MaxDocuments=4.
+func TestDeclinedInstanceLocationsCountAgainstMaxDocuments(t *testing.T) {
+	dir, main := writeSchemaSet(t)
+	s, err := LoadFiles([]string{main}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, write := range map[string]bool{"missing": false, "wrong namespace": true} {
+		var b strings.Builder
+		b.WriteString(`<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="`)
+		for i := 0; i < 200; i++ {
+			loc := fmt.Sprintf("d%d.xsd", i)
+			if write {
+				if err := os.WriteFile(filepath.Join(dir, loc), []byte(
+					`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:else"/>`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fmt.Fprintf(&b, " urn:other %s", loc)
+		}
+		b.WriteString(`"><b xmlns="urn:other">x</b></doc>`)
+		tree, err := xdm.ParseString(b.String(), xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := &countingResolver{Resolver: RootedFileResolver([]string{main})}
+		_, err = s.WithInstanceLocations(tree.Root, InstanceLocationPolicy{
+			AllowNamespace: func(string) bool { return true },
+			Resolver:       r,
+			MaxDocuments:   4,
+		}, Options{})
+		if err == nil || !strings.Contains(err.Error(), "more than 4 documents") {
+			t.Errorf("%s: WithInstanceLocations = %v, want the document bound's refusal", name, err)
+		}
+		if r.fetches > 4 {
+			t.Errorf("%s: the resolver was asked %d times under MaxDocuments=4", name, r.fetches)
+		}
 	}
 }

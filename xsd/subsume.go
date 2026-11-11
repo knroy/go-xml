@@ -83,6 +83,11 @@ type budgetStats struct {
 	// TestGroupDAGLoadsInGraphTime asserts on.
 	GroupCycleSteps atomic.Uint64
 	NestedAllSteps  atomic.Uint64
+	// RangeSteps counts the groups effectiveTotalRange and
+	// particleIgnorable expanded, for the same assertion.
+	RangeSteps atomic.Uint64
+	// MatchSteps counts the follow-set members matchNames examined.
+	MatchSteps atomic.Uint64
 }
 
 // budgetStatsHook lets a caller observe the declines of the next schema loads.
@@ -127,6 +132,19 @@ func countGroupCycleStep() {
 
 func countNestedAllStep() {
 	declined(func(s *budgetStats) *atomic.Uint64 { return &s.NestedAllSteps })
+}
+
+func countMatchStep(n int) {
+	if budgetStatsHook == nil {
+		return
+	}
+	if st := budgetStatsHook(); st != nil {
+		st.MatchSteps.Add(uint64(n))
+	}
+}
+
+func countRangeStep() {
+	declined(func(s *budgetStats) *atomic.Uint64 { return &s.RangeSteps })
 }
 
 // subsumeMaxStates caps the unrolled NFA for either side.

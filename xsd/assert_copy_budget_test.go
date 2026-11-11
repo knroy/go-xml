@@ -155,3 +155,91 @@ func TestAlternativeScopeNamespacesLinear(t *testing.T) {
 		t.Errorf("20 alternatives under 1,000 declarations allocated %d MB", n>>20)
 	}
 }
+
+// The attributes of an asserted subtree are copied by every asserted ancestor
+// and are charged like its nodes. 50 levels over 41,000 attributes on the
+// innermost element copy about 2.05 million of them, past xpath.MaxNodes.
+func TestNestedAssertionAttributeCopiesAreBudgeted(t *testing.T) {
+	s := loadAssertionSchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">`+
+		`<xs:complexType name="T"><xs:sequence><xs:element ref="s" minOccurs="0"/></xs:sequence>`+
+		`<xs:anyAttribute processContents="skip"/>`+
+		`<xs:assert test="exists(.)"/></xs:complexType>`+
+		`<xs:element name="s" type="T"/></xs:schema>`)
+	nested := func(depth int) *xdm.Node {
+		var b strings.Builder
+		b.WriteString(strings.Repeat("<s>", depth-1))
+		b.WriteString("<s")
+		for i := 0; i < 41000; i++ {
+			fmt.Fprintf(&b, ` a%d=""`, i)
+		}
+		b.WriteString("/>")
+		b.WriteString(strings.Repeat("</s>", depth-1))
+		doc, err := xdm.ParseString(b.String(), xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return doc.Root
+	}
+	if err := s.Validate(nested(1), ValidateOptions{}); err != nil {
+		t.Fatalf("one asserted level over 41,000 attributes was refused: %v", err)
+	}
+	err := s.Validate(nested(50), ValidateOptions{})
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Fatalf("Validate = %v, want the node budget's refusal", err)
+	}
+}
+
+// inScopeDoc is n children <c/> under a root declaring k namespaces.
+func inScopeDoc(t *testing.T, k, n int) *xdm.Node {
+	t.Helper()
+	doc, err := xdm.ParseString(`<r`+nsDecls(k)+`>`+strings.Repeat("<c/>", n)+`</r>`,
+		xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc.Root
+}
+
+// The in-scope bindings an assertion's or an alternative's copy carries are
+// charged one apiece: declared once on the root, they are copied once per
+// child. 20,000 bindings under 101 children copy about 2.02 million.
+func TestScopeCopyBindingsAreBudgeted(t *testing.T) {
+	for _, c := range []struct{ name, decl string }{
+		{"assertion", `<xs:element name="c" maxOccurs="unbounded"><xs:complexType>` +
+			`<xs:assert test="true()"/></xs:complexType></xs:element>`},
+		{"alternative", `<xs:element name="c" maxOccurs="unbounded">` +
+			`<xs:alternative test="@a = '1'" type="xs:string"/>` +
+			`<xs:alternative type="xs:anyType"/></xs:element>`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := loadAssertionSchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">`+
+				`<xs:element name="r"><xs:complexType><xs:sequence>`+c.decl+
+				`</xs:sequence></xs:complexType></xs:element></xs:schema>`)
+			if err := s.Validate(inScopeDoc(t, 20000, 90), ValidateOptions{}); err != nil {
+				t.Fatalf("90 children under 20,000 bindings were refused: %v", err)
+			}
+			err := s.Validate(inScopeDoc(t, 20000, 101), ValidateOptions{})
+			if !errors.Is(err, xdm.ErrResourceLimit) {
+				t.Fatalf("Validate = %v, want the node budget's refusal", err)
+			}
+		})
+	}
+}
+
+// A type alternative whose test the budget refuses is no verdict. It was
+// taken for a false test, so the element fell through to the default
+// alternative and escaped the xs:error one: the document was reported valid.
+func TestAlternativeRefusalIsNotFalse(t *testing.T) {
+	s := loadAssertionSchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">`+
+		`<xs:element name="r">`+
+		`<xs:alternative test="count(reverse(1 to 5000001)) gt 0" type="xs:error"/>`+
+		`<xs:alternative type="xs:anyType"/></xs:element></xs:schema>`)
+	doc, err := xdm.ParseString(`<r/>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Validate(doc.Root, ValidateOptions{})
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Fatalf("Validate = %v, want the item budget's refusal", err)
+	}
+}
