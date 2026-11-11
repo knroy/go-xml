@@ -595,6 +595,13 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 			sb.WriteString("<![" + kw + subset[body:end])
 			i = end
 			continue
+		} else if end < 0 {
+			// An IGNORE section that never closes runs to the end of the
+			// text, so nothing after it is a reference; the grammar check
+			// refuses it. Stopping here keeps the pass linear: rescanning
+			// the tail from every later "<![" cost O(k*n).
+			sb.WriteString(subset[i:])
+			break
 		}
 		if subset[i] != '%' {
 			sb.WriteByte(subset[i])
@@ -678,8 +685,8 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 // parameter entity whose replacement text is IGNORE, and "[". It returns the
 // keyword as substituted, the offset of the "[", and the offset just past the
 // section's "]]>", counting nested sections as §3.4 [64] does; end is i when
-// s[i:] is no such section or is unterminated, which the grammar check
-// refuses.
+// s[i:] is no such section, and -1 when it is one that is unterminated, which
+// the grammar check refuses.
 func ignoredSection(s string, i int, params map[string]paramEntity) (kw string, body, end int) {
 	if !strings.HasPrefix(s[i:], "<![") {
 		return "", i, i
@@ -727,7 +734,7 @@ func ignoredSection(s string, i int, params map[string]paramEntity) (kw string, 
 			j += 2
 		}
 	}
-	return "", i, i
+	return "", i, -1
 }
 
 // paramEntity is a parameter-entity declaration: internal replacement text, or
@@ -826,7 +833,17 @@ func endOfDTDConstruct(s string, i int) int {
 		}
 		return i + len("<!--") + end + len("-->")
 	}
-	if !strings.HasPrefix(rest, "<!") && !strings.HasPrefix(rest, "<?") {
+	if strings.HasPrefix(rest, "<?") {
+		// A PI ends at "?>" (§2.6), as the tokenizer and the grammar read it,
+		// not at its first ">": its body is opaque, not scanned for
+		// references or section starts.
+		end := strings.Index(rest[len("<?"):], "?>")
+		if end < 0 {
+			return len(s)
+		}
+		return i + len("<?") + end + len("?>")
+	}
+	if !strings.HasPrefix(rest, "<!") {
 		return i
 	}
 	end := endOfDeclaration(rest)
