@@ -535,6 +535,19 @@ func (p *parser) finish() error {
 		}
 	}
 
+	// Circular base type definitions and circular unions (st-props-correct.2)
+	// are diagnosed as soon as the drain has bound every base and member slot:
+	// before that point {base type definition} and the member slots are nil
+	// everywhere. They run ahead of every later check because those checks
+	// walk the same graphs; a schema found circular here skips them, since
+	// it is already in error and a walk over a cycle proves nothing. The
+	// value checks queued inside the drain itself go through the memoised
+	// union walk (validateUnionValueMemo), which stays finite on a cycle.
+	nerrs := len(p.errs)
+	p.checkTypeBaseCycles()
+	p.checkUnionMemberCycles()
+	circular := len(p.errs) > nerrs
+
 	// Substitute the referenced component for every ref= placeholder, now
 	// that the fixups above have resolved them. This runs after the whole
 	// fixup drain because a placeholder may name a keyref whose own refer=
@@ -559,7 +572,7 @@ func (p *parser) finish() error {
 	// Checks that need every fixup to have run, including the fixups other
 	// fixups queue: a value constraint is validated against a type whose
 	// own members and base are themselves filled in by fixups.
-	for i := 0; i < len(p.postFixups); i++ {
+	for i := 0; !circular && i < len(p.postFixups); i++ {
 		if err := p.postFixups[i](); err != nil {
 			p.errs = append(p.errs, err)
 		}
@@ -575,17 +588,13 @@ func (p *parser) finish() error {
 	// check is looking for does not exist in the component graph yet.
 	p.checkGroupCycles()
 
-	// Circular base type definitions, once every base reference has been
-	// bound. Same ordering reason as the two cycle checks above: before the
-	// fixups drain, {base type definition} is nil everywhere.
-	p.checkTypeBaseCycles()
-	p.checkUnionMemberCycles()
-
 	// The Part 2 facet constraints run last, once every base reference has
 	// been bound: they compare a facet against the base's primitive and
 	// against the facets the base itself set, neither of which is known
 	// while the restriction is being read.
-	p.checkFacetConstraints()
+	if !circular {
+		p.checkFacetConstraints()
+	}
 
 	if len(p.errs) == 0 {
 		return nil

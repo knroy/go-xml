@@ -956,33 +956,53 @@ func (v *validator) derivedFrom(t, want Type) bool {
 	// would let the instance escape the facets — which is what saxonData
 	// simple016.n01.xml does with xsi:type="xs:date" against a union whose
 	// member is a union restricted by a pattern.
-	if u, ok := want.(*SimpleType); ok && u.Variety == VarietyUnion &&
-		unionIsPure(u) {
-		for _, m := range u.MemberTypes {
-			if m != nil && v.derivedFrom(t, m) {
-				return true
-			}
-		}
-	}
+	return derivesThroughUnions(t, want, unionIsPure)
+}
 
-	// A malformed schema can build a cycle that is not a self-loop, so the
-	// walk terminates on a repeated component rather than on a count.
-	seen := map[Type]bool{}
-	for cur := t; cur != nil && !seen[cur]; {
-		seen[cur] = true
-		if cur == want {
-			return true
-		}
+// derivesThroughUnions reports whether t's base chain reaches want or, for
+// every union u that follow admits, one of u's members, transitively.
+//
+// The base chain of t is walked once into a set, then the union-member DAG
+// under want is walked breadth-first with a visited set. Each type is
+// examined once, so unions sharing members cost the size of the graph rather
+// than the number of paths through it, and a malformed schema's cycle (in
+// either the base chain or the member graph) terminates.
+func derivesThroughUnions(t, want Type, follow func(*SimpleType) bool) bool {
+	if t == want {
+		return t != nil
+	}
+	chain := map[Type]bool{}
+	names := map[xdm.QName]bool{}
+	for cur := t; cur != nil && !chain[cur]; {
+		chain[cur] = true
 		// Comparing by name as well catches the case where a built-in
 		// was reached through two different schema loads.
-		if n := cur.TypeName(); n.Local != "" && n == want.TypeName() {
-			return true
+		if n := cur.TypeName(); n.Local != "" {
+			names[n] = true
 		}
 		base := cur.BaseType()
-		if base == cur || base == nil {
-			return false
+		if base == cur {
+			break
 		}
 		cur = base
+	}
+	visited := map[Type]bool{want: true}
+	queue := []Type{want}
+	for i := 0; i < len(queue); i++ {
+		w := queue[i]
+		if chain[w] || names[w.TypeName()] {
+			return true
+		}
+		u, ok := w.(*SimpleType)
+		if !ok || u.Variety != VarietyUnion || !follow(u) {
+			continue
+		}
+		for _, m := range u.MemberTypes {
+			if m != nil && !visited[m] {
+				visited[m] = true
+				queue = append(queue, m)
+			}
+		}
 	}
 	return false
 }
@@ -2079,9 +2099,8 @@ func (v *validator) openContentWithSiblings(t *ComplexType) *OpenContent {
 		}
 	}
 
-	w := *t.OpenContent.Wildcard
-	w.siblingNames = names
-	oc := &OpenContent{Mode: t.OpenContent.Mode, Wildcard: &w}
+	oc := &OpenContent{Mode: t.OpenContent.Mode,
+		Wildcard: t.OpenContent.Wildcard.withSiblingNames(names)}
 	v.openContents[t] = oc
 	return oc
 }
@@ -2150,21 +2169,31 @@ func effectiveValue(el *xdm.Node, decl *ElementDecl) string {
 // apply to the group as a unit, which is a different thing from applying them
 // to each member, and the members' own bounds could not express it.
 func flattenAll(g *ModelGroup) []*Particle {
-	return flattenAllSeen(g, map[*ModelGroup]bool{})
+	return flattenAllSeen(g, map[*ModelGroup]bool{}, map[*ModelGroup]int{})
 }
 
-// flattenAllSeen carries the set of groups already entered.
+// flattenAllSeen carries the set of groups currently entered and the number
+// of times each group has been inlined.
 //
 // A group definition whose content references itself is a cycle, and following
 // it would recurse until the stack is gone. Stopping at a repeat drops the
 // self-reference rather than looping; the schema is ill-formed either way, and
 // the content-model compiler reports it.
-func flattenAllSeen(g *ModelGroup, seen map[*ModelGroup]bool) []*Particle {
-	if seen[g] {
+//
+// A group shared through two references is inlined twice: that duplicate is
+// what the Unique Particle Attribution check reports (two particles that match
+// the same element). A third copy adds nothing that check does not already
+// see, and copying a shared group once per path is what made a DAG of shared
+// all groups expand exponentially before any position bound was consulted.
+// Inlining each group at most twice keeps the output linear in the size of
+// the group graph.
+func flattenAllSeen(g *ModelGroup, active map[*ModelGroup]bool, inlined map[*ModelGroup]int) []*Particle {
+	if active[g] || inlined[g] >= 2 {
 		return nil
 	}
-	seen[g] = true
-	defer delete(seen, g)
+	active[g] = true
+	inlined[g]++
+	defer delete(active, g)
 
 	nested := false
 	for _, p := range g.Particles {
@@ -2179,7 +2208,7 @@ func flattenAllSeen(g *ModelGroup, seen map[*ModelGroup]bool) []*Particle {
 	var out []*Particle
 	for _, p := range g.Particles {
 		if inner := allGroupOf(p); inner != nil {
-			out = append(out, flattenAllSeen(inner, seen)...)
+			out = append(out, flattenAllSeen(inner, active, inlined)...)
 			continue
 		}
 		out = append(out, p)

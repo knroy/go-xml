@@ -1114,30 +1114,9 @@ func typeDerivedFrom(t, want Type) bool {
 	if want == nil || t == nil {
 		return true
 	}
-	// A member of a union is validly derived from it (§3.14.6 clause 2.2.3).
-	if u, ok := want.(*SimpleType); ok && u.Variety == VarietyUnion {
-		for _, m := range u.MemberTypes {
-			if m != nil && typeDerivedFrom(t, m) {
-				return true
-			}
-		}
-	}
-	seen := map[Type]bool{}
-	for cur := t; cur != nil && !seen[cur]; {
-		seen[cur] = true
-		if cur == want {
-			return true
-		}
-		if n := cur.TypeName(); n.Local != "" && n == want.TypeName() {
-			return true
-		}
-		base := cur.BaseType()
-		if base == cur || base == nil {
-			return false
-		}
-		cur = base
-	}
-	return false
+	// A member of a union is validly derived from it (§3.14.6 clause 2.2.3),
+	// for every union variety, pure or not.
+	return derivesThroughUnions(t, want, func(*SimpleType) bool { return true })
 }
 
 // checkTypeTables applies typeAlternativesOK to every element declaration in
