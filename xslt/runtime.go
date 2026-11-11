@@ -1592,10 +1592,21 @@ func globalRefs(g *Variable) []string {
 		// available -- see bodyVariableRefs.
 		return g.bodyRefs
 	}
-	// bodyRefs is non-empty here only for a global whose select expression
-	// calls an xsl:function: foldFunctionRefsIntoGlobals put that function's
-	// own references there, and they are dependencies of this global just as
-	// much as the names it writes itself.
+	// The variables named by the xsl:functions it calls are dependencies of
+	// this global just as much as the names it writes itself; see
+	// foldFunctionRefsIntoGlobals.
+	refs := ownGlobalRefs(g)
+	if g.fdeps != nil {
+		refs = g.fdeps.appendRefs(refs, g)
+	}
+	return refs
+}
+
+// ownGlobalRefs is globalRefs without what the functions g calls name.
+func ownGlobalRefs(g *Variable) []string {
+	if g.Select == nil {
+		return g.bodyRefs
+	}
 	return append(variableRefsIn(g.Select.Source(), g.selectNS), g.bodyRefs...)
 }
 
@@ -1843,62 +1854,173 @@ func (rt *runtime) noteUnbound(bits uint8) {
 }
 
 // markGlobalOrder sets Variable.selfRef and Variable.eager. It runs once
-// every module has compiled and foldFunctionRefsIntoGlobals has added the
-// references made through stylesheet functions, since globalRefs reads those
-// too.
+// every module has compiled and foldFunctionRefsIntoGlobals has recorded the
+// functions each global calls, since globalRefs reads through those too.
 //
 // A global is eager when it has effects, names itself, or reaches a cycle of
 // globalRefs dependencies: evaluated at the start, in declaration order and
 // dependencies first, a circularity is reported naming the global it named
 // when every global was evaluated that way.
+//
+// The walk is over globals and xsl:functions together, each function a node
+// of its own, so a function many globals call is followed once rather than
+// once per caller: time and space are linear in the references. globalRefs
+// leaves a global's own name out of what its functions name, and that is the
+// one difference from the globals-only graph: a cycle g -> f -> g through
+// functions alone is not a dependency of g on itself. So a strongly connected
+// component is a cycle of globalRefs exactly when it holds two globals or
+// more, and a global reaches a cycle when its component is one or leads to
+// one.
 func (c *compiler) markGlobalOrder() {
-	byName := make(map[string]*Variable, len(c.sheet.globals))
-	for _, g := range c.sheet.globals {
+	globals := c.sheet.globals
+	byName := make(map[string]int32, len(globals))
+	for i, g := range globals {
 		if _, dup := byName[g.Name.Clark()]; !dup {
-			byName[g.Name.Clark()] = g
+			byName[g.Name.Clark()] = int32(i)
 		}
 	}
-	// A depth-first walk: meeting a variable still on the walk's path is a
-	// cycle, and everything on the path from it reaches that cycle.
-	const (
-		unseen = iota
-		onPath
-		finished
-	)
-	mark := map[*Variable]int{}
-	reaches := map[*Variable]bool{}
-	var walk func(g *Variable) bool
-	walk = func(g *Variable) bool {
-		switch mark[g] {
-		case onPath:
-			return true
-		case finished:
-			return reaches[g]
+	// Nodes 0..len(globals)-1 are the globals; a function gets the next
+	// number the first time an edge reaches it.
+	adj := make([][]int32, len(globals))
+	fnID := map[string]int32{}
+	var fnNames []string
+	fn := func(name string) (int32, bool) {
+		if id, ok := fnID[name]; ok {
+			return id, true
 		}
-		mark[g] = onPath
-		r := false
-		for _, dep := range globalRefs(g) {
+		if len(c.funcRefs[name]) == 0 && len(c.funcCalls[name]) == 0 {
+			return 0, false
+		}
+		id := int32(len(adj))
+		fnID[name] = id
+		fnNames = append(fnNames, name)
+		adj = append(adj, nil)
+		return id, true
+	}
+	for i, g := range globals {
+		for _, dep := range ownGlobalRefs(g) {
 			d, ok := byName[dep]
 			if !ok {
 				continue
 			}
-			if d == g {
+			if d == int32(i) {
 				g.selfRef = true
 				continue
 			}
-			if walk(d) {
-				r = true
+			adj[i] = append(adj[i], d)
+		}
+		if g.fdeps != nil {
+			for _, call := range g.calls {
+				if f, ok := fn(call); ok {
+					adj[i] = append(adj[i], f)
+				}
 			}
 		}
-		mark[g], reaches[g] = finished, r
-		return r
 	}
-	for _, g := range c.sheet.globals {
-		walk(g)
+	for j := 0; j < len(fnNames); j++ {
+		name, id := fnNames[j], int32(len(globals)+j)
+		for _, ref := range c.funcRefs[name] {
+			if d, ok := byName[ref]; ok {
+				adj[id] = append(adj[id], d)
+			}
+		}
+		for _, call := range c.funcCalls[name] {
+			if f, ok := fn(call); ok {
+				adj[id] = append(adj[id], f)
+			}
+		}
 	}
-	for _, g := range c.sheet.globals {
-		g.eager = g.eager || g.selfRef || reaches[g]
+	reaches := globalCycleReach(adj, len(globals))
+	for i, g := range globals {
+		g.eager = g.eager || g.selfRef || reaches[i]
 	}
+}
+
+// globalCycleReach reports, for each of the first nGlobals nodes of adj,
+// whether its strongly connected component holds two globals or more or
+// leads to one that does. It is Tarjan's algorithm with an explicit stack,
+// since the depth is the stylesheet's to choose; a component is complete
+// only after every component it leads to, so each is decided as it closes.
+func globalCycleReach(adj [][]int32, nGlobals int) []bool {
+	n := len(adj)
+	index := make([]int32, n) // 0: not yet visited
+	low := make([]int32, n)
+	comp := make([]int32, n)
+	onStack := make([]bool, n)
+	var compReach []bool
+	var stack []int32
+	type frame struct {
+		v int32
+		e int
+	}
+	var path []frame
+	next := int32(1)
+	visit := func(v int32) {
+		index[v], low[v] = next, next
+		next++
+		stack = append(stack, v)
+		onStack[v] = true
+		path = append(path, frame{v: v})
+	}
+	for root := range n {
+		if index[root] != 0 {
+			continue
+		}
+		visit(int32(root))
+		for len(path) > 0 {
+			f := &path[len(path)-1]
+			if f.e < len(adj[f.v]) {
+				w := adj[f.v][f.e]
+				f.e++
+				if index[w] == 0 {
+					visit(w)
+				} else if onStack[w] {
+					low[f.v] = min(low[f.v], index[w])
+				}
+				continue
+			}
+			v := f.v
+			path = path[:len(path)-1]
+			if len(path) > 0 {
+				p := path[len(path)-1].v
+				low[p] = min(low[p], low[v])
+			}
+			if low[v] != index[v] {
+				continue
+			}
+			id := int32(len(compReach))
+			start := len(stack)
+			for {
+				start--
+				if stack[start] == v {
+					break
+				}
+			}
+			members := stack[start:]
+			nG := 0
+			for _, w := range members {
+				comp[w], onStack[w] = id, false
+				if int(w) < nGlobals {
+					nG++
+				}
+			}
+			reach := nG >= 2
+			for _, w := range members {
+				for _, x := range adj[w] {
+					if comp[x] != id && compReach[comp[x]] {
+						reach = true
+					}
+				}
+			}
+			compReach = append(compReach, reach)
+			stack = stack[:start]
+		}
+	}
+	out := make([]bool, nGlobals)
+	for i := range out {
+		out[i] = compReach[comp[i]]
+	}
+	return out
 }
 
 // hasEffects reports whether a global declaration's own select or content

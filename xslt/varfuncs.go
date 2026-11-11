@@ -126,8 +126,9 @@ var lateBoundFuncNames = func() map[string]bool {
 	return m
 }()
 
-// foldFunctionRefsIntoGlobals adds to each global the variables named by the
-// bodies of the functions its initialiser calls.
+// foldFunctionRefsIntoGlobals records on each global the functions its
+// initialiser calls, so that globalRefs can add the variables those
+// functions' bodies name.
 //
 // A dependency reaches a global by three routes, and a lexical scan of the
 // declaration sees only the first: its select expression, its sequence
@@ -136,9 +137,9 @@ var lateBoundFuncNames = func() map[string]bool {
 // itself can find -- $v:nominal-page-width selects f:parse-length(...), whose
 // body matches against a $vp:relative-regex declared in another module.
 //
-// The walk is transitive and bounded by the set of functions, so a recursive
-// or mutually recursive pair terminates: a name already visited is not
-// followed again.
+// Only the call names are kept per global, and one funcDeps for the whole
+// stylesheet: copying each function's references into every global that
+// calls it held globals times references.
 //
 // This runs after every module has compiled, because the xsl:function may be
 // declared below the global that calls it or in a module imported afterwards
@@ -147,44 +148,62 @@ func (c *compiler) foldFunctionRefsIntoGlobals() {
 	if len(c.funcRefs) == 0 {
 		return
 	}
+	fd := &funcDeps{refs: c.funcRefs, calls: c.funcCalls}
 	for _, g := range c.sheet.globals {
 		if g.Select == nil {
 			continue
 		}
-		seen := map[string]bool{}
-		for _, ref := range g.bodyRefs {
-			seen[ref] = true
+		calls := g.Select.StaticCalls()
+		if len(calls) == 0 {
+			continue
 		}
-		// A function that names this very global is not a dependency of it.
-		// param-0301 is the case: $x selects my:func(1), and my:func declares
-		// a local $b whose select is $x. Section 9.4 makes that a circularity
-		// only if it is evaluated, and here it never is -- the function
-		// returns $a + 2 and never reads $b. Recording the self-reference
-		// turned a stylesheet the specification requires to work into
-		// XPST0008.
-		seen[g.Name.Clark()] = true
-		// The queue makes the walk transitive: a function whose body calls
-		// another contributes that one's references too. visited bounds it,
-		// so recursion -- direct or mutual -- terminates.
-		visited := map[string]bool{}
-		var queue []string
-		for _, call := range g.Select.StaticCalls() {
-			queue = append(queue, call.Name.Clark())
+		g.calls = make([]string, len(calls))
+		for i, call := range calls {
+			g.calls[i] = call.Name.Clark()
 		}
-		for len(queue) > 0 {
-			fn := queue[0]
-			queue = queue[1:]
-			if visited[fn] {
-				continue
-			}
-			visited[fn] = true
-			for _, ref := range c.funcRefs[fn] {
-				if !seen[ref] {
-					seen[ref] = true
-					g.bodyRefs = append(g.bodyRefs, ref)
-				}
-			}
-			queue = append(queue, c.funcCalls[fn]...)
-		}
+		g.fdeps = fd
 	}
+}
+
+// funcDeps maps an xsl:function's Clark name to the globals its body names
+// (refs) and the functions it calls (calls); see compiler.funcRefs.
+type funcDeps struct {
+	refs, calls map[string][]string
+}
+
+// appendRefs appends to out the globals named by the functions g calls,
+// transitively, each once and in breadth-first order, leaving out g's own
+// name and what g.bodyRefs already holds.
+//
+// A function that names this very global is not a dependency of it.
+// param-0301 is the case: $x selects my:func(1), and my:func declares a local
+// $b whose select is $x. Section 9.4 makes that a circularity only if it is
+// evaluated, and here it never is -- the function returns $a + 2 and never
+// reads $b. Recording the self-reference turned a stylesheet the
+// specification requires to work into XPST0008.
+//
+// visited bounds the walk by the set of functions, so a recursive or mutually
+// recursive pair terminates.
+func (fd *funcDeps) appendRefs(out []string, g *Variable) []string {
+	seen := map[string]bool{g.Name.Clark(): true}
+	for _, ref := range g.bodyRefs {
+		seen[ref] = true
+	}
+	visited := map[string]bool{}
+	queue := append([]string(nil), g.calls...)
+	for i := 0; i < len(queue); i++ {
+		fn := queue[i]
+		if visited[fn] {
+			continue
+		}
+		visited[fn] = true
+		for _, ref := range fd.refs[fn] {
+			if !seen[ref] {
+				seen[ref] = true
+				out = append(out, ref)
+			}
+		}
+		queue = append(queue, fd.calls[fn]...)
+	}
+	return out
 }

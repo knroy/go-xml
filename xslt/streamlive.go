@@ -31,11 +31,11 @@ func (run *streamRun) liveBuiltIn(focus focuser, pos int, el *xdm.Node, md int, 
 	default:
 		return false, false, nil // deep-copy grounds, fail stops: the view's way
 	}
-	if l, ok := s.candidates(el, mode); !ok || len(l) > 0 {
+	if l, ok := s.candidates(el, mode); !ok || !l.none() {
 		return false, false, nil
 	}
 	for i := range el.NumAttrs() {
-		if l, ok := s.candidates(el.AttrAt(i), mode); !ok || len(l) > 0 {
+		if l, ok := s.candidates(el.AttrAt(i), mode); !ok || !l.none() {
 			return false, false, nil
 		}
 	}
@@ -153,7 +153,7 @@ func bareMatch(s *Stylesheet, n *xdm.Node, mode string) bool {
 	if !ok {
 		return false
 	}
-	for _, i := range l {
+	for i, more := l.next(); more; i, more = l.next() {
 		if !s.templates[i].Match.predicateFree() {
 			return false
 		}

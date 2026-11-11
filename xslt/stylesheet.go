@@ -441,6 +441,12 @@ type Variable struct {
 	// Execute, so recovering them there would mean a type switch over every
 	// instruction kind.
 	bodyRefs []string
+	// calls names the functions a select expression calls, and fdeps what
+	// the stylesheet's xsl:function bodies name, both set by
+	// foldFunctionRefsIntoGlobals: globalRefs follows them on demand rather
+	// than every caller holding a copy of each function's references.
+	calls []string
+	fdeps *funcDeps
 }
 
 // keyDef is a compiled xsl:key.
