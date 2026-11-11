@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -73,5 +74,39 @@ func TestSM05AtomicStepAccumulationIsCharged(t *testing.T) {
 	}
 	if _, err := eval("count(//*/(//*, 1))", 0); err == nil || !strings.Contains(err.Error(), "XPTY0018") {
 		t.Fatalf("mixed step = %v; want XPTY0018", err)
+	}
+}
+
+// TestSM05ImplicitCastsBoundDigits: the conversions XPath applies itself --
+// general comparison, date component functions, function conversion -- are
+// refused past the digit bound before the text is parsed, as a cast is.
+func TestSM05ImplicitCastsBoundDigits(t *testing.T) {
+	run := func(q, n string, digits int) error {
+		c, err := CompileWith(q, CompileOptions{Version: XPath31})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := NewContext(nil, Builtins()).WithEnv(func(e *Env) { e.MaxDigits = digits })
+		_, err = c.Eval(ctx.WithVar(xdm.QName{Local: "n"}, xdm.One(xdm.NewString(n))))
+		return err
+	}
+	long := strings.Repeat("1", MaxDigits+1)
+	for _, q := range []string{
+		`xs:untypedAtomic('PT' || $n || 'S') = xs:dayTimeDuration('PT1S')`,
+		`xs:untypedAtomic('12:00:00.' || $n) = xs:time('12:00:00')`,
+		`hours-from-time(xs:untypedAtomic('12:00:00.' || $n))`,
+	} {
+		if err := run(q, long, 0); err == nil || !strings.Contains(err.Error(), "FOCA0003") ||
+			!errors.Is(err, xdm.ErrResourceLimit) {
+			t.Errorf("%s: got %v, want FOCA0003 as a resource limit", q, err)
+		}
+	}
+	// Function conversion honours the host's own bound.
+	q := `function($d as xs:dayTimeDuration) { $d }(xs:untypedAtomic('PT' || $n || 'S'))`
+	if err := run(q, strings.Repeat("1", 101), 100); err == nil || !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("function conversion: got %v, want a resource limit", err)
+	}
+	if err := run(q, "5", 100); err != nil {
+		t.Errorf("function conversion control: %v", err)
 	}
 }

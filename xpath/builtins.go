@@ -217,10 +217,7 @@ func registerConstructors(l *Library) {
 			if err != nil {
 				return nil, err
 			}
-			if err := ctx.checkCastDigits(it.(*xdm.Atomic), target); err != nil {
-				return nil, err
-			}
-			out, err := CastAtomic(it.(*xdm.Atomic), target)
+			out, err := ctx.castAtomic(it.(*xdm.Atomic), target)
 			if err != nil {
 				return nil, err
 			}

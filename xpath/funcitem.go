@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/knroy/go-xml/v2/internal/xdmfunc"
@@ -456,7 +457,10 @@ func convertForParam(ctx *Context, v xdm.Sequence, st SequenceType) (xdm.Sequenc
 				return nil, xdm.ErrType(
 					"value does not match the declared type %s", st.String())
 			}
-			c, err := CastAtomic(a, st.AtomicType)
+			c, err := ctx.castAtomic(a, st.AtomicType)
+			if errors.Is(err, xdm.ErrResourceLimit) {
+				return nil, err
+			}
 			if err != nil {
 				return nil, xdm.ErrType(
 					"value does not match the declared type %s", st.String())

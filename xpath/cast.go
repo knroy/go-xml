@@ -21,7 +21,20 @@ import (
 // xs:double is an error (FORG0001), not NaN. Silent NaN is how a validator
 // ends up reporting a document as valid because a numeric comparison quietly
 // became false.
+//
+// Text cast to a type whose value is parsed through big.Rat is refused past
+// the default MaxDigits bound (see Context.checkCastDigits) before it is
+// parsed, so every conversion reaching here -- comparison, function
+// conversion, coercion -- is bounded and not only the cast expression.
 func CastAtomic(a *xdm.Atomic, target xdm.TypeCode) (*xdm.Atomic, error) {
+	return (*Context)(nil).castAtomic(a, target)
+}
+
+// castAtomic is CastAtomic under c's digit bound, the default for a nil c.
+func (c *Context) castAtomic(a *xdm.Atomic, target xdm.TypeCode) (*xdm.Atomic, error) {
+	if err := c.checkCastDigits(a, target); err != nil {
+		return nil, err
+	}
 	if a.Type == target {
 		return a, nil
 	}
@@ -1065,7 +1078,12 @@ func isNameRune(r rune) bool { return xmlname.IsNameRune(r) }
 // facet that the type code cannot carry. An unknown name falls back to a plain
 // cast to the primitive.
 func CastToDerived(a *xdm.Atomic, target xdm.TypeCode, facet string) (*xdm.Atomic, error) {
-	out, err := CastAtomic(a, target)
+	return (*Context)(nil).castToDerived(a, target, facet)
+}
+
+// castToDerived is CastToDerived under c's digit bound, the default for a nil c.
+func (c *Context) castToDerived(a *xdm.Atomic, target xdm.TypeCode, facet string) (*xdm.Atomic, error) {
+	out, err := c.castAtomic(a, target)
 	if err != nil {
 		return nil, err
 	}
