@@ -492,6 +492,14 @@ type serializer struct {
 	// latest entry for a prefix is the one in force. It replaced a map per
 	// element holding a copy of every binding in scope.
 	ns []nsPair
+	// nsTop indexes ns once it holds more than nsIndexFrom bindings: the
+	// position of each prefix's latest binding, with nsPrev[i] the position
+	// of the one ns[i] shadows (-1 for none). nsIndexed is how much of ns
+	// the index covers; ns is truncated without it, and pushNS and
+	// lookupNS unwind what was cut. Nil when not indexing.
+	nsTop     map[string]int
+	nsPrev    []int
+	nsIndexed int
 	// seeded is the top-level element whose ancestors are not being written,
 	// and whose inherited bindings element therefore writes itself; see
 	// rootNamespaces.
@@ -630,6 +638,16 @@ func (s *serializer) fail(err error) {
 func (s *serializer) validateComment(text string) error {
 	if strings.Contains(text, "--") || strings.HasSuffix(text, "-") {
 		return fmt.Errorf("SERE0003: comment content contains a forbidden hyphen sequence")
+	}
+	// An HTML parser ends a comment that opens with ">" or "->" at once --
+	// "<!-->" and "<!--->" are abruptly closed empty comments -- so the rest
+	// of the text is read as live markup. Serialization 3.1 assigns this no
+	// code; it is refused as the hyphen sequences are, and as SERE0015
+	// refuses the ">" that would end a processing instruction early. The
+	// xhtml method is covered too: its output is written to be read as HTML.
+	if s.html && (strings.HasPrefix(text, ">") || strings.HasPrefix(text, "->")) {
+		return fmt.Errorf("SERE0003: comment content starts with %q, which "+
+			"ends the comment in an HTML parser", text[:strings.IndexByte(text, '>')+1])
 	}
 	return s.validateXMLLiteral(text)
 }
@@ -1014,7 +1032,7 @@ func (s *serializer) openTag(n *xdm.Node, depth, base int, nonEmpty bool) (elemS
 	if p := s.elemPrefix(n); n.Name().URI != "" && s.inScope(base, p) != n.Name().URI &&
 		s.declaredURI(base, p) != n.Name().URI {
 		s.writeNamespaceDecl(p, n.Name().URI)
-		s.ns = append(s.ns, nsPair{p, n.Name().URI})
+		s.pushNS(p, n.Name().URI)
 	}
 	// An element in no namespace under an ancestor with a default namespace
 	// has to undeclare it. Without xmlns="" the element is read back as
@@ -1029,7 +1047,7 @@ func (s *serializer) openTag(n *xdm.Node, depth, base int, nonEmpty bool) (elemS
 	if _, undeclared := s.declared(base, ""); n.Name().URI == "" && n.Name().Prefix == "" &&
 		s.inScope(base, "") != "" && !undeclared {
 		s.writeNamespaceDecl("", "")
-		s.ns = append(s.ns, nsPair{"", ""})
+		s.pushNS("", "")
 	}
 	for a := range n.Attrs() {
 		if a.Name().URI == "" || a.Name().URI == xdm.NSXML {
@@ -1039,7 +1057,7 @@ func (s *serializer) openTag(n *xdm.Node, depth, base int, nonEmpty bool) (elemS
 			continue
 		}
 		s.writeNamespaceDecl(a.Name().Prefix, a.Name().URI)
-		s.ns = append(s.ns, nsPair{a.Name().Prefix, a.Name().URI})
+		s.pushNS(a.Name().Prefix, a.Name().URI)
 	}
 
 	for a := range n.Attrs() {
@@ -1254,8 +1272,14 @@ func (s *serializer) ownNamespaceDecl(n *xdm.Node, base int, prefix, uri string)
 	// namespace-alias-2620 shows -- is dropped here rather than written
 	// beside the one added below, which produced two xmlns:y attributes
 	// on one element and output that is not well-formed XML.
-	if prefix != "" && prefix == s.elemPrefix(n) &&
-		n.Name().URI != "" && uri != n.Name().URI {
+	//
+	// The default namespace is covered as well: HTML5 normalisation writes
+	// <svg:svg> unprefixed (elemPrefix), and a default declaration the
+	// element carries for another URI is then the binding its name
+	// displaces. Requiring a non-empty prefix here wrote that one and the
+	// SVG default openTag adds, two xmlns on one start tag. A descendant in
+	// the displaced namespace re-declares it, through openTag's check.
+	if prefix == s.elemPrefix(n) && n.Name().URI != "" && uri != n.Name().URI {
 		return
 	}
 	// An element binds each prefix at most once. A node list can hold the
@@ -1282,7 +1306,7 @@ func (s *serializer) ownNamespaceDecl(n *xdm.Node, base int, prefix, uri string)
 		return
 	}
 	s.writeNamespaceDecl(prefix, uri)
-	s.ns = append(s.ns, nsPair{prefix, uri})
+	s.pushNS(prefix, uri)
 }
 
 // rootNamespaces returns the declarations to write on n when it is
@@ -1297,10 +1321,12 @@ func (s *serializer) ownNamespaceDecl(n *xdm.Node, base int, prefix, uri string)
 // result element copies its bindings in.
 func rootNamespaces(n *xdm.Node) []nsPair {
 	var arr [32]nsBinding
+	var own [32]string
 	scope := scopeBindings(n, arr[:0])
+	declared := declaredPrefixes(n, own[:0])
 	out := make([]nsPair, 0, len(scope)+n.NumNamespaceDecls())
 	for _, b := range scope {
-		if !declares(n, b.prefix) {
+		if _, found := slices.BinarySearch(declared, b.prefix); !found {
 			out = append(out, nsPair{b.prefix, b.uri})
 		}
 	}
@@ -1334,6 +1360,16 @@ type nsPair struct{ prefix, uri string }
 // inScope returns the URI an ancestor bound prefix to, or "" if none did:
 // the latest binding in s.ns[:base].
 func (s *serializer) inScope(base int, prefix string) string {
+	if i := s.lookupNS(prefix); i >= 0 {
+		for i >= base {
+			if i = s.nsPrev[i]; i < 0 {
+				return ""
+			}
+		}
+		return s.ns[i].uri
+	} else if s.nsTop != nil {
+		return ""
+	}
 	for i := base - 1; i >= 0; i-- {
 		if s.ns[i].prefix == prefix {
 			return s.ns[i].uri
@@ -1345,12 +1381,88 @@ func (s *serializer) inScope(base int, prefix string) string {
 // declared returns the URI the current element, whose own bindings start at
 // base, has declared for prefix, and whether it has declared one.
 func (s *serializer) declared(base int, prefix string) (string, bool) {
+	if i := s.lookupNS(prefix); i >= base {
+		return s.ns[i].uri, true
+	} else if s.nsTop != nil {
+		return "", false
+	}
 	for i := len(s.ns) - 1; i >= base; i-- {
 		if s.ns[i].prefix == prefix {
 			return s.ns[i].uri, true
 		}
 	}
 	return "", false
+}
+
+// nsIndexFrom is how many bindings s.ns holds before inScope and declared
+// read an index instead of scanning it. They run per declaration and per
+// namespaced attribute of every element, so the scan made an element with K
+// declarations K^2, where the parser accepts it in linear time; below the
+// threshold the scan is cheaper than a map. The index is dropped again once
+// s.ns falls to a quarter of it, so a rebuild is paid for by the pushes
+// since the last one.
+const nsIndexFrom = 32
+
+// pushNS appends a binding to s.ns, indexing it when s.ns is large.
+func (s *serializer) pushNS(prefix, uri string) {
+	s.syncNS()
+	s.ns = append(s.ns, nsPair{prefix, uri})
+	if s.nsTop == nil {
+		if len(s.ns) <= nsIndexFrom {
+			return
+		}
+		s.nsTop, s.nsPrev = make(map[string]int, len(s.ns)), s.nsPrev[:0]
+		for i := range s.ns[:len(s.ns)-1] {
+			s.linkNS(i)
+		}
+	}
+	s.linkNS(len(s.ns) - 1)
+	s.nsIndexed = len(s.ns)
+}
+
+// linkNS indexes s.ns[i], the binding after those already indexed.
+func (s *serializer) linkNS(i int) {
+	prev, ok := s.nsTop[s.ns[i].prefix]
+	if !ok {
+		prev = -1
+	}
+	s.nsPrev = append(s.nsPrev[:i], prev)
+	s.nsTop[s.ns[i].prefix] = i
+}
+
+// syncNS unwinds from the index the bindings s.ns was truncated past. They
+// are still in its backing array: nothing appends to s.ns but pushNS, which
+// syncs first.
+func (s *serializer) syncNS() {
+	if s.nsTop == nil || s.nsIndexed == len(s.ns) {
+		return
+	}
+	if len(s.ns) <= nsIndexFrom/4 {
+		s.nsTop = nil
+		return
+	}
+	cut := s.ns[:s.nsIndexed]
+	for i := s.nsIndexed - 1; i >= len(s.ns); i-- {
+		if prev := s.nsPrev[i]; prev < 0 {
+			delete(s.nsTop, cut[i].prefix)
+		} else {
+			s.nsTop[cut[i].prefix] = prev
+		}
+	}
+	s.nsIndexed = len(s.ns)
+}
+
+// lookupNS returns the position of prefix's latest binding in s.ns, or -1
+// when the index has none or s.ns is not indexed.
+func (s *serializer) lookupNS(prefix string) int {
+	s.syncNS()
+	if s.nsTop == nil {
+		return -1
+	}
+	if i, ok := s.nsTop[prefix]; ok {
+		return i
+	}
+	return -1
 }
 
 // declaredURI is declared without the presence flag.

@@ -518,7 +518,7 @@ func execSequenceBody(body []Instruction, rt *runtime, out *outputBuilder) error
 		if err := execConditionalSequence(body, rt, out); err != nil {
 			return err
 		}
-		return out.Refused()
+		return outputRefused(rt, out)
 	}
 	for _, instr := range body {
 		if err := rt.ctx.Err(); err != nil {
@@ -531,7 +531,7 @@ func execSequenceBody(body []Instruction, rt *runtime, out *outputBuilder) error
 		// every sequence constructor runs through, so a refusal latched by
 		// any of them is returned within one instruction of the node that
 		// crossed the bound. See xdmbuild.Builder.Refused and xpath.MaxNodes.
-		if err := out.Refused(); err != nil {
+		if err := outputRefused(rt, out); err != nil {
 			return err
 		}
 		// A variable declared mid-sequence is in scope for the instructions
@@ -563,7 +563,22 @@ func execSequenceBody(body []Instruction, rt *runtime, out *outputBuilder) error
 	}
 	// What the last instruction latched is reported here, not lost: no
 	// iteration follows to see it.
-	return out.Refused()
+	return outputRefused(rt, out)
+}
+
+// outputRefused reports the result-tree budget latched on out and, for a
+// sequence held at the top level, the item bound (topItemsRefused). Both are
+// checked here, once per instruction, because this loop is where every
+// instruction's output lands. The item bound used to be checked by
+// xsl:sequence, xsl:copy-of and xsl:copy alone, so an instruction that built
+// into a buffer of its own and appended it whole -- xsl:try, an as-typed
+// template, xsl:perform-sort, xsl:evaluate, on-empty -- delivered MaxItems
+// per turn of an enclosing xsl:for-each with nothing counting the total.
+func outputRefused(rt *runtime, out *outputBuilder) error {
+	if err := out.Refused(); err != nil {
+		return err
+	}
+	return topItemsRefused(rt, out)
 }
 
 // evalVariable computes a variable's value from its select expression or its

@@ -136,25 +136,38 @@ func mapItems(ctx *xpath.Context, args []xdm.Sequence,
 // about to copy, as xsl:copy-of charges its copies: before they are made, so
 // a refusal allocates none of them. A snapshot copies each ancestor too.
 // An absent context item is left for the copy to report.
+//
+// A copied element without the spine inherits its ancestors' bindings
+// (inheritNamespaces), which the byte budget is charged for as xsl:copy-of
+// charges them: at most the ancestors' declarations, counted here because
+// copyItem has no context to charge what it added.
 func chargeCopies(ctx *xpath.Context, args []xdm.Sequence, spine bool) error {
 	in, err := inputItems(ctx, args)
 	if err != nil {
 		return nil
 	}
-	n := 0
+	n, inherited := 0, 0
 	for _, it := range in {
 		v, ok := it.(*xdm.Node)
 		if !ok {
 			continue
 		}
 		n += countSubtree(v)
-		if spine && v.Kind() != xdm.KindDocument {
-			for a := v.Parent(); a != nil; a = a.Parent() {
+		if v.Kind() == xdm.KindDocument {
+			continue
+		}
+		for a := v.Parent(); a != nil; a = a.Parent() {
+			if spine {
 				n += 1 + a.NumAttrs() + a.NumNamespaceDecls()
+			} else if v.Kind() == xdm.KindElement {
+				inherited += a.NumNamespaceDecls()
 			}
 		}
 	}
-	return ctx.ChargeNodes(n)
+	if err := ctx.ChargeNodes(n); err != nil {
+		return err
+	}
+	return chargeInherited(ctx, inherited)
 }
 
 // copyItem is internal:copy-item: a deep copy of a node, anything else
