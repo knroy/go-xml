@@ -266,3 +266,55 @@ func TestStaticScopeIsNotRebuiltPerExpression(t *testing.T) {
 		t.Errorf("compiling %d static parameters allocated %d MB; want under 256 MB", v, got>>20)
 	}
 }
+
+// A host document is searched for a fragment's ID once per compilation, not
+// once per xsl:include or xsl:import occurrence on each of the three walks:
+// N occurrences of a K-node host cost N*K, and only the selected subtree is
+// charged. The index keeps the search's answers: the first element in
+// document order with that id or xml:id, else the document element.
+func TestEmbeddedModuleIndexesTheHostOnce(t *testing.T) {
+	tree, err := xdm.ParseString(`<doc><a id="x"/><b xml:id="m"/><c id="m"/><d q:id="y" xmlns:q="urn:q"/></doc>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &compiler{}
+	for range 3 {
+		for id, want := range map[string]string{"m": "b", "x": "a", "y": "doc", "": "doc", "nope": "doc"} {
+			if got := c.embeddedModule(tree.Root, id); got == nil || got.Name().Local != want {
+				t.Fatalf("#%s: got %v, want <%s>", id, got, want)
+			}
+		}
+	}
+	if len(c.moduleIDs) != 1 {
+		t.Fatalf("indexed %d host trees, want 1", len(c.moduleIDs))
+	}
+}
+
+// sameTree resolves every href to one parsed tree, as a caching resolver
+// does, so that a walk over it costs no parse.
+type sameTree struct{ doc *xdm.Node }
+
+func (s sameTree) ResolveModule(href, base string) (*xdm.Node, string, error) {
+	return s.doc, "host.xml", nil
+}
+
+// The compile walk stops when the CompileContext caller gives up, as the
+// static phase does: an xsl:include of a fragment once ran every occurrence
+// to the end and returned nil.
+func TestModuleWalkHonoursCancellation(t *testing.T) {
+	host, err := xdm.ParseString(`<doc><xsl:stylesheet xml:id="m" version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"/></doc>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	main, err := xdm.ParseString(`<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">`+
+		strings.Repeat(`<xsl:include href="host.xml#m"/>`, 200)+
+		`<xsl:template name="xsl:initial-template"/></xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &countdownCtx{Context: context.Background(), n: 20}
+	_, err = CompileContext(ctx, main.Root, CompileOptions{Resolver: sameTree{host.Root}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want context.Canceled", err)
+	}
+}

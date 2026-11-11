@@ -687,7 +687,7 @@ func (p *staticPhase) includeModule(el *xdm.Node) error {
 	p.seen[resolved] = true
 	defer delete(p.seen, resolved)
 	if fragment != "" {
-		if sub := embeddedModule(doc, fragment); sub != nil {
+		if sub := p.c.embeddedModule(doc, fragment); sub != nil {
 			doc = sub
 		}
 	}
