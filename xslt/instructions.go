@@ -191,7 +191,7 @@ func (i *sequenceInstr) appendItem(rt *runtime, out *outputBuilder, it xdm.Item)
 			if err := rt.ctx.Err(); err != nil {
 				return err
 			}
-			if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
+			if err := chargeCopy(rt.ctx, v); err != nil {
 				return err
 			}
 			return chargeInherited(rt.ctx, inheritNamespacesAt(rt, out.AppendCopyOf(v), v, dest))
@@ -301,7 +301,7 @@ func (i *copyOfInstr) copyItem(rt *runtime, out *outputBuilder, it xdm.Item) err
 			// Charged before the copy is made, as the node branch below
 			// does; copy-of of a 100 MB document copied 5.7M nodes
 			// uncharged while shallow-copy of it was refused.
-			if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
+			if err := chargeCopy(rt.ctx, v); err != nil {
 				return err
 			}
 			c := copyDocumentNode(v)
@@ -417,7 +417,7 @@ func (i *copyOfInstr) copyItem(rt *runtime, out *outputBuilder, it xdm.Item) err
 		if err := rt.ctx.Err(); err != nil {
 			return err
 		}
-		if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
+		if err := chargeCopy(rt.ctx, v); err != nil {
 			return err
 		}
 		// Under an open element the copy is made once, straight into the
@@ -1015,8 +1015,7 @@ func execBlocking(rt *runtime, noInherit bool, body []Instruction, sub *outputBu
 	if err != nil {
 		return err
 	}
-	blockNamespaceInheritance(el)
-	return nil
+	return blockNamespaceInheritance(rt.ctx, el)
 }
 
 // copyInstr implements xsl:copy, a shallow copy of the context node.
@@ -1962,7 +1961,12 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	// Messages are collected rather than printed: a library writing to stderr
 	// is a nuisance, and the caller may want them alongside the result.
+	// The text is held until the transform returns, so it is charged to the
+	// byte budget as xsl:value-of charges the same joined text.
 	if !rt.opts.disableMessages {
+		if err := rt.ctx.ChargeBytes(len(text)); err != nil {
+			return err
+		}
 		*rt.messages = append(*rt.messages, text)
 	}
 
