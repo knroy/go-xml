@@ -287,6 +287,12 @@ type btParser struct {
 	src    string
 	pos    int
 	groups int
+	// depth is the number of groups, capturing or not, now open. Each
+	// recurses parseAlternation -> ... -> parseGroup once, and only
+	// capturing groups are counted by groups, so "(?:" nested deep enough
+	// overflowed the goroutine stack: fatal, not an error. RE2, which never
+	// sees a pattern routed here, refuses past the same 1000 levels.
+	depth int
 	// closed is the set of capturing groups whose ")" has already been read.
 	// It is what a backreference may name, and the reason the resolution
 	// happens during the parse rather than after it: Appendix F's backReference
@@ -530,7 +536,13 @@ func (p *btParser) parseGroup() (btNode, error) {
 			return nil, p.errf("too many capturing groups")
 		}
 	}
+	p.depth++
+	if p.depth > maxSchemaRegexpDepth {
+		return nil, p.errf("group nesting exceeds %d levels: %w",
+			maxSchemaRegexpDepth, xdm.ErrResourceLimit)
+	}
 	inner, err := p.parseAlternation()
+	p.depth--
 	if err != nil {
 		return nil, err
 	}
