@@ -1,6 +1,8 @@
 package xslt
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -59,16 +61,23 @@ func (a *abstractStub) Execute(rt *runtime, out *outputBuilder) error {
 			"be invoked", a.what)
 }
 
-// abstractMarker is the attribute compileUsedPackage writes on a declaration
-// whose body must become a stub.
+// abstractMarkerNS is the namespace of the attribute compileUsedPackage
+// writes on a declaration whose body must become a stub.
 //
-// It is an attribute in a namespace no stylesheet can write, rather than a
-// field threaded through the compiler, because the three declarations that
-// need it -- xsl:template, xsl:function and xsl:attribute-set -- are compiled
-// by three separate functions reached through compileTopLevel, and each
-// already receives the element. Marking the element keeps the change to one
-// line in each.
-const abstractMarkerNS = "http://go-xml.invalid/xslt/abstract"
+// It is an attribute rather than a field threaded through the compiler,
+// because the three declarations that need it -- xsl:template, xsl:function
+// and xsl:attribute-set -- are compiled by three separate functions reached
+// through compileTopLevel, and each already receives the element; and it
+// travels with the rebuilt package tree, which outlives one compilation.
+//
+// The URI ends in a random suffix drawn once per process, so a stylesheet
+// cannot write the marker itself: a fixed URI let any author declare that
+// namespace and turn a variable, template or function into an abstract stub.
+var abstractMarkerNS = func() string {
+	var b [16]byte
+	rand.Read(b[:]) // never fails since Go 1.24
+	return "http://go-xml.invalid/xslt/abstract/" + hex.EncodeToString(b[:])
+}()
 
 // markAbstract records that a declaration is an abstract component, so that
 // the compiler gives it a stub body.
