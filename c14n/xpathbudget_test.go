@@ -3,6 +3,7 @@ package c14n
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -68,5 +69,34 @@ func TestFromXPathFilterSharedBudget(t *testing.T) {
 	_, err := FromXPathFilter(doc, filter, nil)
 	if !errors.Is(err, xdm.ErrResourceLimit) {
 		t.Fatalf("err = %v, want xdm.ErrResourceLimit", err)
+	}
+}
+
+// The XPath Filter's input node-set charges its namespace nodes against the
+// shared item budget: E elements under B declared prefixes make E*B namespace
+// nodes from E+B bytes of markup, and they used to be materialised all at
+// once, uncharged, before the filter ran.
+func TestFromXPathFilterChargesNamespaceAxis(t *testing.T) {
+	testEnv = func(e *xpath.Env) { e.MaxItems = 1000 }
+	defer func() { testEnv = nil }()
+	var decls strings.Builder
+	for i := range 20 {
+		decls.WriteString(` xmlns:p` + strconv.Itoa(i) + `="u` + strconv.Itoa(i) + `"`)
+	}
+	// 61 elements, each with 21 namespace nodes (20 declared plus xml).
+	doc := parse(t, `<a`+decls.String()+`>`+strings.Repeat(`<b/>`, 60)+`</a>`)
+	if _, err := FromXPathFilter(doc, "true()", nil); !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Fatalf("err = %v, want xdm.ErrResourceLimit", err)
+	}
+	// Within the budget, every namespace node is still filtered.
+	small := parse(t, `<a`+decls.String()+`><b/></a>`)
+	set, err := FromXPathFilter(small, "true()", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := set.(NamespaceSet)
+	b := small.FirstChild().FirstChild()
+	if !ns.ContainsNamespace(b, "p19") || !ns.ContainsNamespace(b, "xml") {
+		t.Error("an inherited namespace node of b was not kept")
 	}
 }
