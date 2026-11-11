@@ -247,7 +247,7 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 		v.stopped = true
 		return
 	}
-	annotateForAssertion(scoped, t)
+	annotateForAssertion(scoped, t, v.schema.typeEnv)
 
 	// $value is in scope in every assertion, not only those on a simple
 	// type (§3.13.4). On a complex type it is the element's simple content
@@ -352,7 +352,7 @@ func (v *validator) assertionValue(el *xdm.Node, t *ComplexType) xdm.Sequence {
 func (v *validator) scopeForAssertion(el *xdm.Node) (*xdm.Node, error) {
 	clone := xdm.NewNode(xdm.KindElement, el.Name(), el.Value())
 	clone.SetBaseURI(el.BaseURI())
-	clone.ApplyTyping(v.typingOf(el))
+	v.copyTyping(clone, el)
 	// The copy is rooted at the element, so namespace declarations made by
 	// an ancestor are out of scope in it. They still apply to the element
 	// in the real document, and a QName-valued attribute cannot be expanded
@@ -419,7 +419,7 @@ func (v *validator) fillScopeCopy(ctx *xpath.Context, dst, src *xdm.Node) error 
 		if err := ctx.ChargeNodes(1); err != nil {
 			return err
 		}
-		dst.AppendAttr(a.Name(), a.Value()).ApplyTyping(v.typingOf(a))
+		v.copyTyping(dst.AppendAttr(a.Name(), a.Value()), a)
 	}
 	for c := range src.Children() {
 		if isCommentOrPI(c) || v.dropped[c] {
@@ -429,7 +429,7 @@ func (v *validator) fillScopeCopy(ctx *xpath.Context, dst, src *xdm.Node) error 
 			return err
 		}
 		cc := dst.AppendShallowCopy(c)
-		cc.ApplyTyping(v.typingOf(c))
+		v.copyTyping(cc, c)
 		var pairs []string
 		for ns := range v.namespaceDecls(c) {
 			pairs = append(pairs, ns.prefix, ns.uri)
@@ -443,6 +443,19 @@ func (v *validator) fillScopeCopy(ctx *xpath.Context, dst, src *xdm.Node) error 
 		}
 	}
 	return nil
+}
+
+// copyTyping gives dst, a node of the assertion scope copy, src's PSVI typing
+// and the validating schema's TypeEnvironment. xdm.Typing carries no
+// environment, and a typed node without one atomises against the process-wide
+// fallback, which holds the derivations of whichever schema registered the
+// same type name last: an assertion's "instance of" verdict would then depend
+// on schemas loaded after this one.
+func (v *validator) copyTyping(dst, src *xdm.Node) {
+	dst.ApplyTyping(v.typingOf(src))
+	if dst.TypeAnnotation() != "" {
+		dst.SetTypeEnv(v.schema.typeEnv)
+	}
 }
 
 func isCommentOrPI(n *xdm.Node) bool {
@@ -603,13 +616,15 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 // violated one. "every $x in .//d satisfies $x gt xs:date('1900-01-01')" over
 // a recursive type held at nesting 32 and failed at 33, on documents that
 // differ only in how deep they are.
-func annotateForAssertion(el *xdm.Node, t *ComplexType) {
-	annotateSubtree(el, t, true)
+func annotateForAssertion(el *xdm.Node, t *ComplexType, env *xdm.TypeEnvironment) {
+	annotateSubtree(el, t, true, env)
 }
 
 // annotateSubtree labels el and its descendants. isRoot marks the assertion
-// root, which is the one element that keeps no type of its own.
-func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
+// root, which is the one element that keeps no type of its own. Every label
+// carries env, the validating schema's TypeEnvironment, for the reason given
+// at copyTyping.
+func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool, env *xdm.TypeEnvironment) {
 	if el == nil || t == nil {
 		return
 	}
@@ -620,6 +635,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
 		a := el.Attr(use.Decl.Name.URI, use.Decl.Name.Local)
 		if a != nil && a.TypeAnnotation() == "" {
 			a.SetTypeAnnotation(annotationName(use.Decl.Type))
+			a.SetTypeEnv(env)
 		}
 	}
 
@@ -635,6 +651,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
 		// assertion reaches it.
 		if !isRoot && el.TypeAnnotation() == "" {
 			el.SetTypeAnnotation(annotationName(t.SimpleContent))
+			el.SetTypeEnv(env)
 		}
 		return
 	}
@@ -652,9 +669,10 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
 		case *SimpleType:
 			if c.TypeAnnotation() == "" {
 				c.SetTypeAnnotation(annotationName(dt))
+				c.SetTypeEnv(env)
 			}
 		case *ComplexType:
-			annotateSubtree(c, dt, false)
+			annotateSubtree(c, dt, false, env)
 		}
 	}
 }

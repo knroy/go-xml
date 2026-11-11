@@ -38,7 +38,7 @@ func sm09Within(t *testing.T, label string, f func()) {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatalf("%s: union DAG walk did not finish; walk is per path, not per type", label)
+		t.Fatalf("%s: walk did not finish; it is per path, not per type", label)
 	}
 }
 
