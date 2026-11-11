@@ -46,8 +46,13 @@ package xslt
 // back when its turn goes on (xpathleaf.LockYield).
 
 import (
+	"errors"
 	"reflect"
+	goruntime "runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"weak"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
@@ -222,6 +227,40 @@ func (rt *runtime) forkOf(instr Instruction) *streamOp {
 	return nil
 }
 
+// streamReaders counts, per transform (by its eval lock, which the
+// transforms fn:transform starts share), the documents its streamed runs
+// read at once: one per container's cursor, and a tee's consumers in place
+// of the cursor they read. maxTeeParts bounds one tee, and the planner the
+// forks inside its prongs (teeReaders); a streamed xsl:source-document in a
+// prong, or in another's body, opens a cursor of its own outside both, so
+// the bound is held here across them all, and a run past it goes to the
+// tree as an over-wide fork does. The key is weak, removed with the lock.
+var streamReaders sync.Map // weak.Pointer[xpath.EvalLock] -> *atomic.Int64
+
+// errStreamReaders sends a container to the tree: more documents read at
+// once than streamReaders allows.
+var errStreamReaders = errors.New("streaming: more readers of documents at once than a tee runs")
+
+// takeReaders counts n more readers for rt's transform, and reports
+// whether they stay within maxTeeParts; release gives them back, and is
+// to be called only when ok.
+func takeReaders(rt *runtime, n int) (release func(), ok bool) {
+	if rt.evalLock == nil || n <= 0 {
+		return func() {}, true
+	}
+	key := weak.Make(rt.evalLock)
+	v, loaded := streamReaders.LoadOrStore(key, new(atomic.Int64))
+	if !loaded {
+		goruntime.AddCleanup(rt.evalLock, func(k weak.Pointer[xpath.EvalLock]) { streamReaders.Delete(k) }, key)
+	}
+	live := v.(*atomic.Int64)
+	if live.Add(int64(n)) > maxTeeParts {
+		live.Add(-int64(n))
+		return nil, false
+	}
+	return func() { live.Add(-int64(n)) }, true
+}
+
 // fork runs op's prongs, body, at the document node: the consuming ones on
 // a tee of the cursor, each into a builder of its own; then appends what
 // they wrote to out in prong order. The error is the first prong's, in
@@ -269,6 +308,11 @@ func (run *streamRun) fork(rt *runtime, op *streamOp, body []Instruction, out *o
 	}
 	saved := make([]held, len(cons))
 	kept := false
+	release, ok := takeReaders(rt, len(cons)-1) // the consumers replace the cursor
+	if !ok {
+		return errStreamReaders
+	}
+	defer release()
 	back := xpathleaf.LockYield(rt.evalLock)
 	run.teed = true
 	cerrs := run.c.Tee(len(cons), func(j int, c *xdmstream.Cursor) error {

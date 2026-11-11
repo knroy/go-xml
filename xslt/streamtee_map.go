@@ -142,6 +142,11 @@ func (run *streamRun) teeEval(rt *runtime, op *streamOp) (xdm.Sequence, error) {
 	if run.d != 0 || !run.c.Fresh() {
 		return nil, errStreamPlan
 	}
+	release, ok := takeReaders(rt, len(t.parts)-1) // streamfork.go
+	if !ok {
+		return nil, errStreamReaders
+	}
+	defer release()
 	vals := make([]xdm.Sequence, len(t.parts))
 	// The eval lock is let go as each turn ends, as the fork's prongs do
 	// (streamfork.go).

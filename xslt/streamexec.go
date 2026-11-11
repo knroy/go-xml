@@ -1649,6 +1649,13 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 			return true, err
 		}
 	}
+	// Its cursor is one more reader of the transform's (streamfork.go).
+	release, ok := takeReaders(rt, 1)
+	if !ok {
+		unread()
+		return false, nil
+	}
+	defer release()
 	if traceBursts != nil {
 		traceBursts(href)
 	}
