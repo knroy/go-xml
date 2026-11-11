@@ -22,6 +22,10 @@ type Locals struct {
 	vals  []xdm.Sequence
 	base  int
 	off   bool
+	// items is the total length of the values on the stack: what the
+	// bindings hold live, which xpath.Compiled.Eval subtracts from each
+	// expression's item allowance.
+	items int64
 }
 
 // LocalsHost is implemented by a Host.Runtime that binds on a Locals.
@@ -55,7 +59,11 @@ type localName struct{ uri, local string }
 func (l *Locals) Push(name xdm.QName, val xdm.Sequence) {
 	l.names = append(l.names, localName{name.URI, name.Local})
 	l.vals = append(l.vals, val)
+	l.items += int64(len(val))
 }
+
+// Items is the total number of items the bindings on the stack hold.
+func (l *Locals) Items() int64 { return l.items }
 
 // Len is the number of bindings on the stack, visible or not.
 func (l *Locals) Len() int { return len(l.names) }
@@ -64,6 +72,9 @@ func (l *Locals) Len() int { return len(l.names) }
 func (l *Locals) Truncate(n int) {
 	if n >= len(l.names) {
 		return
+	}
+	for _, v := range l.vals[n:] {
+		l.items -= int64(len(v))
 	}
 	clear(l.vals[n:]) // let the collector have the values
 	l.names, l.vals = l.names[:n], l.vals[:n]
@@ -89,6 +100,9 @@ func (l *Locals) Detach(n int) *Locals {
 func (l *Locals) Reattach(d *Locals) {
 	l.names = append(l.names, d.names...)
 	l.vals = append(l.vals, d.vals...)
+	for _, v := range d.vals {
+		l.items += int64(len(v))
+	}
 }
 
 // Lookup finds the topmost visible binding of the name.
@@ -104,8 +118,12 @@ func (l *Locals) Lookup(uri, local string) (xdm.Sequence, bool) {
 // Frozen is a copy of the visible bindings that later pushes and truncations
 // do not change.
 func (l *Locals) Frozen() *Locals {
-	return &Locals{names: append([]localName(nil), l.names[l.base:]...),
+	f := &Locals{names: append([]localName(nil), l.names[l.base:]...),
 		vals: append([]xdm.Sequence(nil), l.vals[l.base:]...)}
+	for _, v := range f.vals {
+		f.items += int64(len(v))
+	}
+	return f
 }
 
 // FrozenOnly is Frozen keeping only the bindings keep accepts.
@@ -115,6 +133,7 @@ func (l *Locals) FrozenOnly(keep func(uri, local string) bool) *Locals {
 		if n := l.names[i]; keep(n.uri, n.local) {
 			f.names = append(f.names, n)
 			f.vals = append(f.vals, l.vals[i])
+			f.items += int64(len(l.vals[i]))
 		}
 	}
 	return f

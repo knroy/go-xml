@@ -183,3 +183,37 @@ func TestSM05TallBodyChargesRecursionDepth(t *testing.T) {
 		t.Fatalf("short body at depth 400: %v", err)
 	}
 }
+
+// sm05Locals is a host runtime binding on a locals stack, as XSLT's does.
+type sm05Locals struct{ l *xpathleaf.Locals }
+
+func (h sm05Locals) Locals() *xpathleaf.Locals { return h.l }
+
+// TestSM05LiveLocalsShrinkTheAllowance: what the host's local bindings hold
+// live is taken off each expression's fresh item allowance, so sibling
+// variables and recursive frames cannot each hold MaxItems at once.
+func TestSM05LiveLocalsShrinkTheAllowance(t *testing.T) {
+	locals := &xpathleaf.Locals{}
+	ctx := NewContext(nil, Builtins()).WithEnv(func(e *Env) {
+		e.MaxItems, e.LibraryVersion = 20, XPath31
+	}).WithVersion(XPath31)
+	xpathleaf.SetHost(ctx, &xpathleaf.Host{Runtime: sm05Locals{locals}})
+	c, err := CompileWith("count(tokenize($s))", CompileOptions{Version: XPath31})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx = ctx.WithVar(xdm.QName{Local: "s"}, strSeq(strings.Repeat("a ", 10)))
+	if _, err := c.Eval(ctx); err != nil {
+		t.Fatalf("with nothing bound: %v", err)
+	}
+	locals.Push(xdm.QName{Local: "held"}, manyItems(15))
+	_, err = c.Eval(ctx)
+	wantRefused(t, err, wantItems)
+	locals.Truncate(0)
+	if locals.Items() != 0 {
+		t.Fatalf("Items after Truncate(0) = %d", locals.Items())
+	}
+	if _, err := c.Eval(ctx); err != nil {
+		t.Fatalf("after the binding went out of scope: %v", err)
+	}
+}

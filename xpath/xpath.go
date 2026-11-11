@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/knroy/go-xml/v2/internal/xdmlimit"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -377,9 +378,14 @@ func (c *Compiled) Eval(ctx *Context) (_ xdm.Sequence, err error) {
 	// cleared the outer loop's count on every call and materialised 2,000,000
 	// items under a bound of 100,000. So the enclosing count is put back on
 	// return, and the enclosing construct charges the result itself.
+	//
+	// The fresh allowance is less what the host's local bindings hold live
+	// (liveLocalItems): an XSLT variable's value stays bound for the rest of
+	// its frame, so starting every select at zero let sibling variables and
+	// recursive frames each hold a full MaxItems at once.
 	if ctx == nil || !ctx.heldItems {
 		if p := ctx.ev().items; p != nil {
-			saved := atomic.SwapInt64(p, 0)
+			saved := atomic.SwapInt64(p, liveLocalItems(ctx))
 			defer atomic.StoreInt64(p, saved)
 		}
 	}
@@ -400,6 +406,24 @@ func (c *Compiled) Eval(ctx *Context) (_ xdm.Sequence, err error) {
 		return c.evalForeign(ctx)
 	}
 	return c.expr.Eval(c.scope(ctx))
+}
+
+// liveLocalItems is the number of items held by the local bindings of the
+// host evaluation ctx runs on (xpathleaf.Locals), or zero. Only the
+// evaluation's own goroutine reads the stack: a foreign context, or one whose
+// stack is off, may be running elsewhere.
+func liveLocalItems(ctx *Context) int64 {
+	if ctx == nil || ctx.foreign || ctx.host == nil {
+		return 0
+	}
+	lh, ok := ctx.host.Runtime.(xpathleaf.LocalsHost)
+	if !ok {
+		return 0
+	}
+	if l := lh.Locals(); l != nil && !l.Off() {
+		return l.Items()
+	}
+	return 0
 }
 
 // evalForeign is Eval with a context handed to host code, which may be
