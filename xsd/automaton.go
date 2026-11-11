@@ -344,6 +344,7 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		scope = len(m.counters) - 1
 	}
 
+	posStart := len(m.positions)
 	var inner frag
 	var err error
 	switch t := p.Term.(type) {
@@ -427,6 +428,10 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		for _, l := range inner.last {
 			m.scopeLast[scope][l] = true
 		}
+		if scope == len(m.counters)-1 && m.decisionFree(scope) {
+			m.dropCounter(scope, enclosing, posStart)
+			scope = enclosing
+		}
 	}
 	if (p.MaxOccurs == Unbounded || p.MaxOccurs > 1) && !inner.looped {
 		// The loop-back edges wrap around scope, so they lie inside
@@ -445,6 +450,45 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		inner.nullable = true
 	}
 	return inner, nil
+}
+
+// decisionFree reports whether counter c, the innermost one, can never change
+// what the runtime decides, so the positions and edges alone say everything.
+//
+// A count is set to 1 on entering a scope and only grows, so a minimum of 0
+// or 1 is met whenever it is checked. A maximum of 1 is never repeated past,
+// and an unbounded maximum caps the count at min+1, which every reading meets
+// alike. What the counter could still decide is when a repetition restarts
+// the scopes nested in it, so it is decision-free only with none inside it:
+// the caller asks only for the last counter created.
+//
+// This is what keeps a? and a* off the count vector. Every such particle had
+// a counter of its own, so no two positions of (a?|a?|...|a?)* or of a dense
+// (a?,a?,...,a?) shared one, positionClasses could merge none of them, and
+// each child cost live states x follow width x vector length.
+func (m *contentModel) decisionFree(c int) bool {
+	k := m.counters[c]
+	return k.min <= 1 && (k.max == 1 || k.max == Unbounded)
+}
+
+// dropCounter removes counter c, the last one, as though its particle had
+// never had one: positions created from posStart on leave it off their chains,
+// and the edges laid inside one of its repetitions lie inside enclosing's.
+func (m *contentModel) dropCounter(c, enclosing, posStart int) {
+	for p := posStart; p < len(m.positions); p++ {
+		chain := m.positions[p].counters
+		if len(chain) > 0 && chain[len(chain)-1] == c {
+			m.positions[p].counters = chain[:len(chain)-1]
+		}
+		for i := range m.pieces[p] {
+			if m.pieces[p][i].scope == c {
+				m.pieces[p][i].scope = enclosing
+			}
+		}
+	}
+	m.counters = m.counters[:c]
+	m.scopeFirst = m.scopeFirst[:c]
+	m.scopeLast = m.scopeLast[:c]
 }
 
 // counterChain returns the counter indices containing a scope, outermost first.

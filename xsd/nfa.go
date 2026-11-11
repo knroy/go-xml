@@ -455,11 +455,25 @@ func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int, cla
 	if classes != nil {
 		walked = map[stepKey]bool{}
 	}
+	// With no counters a state is its position alone, so what a run adds
+	// does not depend on the state it is reached from: each run is walked
+	// once per child. The runs are shared slices, so a dense (a?,a?,...)
+	// whose live states hold overlapping suffixes walks each member once,
+	// not once per state holding it.
+	type runKey struct {
+		first *int
+		n     int
+	}
+	var runsWalked map[runKey]bool
+	if len(m.counters) == 0 {
+		runsWalked = map[runKey]bool{}
+	}
 	for i := 0; i < n; i++ {
 		next := spare
 		clear(next.seen)
 		next.order = next.order[:0]
 		clear(walked)
+		clear(runsWalked)
 		for _, st := range states.order {
 			if walked != nil && st.pos >= 0 {
 				k := stepKey{classes[st.pos], st.counts}
@@ -469,6 +483,13 @@ func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int, cla
 				walked[k] = true
 			}
 			for _, run := range candidates(m, st, start) {
+				if runsWalked != nil && len(run.to) > 0 {
+					k := runKey{&run.to[0], len(run.to)}
+					if runsWalked[k] {
+						continue
+					}
+					runsWalked[k] = true
+				}
 				countMatchStep(len(run.to))
 				for _, pos := range run.to {
 					if !match(i, pos) {
