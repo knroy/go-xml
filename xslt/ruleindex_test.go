@@ -181,7 +181,7 @@ func TestRuleIndexCoversEveryCandidate(t *testing.T) {
 				t.Fatalf("no index for %v in mode %q", n.Kind(), mode)
 			}
 			in := map[int]bool{}
-			for _, i := range cand {
+			for i, more := cand.next(); more; i, more = cand.next() {
 				in[i] = true
 			}
 			for i, r := range s.templates {

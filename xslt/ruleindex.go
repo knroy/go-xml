@@ -1,6 +1,8 @@
 package xslt
 
 import (
+	"sort"
+
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -10,7 +12,7 @@ import (
 // For each mode it holds, per node kind and per element/attribute name, the
 // indexes into Stylesheet.templates of the rules whose pattern may match such
 // a node, in the templates' own (precedence, priority, declaration) order.
-// Scanning one of those lists from index start visits the same matching
+// Merging a node's lists (ruleCands) from index start visits the same matching
 // rules in the same order as the linear scan, so the winner, the resume index
 // handed to xsl:next-match and any pattern error are all unchanged.
 //
@@ -24,13 +26,30 @@ type modeRules struct {
 	// empty records that no template rule is in the mode at all.
 	empty  bool
 	byKind [xdm.KindNamespace + 1][]int
+	// byName holds only the rules keyed on that name; the rules that match
+	// the name's kind whatever the name stay in byKind, and dispatch merges
+	// the two, so a wildcard rule is stored once per mode, not once per name.
 	byName map[ruleName][]int
+	// all is the index of the mode="#all" rules, shared by every mode so they
+	// are stored once, not once per mode; nil on that shared index itself.
+	all *modeRules
 }
 
 type ruleName struct {
 	kind       xdm.NodeKind
 	uri, local string
 }
+
+// fanoutFactor bounds the entries one xsl:template declaration may add to
+// the index: a rule naming m modes whose branches need e entries each mode
+// costs m*e, and once that passes fanoutFactor*(m+e), a multiple of what it
+// took to write, its modes are left out of the index and dispatch in them
+// takes the linear scan. Every other mode stays indexed and the index stays
+// linear in the stylesheet, not in the product of one rule's @mode and
+// @match.
+// ponytail: whole modes fall back; sharing one list per mode set would keep
+// them indexed if a real stylesheet ever needs it.
+const fanoutFactor = 16
 
 // buildRuleIndex indexes s.templates, which must already be sorted.
 func (s *Stylesheet) buildRuleIndex() {
@@ -48,56 +67,116 @@ func (s *Stylesheet) buildRuleIndex() {
 	for m := range s.modeNoMatch {
 		modes[m] = true
 	}
+	all := &modeRules{byName: map[ruleName][]int{}, empty: true}
+	idx := ruleIndex{}
+	for mode := range modes {
+		idx[mode] = &modeRules{byName: map[ruleName][]int{}, empty: true, all: all}
+	}
 	type keys struct {
 		kinds [xdm.KindNamespace + 1]bool
 		names []ruleName
 	}
 	tk := make([]keys, len(s.templates))
+	// The branches of one union rule share its @mode (compileTemplate), so
+	// the cost is summed over the whole declaration.
+	cost := map[int]int{}
 	for i, t := range s.templates {
 		tk[i].kinds, tk[i].names = ruleKeys(t)
+		cost[t.unionGroup] += len(tk[i].names) + 1
 	}
-	idx := ruleIndex{}
-	for mode := range modes {
-		mr := &modeRules{byName: map[ruleName][]int{}, empty: true}
-		for i, t := range s.templates {
-			if !t.matchesMode(mode) {
-				continue
+	var unindexed []string
+	for i, t := range s.templates {
+		if m, e := len(t.Mode), cost[t.unionGroup]; m > 1 && m*e > fanoutFactor*(m+e) {
+			unindexed = append(unindexed, t.Mode...)
+			continue
+		}
+		in := t.Mode
+		if len(in) == 0 {
+			in = []string{""}
+		}
+		for _, m := range in {
+			mr := all
+			switch m {
+			case "#all": // XTSE0550: it stands alone
+			case "#default":
+				mr = idx[""]
+			default:
+				mr = idx[m]
 			}
+			mr.add(i, &tk[i].kinds, tk[i].names)
+		}
+	}
+	if !all.empty {
+		for _, mr := range idx {
 			mr.empty = false
-			kinds, names := tk[i].kinds, tk[i].names
-			for k := range mr.byKind {
-				if kinds[k] {
-					mr.byKind[k] = append(mr.byKind[k], i)
-				}
-			}
-			for _, n := range names {
-				if l := mr.byName[n]; len(l) == 0 || l[len(l)-1] != i {
-					mr.byName[n] = append(l, i)
-				}
-			}
 		}
-		// A name's list also needs every rule that matches its kind
-		// whatever the name: merge the two, both already in order.
-		for n, own := range mr.byName {
-			mr.byName[n] = mergeSorted(own, mr.byKind[n.kind])
+	}
+	for _, m := range unindexed {
+		if m == "#default" {
+			m = ""
 		}
-		idx[mode] = mr
+		delete(idx, m)
 	}
 	s.rules = idx
 }
 
-func mergeSorted(a, b []int) []int {
-	out := make([]int, 0, len(a)+len(b))
-	for len(a) > 0 && len(b) > 0 {
-		if a[0] < b[0] {
-			out, a = append(out, a[0]), a[1:]
-		} else if b[0] < a[0] {
-			out, b = append(out, b[0]), b[1:]
-		} else {
-			out, a, b = append(out, a[0]), a[1:], b[1:]
+// add files rule i under kinds and names. Rules are added in index order,
+// so every list stays sorted; a repeat of i (a duplicate @mode token or name)
+// is dropped.
+func (mr *modeRules) add(i int, kinds *[xdm.KindNamespace + 1]bool, names []ruleName) {
+	mr.empty = false
+	for k := range mr.byKind {
+		if kinds[k] {
+			if l := mr.byKind[k]; len(l) == 0 || l[len(l)-1] != i {
+				mr.byKind[k] = append(l, i)
+			}
 		}
 	}
-	return append(append(out, a...), b...)
+	for _, n := range names {
+		if l := mr.byName[n]; len(l) == 0 || l[len(l)-1] != i {
+			mr.byName[n] = append(l, i)
+		}
+	}
+}
+
+// ruleCands is the candidate rules for one node: up to four ascending lists
+// (the mode's name and kind lists, then the #all index's) that next merges
+// in place, so dispatch allocates nothing.
+type ruleCands [4][]int
+
+// from drops every candidate below start.
+func (c *ruleCands) from(start int) {
+	if start == 0 {
+		return
+	}
+	for k, l := range c {
+		c[k] = l[sort.SearchInts(l, start):]
+	}
+}
+
+// next pops the lowest remaining candidate, once even when several lists
+// hold it.
+func (c *ruleCands) next() (int, bool) {
+	least := -1
+	for _, l := range c {
+		if len(l) > 0 && (least < 0 || l[0] < least) {
+			least = l[0]
+		}
+	}
+	if least < 0 {
+		return 0, false
+	}
+	for k, l := range c {
+		if len(l) > 0 && l[0] == least {
+			c[k] = l[1:]
+		}
+	}
+	return least, true
+}
+
+// none reports whether no candidate is left.
+func (c *ruleCands) none() bool {
+	return len(c[0])+len(c[1])+len(c[2])+len(c[3]) == 0
 }
 
 // ruleKeys reports which nodes t's pattern may match on node test alone: any
@@ -168,20 +247,36 @@ func ruleKeys(t *Template) (kinds [xdm.KindNamespace + 1]bool, names []ruleName)
 	return
 }
 
-// candidates returns the indexes of the rules in mode that may match node,
-// and false when the mode or node is one the index does not cover.
-func (s *Stylesheet) candidates(node *xdm.Node, mode string) ([]int, bool) {
+// candidates returns the rules in mode that may match node, and false when
+// the mode or node is one the index does not cover.
+func (s *Stylesheet) candidates(node *xdm.Node, mode string) (ruleCands, bool) {
+	var c ruleCands
 	if node == nil || s.rules == nil {
-		return nil, false
+		return c, false
 	}
 	mr := s.rules[mode]
-	if mr == nil || int(node.Kind()) >= len(mr.byKind) {
-		return nil, false
+	k := node.Kind()
+	if mr == nil || int(k) >= len(mr.byKind) {
+		return c, false
 	}
-	if node.Kind() == xdm.KindElement || node.Kind() == xdm.KindAttribute {
-		if l, ok := mr.byName[ruleName{node.Kind(), node.Name().URI, node.Name().Local}]; ok {
-			return l, true
+	c[1] = mr.byKind[k]
+	if mr.all != nil {
+		c[3] = mr.all.byKind[k]
+	}
+	if k != xdm.KindElement && k != xdm.KindAttribute {
+		return c, true
+	}
+	named := len(mr.byName) > 0
+	allNamed := mr.all != nil && len(mr.all.byName) > 0
+	if named || allNamed {
+		qn := node.Name()
+		key := ruleName{k, qn.URI, qn.Local}
+		if named {
+			c[0] = mr.byName[key]
+		}
+		if allNamed {
+			c[2] = mr.all.byName[key]
 		}
 	}
-	return mr.byKind[node.Kind()], true
+	return c, true
 }
