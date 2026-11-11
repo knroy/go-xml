@@ -250,9 +250,14 @@ type StreamingDocumentResolver interface {
 }
 
 // NewFileResolver returns a resolver confined to the given directories.
+// An empty or blank root is refused: it names no directory, and
+// filepath.Abs would have made it the working directory.
 func NewFileResolver(roots ...string) (*FileResolver, error) {
 	r := &FileResolver{cache: map[string]*xdm.Tree{}}
 	for _, root := range roots {
+		if blankRoot(root) {
+			return nil, fmt.Errorf("resolver root %q names no directory", root)
+		}
 		abs, err := filepath.Abs(root)
 		if err != nil {
 			return nil, fmt.Errorf("resolver root %q: %w", root, err)
@@ -269,6 +274,9 @@ func NewFileResolver(roots ...string) (*FileResolver, error) {
 	}
 	return r, nil
 }
+
+// blankRoot reports whether a root names no directory.
+func blankRoot(root string) bool { return strings.TrimSpace(root) == "" }
 
 // readConfined reads a file that resolvePath has already placed inside a root,
 // re-checking containment at open time rather than trusting the earlier check.
@@ -318,6 +326,9 @@ func (r *FileResolver) openConfined(path, name string, use func(f *os.File) erro
 // the file open: the confinement is decided at the open.
 func (r *FileResolver) openConfinedFile(path, name string) (*os.File, error) {
 	for _, root := range r.Roots {
+		if blankRoot(root) {
+			continue
+		}
 		absRoot, err := filepath.Abs(root)
 		if err != nil {
 			continue
@@ -516,6 +527,13 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 	}
 
 	for _, root := range r.Roots {
+		// A blank root, in a Roots set by hand, contains nothing: it is not
+		// the working directory, and it still counts as a root, so a
+		// resolver whose roots are all blank refuses every path rather than
+		// becoming unconfined.
+		if blankRoot(root) {
+			continue
+		}
 		// The root is made absolute and symlink-resolved on the same terms
 		// as the path. Comparing an absolute path against a root the caller
 		// wrote relatively makes filepath.Rel fail, and every file is then
