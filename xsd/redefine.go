@@ -524,8 +524,37 @@ func (a *assembler) checkRedefinedGroup(el *xdm.Node, q xdm.QName, repl, orig *M
 	if repl == nil || orig == nil || repl.Group == nil || orig.Group == nil {
 		return
 	}
+	// This runs from postFixups, before checkGroupCycles, and the
+	// restriction walk assumes an acyclic group graph: a replacement that
+	// reaches a circular group spun or overflowed the stack. That group is
+	// reported as mg-props-correct.2 by checkGroupCycles; there is nothing
+	// to measure against it here.
+	st := &groupSCC{index: map[*ModelGroup]int{}, low: map[*ModelGroup]int{},
+		onStack: map[*ModelGroup]bool{}, circular: map[*ModelGroup]bool{}}
+	for _, g := range []*ModelGroup{repl.Group, orig.Group} {
+		if st.index[g] == 0 {
+			cycleFrom(g, st)
+		}
+	}
+	if len(st.circular) > 0 {
+		return
+	}
 	r := &Particle{MinOccurs: 1, MaxOccurs: 1, Term: repl.Group}
 	b := &Particle{MinOccurs: 1, MaxOccurs: 1, Term: orig.Group}
+	// The same flattening gate checkParticleRestriction applies before
+	// the walk it shares with this one.
+	limit := a.schema.maxPositions
+	if limit <= 0 {
+		limit = maxPositions
+	}
+	inlined := map[*ModelGroup]int{}
+	if inlinedTooLong(r, limit, inlined) || inlinedTooLong(b, limit, inlined) {
+		a.p.errs = append(a.p.errs, fmt.Errorf(
+			"the redefinition of group %q: Particle Valid (Restriction) cannot be "+
+				"checked: a model group flattens to more than %d particles: %w",
+			q.Local, limit, xdm.ErrResourceLimit))
+		return
+	}
 	if err := particleValidRestrictionIn(r, b, a.schema.Version, a.schema.budgets); err != nil {
 		// An undecided check carries no constraint code: it is no verdict,
 		// and the error is kept as is so that xdm.ErrResourceLimit survives.
