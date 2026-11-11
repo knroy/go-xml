@@ -419,8 +419,12 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	// that was meant for sequences.
 	var ext accumExtend
 	extend := func(prev, next xdm.Sequence) (xdm.Sequence, error) { return ext.extend(ctx, prev, next) }
-	var walk func(*xdm.Node) error
-	walk = func(n *xdm.Node) error {
+	// The walk is a loop, not a recursion on the children: a rule reading
+	// another accumulator not walked yet walks that one inside its own step,
+	// so a recursive walk held a chain of k such reads at depth d of the
+	// document as k*d frames. Each link now holds a fixed few, and the
+	// chain is bounded by the XPath call depth each read is charged.
+	pre := func(n *xdm.Node) error {
 		next, err := rt.applyAccumRules(def, n, cur, ctx, false)
 		if err != nil {
 			return err
@@ -454,11 +458,9 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 		// The before and after maps are left without entries for attribute
 		// nodes for the same reason; accumulator-before on an attribute is
 		// XTTE3360 and never reaches the map.
-		for ch := range n.Children() {
-			if err := walk(ch); err != nil {
-				return err
-			}
-		}
+		return nil
+	}
+	post := func(n *xdm.Node) error {
 		end, err := rt.applyAccumRules(def, n, cur, ctx, true)
 		if err != nil {
 			return err
@@ -466,11 +468,38 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 		if cur, err = extend(cur, end); err != nil {
 			return err
 		}
+		i := n.Index() - vals.base
 		vals.after[i] = cur
 		vals.state[i] |= accumAfterSet
 		return nil
 	}
-	if err := walk(root); err != nil {
+	walk := func() error {
+		depth := 0
+		for n := root; n != nil; {
+			if err := pre(n); err != nil {
+				return err
+			}
+			if c := n.FirstChild(); c != nil {
+				n, depth = c, depth+1
+				continue
+			}
+			for {
+				if err := post(n); err != nil {
+					return err
+				}
+				if depth == 0 {
+					return nil
+				}
+				if s := n.NextSibling(); s != nil {
+					n = s
+					break
+				}
+				n, depth = n.Parent(), depth-1
+			}
+		}
+		return nil
+	}
+	if err := walk(); err != nil {
 		// §18.2.5 (Dynamic Errors in Accumulators): the error "is signaled
 		// as an error from any subsequent call on accumulator-before or
 		// accumulator-after that references the accumulator", "understood
