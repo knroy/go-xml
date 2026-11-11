@@ -830,7 +830,20 @@ func evalFor(ctx *Context, bindings []Binding, body Expr) (xdm.Sequence, error) 
 		if err != nil {
 			return nil, err
 		}
-		if err := ctx.countItems(len(v)); err != nil {
+		// The recursive form charged a body result once at every binding
+		// level, as each level's concatenation took it in, and the item
+		// budget's verdicts are pinned to that accounting: XQuery charges a
+		// FLWOR's tuple stream per clause, and "count(for ...)" -- routed
+		// here -- must be refused where the bare FLWOR is. So the charge is
+		// kept, made at once for all the levels, saturating rather than
+		// wrapping where int is 32 bits.
+		charge := len(v)
+		if charge > math.MaxInt/len(bindings) {
+			charge = math.MaxInt
+		} else {
+			charge *= len(bindings)
+		}
+		if err := ctx.countItems(charge); err != nil {
 			return nil, err
 		}
 		out = append(out, v...)
