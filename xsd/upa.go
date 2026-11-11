@@ -52,6 +52,10 @@ type CheckOptions struct {
 	//
 	// The zero value is 1.0, which keeps the stricter rule.
 	Version Version
+
+	// budgets are the schema's retained Options budgets, which
+	// checkContentModelConstraints fills in; zero reads the defaults.
+	budgets loadBudgets
 }
 
 // CheckConstraints applies the schema component constraints that are checked
@@ -88,6 +92,7 @@ func (s *Schema) CheckConstraints(opts CheckOptions) error {
 // cost is paid once per load rather than once per document.
 func checkContentModelConstraints(s *Schema, opts CheckOptions) error {
 	var errs []error
+	opts.budgets = s.budgets
 
 	// The content models to check are those of every named type *and* of
 	// every anonymous type declared inline in an element declaration.
@@ -175,7 +180,7 @@ func checkContentModelConstraints(s *Schema, opts CheckOptions) error {
 	}
 
 	for _, site := range sites {
-		m, err := compileForChecks(site.particle, s.maxPositions, maxUPAStateWidth, 0)
+		m, err := compileForChecks(site.particle, s.maxPositions, s.budgets.width(), 0)
 		if err != nil {
 			// A model that will not compile is a model none of the
 			// checks below can run against, so the schema arrives at
@@ -349,8 +354,8 @@ func sortedErrors(msgs []string) []error {
 // They are vars only so tests may lower them; they are never assigned in
 // production.
 var (
-	maxUPAStateWidth = 256
-	maxUPAPairTests  = 1 << 22 // 4,194,304
+	maxUPAStateWidth = DefaultMaxUPAStateWidth
+	maxUPAPairTests  = DefaultMaxUPAPairTests // 4,194,304
 )
 
 // checkUPA reports a content model in which two competing particles could match
@@ -378,7 +383,7 @@ func checkUPA(m *contentModel, where string, opts CheckOptions) error {
 		states = append(states, upaState{f, false})
 	}
 
-	budget := maxUPAPairTests
+	width, budget := opts.budgets.width(), opts.budgets.pairs()
 	for _, st := range states {
 		state := st.positions
 		// Bound the WORK before any of it is done. A state too wide to
@@ -388,13 +393,13 @@ func checkUPA(m *contentModel, where string, opts CheckOptions) error {
 		// constraint must be refused, never assumed to hold. See
 		// maxUPAStateWidth.
 		pairs := len(state) * (len(state) - 1) / 2
-		if len(state) > maxUPAStateWidth {
+		if len(state) > width {
 			return fmt.Errorf(
 				"%s: Unique Particle Attribution cannot be checked: a state of "+
 					"the content model has %d competing positions, over the limit "+
 					"of %d; the schema is refused because its ambiguity is "+
 					"undecided, not because it is known to be ambiguous: %w",
-				where, len(state), maxUPAStateWidth, xdm.ErrResourceLimit)
+				where, len(state), width, xdm.ErrResourceLimit)
 		}
 		if pairs > budget {
 			return fmt.Errorf(
@@ -402,7 +407,7 @@ func checkUPA(m *contentModel, where string, opts CheckOptions) error {
 					"model needs more than %d position-pair comparisons; the "+
 					"schema is refused because its ambiguity is undecided, not "+
 					"because it is known to be ambiguous: %w",
-				where, maxUPAPairTests, xdm.ErrResourceLimit)
+				where, opts.budgets.pairs(), xdm.ErrResourceLimit)
 		}
 		budget -= pairs
 		for i := 0; i < len(state); i++ {

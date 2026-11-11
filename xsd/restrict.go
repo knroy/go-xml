@@ -144,7 +144,7 @@ func (p *parser) checkParticleRestriction() error {
 					"the restriction is undecided, not because it is known to be invalid: %w",
 				typeLabel(name, ct), limit, xdm.ErrResourceLimit)
 		}
-		if err := particleValidRestrictionVersion(ct.Particle, base.Particle, p.schema.Version); err != nil {
+		if err := particleValidRestrictionIn(ct.Particle, base.Particle, p.schema.Version, p.schema.budgets); err != nil {
 			errs = append(errs, fmt.Errorf(
 				"%s is not a valid restriction of %s: %w",
 				typeLabel(name, ct), typeLabel(base.Name, base), err))
@@ -277,7 +277,13 @@ func particleValidRestriction(r, b *Particle) error {
 // particleValidRestrictionVersion is particleValidRestriction with the schema
 // version, which decides whether the 1.1 all-group subsumption rule applies.
 func particleValidRestrictionVersion(r, b *Particle, v Version) error {
-	return particleRestricts(r, b, false, &restrictWalk{v: v, memo: map[restrictPair]error{}})
+	return particleValidRestrictionIn(r, b, v, loadBudgets{})
+}
+
+// particleValidRestrictionIn is particleValidRestrictionVersion under a
+// schema's retained budgets (Options.MaxSubsumptionStates and the rest).
+func particleValidRestrictionIn(r, b *Particle, v Version, lb loadBudgets) error {
+	return particleRestricts(r, b, false, &restrictWalk{v: v, lb: lb, memo: map[restrictPair]error{}})
 }
 
 // restrictWalk is the state one Particle Valid (Restriction) check carries
@@ -294,6 +300,7 @@ func particleValidRestrictionVersion(r, b *Particle, v Version) error {
 // now decided once and the walk is bounded by the number of distinct pairs.
 type restrictWalk struct {
 	v    Version
+	lb   loadBudgets
 	memo map[restrictPair]error
 }
 
@@ -403,14 +410,14 @@ func particleRestrictsOnce(r, b *Particle, expanded bool, w *restrictWalk) error
 	// approximation of the same inclusion, never wrong in the accepting
 	// direction.
 	if w.v >= Version11 {
-		if err, ok := allSubsumes(r, b); ok {
+		if err, ok := allSubsumes(r, b, w.lb); ok {
 			return err
 		}
 		// The general form of the same 1.1 constraint, decided by
 		// language inclusion where the models can be unrolled exactly.
 		// It declines for an all group, a recursive model or a range
 		// too wide to unroll, and the table below then answers.
-		if err, ok := particleSubsumes(r, b); ok {
+		if err, ok := particleSubsumesIn(r, b, w.lb); ok {
 			return err
 		}
 	}
@@ -1844,7 +1851,7 @@ func sameElementDecl(a, b *Particle) bool {
 //
 // R is then included in B exactly when every branch through R produces counts
 // inside every budget. allBranchCounts enumerates the branches.
-func allSubsumes(r, b *Particle) (error, bool) {
+func allSubsumes(r, b *Particle, lb loadBudgets) (error, bool) {
 	bg, ok := b.Term.(*ModelGroup)
 	if !ok || bg.Compositor != CompositorAll {
 		return nil, false
@@ -1948,7 +1955,7 @@ func allSubsumes(r, b *Particle) (error, bool) {
 		}
 	}
 
-	branches, ok := allBranchCounts(r)
+	branches, ok := allBranchCountsIn(r, lb.branchN())
 	if !ok {
 		return nil, false
 	}
@@ -2173,6 +2180,11 @@ func (c branchCount) add(name xdm.QName, r occRange) {
 // cannot describe — a wildcard, or an element with no resolvable name — in
 // which case the caller falls back to the structural table.
 func allBranchCounts(p *Particle) ([]branchCount, bool) {
+	return allBranchCountsIn(p, branchLimit)
+}
+
+// allBranchCountsIn is allBranchCounts with the branch budget given.
+func allBranchCountsIn(p *Particle, limit int) ([]branchCount, bool) {
 	if p.MaxOccurs == 0 {
 		return []branchCount{{}}, true
 	}
@@ -2183,7 +2195,7 @@ func allBranchCounts(p *Particle) ([]branchCount, bool) {
 		return []branchCount{c}, true
 
 	case *ModelGroup:
-		inner, ok := groupBranchCounts(t)
+		inner, ok := groupBranchCounts(t, limit)
 		if !ok {
 			return nil, false
 		}
@@ -2239,21 +2251,21 @@ func allBranchCounts(p *Particle) ([]branchCount, bool) {
 // approximation. Enforced by TestRestrictionBudgetSoundness and TestBranchCountsDeclineIsNotAcceptance.
 //
 // It is a var only so tests may lower it; it is never assigned in production.
-var branchLimit = 4096
+var branchLimit = DefaultMaxRestrictionBranches
 
-func groupBranchCounts(g *ModelGroup) ([]branchCount, bool) {
+func groupBranchCounts(g *ModelGroup, limit int) ([]branchCount, bool) {
 	if g.Compositor == CompositorChoice {
 		if len(g.Particles) == 0 {
 			return []branchCount{{}}, true
 		}
 		var out []branchCount
 		for _, child := range g.Particles {
-			brs, ok := allBranchCounts(child)
+			brs, ok := allBranchCountsIn(child, limit)
 			if !ok {
 				return nil, false
 			}
 			out = append(out, brs...)
-			if len(out) > branchLimit {
+			if len(out) > limit {
 				declineBranchBudget()
 				return nil, false
 			}
@@ -2267,11 +2279,11 @@ func groupBranchCounts(g *ModelGroup) ([]branchCount, bool) {
 	// the base is an all group, whose language is likewise order-blind.
 	out := []branchCount{{}}
 	for _, child := range g.Particles {
-		brs, ok := allBranchCounts(child)
+		brs, ok := allBranchCountsIn(child, limit)
 		if !ok {
 			return nil, false
 		}
-		if len(out)*len(brs) > branchLimit {
+		if len(out)*len(brs) > limit {
 			declineBranchBudget()
 			return nil, false
 		}

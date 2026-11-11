@@ -165,7 +165,9 @@ type counter struct {
 // checked under — see Schema.maxPositions.
 //
 // Every follow set is bounded by maxUPAStateWidth, the width checkUPA already
-// refuses at load, so a schema that loaded never reaches it.
+// refuses at load, so a schema that loaded never reaches it. Validation calls
+// compileForChecks with the schema's retained Options.MaxUPAStateWidth
+// instead, for the same reason it passes the retained position budget.
 func compileContentModel(p *Particle, limit int) (*contentModel, error) {
 	return compileForChecks(p, limit, maxUPAStateWidth, 0)
 }
