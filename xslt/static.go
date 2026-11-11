@@ -1009,9 +1009,19 @@ func (p *staticPhase) staticRuntime() *runtime {
 // containing element, no context item, no schema, the restricted function
 // library, and the static variables declared before el in tree order — which
 // is exactly the set this pass has accumulated by the time it reaches el.
+//
+// The bindings are the per-compile shared map of el's nearest declaring
+// element (inScopeNamespacesShared), which this function and everything it
+// hands them to only read: building el's own map per expression was linear in
+// the declarations in scope, per expression.
 func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
+	// Every use-when and shadow attribute is evaluated here, so this is the
+	// one cancellation point a module of nothing else needs.
+	if err := p.c.goCtx().Err(); err != nil {
+		return nil, err
+	}
 	ns := &nsResolver{
-		bindings:  el.InScopeNamespaces(),
+		bindings:  inScopeNamespacesShared(el),
 		defaultNS: xpathDefaultNamespace(el),
 	}
 	compiled, err := xpath.CompileWith(src, xpath.CompileOptions{

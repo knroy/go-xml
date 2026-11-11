@@ -3,6 +3,7 @@ package xslt
 import (
 	"context"
 	"fmt"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -121,5 +122,40 @@ func TestSM01ExposeResolvedOncePerPackage(t *testing.T) {
 	}
 	if got := res.String(); got != "<ok/>" {
 		t.Errorf("got %q, want <ok/>", got)
+	}
+}
+
+// TestSM01StaticEvalSharesNamespaces: k namespace declarations in scope of k
+// use-when expressions. Building each expression's own in-scope map is k*k
+// work; sharing the declaring element's map is k. Quadrupling k must not
+// come near to multiplying the compile's allocation by sixteen.
+func TestSM01StaticEvalSharesNamespaces(t *testing.T) {
+	alloc := func(k int) uint64 {
+		var b strings.Builder
+		b.WriteString(`<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"`)
+		for i := 0; i < k; i++ {
+			fmt.Fprintf(&b, ` xmlns:n%d="urn:n%d"`, i, i)
+		}
+		b.WriteString(`>`)
+		for i := 0; i < k; i++ {
+			fmt.Fprintf(&b, `<xsl:template name="t%d" use-when="true()"/>`, i)
+		}
+		b.WriteString(`</xsl:stylesheet>`)
+		tree, err := xdm.ParseString(b.String(), xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var before, after goruntime.MemStats
+		goruntime.ReadMemStats(&before)
+		if _, err := Compile(tree.Root, CompileOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		goruntime.ReadMemStats(&after)
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	small, large := alloc(300), alloc(1200)
+	if large > 8*small {
+		t.Errorf("compile allocation grew %d -> %d bytes for 4x the use-when "+
+			"expressions under 4x the namespaces: quadratic", small, large)
 	}
 }
