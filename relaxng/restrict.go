@@ -84,7 +84,7 @@ func directStep(s steps, i int) bool {
 // checkRestrictions applies §7 to a schema document.
 func checkRestrictions(root *xdm.Node) error {
 	r := &restrictor{defines: map[string]*xdm.Node{}, root: root,
-		startStack: []string{"start"}}
+		startStack: []string{"start"}, pruned: map[*xdm.Node]bool{}}
 	r.collect(root)
 	// A schema that is not a <grammar> is a pattern standing where a <start>
 	// would: §7.1.5 constrains it the same way, so a schema that is simply
@@ -134,6 +134,11 @@ type restrictor struct {
 	// and adds no step: it is constrained by §7.1.5 only if the position is
 	// itself under the schema's start.
 	startStack []string
+	// pruned holds prune's answer for each node met, shared with the nested
+	// grammars' restrictors. walk asks at every node, and each answer
+	// rescanned the subtree: D levels of <optional> over a wide <group> cost
+	// D times its size, 1.15 s for 177 KB.
+	pruned map[*xdm.Node]bool
 }
 
 func (r *restrictor) collect(n *xdm.Node) {
@@ -164,7 +169,7 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 	local := n.Name().Local
 
 	// A pattern that simplification erases cannot violate anything.
-	if prune(n) {
+	if r.prune(n) {
 		return nil
 	}
 
@@ -174,8 +179,12 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 		}
 	}
 
+	// The stacks below extend stack in place rather than copying it, which
+	// cost the depth again at every node. The walk is depth-first and no
+	// stack outlives the call it was passed to, so a sibling overwriting the
+	// slot past a shared stack's end disturbs nothing still reading it.
 	if !transparent(n, local) {
-		if err := matchProhibited(append(append([]string{}, stack...), local)); err != nil {
+		if err := matchProhibited(append(stack, local)); err != nil {
 			return err
 		}
 	}
@@ -213,12 +222,12 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 		// (§4.12), so it contributes no step to the path. Keeping it would
 		// make oneOrMore//group//attribute match a group that is not there.
 		if effectiveChildren(n) < 2 {
-			kids = append([]string{}, stack...)
+			kids = stack
 			break
 		}
-		kids = append(append([]string{}, stack...), local)
+		kids = append(stack, local)
 	default:
-		kids = append(append([]string{}, stack...), local)
+		kids = append(stack, local)
 	}
 
 	for _, kid := range n.ChildElements() {
@@ -250,7 +259,7 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 // <start> standing where the grammar does.
 func (r *restrictor) walkNested(g *xdm.Node, stack []string) error {
 	sub := &restrictor{defines: map[string]*xdm.Node{}, inDefine: r.inDefine,
-		startStack: stack}
+		startStack: stack, pruned: r.pruned}
 	sub.collect(g)
 	for _, kid := range g.ChildElements() {
 		if kid.Name().URI != NS {
@@ -404,10 +413,21 @@ func matchSteps(stack []string, steps steps) bool {
 // present in the simplified grammar at all, and the suite tests exactly that —
 // an <attribute> inside an <attribute> is legal when a sibling <notAllowed/>
 // removes the whole group first.
-func prune(n *xdm.Node) bool {
+//
+// The answer depends on the subtree alone, so r remembers it per node.
+func (r *restrictor) prune(n *xdm.Node) bool {
 	if n.Name().URI != NS {
 		return false
 	}
+	if v, ok := r.pruned[n]; ok {
+		return v
+	}
+	v := r.pruneOnce(n)
+	r.pruned[n] = v
+	return v
+}
+
+func (r *restrictor) pruneOnce(n *xdm.Node) bool {
 	switch n.Name().Local {
 	case "notAllowed":
 		return true
@@ -422,7 +442,7 @@ func prune(n *xdm.Node) bool {
 			return false
 		}
 		for _, kid := range kids {
-			if prune(kid) {
+			if r.prune(kid) {
 				return true
 			}
 		}
@@ -435,7 +455,7 @@ func prune(n *xdm.Node) bool {
 			return false
 		}
 		for _, kid := range kids {
-			if !prune(kid) {
+			if !r.prune(kid) {
 				return false
 			}
 		}

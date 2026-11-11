@@ -126,3 +126,36 @@ func TestSM10DefinitionLadderIsLinear(t *testing.T) {
 		}
 	}
 }
+
+// pruneDepthCost times checkRestrictions over d nested <optional> above a
+// group of m <empty/>.
+func pruneDepthCost(t *testing.T, d, m int) time.Duration {
+	t.Helper()
+	src := `<element name="r" xmlns="http://relaxng.org/ns/structure/1.0">` +
+		strings.Repeat("<optional>", d) + "<group>" + strings.Repeat("<empty/>", m) + "</group>" +
+		strings.Repeat("</optional>", d) + "</element>"
+	tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := tree.Root.ChildElements()[0]
+	best := time.Duration(1 << 62)
+	for range 3 {
+		start := time.Now()
+		if err := checkRestrictions(root); err != nil {
+			t.Fatal(err)
+		}
+		best = min(best, time.Since(start))
+	}
+	return best
+}
+
+// SECURITY (run-5). Every node of the §7 walk re-pruned its whole subtree,
+// so D levels above a wide group cost D times its size: 1.15 s at D=800.
+// Memoised, the depth adds only its own nodes.
+func TestSM10RestrictionWalkIsLinear(t *testing.T) {
+	flat, deep := pruneDepthCost(t, 1, 5000), pruneDepthCost(t, 400, 5000)
+	if r := float64(deep) / float64(flat); r > 8 {
+		t.Fatalf("400 levels cost %.0fx one level (%v vs %v); prune rescans subtrees again", r, deep, flat)
+	}
+}
