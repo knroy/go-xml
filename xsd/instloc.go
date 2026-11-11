@@ -229,12 +229,17 @@ func instanceLocalPath(loc, base string, dirs []string) (string, error) {
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(base, p)
 	}
-	if foreign || !insideDirs(p, dirs) {
+	// The absolute form is what is checked and returned. Joining against a
+	// relative base cleans "./file:/etc/x" down to "file:/etc/x", which a
+	// resolver re-parses as a file: URI naming /etc/x; an absolute path
+	// starts with "/" or a drive letter and can never be read as a scheme.
+	abs, err := filepath.Abs(p)
+	if err != nil || foreign || !insideDirs(abs, dirs) {
 		return "", fmt.Errorf(
 			"schemaLocation %q in the instance resolves outside the "+
 				"directories the schema was loaded from: %w", loc, errRefusedByPolicy)
 	}
-	return p, nil
+	return abs, nil
 }
 
 // insideDirs reports whether p lies inside one of dirs once both are resolved,
