@@ -27,7 +27,12 @@ Two sets of exceptions, both verified by the boundary tests described in
 * **A negative `MaxDepth` means the default, not "no limit"**, in
   `xdm.ParseOptions`, `xpath.Env` and `c14n.MaxDepth` — a depth bound of zero or below would
   reject every document, so there is no useful reading of a negative value
-  other than "the caller set nothing". Elsewhere — `xsd.ValidateOptions`,
+  other than "the caller set nothing". The recursion bounds
+  `xdm.ParseOptions.MaxEntityDepth` and `MaxExternalDepth` and
+  `xdm.XIncludeOptions.MaxDepth` read a negative value the same way, and have
+  no unlimited setting at all: each level is Go recursion, whose overflow is
+  fatal, so a value above a documented ceiling (10,000, 100 and 200) is
+  treated as the ceiling. Elsewhere — `xsd.ValidateOptions`,
   `relaxng.ValidateOptions`, `xslt.TransformOptions` — a negative `MaxDepth`
   really does mean no limit.
 * **A negative `MaxItems` really is no bound** (`xpath.Env`,
@@ -108,7 +113,7 @@ syntax error does *not* carry the sentinel.
 | `MaxNodes` | `xdm/parse.go` | *(none)* | as above |
 | `MaxBytes` | `xdm/parse.go` | *(none)* | as above |
 | entity expansion budget | `xdm/dtd_entities.go`, `xdm/dtd_external.go` | *(none)* | as above; shared across every document one XInclude pass parses and every parse one XPath evaluation performs, not per parse |
-| `maxIncludeDepth` / `maxIncludeFetches` | `xdm/xinclude.go` | *(none)* | the text already said "resource limit exceeded"; now `errors.Is` agrees |
+| `XIncludeOptions.MaxDepth` / `MaxFetches` (`maxIncludeDepth` / `maxIncludeFetches` by default) | `xdm/xinclude.go` | *(none)* | the text already said "resource limit exceeded"; now `errors.Is` agrees |
 | XInclude node budget (`Parse.MaxNodes`) | `xdm/xinclude.go` | *(none)* | as above; counts everything one pass's inclusions copy in, href-less xpointer selections included |
 | text store blocks (`textBlocks`, 1<<17, about 1 GiB of copied text in one tree) | `xdm/record.go` | *(none)* | was a panic; returned by every entry point with an error return (methods with none still panic with this error) |
 | streamed ancestor copies (`spineCopiesPerRecord`, 64) | `xdm/bursts.go` | *(none)* | reads as a malformed document; a streamed parse that has copied over 16M ancestor records (elements and their attributes), more than 64 per record of its bursts, is refused where Parse + Transform succeeds. Small bursts share their ancestor copies, so only a spine of tens of thousands of attributes over large bursts reaches it |
@@ -194,9 +199,16 @@ tree, err := xdm.ParseString(src, xdm.ParseOptions{
 | `StripSpace` | `func(QName) bool` | keep all | Drops whitespace-only text nodes for the element names it returns true for. A predicate rather than a bool because `xsl:strip-space` is per-element. |
 | `AllowDOCTYPE` | `bool` | refuse | Permits a `DOCTYPE` declaration. See below. |
 | `TrackPositions` | `bool` | off | Records where each element starts, so a validation error can name a line. Keeps each line's start offset and each element's column, not the source text: about 10% more retained memory (parse-10mb 37.2 → 41.5 MB), no extra parse time. |
-| `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Nesting limit. Deep input is the cheapest route to stack exhaustion. |
+| `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Nesting limit. Deep input is the cheapest route to stack exhaustion. Negative means the default. Any positive value is honoured: the parse is iterative, so `math.MaxInt` lifts the bound, but validation, serialization, XInclude and C14N recurse per level afterwards, and a Go stack overflow ends the process. |
 | `MaxBytes` | `int64` | `DefaultMaxBytes` = 64 MB | Source size limit, enforced on the read. |
 | `MaxNodes` | `int` | `DefaultMaxNodes` = 10,000,000 | Node count limit: elements, attributes, namespace declarations, text, comments and PIs. Whitespace-only text is not counted (it always sits between two counted nodes, and a tree strips it after the parse where a stream strips it during, so counting it would make the two disagree). |
+| `MaxEntityDepth` | `int` | 100 | How deeply entity references nest inside replacement text. Negative means the default; above 10,000 reads as 10,000, since each level is Go recursion. Raising it also raises expansion time, which is quadratic in a chain's depth. |
+| `MaxEntityBytes` | `int64` | 64 KiB | One general entity's fully expanded replacement text. Negative: no per-entity limit (`MaxTotalEntityBytes` still applies). Measured: the RFC 3987 type library fits six times over, a five-level billion-laughs does not. Not `dtd.LoadOptions.MaxEntityBytes`, which is a DTD load's total. |
+| `MaxTotalEntityBytes` | `int64` | 1 MiB | Every expansion of one document together, external fetches, an XInclude pass's documents and one XPath evaluation's parses included. Negative: no limit, which lets a few hundred bytes expand to all of memory. |
+| `MaxEntities` | `int` | 10,000 | General entities, and separately parameter entities, one DTD may declare (later declarations are not read), and references one rewritten source may substitute (more is refused). Negative: no limit. |
+| `MaxExternalFetches` | `int` | 64 | External resources (entities, the external subset) one document reads through `ExternalEntities`. Negative: no limit. |
+| `MaxExternalFetchBytes` | `int64` | 512 KiB | One fetched external resource. Negative: no per-fetch limit; `MaxTotalEntityBytes` still bounds the read. |
+| `MaxExternalDepth` | `int` | 10 | Nesting of external and parameter entities. Negative means the default; above 100 reads as 100, since parameter nesting restarts in each external level and the stack cost is quadratic. |
 | `Warn` | `func(error)` | silent | Receives the errors a parse reports without failing: today the xml:id errors of xml:id §4/§6, a duplicate value (an xml:id repeating another xml:id or a DTD-declared ID, or a DTD-declared ID repeating an xml:id) and a value that is not an NCName after normalisation. Each is an `*xdm.Error` with code `XQDY0091`; the attribute stays an ID and the parse succeeds. At most 100 per parse, then one "suppressed" summary. Applies to `Parse`, `ParseString` and `ParseBursts`. |
 
 ### Why there are two size limits
@@ -1020,7 +1032,9 @@ nothing to replace and is returned as it is.
 | `XIncludeOptions` field | Meaning |
 |---|---|
 | `Resolver` | reads each `href`; nil refuses every inclusion (see below) |
-| `Parse` | the `ParseOptions` included XML resources are parsed with; `BaseURI` and `DocumentURI` are set per resource |
+| `Parse` | the `ParseOptions` included XML resources are parsed with; `BaseURI` and `DocumentURI` are set per resource. Its entity limits bind each included document, and `MaxTotalEntityBytes` is charged once for the whole pass |
+| `MaxFetches` | resources one pass reads in total. Zero: 200; negative: no limit |
+| `MaxDepth` | how deeply inclusions nest. Zero or negative: 40; above 200 reads as 200, since each level recurses in Go once per level and once per element of the included document |
 | `Context` | cancellation, checked before each inclusion, before each fetch and every 1024 nodes (`xincludeCheckEvery`) a local xpointer search visits. Once it is done the pass returns an error wrapping `ctx.Err()` and no tree; no `xi:fallback` recovers from it, and the input tree is never modified. Nil means no cancellation |
 
 **The resolver is the whole of the confinement.** `xdm` has no filesystem and
@@ -1049,7 +1063,7 @@ XInclude, and an unsupported pointer part falls through by the XPointer
 Framework's own rule rather than being an error.
 
 Three resource budgets apply to one pass: at most 200 resources are read in
-total, inclusions may nest at most 40 deep, and everything the inclusions copy
+total (`MaxFetches`), inclusions may nest at most 40 deep (`MaxDepth`), and everything the inclusions copy
 in (fetched documents and href-less xpointer selections alike) counts against
 `Parse.MaxNodes` (zero: `DefaultMaxNodes`; negative: no bound). All report
 `resource limit exceeded`, and none substitutes for the others — a fan-out of a

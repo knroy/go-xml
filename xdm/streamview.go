@@ -255,6 +255,7 @@ func (b *burster) newViews(t *Tree) *viewBatch {
 	}
 	if s := t.source; s != nil {
 		c.source.externalSubset = s.externalSubset
+		c.source.maxEntities = s.maxEntities
 	}
 	vb.o.add(0, 0)
 	vb.deep, vb.n = r, 1

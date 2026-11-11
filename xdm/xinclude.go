@@ -78,6 +78,14 @@ const (
 	// and exceeding this bound reports "resource limit exceeded" so that a
 	// caller can tell a defective document from an expensive one.
 	maxIncludeDepth = 40
+
+	// includeDepthCeiling is the most XIncludeOptions.MaxDepth may raise
+	// maxIncludeDepth to. The stack an include chain spends is its length
+	// times the element depth of each document (the copy recurses per
+	// element), so 200 levels of documents at the default parse MaxDepth is
+	// at most 200,000 copy frames, a fraction of Go's 1 GB stack, whose
+	// overflow is fatal. A raised parse MaxDepth multiplies it.
+	includeDepthCeiling = 200
 )
 
 // XIncludeOptions configures ProcessXInclude.
@@ -96,6 +104,20 @@ type XIncludeOptions struct {
 	// bound the including document was held to. BaseURI and DocumentURI are
 	// overwritten per resource and anything set here for them is ignored.
 	Parse ParseOptions
+
+	// MaxFetches bounds how many resources one pass may read in total,
+	// counted across the whole recursion. Zero means 200, the default; a
+	// negative value means no limit. A cycle is caught separately, so this
+	// bounds only fan-out: a document including a thousand distinct small
+	// files repeats nothing and still costs a thousand parses.
+	MaxFetches int
+
+	// MaxDepth bounds how deeply inclusions may nest. Zero or a negative
+	// value means 40, the default; a value above 200 is treated as 200.
+	// There is no unlimited setting because a chain of inclusions recurses
+	// in Go once per level and once per element of each included document,
+	// and a Go stack overflow is fatal, not an error.
+	MaxDepth int
 
 	// Context carries cancellation. The pass checks it before each
 	// inclusion, before each fetch and every xincludeCheckEvery nodes a
@@ -135,7 +157,9 @@ func ProcessXInclude(tree *Tree, opts XIncludeOptions) (_ *Tree, err error) {
 		// changed, and the caller is promised a tree separate from it.
 		return tree, nil
 	}
-	p := &includeProc{opts: opts, budget: &entityBudget{}}
+	p := &includeProc{opts: opts, budget: &entityBudget{},
+		maxFetches: budgetLimit(int64(opts.MaxFetches), maxIncludeFetches),
+		maxDepth:   depthLimit(opts.MaxDepth, maxIncludeDepth, includeDepthCeiling)}
 	if base != "" {
 		p.stack = append(p.stack, base)
 	}
@@ -189,6 +213,9 @@ type includeProc struct {
 	// instead of together — 95 KB of source expanded to 149 MB with
 	// MaxBytes 8192 and MaxNodes 50, neither of which can see an expansion.
 	budget *entityBudget
+	// maxFetches and maxDepth are XIncludeOptions.MaxFetches and MaxDepth
+	// as resolved.
+	maxFetches, maxDepth int
 	// done maps each element of a document being processed whose content
 	// processing has finished to its processed copy, which an href-less
 	// xpointer selects from in its place. See selectLocal.
@@ -398,10 +425,10 @@ func (p *includeProc) expandInclude(dst, inc *Node, depth int) error {
 	if err := p.cancelled(); err != nil {
 		return err
 	}
-	if depth >= maxIncludeDepth {
+	if depth >= p.maxDepth {
 		return fatalInclude{fmt.Errorf(
 			"resource limit exceeded: xi:include nesting exceeds %d levels: %w",
-			maxIncludeDepth, ErrResourceLimit)}
+			p.maxDepth, ErrResourceLimit)}
 	}
 
 	// Section 3.2: an include element may have "zero or one fallback"
@@ -620,10 +647,10 @@ func (p *includeProc) viewOf(n *Node) *Node {
 
 // fetchText reads a resource as characters.
 func (p *includeProc) fetchText(target, base, encoding string) (*Node, error) {
-	if p.fetches >= maxIncludeFetches {
+	if p.fetches >= p.maxFetches {
 		return nil, fatalInclude{fmt.Errorf(
 			"resource limit exceeded: document performs more than %d inclusions: %w",
-			maxIncludeFetches, ErrResourceLimit)}
+			p.maxFetches, ErrResourceLimit)}
 	}
 	if p.opts.Resolver == nil {
 		return nil, fmt.Errorf("no include resolver: inclusions are not permitted")
@@ -700,10 +727,10 @@ func (p *includeProc) fetch(dst *Node, target, base, parse, xptr, encoding strin
 		}
 		return nil
 	}
-	if p.fetches >= maxIncludeFetches {
+	if p.fetches >= p.maxFetches {
 		return fatalInclude{fmt.Errorf(
 			"resource limit exceeded: document performs more than %d inclusions: %w",
-			maxIncludeFetches, ErrResourceLimit)}
+			p.maxFetches, ErrResourceLimit)}
 	}
 	if p.opts.Resolver == nil {
 		return fmt.Errorf("no include resolver: inclusions are not permitted")

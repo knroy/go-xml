@@ -76,6 +76,13 @@ type ParseOptions struct {
 	// MaxDepth bounds nesting. Deeply nested input is the cheapest way to
 	// drive a recursive descent into stack exhaustion, so the limit is
 	// enforced during construction rather than left to the runtime.
+	//
+	// Zero or a negative value means DefaultMaxDepth. Any positive value is
+	// honoured as given: the parse itself is iterative, so a large value
+	// such as math.MaxInt lifts the bound. That is the trade-off to weigh,
+	// since much that later walks the tree (validation, serialization,
+	// XInclude, canonicalization) recurses once per level, and a Go stack
+	// overflow ends the process rather than returning an error.
 	MaxDepth int
 
 	// MaxBytes bounds the source document. Zero means DefaultMaxBytes;
@@ -92,6 +99,62 @@ type ParseOptions struct {
 	// a megabyte of "<a/>" is fifty times the memory of a megabyte of text.
 	// MaxBytes bounds the read; MaxNodes bounds what the read can allocate.
 	MaxNodes int
+
+	// MaxEntityDepth bounds how deeply entity references may nest inside
+	// replacement text. Zero or a negative value means 100, the default; a
+	// value above 10,000 is treated as 10,000. Nesting is how a
+	// billion-laughs bomb multiplies, and each level is a level of Go
+	// recursion, so there is deliberately no unlimited setting: the ceiling
+	// keeps the deepest expansion (also nested in up to MaxExternalDepth
+	// external entities) far below Go's 1 GB goroutine stack, whose overflow
+	// is fatal rather than an error.
+	MaxEntityDepth int
+
+	// MaxEntityBytes bounds the fully expanded replacement text of any ONE
+	// general entity. Zero means 64 KiB, the default; a negative value means
+	// no per-entity limit (MaxTotalEntityBytes still applies). 64 KiB is
+	// measured: it carries the W3C RFC 3987 type library six times over and
+	// refuses a five-level billion-laughs. Raise it for documents whose
+	// entities legitimately expand further. (dtd.LoadOptions.MaxEntityBytes
+	// is a different quantity: the total for a DTD load.)
+	MaxEntityBytes int64
+
+	// MaxTotalEntityBytes bounds every entity expansion of one document
+	// together, including the external entities it fetches, the documents
+	// one XInclude pass includes and the parses one XPath evaluation makes
+	// (see EntityBudget). Zero means 1 MiB, the default; a negative value
+	// means no limit, which leaves a document able to expand to as much
+	// memory as it likes from a few hundred bytes: use it only for input
+	// you produced yourself.
+	MaxTotalEntityBytes int64
+
+	// MaxEntities bounds how many general entities, and separately how many
+	// parameter entities, one DTD may declare, and how many references one
+	// rewritten source may substitute. Zero means 10,000, the default; a
+	// negative value means no limit. Declarations past the limit are not
+	// read, and a substitution past it is refused.
+	MaxEntities int
+
+	// MaxExternalFetches bounds how many external resources (entities and
+	// the external DTD subset) one document may read through
+	// ExternalEntities. Zero means 64, the default; a negative value means
+	// no limit, which leaves the fan-out of reads to the document.
+	MaxExternalFetches int
+
+	// MaxExternalFetchBytes bounds ONE fetched external resource. Zero means
+	// 512 KiB, the default; a negative value means no per-fetch limit
+	// (MaxTotalEntityBytes still bounds the read, as every fetch is charged
+	// to it before it is expanded).
+	MaxExternalFetchBytes int64
+
+	// MaxExternalDepth bounds how deeply external entities and parameter
+	// entities may nest. Zero or a negative value means 10, the default; a
+	// value above 100 is treated as 100. Each level is a read and a level of
+	// Go recursion, and parameter-entity nesting restarts inside each
+	// external level, so the cost is quadratic in this value: the ceiling
+	// keeps that far below a fatal stack overflow, and there is no
+	// unlimited setting.
+	MaxExternalDepth int
 
 	// Warn, when non-nil, receives the errors a parse reports without
 	// failing. Nil, the default, reports nothing and changes nothing.
@@ -726,6 +789,9 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 					// Retained so a caller can validate against the document's
 					// own DTD; see Tree.DocType.
 					tree.DocType = d
+					if ps.opts.MaxEntities != 0 {
+						tree.ownSource().maxEntities = ps.opts.entityLimits().count
+					}
 					// Without a resolver no parameter entity is read, so §5.1
 					// stops entity and ATTLIST processing at the first
 					// reference to one, unless the document is standalone.
@@ -762,7 +828,7 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 					// when a resolver was supplied. With none, this whole block
 					// is skipped and the subset is read exactly as before.
 					if ps.opts.ExternalEntities != nil && !ps.opts.entitiesExpanded {
-						ents = newEntityTable(ps.opts.BaseURI, ps.opts.entityBudget)
+						ents = newEntityTable(ps.opts.BaseURI, ps.opts.entityBudget, ps.opts.entityLimits())
 						// The DOCTYPE follows the XML declaration, so by now the
 						// decoder has read the version and §4.3.4 can be enforced
 						// against it. See entityTable.checkEntityVersion.
@@ -842,7 +908,7 @@ func parseSteps(r io.Reader, whole string, opts ParseOptions) (step func() (*Tre
 						src.externalSubset = first.externalSubset
 						src.dtdNotes = append(src.dtdNotes, first.notes...)
 					} else {
-						ents = parseEntityDecls(declText, ps.opts.BaseURI, ps.opts.entityBudget)
+						ents = parseEntityDecls(declText, ps.opts.BaseURI, ps.opts.entityBudget, ps.opts.entityLimits())
 					}
 					if ents != nil {
 						ents.version11 = dec.IsVersion11()
