@@ -218,7 +218,8 @@ bursts reaches. These remain, each with the reason:
 - **A DTD content model of the shape `(a1*|…|an*)*` still stores about n²
   follow entries.** Shared follow pieces made a repeated choice of plain
   members linear, but not this shape; it is bounded by the 2²⁰ representation
-  budget (`maxSequenceMatcherEdges`), so a wide one is refused, not slow.
+  budget (`maxSequenceMatcherEdges`, `dtd.Options.MaxContentModelEdges`
+  since round SK), so a wide one is refused, not slow.
 - **Withheld and deferred from run-3, still open:** the NT `\??\` prefix fix
   is untested on a Windows host (string-level tests only); the run-3 deferred
   units (RELAX NG compact parser and `dtd.Parse` panic review, array walkers
@@ -311,7 +312,8 @@ merge's inputs) each hands xpath's `EvalLock` back at each switch, so a host
 function item cannot hang it. `xsl:merge` streams the documents of a
 `for-each-source` merge source each on a cursor, up to 64 at once (each holds
 its file, cursor and coroutine until the merge ends; a merge of more runs on
-the tree: `mergeStreamsMax`, a resource limit kept from rounds SC/SE; §2.1
+the tree: `TransformOptions.MaxMergeStreams`, default 64 and configurable
+since round SK, a resource limit kept from rounds SC/SE; §2.1
 gives "limits on the size of source documents that can be transformed" as its
 example of an implementation-dependent feature; no W3C case merges more than
 64), merged by key as the tree
@@ -884,7 +886,8 @@ plan:
   rules"; their input is a `document()` tree). The per-file figure of 56
   unverified and 100 unknown (§19.8 below) reads each module alone, without
   its imported schema or the modules it imports or uses.
-- *A merge of more than 64 inputs* (0 W3C cases): kept, a resource limit (above).
+- *A merge of more than 64 inputs* (0 W3C cases): kept, a resource limit
+  (above); `TransformOptions.MaxMergeStreams` raises it.
 - *No `TransformOptions.Output`* (every case the harness runs without it): the
   result tree is the output, so it is built; inherent. With `Output` the
   held parts are listed in the bullet below.
@@ -1638,6 +1641,18 @@ Conformance Test Suite (see [testing.md](testing.md#tokeniser-differential)) or
 by the parse work recorded in [CHANGELOG.md](../CHANGELOG.md).
 
 * A character error is reported against the line where the run ended.
+
+### c14n XPath filters and the XPath 1.0 number model (XML-DSig)
+
+c14n evaluates XML-DSig XPath filters in XPath 2.0 1.0-compatibility mode,
+and `c14n/c14n_test.go` pins seventeen behaviours where that agrees with
+XPath 1.0 ([`c58c9c5`](https://github.com/knroy/go-xml/commit/c58c9c5)).
+Two number-model differences remain, listed in that test and not asserted:
+`number("+1")`, `number("1e3")` and `number("INF")` are numbers where XPath
+1.0 §4.4 gives NaN, and `string()` of a double gives `1.0E7`, `INF` and `-0`
+where §4.2 gives `10000000`, `Infinity` and `0`. Closing them needs an XPath
+1.0 number model that 2.0 compatibility mode must not use, so a new exported
+`xpath` switch; it is in progress (round SK, lane SK3).
 
 ---
 

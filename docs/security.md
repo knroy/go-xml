@@ -129,20 +129,46 @@ rejecting direction:
 `xquery.Options` `MaxModules` / `MaxModuleBytes` / `MaxSchemaBytes` ·
 `dtd.LoadOptions` `MaxExternalDocuments` / `MaxExternalBytes` /
 `MaxEntityBytes` · `dtd.FileResolver.MaxBytes` ·
-`xsd.ValidateOptions` `MaxDepth` / `MaxErrors` ·
-`DefaultMaxMatchStates` · `subsumeMaxStates` · `subsumeMaxProduct` ·
-`branchLimit` · `xpath` `MaxItems` / `MaxBytes` / `MaxNodes` ·
-`xsd.Options` `MaxContentModelPositions` · `maxUPAStateWidth` ·
-`maxUPAPairTests` ·
+`xsd.ValidateOptions` `MaxDepth` / `MaxErrors` / `MaxMatchStates` ·
+`xsd.Options` `MaxSubsumptionStates` / `MaxSubsumptionProduct` /
+`MaxRestrictionBranches` · `xpath` `MaxItems` / `MaxBytes` / `MaxNodes` ·
+`xsd.Options` `MaxContentModelPositions` / `MaxUPAStateWidth` /
+`MaxUPAPairTests` ·
 `maxSubstitutionClosure` · `TransformOptions.MaxDepth` · the RELAX NG
-derivative bound · the XPath regex step and depth budgets ·
+derivative bound · the XPath regex step and depth budgets
+(`xpath.SetBacktrackBudget` / `SetBacktrackMaxDepth`) ·
 `xpath` `maxChainLength` / `maxOptimizeDepth`.
+
+Since round SK (2026-11-10) every limit that was a fixed constant is an
+option field or setter, with zero meaning the old default, so the defaults
+are unchanged: the entity and external-DTD limits (`xdm.ParseOptions`
+`MaxEntityDepth` / `MaxEntityBytes` / `MaxTotalEntityBytes` / `MaxEntities` /
+`MaxExternalFetches` / `MaxExternalFetchBytes` / `MaxExternalDepth`),
+XInclude (`XIncludeOptions` `MaxFetches` / `MaxDepth`), the DTD load and
+content model (`dtd.LoadOptions` `MaxParameterDepth` / `MaxConditionalDepth`,
+`dtd.Options` `MaxContentModelPositions` / `MaxContentModelEdges` /
+`MaxMatchStates`), RELAX NG (`relaxng.Options` `MaxIncludeDepth` /
+`MaxSchemaFetches` / `MaxFetchedNodes` / `MaxFetchedBytes` /
+`MaxRefExpansions`), the XSD load budgets above, and XSLT
+(`CompileOptions` `MaxModuleVisits` / `MaxModuleNodes`,
+`TransformOptions.MaxMergeStreams`). A limit whose levels are Go recursion
+has no unlimited setting and clamps to a ceiling, because a stack overflow is
+fatal: entity depth 10,000, external depth 100, XInclude depth 200, DTD
+parameter and conditional depth 1000, RELAX NG include depth 1000, module
+visits 50,000, backtrack depth 500,000. The XSD load budgets read a negative
+value as the default, since `Load` cannot be cancelled. `relaxng`
+`externalRef` compilations and nested `fn:transform` compiles inherit the
+caller's settings. `docs/options.md` documents each field
+([`4986fa7`](https://github.com/knroy/go-xml/commit/4986fa7)).
 
 "Refused loudly" needed qualifying, and now it holds in both halves. Most
 limits that raise an error have to borrow a *semantic* error code, because
 the specs define none for "I gave up" — `XPDY0001` for a depth cap,
-`cvc-elt.1` for a document that was never assessed. Read alone, each of those
-tells the caller something untrue about its input. XPath is the exception:
+and, until round SK, `cvc-elt.1` for a document that was never assessed. Read
+alone, each of those tells the caller something untrue about its input. An XSD
+validation stopped at `ValidateOptions.MaxDepth`, or an assertion the
+processor declined to evaluate, now carries no code at all, only
+`xdm.ErrResourceLimit` ([`de6e686`](https://github.com/knroy/go-xml/commit/de6e686)). XPath is the exception:
 §2.3.1 defines `XPDY0130` for an implementation-dependent limit, and the
 parser's depth, chain and type-nesting caps and XQuery's constructor and
 nesting caps report it, having borrowed the syntax code `XPST0003` until
@@ -155,11 +181,16 @@ site also wraps `xdm.ErrResourceLimit`, so `errors.Is` separates a refusal
 from a fault while the message stays byte-identical for the suites;
 `docs/options.md` tabulates the sites.
 
-The `subsumeMaxStates`, `subsumeMaxProduct` and `branchLimit` declines are the
-other half, and they are the quiet ones: they raise nothing at all, returning
+The `subsumeMaxStates`, `subsumeMaxProduct` and `branchLimit` declines
+(`xsd.Options` `MaxSubsumptionStates`, `MaxSubsumptionProduct` and
+`MaxRestrictionBranches`, defaults 4096, 20,000 and 4096) are the other half,
+and they were the quiet ones: they raise nothing themselves, returning
 "declined" so the caller falls back to the conservative structural table. That
 is sound (below) but it was invisible — a schema refused because a budget ran
-out looked exactly like one the table genuinely forbids. Those declines are now
+out looked exactly like one the table genuinely forbids. Since round SK a
+table rejection that followed a budget decline wraps `xdm.ErrResourceLimit`
+and says the restriction is undecided, with no constraint code
+([`5203922`](https://github.com/knroy/go-xml/commit/5203922)). Those declines are also
 counted through the `budgetStats` hook in `xsd/subsume.go`, on the model of
 `icStats` in `xsd/identity.go`, with budget declines (fixable by raising a
 limit) separated from structural ones (a recursive group, an all group, a
@@ -169,8 +200,8 @@ verdict, which `xsd/budget_stats_test.go` asserts alongside the counting.
 For four of these — `maxPositions`, `branchLimit`, `subsumeMaxStates` and
 `subsumeMaxProduct` — the claim that the fallback is conservative is no longer
 only a reading of the code. `xsd/budget_soundness_test.go` enforces it
-differentially: the four are package-level `var`s (never assigned outside
-tests), and the suite computes each verdict twice — once normally, once with
+differentially: the four are package-level `var`s holding the defaults
+(assigned only in tests; a caller's option overrides them per load), and the suite computes each verdict twice — once normally, once with
 the budget forced so low that every input exceeds it — then asserts the one
 direction that matters,
 
@@ -205,7 +236,9 @@ projection is kept because it is why the width gate exists, not because it is
 what the position budget prevents — those are two different bounds guarding two
 different shapes, and the section below separates them.
 
-Two budgets now bound it. `maxUPAStateWidth` (256) is checked on `len(state)`
+Two budgets now bound it (`xsd.Options.MaxUPAStateWidth` and
+`MaxUPAPairTests` since round SK; zero or negative is the default, there is
+no unlimited setting). `maxUPAStateWidth` (256) is checked on `len(state)`
 **before** the triangular loop begins, so no part of the quadratic cost is paid
 before the gate notices, and a state is either scanned whole or declined whole
 — a half-examined state would be a check reporting "no violation" having looked
@@ -563,9 +596,11 @@ an end-to-end hostile document whose `xi:include` names an `http://` URL, and
 that an `xi:fallback` cannot be used to launder a refusal into a read.
 
 Four **resource budgets** hold the cost of one pass: at most 200 resources
-read in total, at most 40 levels of nesting, the inclusions' node count against
+read in total (`XIncludeOptions.MaxFetches`), at most 40 levels of nesting
+(`MaxDepth`, clamped to 200), the inclusions' node count against
 `Parse.MaxNodes` (local xpointer selections included, which no fetch or depth
-counter sees), and the document's `maxTotalEntityBytes` entity-expansion
+counter sees), and the document's `maxTotalEntityBytes`
+(`ParseOptions.MaxTotalEntityBytes`, 1 MiB) entity-expansion
 allowance, which spans every included document rather than restarting for each.
 All four report `resource limit exceeded`, and none substitutes for another — a
 fan-out of a thousand distinct small files repeats nothing and would otherwise
@@ -1423,9 +1458,10 @@ through it. The regression test that caught that is `TestEntityExpansionBlowupIs
 
 `<include>` and `<externalRef>` reach a caller-supplied `Resolver`, which may
 read a file or the network, so a chain of them costs a fetch per level even
-when every href is distinct. `maxIncludeDepth` (40) is the budget for that, and
+when every href is distinct. `relaxng.Options.MaxIncludeDepth` (default 40,
+clamped to 1000, no unlimited setting) is the budget for that, and
 exceeding it reports `resource limit exceeded`. That bound is per chain. A
-second one, `maxSchemaFetches` (10,000), counts every include/externalRef fetch
+second one, `MaxSchemaFetches` (default 10,000; negative is no limit), counts every include/externalRef fetch
 of one compilation across all routes: a diamond is legal and is fetched once
 per route, so levels that each include the next F times cost F^depth fetches
 (F=12 over five levels was 271,453 fetches from 1.7 KB). Exceeding it wraps

@@ -350,6 +350,11 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | An error in a `GroundLater` copy stopped the parse, forcing a re-run | The cursor returns it from the call that met it and reads on: re-runs 9 → 0. | [`ac7af57`][ac7af57] |
 | Under `Output` or `SecondaryOutput` an HTML5 result was held to its end | Prefix normalisation is decided per element and the bare doctype waits only for the first element, so HTML5 streams. | [`b888d21`][b888d21] |
 | The §19.8 analysis judged root(X) of a striding X, and a leading /, without a static type, leaving valid stylesheets unknown and missing XTSE3430s | §19.1/§19.2 context item types decide §19.8.9.18's rewrite: root() in xsl:source-document streams, //x in a match="*" rule is refused. | [`f201db3`][f201db3] |
+| The stream plan dropped the §19.2 context item type from each record, so re-analysing a record alone disagreed with the walk | Plan records and site parses carry the context item type; the agreement test re-analyses with it. | [`bfedf0c`][bfedf0c] |
+| A dead `FOAR0002` range-bound check remained, one call from reporting a resource limit as overflow | Removed; the live `to` refusal is `XPDY0130` wrapping `xdm.ErrResourceLimit` (XPath 3.1 §2.3.1), pinned. | [`40345b7`][40345b7] |
+| Where c14n's 1.0-compatibility XPath agrees with XPath 1.0 for DSig filters was untested | Seventeen agreements are pinned; the number-model differences left are listed in the test and known-gaps. | [`c58c9c5`][c58c9c5] |
+| Entity, external-DTD and XInclude limits were fixed constants | They are ParseOptions/XIncludeOptions fields; defaults unchanged, recursion depths clamp to a ceiling. | [`1c789ca`][1c789ca] |
+| The dtd, relaxng, xsd and xslt compile/merge budgets could not be configured | They are option fields with zero = today's default; externalRef and nested fn:transform compiles inherit the caller's settings. | [`7dd3159`][7dd3159], [`ae41e4c`][ae41e4c], [`2188003`][2188003], [`80e124e`][80e124e], [`58415b6`][58415b6] |
 
 
 ### Fixed
@@ -520,6 +525,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it means | Commit |
 |---|---|---|
+| An XSD validation refused at `MaxDepth`, or an assertion declined, has no validity code | Its `ValidationError.Code` is "" (was `cvc-elt.1` / `cvc-assertion.3`) and `Err` wraps `xdm.ErrResourceLimit`; the document is still refused. | [`de6e686`][de6e686] |
+| A 1.1 restriction rejected after a subsumption budget decline wraps `xdm.ErrResourceLimit` | Still refused, now as undecided with no constraint code; raising the `xsd.Options` budgets may admit it. | [`5203922`][5203922] |
 | `dtd.Validate` reports undeclared attributes | A document that validated before may now fail; `Options.AllowUndeclared` skips them, as it skips undeclared elements. | [`915eb63`][915eb63] |
 | XQuery `validate lax` with no imported schema returns a copy of its operand | The result is a new node, not the input node, as §3.21 requires; the input keeps no annotation. | [`f46ec7b`][f46ec7b] |
 | A tree past the text store's block ceiling is an error, not a panic | Entry points that return an error return `xdm.ErrResourceLimit`; `xdm`/`xdmbuild` methods with no error return still panic, with an error value that matches it. | [`91f30c9`][91f30c9] |
@@ -2910,6 +2917,17 @@ here so every entry in this file sits under a release.
 [2d60ddd]: https://github.com/knroy/go-xml/commit/2d60ddd
 [7e6845f]: https://github.com/knroy/go-xml/commit/7e6845f
 [f201db3]: https://github.com/knroy/go-xml/commit/f201db3
+[bfedf0c]: https://github.com/knroy/go-xml/commit/bfedf0c
+[40345b7]: https://github.com/knroy/go-xml/commit/40345b7
+[c58c9c5]: https://github.com/knroy/go-xml/commit/c58c9c5
+[1c789ca]: https://github.com/knroy/go-xml/commit/1c789ca
+[7dd3159]: https://github.com/knroy/go-xml/commit/7dd3159
+[ae41e4c]: https://github.com/knroy/go-xml/commit/ae41e4c
+[2188003]: https://github.com/knroy/go-xml/commit/2188003
+[80e124e]: https://github.com/knroy/go-xml/commit/80e124e
+[58415b6]: https://github.com/knroy/go-xml/commit/58415b6
+[de6e686]: https://github.com/knroy/go-xml/commit/de6e686
+[5203922]: https://github.com/knroy/go-xml/commit/5203922
 [337c660]: https://github.com/knroy/go-xml/commit/337c660
 [243a7af]: https://github.com/knroy/go-xml/commit/243a7af
 [43ca8b3]: https://github.com/knroy/go-xml/commit/43ca8b3
