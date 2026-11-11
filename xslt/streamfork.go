@@ -153,16 +153,34 @@ func (b *streamBuilder) prongs(el *xdm.Node, prongs []*xdm.Node, f vfocus) bool 
 		}
 		op.prongs = append(op.prongs, ops)
 		if len(ops) > 0 {
-			readers++
+			readers += 1 + teeReaders(ops)
 		}
 	}
-	if readers > maxTeeParts { // the tee's consumers (fork)
+	if readers > maxTeeParts { // the tee's consumers, and those of the forks in its prongs
 		return b.refuse(elName(el) + ": more prongs read the document than a tee runs")
 	}
 	b.x.ops[el] = op
 	*b.ops = append(*b.ops, op)
 	b.kinds[streamtrace.KindFork]++
 	return true
+}
+
+// teeReaders counts the consumers the forks among ops, and inside them, tee
+// a prong's cursor for: they are live while the prong's own consumer is, so
+// a fork's bound (maxTeeParts) holds for them too (xdmstream.Cursor.Tee).
+func teeReaders(ops []*streamOp) int {
+	n := 0
+	for _, op := range ops {
+		if op.fork {
+			for _, p := range op.prongs {
+				if len(p) > 0 {
+					n += 1 + teeReaders(p)
+				}
+			}
+		}
+		n += teeReaders(op.inner)
+	}
+	return n
 }
 
 // noteStreamFork records the compiled form of n, a fork or map op of the
