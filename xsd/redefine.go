@@ -590,7 +590,7 @@ func (a *assembler) checkRedefinedAttrGroup(el *xdm.Node, q xdm.QName, repl, ori
 			base[u.Decl.Name] = u
 		}
 	}
-	baseWild := groupWildcard(orig, nil)
+	baseWild := a.p.groupWildcard(orig)
 
 	bad := func(format string, args ...any) {
 		a.p.errs = append(a.p.errs, errorAt(el, "src-redefine.7.2.2",
@@ -601,7 +601,7 @@ func (a *assembler) checkRedefinedAttrGroup(el *xdm.Node, q xdm.QName, repl, ori
 	}
 
 	// Clause 4: a wildcard admits names as surely as a declared use does.
-	if rw := groupWildcard(repl, nil); rw != nil {
+	if rw := a.p.groupWildcard(repl); rw != nil {
 		switch {
 		case baseWild == nil:
 			bad("it adds an attribute wildcard")

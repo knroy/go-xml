@@ -2252,17 +2252,26 @@ func (v *validator) baseDeclaredType(t *ComplexType, name xdm.QName) Type {
 // as soon as any of them appears.
 func optionalAllMembers(g *ModelGroup, particles []*Particle) []int {
 	var out []int
+	// index maps a particle to its first position in particles, built only
+	// once an optional nested group is found: a scan per member was
+	// members × particles per call.
+	var index map[*Particle]int
 	for _, p := range g.Particles {
 		inner := allGroupOf(p)
 		if inner == nil || p.MinOccurs != 0 {
 			continue
 		}
-		for _, member := range flattenAll(inner) {
+		if index == nil {
+			index = make(map[*Particle]int, len(particles))
 			for i, flat := range particles {
-				if flat == member {
-					out = append(out, i)
-					break
+				if _, dup := index[flat]; !dup {
+					index[flat] = i
 				}
+			}
+		}
+		for _, member := range flattenAll(inner) {
+			if i, ok := index[member]; ok {
+				out = append(out, i)
 			}
 		}
 	}

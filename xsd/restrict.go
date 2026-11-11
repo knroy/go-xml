@@ -1054,13 +1054,19 @@ func typeRestrictsSeen(t, want Type, seen map[Type]bool) bool {
 // from a union it was itself restricted from: the facets of a derivation chain
 // accumulate, and a member is unconstrained by all of them alike. The walk
 // stops when it leaves the union variety, which is where xs:anySimpleType sits.
+//
+// The chain may be circular — checkUnionMemberCycles and checkTypeBaseCycles
+// report that only after the postFixups that reach this — so a type seen
+// before ends the walk.
 func unionIsPure(st *SimpleType) bool {
-	for cur := st; cur != nil && cur.Variety == VarietyUnion; {
+	seen := map[*SimpleType]bool{}
+	for cur := st; cur != nil && cur.Variety == VarietyUnion && !seen[cur]; {
+		seen[cur] = true
 		if !cur.Facets.IsEmpty() {
 			return false
 		}
 		base, ok := cur.Base.(*SimpleType)
-		if !ok || base == cur {
+		if !ok {
 			break
 		}
 		cur = base
