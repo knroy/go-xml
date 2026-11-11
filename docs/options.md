@@ -136,9 +136,9 @@ syntax error does *not* carry the sentinel.
 | `MaxSchemaBytes` | `xquery/schemaimport.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the schema is not there |
 | `MaxSchemaBytes` | `xslt/importschema.go` | *(none)* | as above for `xsl:import-schema`; deliberately **not** `XTSE0220`, which would claim the schema is invalid; wraps `xdm.ErrResourceLimit` |
 | `ValidateOptions.MaxDepth` | `xsd/validate.go` | `cvc-elt.1` | the element is invalid against its declaration |
-| `maxSchemaFetches` (10,000) | `relaxng/resolve.go` | *(none)* | include/externalRef fetches per RELAX NG compilation, all routes; the refusal names the budget |
-| fetched-document budget | `relaxng/compile.go` | *(none)* | the nodes and text bytes of every fetched include/externalRef document per compilation, at xdm's single-document `DefaultMaxNodes` and `DefaultMaxBytes`; wraps `xdm.ErrResourceLimit` |
-| `maxSequenceMatcherEdges` (1<<20) | `xsd/automaton.go` | *(none)* | follow representation one DTD content model may store in `dtd.Validate`: one per piece plus its unshared members, so a repeated choice of n costs ~2n and a dense `(a?,a?,…)` still stops at ~1450 positions; XSD models keep the `maxUPAStateWidth` (256) cap |
+| `Options.MaxSchemaFetches` (default 10,000) | `relaxng/compile.go` | *(none)* | include/externalRef fetches per RELAX NG compilation, all routes; the refusal names the budget |
+| fetched-document budget (`Options.MaxFetchedNodes` / `MaxFetchedBytes`) | `relaxng/compile.go` | *(none)* | the nodes and text bytes of every fetched include/externalRef document per compilation, by default at xdm's single-document `DefaultMaxNodes` and `DefaultMaxBytes`; wraps `xdm.ErrResourceLimit` |
+| `maxSequenceMatcherEdges` (1<<20; `dtd.Options.MaxContentModelEdges`) | `xsd/automaton.go` | *(none)* | follow representation one DTD content model may store in `dtd.Validate`: one per piece plus its unshared members, so a repeated choice of n costs ~2n and a dense `(a?,a?,…)` still stops at ~1450 positions; XSD models keep the `maxUPAStateWidth` (256) cap |
 | `maxModuleVisits` (10,000) | `xslt/compile.go` | *(none)* | `xsl:include`/`xsl:import` resolutions per `Compile`, all routes, static phase and compile both counting, plus each `xsl:use-package` read and compile; the refusal names the budget and wraps `xdm.ErrResourceLimit` |
 | `maxModuleNodes` (500,000) | `xslt/compile.go` | *(none)* | tree nodes compiled across every imported, included and used module per `Compile`, static-phase `fn:transform` compiles included; wraps `xdm.ErrResourceLimit` |
 | `fn:transform` nesting | `xslt/fntransform.go` | `XPDY0001` | no context item is defined; the depth is `TransformOptions.MaxDepth`, charged from the call so that a stylesheet transforming itself accumulates it, including across nested compilations; `DefaultMaxDepth` in the static phase |
@@ -1144,18 +1144,74 @@ d, err := dtd.Load(tree.DocType, dtd.LoadOptions{
 | `MaxExternalDocuments` | `int` | `DefaultMaxExternalDocuments` = 64 | How many external resources one load may read — the subset itself and every parameter-entity module it pulls in. Follows `xsd.MaxDocuments` in shape. |
 | `MaxExternalBytes` | `int64` | `DefaultMaxExternalBytes` = 4 MB | Total bytes read from external resources. A bound on the whole load rather than on one file, because a hundred 512 KB files is the same exhaustion as one 50 MB file and only a total sees both. |
 | `MaxEntityBytes` | `int64` | `DefaultMaxEntityBytes` = 1 MB | Total **expanded** size of parameter entities, **across both subsets**. This is the billion-laughs bound, and the shared counter is the point: a ladder cut in half between the internal and external subsets meets one budget rather than one per subset. What is charged is the size substitution produces, not the `%a8;%a8;…` that produces it. |
+| `MaxParameterDepth` | `int` | `DefaultMaxParameterDepth` = 40 | How deep parameter-entity references may nest, a reference inside a replacement text being one level. A cycle is refused by name at any depth, so this bounds only long legitimate chains. |
+| `MaxConditionalDepth` | `int` | `DefaultMaxConditionalDepth` = 40 | How deep `INCLUDE` sections may nest (§3.4 sets no limit; DocBook nests three or four). An `IGNORE` section is not expanded and does not count. |
 
-All three limits follow the house rule — `0` is the default, `n` is your
-number, `-1` is no limit. Exceeding any of them raises an error wrapping
-`xdm.ErrResourceLimit`, and there is no path on which a subset that could not
-be read or could not be bounded becomes an empty one that the document then
-validates cleanly against.
+The three byte and document limits follow the house rule — `0` is the default,
+`n` is your number, `-1` is no limit. The two depth limits do not, because
+substitution recurses in Go and a stack overflow ends the process: zero **or a
+negative value** means the default, and a value above 1000 is clamped to 1000.
+Exceeding any of them raises an error wrapping `xdm.ErrResourceLimit`, and
+there is no path on which a subset that could not be read or could not be
+bounded becomes an empty one that the document then validates cleanly
+against.
 
 `FileResolver` has one field of its own, `MaxBytes` (zero means
 `DefaultMaxResolverBytes` = 4 MB, negative means no limit), bounding what a
 single call puts in memory. `Root` is not optional in practice: an empty one
 means the process's working directory, which is almost never what you want for
 a document that arrived over the wire.
+
+---
+
+## dtd.Options
+
+Passed to `dtd.Validate`.
+
+| Field | Type | Zero value | What it does |
+|---|---|---|---|
+| `MaxErrors` | `int` | `DefaultMaxErrors` = 100 | Stops after this many failures; negative means no limit. |
+| `AllowUndeclared` | `bool` | off | Skips elements and attributes the DTD does not declare, for a DTD known to be partial. |
+| `MaxContentModelPositions` | `int` | 8192 (`xsd.DefaultMaxContentModelPositions`) | Positions one element content model may compile to. |
+| `MaxContentModelEdges` | `int` | 1<<20 | Follow entries one content model may store: a repeated choice of n costs about 2n, a dense `(a?,a?,…)` about n²/2, so the default refuses the dense form at about 1450 positions. |
+| `MaxMatchStates` | `int` | 4096 (`xsd.DefaultMaxMatchStates`) | Simultaneous automaton states while matching one element's children. |
+
+The three content-model limits follow the house rule (`-1` is no limit) and
+bound what one declaration can cost; `dtd.Validate` hands them to
+`xsd.NewSequenceMatcherWith` as an `xsd.SequenceMatcherOptions` with fields
+`MaxPositions`, `MaxEdges` and `MaxMatchStates`, which a caller compiling a
+bare particle can use directly. A model over the first two is reported as a
+validity error on every element that uses it; an element needing more states
+than `MaxMatchStates` is reported as not matching. Raise them only for a DTD
+you trust: the dense form costs memory quadratic in its length. Lowering them
+can turn a valid document into a reported failure.
+
+---
+
+## relaxng.Options
+
+Passed to `relaxng.CompileWithOptions` and `relaxng.CompileCompact`;
+`relaxng.Compile` is the zero value. Every limit applies to the whole
+compilation, `<externalRef>` and nested `<grammar>` compilations included.
+
+| Field | Type | Zero value | What it does |
+|---|---|---|---|
+| `Resolver` | `Resolver` | refuse | Supplies the documents `<externalRef>` and `<include>` name; nil refuses both. |
+| `BaseURI` | `string` | empty | Where the schema was read from; relative hrefs resolve against it. |
+| `MaxIncludeDepth` | `int` | `DefaultMaxIncludeDepth` = 40 | How deeply includes and externalRefs may nest. A cycle is refused by href at any depth. |
+| `MaxSchemaFetches` | `int` | `DefaultMaxSchemaFetches` = 10,000 | Fetches per compilation, counted over every route: a diamond fetched twice counts twice, which is what bounds F^depth fan-out. |
+| `MaxFetchedNodes` | `int` | `xdm.DefaultMaxNodes` | Nodes of every fetched document together, since each stays reachable until the compile ends. |
+| `MaxFetchedBytes` | `int64` | `xdm.DefaultMaxBytes` | Text and attribute bytes of every fetched document together. |
+| `MaxRefExpansions` | `int` | `DefaultMaxRefExpansions` = 200,000 | `<ref>` expansions per grammar compilation (each definition is compiled once, so DocBook 5.2 needs about 1,900); an externalRef's grammar counts afresh. |
+
+`MaxSchemaFetches`, `MaxFetchedNodes`, `MaxFetchedBytes` and
+`MaxRefExpansions` follow the house rule (`-1` is no limit). `MaxIncludeDepth`
+does not: each level is a Go recursion through a fetch, a parse and a compile,
+so zero or a negative value means the default and a value above 1000 is
+clamped to 1000. Exceeding a fetch limit raises an error wrapping
+`xdm.ErrResourceLimit`; the include depth and expansion refusals say
+"resource limit exceeded" or name the count. Validation has its own limits,
+`ValidateOptions.MaxDepth` and `MaxPatternSize`.
 
 ---
 

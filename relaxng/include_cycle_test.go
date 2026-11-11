@@ -27,7 +27,7 @@ import (
 // much on it.
 func TestIncludeChainOverBoundIsAResourceLimitNotACycle(t *testing.T) {
 	docs := map[string]string{}
-	const chain = maxIncludeDepth + 1
+	const chain = DefaultMaxIncludeDepth + 1
 	for i := 0; i < chain; i++ {
 		docs[fmt.Sprintf("g%d.rng", i)] = fmt.Sprintf(
 			`<grammar`+rngNS+`><include href="g%d.rng"/></grammar>`, i+1)
@@ -53,7 +53,7 @@ func TestIncludeChainOverBoundIsAResourceLimitNotACycle(t *testing.T) {
 // half of the test above: the bound is a ceiling, not a suspicion.
 func TestLegalDeepIncludeChainCompiles(t *testing.T) {
 	docs := map[string]string{}
-	const chain = maxIncludeDepth - 2
+	const chain = DefaultMaxIncludeDepth - 2
 	for i := 0; i < chain; i++ {
 		docs[fmt.Sprintf("g%d.rng", i)] = fmt.Sprintf(
 			`<grammar`+rngNS+`><include href="g%d.rng"/></grammar>`, i+1)
@@ -201,8 +201,8 @@ func TestIncludeFanOutIsBounded(t *testing.T) {
 	if !errors.Is(err, xdm.ErrResourceLimit) {
 		t.Fatalf("got %v after %d fetches, want a resource limit", err, len(r.seen))
 	}
-	if len(r.seen) > maxSchemaFetches {
-		t.Errorf("%d fetches, above the bound of %d", len(r.seen), maxSchemaFetches)
+	if len(r.seen) > DefaultMaxSchemaFetches {
+		t.Errorf("%d fetches, above the bound of %d", len(r.seen), DefaultMaxSchemaFetches)
 	}
 }
 

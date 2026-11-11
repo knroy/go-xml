@@ -85,22 +85,41 @@ const (
 	// binds first rather than getting a fresh allowance per subset.
 	DefaultMaxEntityBytes = 1 << 20
 
-	// maxParameterDepth bounds how deep parameter-entity substitution may
-	// nest.
+	// DefaultMaxParameterDepth bounds how deep parameter-entity
+	// substitution may nest when LoadOptions.MaxParameterDepth is zero.
 	//
 	// A cycle is caught by name before this is reached (see loader.expand),
 	// so this is the bound on legitimate but pathological nesting rather
 	// than the recursion guard. DTD modularisation is two or three deep in
 	// practice; 40 is far above anything real and far below a stack
 	// problem.
-	maxParameterDepth = 40
+	DefaultMaxParameterDepth = 40
 
-	// maxConditionalDepth bounds nesting of INCLUDE/IGNORE sections.
+	// DefaultMaxConditionalDepth bounds nesting of INCLUDE/IGNORE sections
+	// when LoadOptions.MaxConditionalDepth is zero.
 	//
 	// XML 1.0 §3.4 permits them to nest arbitrarily, and DocBook nests
 	// three or four deep. A document may not spend the stack doing so.
-	maxConditionalDepth = 40
+	DefaultMaxConditionalDepth = 40
+
+	// maxDepthCeiling is the most either depth option may raise its bound
+	// to; a larger value is clamped to it. Each level is a Go recursion of
+	// loader.expand (and loader.conditional), a few hundred bytes of stack
+	// plus the strings.Builder it fills, so 1000 levels stay three orders
+	// of magnitude under Go's 1 GB stack limit, whose overflow is fatal
+	// rather than recoverable. That is why neither option has an unlimited
+	// setting.
+	maxDepthCeiling = 1000
 )
+
+// depthBound resolves a recursion-depth option: zero or negative means def,
+// and a value above maxDepthCeiling is clamped to it.
+func depthBound(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return min(v, maxDepthCeiling)
+}
 
 // ErrNoResolver reports that a DOCTYPE named an external subset and no
 // Resolver was configured to read it.
@@ -190,6 +209,23 @@ type LoadOptions struct {
 	// the bytes read, so a bomb whose halves live in different subsets meets
 	// one budget rather than one per subset.
 	MaxEntityBytes int64
+
+	// MaxParameterDepth bounds how deep parameter-entity references may
+	// nest, a reference inside a replacement text being one level. Zero or
+	// a negative value means DefaultMaxParameterDepth (40). There is no
+	// unlimited setting because substitution recurses: a value above 1000
+	// is clamped to 1000, which keeps the recursion far from a fatal Go
+	// stack overflow. A cycle is refused by name at any depth, so raising
+	// this admits only longer legitimate chains; each level costs a
+	// substitution charged to MaxEntityBytes.
+	MaxParameterDepth int
+
+	// MaxConditionalDepth bounds how deep INCLUDE sections may nest (XML
+	// 1.0 §3.4 sets no limit). Zero or a negative value means
+	// DefaultMaxConditionalDepth (40); a value above 1000 is clamped to
+	// 1000, for the same stack-safety reason as MaxParameterDepth. An
+	// IGNORE section is not expanded and does not count.
+	MaxConditionalDepth int
 }
 
 // Load reads a DOCTYPE, fetches the external subset it names, and returns the
@@ -315,6 +351,10 @@ type loader struct {
 	maxDocs   int
 	maxBytes  int64
 	maxExpand int64
+	// maxParams and maxSections are LoadOptions.MaxParameterDepth and
+	// MaxConditionalDepth as resolved by depthBound.
+	maxParams   int
+	maxSections int
 
 	docs  int
 	bytes int64
@@ -346,7 +386,7 @@ type loader struct {
 	nesting []string
 
 	// sections counts the INCLUDE sections currently being expanded, for
-	// maxConditionalDepth.
+	// maxSections.
 	sections int
 
 	// v11 is the system identifier of the first external resource read
@@ -380,6 +420,9 @@ func newLoader(opts LoadOptions) *loader {
 		maxExpand: opts.MaxEntityBytes,
 		params:    map[string]paramEntity{},
 		active:    map[string]bool{},
+
+		maxParams:   depthBound(opts.MaxParameterDepth, DefaultMaxParameterDepth),
+		maxSections: depthBound(opts.MaxConditionalDepth, DefaultMaxConditionalDepth),
 	}
 	if l.maxDocs == 0 {
 		l.maxDocs = DefaultMaxExternalDocuments
@@ -608,13 +651,13 @@ func (l *loader) collectParams(subset, base string) {
 //
 //   - Recursion is refused by name, not merely bounded. XML 1.0 §4.1 makes a
 //     recursive entity a well-formedness error, and l.active detects a cycle
-//     of any length on the first revisit rather than after maxParameterDepth
+//     of any length on the first revisit rather than after maxParams
 //     rounds of doubling.
 func (l *loader) expand(subset, base string, depth int, declLevel bool) (string, error) {
-	if depth > maxParameterDepth {
+	if depth > l.maxParams {
 		return "", fmt.Errorf(
 			"parameter entities nested more than %d deep: %w",
-			maxParameterDepth, xdm.ErrResourceLimit)
+			l.maxParams, xdm.ErrResourceLimit)
 	}
 	if !strings.Contains(subset, "%") && !(declLevel && strings.Contains(subset, "<![")) {
 		return subset, nil
@@ -811,10 +854,10 @@ func (l *loader) conditional(sb *strings.Builder, s, base string, depth int, dec
 	// An IGNORE contributes nothing. Its contents are not even parsed, per
 	// §3.4 — only its delimiters were counted, which matchingSectionEnd did.
 	if kw == "INCLUDE" {
-		if l.sections >= maxConditionalDepth {
+		if l.sections >= l.maxSections {
 			return 0, fmt.Errorf(
 				"conditional sections nested more than %d deep: %w",
-				maxConditionalDepth, xdm.ErrResourceLimit)
+				l.maxSections, xdm.ErrResourceLimit)
 		}
 		// The contents of an INCLUDE are ordinary declarations, and may
 		// contain further conditional sections of their own.

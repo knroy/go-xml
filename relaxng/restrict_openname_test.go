@@ -110,7 +110,7 @@ func TestOpenNameAttributeInDefine(t *testing.T) {
 // Each definition is compiled once and shared by every <ref> naming it. Before
 // that, a <ref> re-compiled the definition's body, so a chain of definitions
 // each referring to the next twice cost 2^links expansions: DocBook 5.2 hit
-// maxRefExpansions, and this 40-link chain was refused by it. Shared, the
+// DefaultMaxRefExpansions, and this 40-link chain was refused by it. Shared, the
 // chain compiles in one expansion per definition.
 func TestRefExpansionIsShared(t *testing.T) {
 	var b strings.Builder

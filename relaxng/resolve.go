@@ -230,28 +230,106 @@ type Options struct {
 	// a relative href is resolved. It may be empty when the schema came from
 	// somewhere with no location, in which case only absolute hrefs work.
 	BaseURI string
+
+	// MaxIncludeDepth bounds how deeply <include> and <externalRef> may
+	// nest. Zero or a negative value means DefaultMaxIncludeDepth (40).
+	// There is no unlimited setting because each level is a Go recursion
+	// through a fetch, a parse and a compile: a value above 1000 is clamped
+	// to 1000, which stays far from a fatal stack overflow. A cycle is
+	// refused by href at any depth, so this bounds only legitimate chains.
+	MaxIncludeDepth int
+
+	// MaxSchemaFetches bounds the include/externalRef fetches of one
+	// compilation, counted over every route, so a diamond fetched twice
+	// counts twice. Zero means DefaultMaxSchemaFetches (10,000); a negative
+	// value means no limit, which lets a few schemas that each include the
+	// next F times cost F^depth fetches — a schema set the caller does not
+	// control should keep a bound.
+	MaxSchemaFetches int
+
+	// MaxFetchedNodes and MaxFetchedBytes bound the nodes and the text and
+	// attribute bytes of every document the fetches bring in, summed over
+	// the compilation, since every fetched tree stays reachable until the
+	// compile ends. Zero means xdm.DefaultMaxNodes and xdm.DefaultMaxBytes,
+	// so a schema set costs no more than the largest single document would;
+	// a negative value means no limit. Each fetched document is still parsed
+	// under the Resolver's own limits.
+	MaxFetchedNodes int
+	MaxFetchedBytes int64
+
+	// MaxRefExpansions bounds the <ref> expansions one grammar compilation
+	// performs; each definition is compiled once and shared, so the count
+	// tracks the definitions a grammar reaches (DocBook 5.2: about 1900).
+	// An <externalRef>'s schema is compiled by a compilation of its own and
+	// counts afresh, its total bounded by MaxFetchedNodes. Zero means
+	// DefaultMaxRefExpansions (200,000); a negative value means no limit.
+	MaxRefExpansions int
 }
 
-// maxIncludeDepth bounds how deeply schemas may include one another.
-//
-// It is a *resource* bound and nothing more. A cycle — a includes b includes
-// a — is a semantic defect in the schema, and it is detected as one, by the
-// active set of hrefs in activeHrefs: a depth counter cannot tell a cycle from
-// a legal chain that happens to be long, so using one to infer the other both
-// mislabels the deep chain and reports the cycle at the wrong href.
-//
-// The bound stays because it is genuinely earned here, unlike a bound that is
-// only standing in for cycle detection: an <include> reaches a Resolver that
-// may read a file or the network, and a chain deep enough to matter costs a
-// fetch per level even when every href is distinct. Exceeding it says
-// "resource limit exceeded", which is a different failure from a cycle and a
-// caller must be able to tell them apart.
-const maxIncludeDepth = 40
+// Defaults for the Options limits left zero.
+const (
+	// DefaultMaxIncludeDepth bounds how deeply schemas may include one another.
+	// Options.MaxIncludeDepth sets it per compilation.
+	//
+	// It is a *resource* bound and nothing more. A cycle — a includes b includes
+	// a — is a semantic defect in the schema, and it is detected as one, by the
+	// active set of hrefs in activeHrefs: a depth counter cannot tell a cycle from
+	// a legal chain that happens to be long, so using one to infer the other both
+	// mislabels the deep chain and reports the cycle at the wrong href.
+	//
+	// The bound stays because it is genuinely earned here, unlike a bound that is
+	// only standing in for cycle detection: an <include> reaches a Resolver that
+	// may read a file or the network, and a chain deep enough to matter costs a
+	// fetch per level even when every href is distinct. Exceeding it says
+	// "resource limit exceeded", which is a different failure from a cycle and a
+	// caller must be able to tell them apart.
+	DefaultMaxIncludeDepth = 40
 
-// maxSchemaFetches bounds the include/externalRef fetches of one compilation,
-// counted over every route rather than per chain: a diamond is legal and is
-// fetched once per route, so repeated inclusion grows exponentially in depth.
-const maxSchemaFetches = 10_000
+	// DefaultMaxSchemaFetches bounds the include/externalRef fetches of one
+	// compilation, counted over every route rather than per chain: a diamond is
+	// legal and is fetched once per route, so repeated inclusion grows
+	// exponentially in depth. Options.MaxSchemaFetches sets it.
+	DefaultMaxSchemaFetches = 10_000
+
+	// DefaultMaxRefExpansions bounds the <ref> expansions of one grammar
+	// compilation; the note on refExpansions in compile.go gives its measure.
+	// Options.MaxRefExpansions sets it.
+	DefaultMaxRefExpansions = 200_000
+)
+
+// maxIncludeDepthCeiling is the most MaxIncludeDepth may raise the include
+// bound to. A level is a handful of Go frames of the compiler plus one parse,
+// a few kilobytes of stack, so 1000 levels stay orders of magnitude below Go's
+// 1 GB stack limit, whose overflow is fatal rather than recoverable.
+const maxIncludeDepthCeiling = 1000
+
+// includeDepth resolves Options.MaxIncludeDepth.
+func (o Options) includeDepth() int {
+	if o.MaxIncludeDepth <= 0 {
+		return DefaultMaxIncludeDepth
+	}
+	return min(o.MaxIncludeDepth, maxIncludeDepthCeiling)
+}
+
+// withBase is o for a document read from href: every limit carries over, so
+// an <externalRef>'s compilation runs under the caller's options, not the
+// defaults.
+func (o Options) withBase(href string) Options {
+	o.BaseURI = href
+	return o
+}
+
+// budget resolves a non-recursive Options limit: zero is def, negative is no
+// limit.
+func budget[T int | int64](v, def T, unlimited T) T {
+	switch {
+	case v == 0:
+		return def
+	case v < 0:
+		return unlimited
+	}
+	return v
+}
 
 // resolveHref turns the href written on n into the reference a Resolver sees.
 //

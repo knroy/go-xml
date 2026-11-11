@@ -62,6 +62,25 @@ type Options struct {
 	// ask otherwise. Turn it on when the DTD is known to be partial;
 	// HasExternalSubset is how to detect that case.
 	AllowUndeclared bool
+
+	// MaxContentModelPositions, MaxContentModelEdges and MaxMatchStates
+	// bound each element content model Validate compiles and matches, as
+	// the fields of the same meaning in xsd.SequenceMatcherOptions do. Zero
+	// means the default — 8192 positions (xsd.DefaultMaxContentModelPositions),
+	// 1<<20 follow entries, 4096 simultaneous states
+	// (xsd.DefaultMaxMatchStates) — and a negative value means no limit, for
+	// a DTD the caller produced itself.
+	//
+	// They bound what one declaration can cost: a model past the first two
+	// is reported as a validity error on every element that uses it, and an
+	// element whose children need more states than MaxMatchStates is
+	// reported as not matching. Raising them admits denser models at the
+	// cost of memory and time that grow with the model (quadratically in
+	// positions for a dense (a?,a?,...)); lowering them can turn a valid
+	// document into a reported failure.
+	MaxContentModelPositions int
+	MaxContentModelEdges     int
+	MaxMatchStates           int
 }
 
 // DefaultMaxErrors bounds how many failures are reported.
@@ -130,7 +149,12 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 		max:        max,
 		allowUndec: opts.AllowUndeclared,
 		matchers:   map[string]*xsd.SequenceMatcher{},
-		ids:        map[string]bool{},
+		matcherOpts: xsd.SequenceMatcherOptions{
+			MaxPositions:   opts.MaxContentModelPositions,
+			MaxEdges:       opts.MaxContentModelEdges,
+			MaxMatchStates: opts.MaxMatchStates,
+		},
+		ids: map[string]bool{},
 
 		// A DTD assembled by a caller rather than by Parse or Load may have
 		// nil name sets — the maps are exported and the zero value is a
@@ -224,7 +248,9 @@ type validator struct {
 	allowUndec bool
 	errs       []*Error
 	matchers   map[string]*xsd.SequenceMatcher
-	names      []xdm.QName // child-name buffer reused across elements
+	// matcherOpts bounds every matcher compiled into matchers.
+	matcherOpts xsd.SequenceMatcherOptions
+	names       []xdm.QName // child-name buffer reused across elements
 	// ids are every ID value seen, for uniqueness and for resolving IDREF.
 	ids map[string]bool
 	// partial records that the DTD was read from the internal subset alone
@@ -374,7 +400,7 @@ func (v *validator) matcherFor(decl *Element) (*xsd.SequenceMatcher, error) {
 	if m, ok := v.matchers[decl.Name]; ok {
 		return m, nil
 	}
-	m, err := xsd.NewSequenceMatcher(decl.Particle)
+	m, err := xsd.NewSequenceMatcherWith(decl.Particle, v.matcherOpts)
 	if err != nil {
 		return nil, err
 	}

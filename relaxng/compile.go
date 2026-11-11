@@ -2,6 +2,7 @@ package relaxng
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -107,7 +108,7 @@ type compiler struct {
 	// opts carries the Resolver and base URI.
 	opts Options
 	// includeDepth counts the includes on the current chain. It is a
-	// resource bound only — see maxIncludeDepth — and says nothing about
+	// resource bound only — see DefaultMaxIncludeDepth — and says nothing about
 	// whether the chain is circular.
 	includeDepth int
 	// activeHrefs is the set of resolved hrefs currently being compiled: the
@@ -159,7 +160,7 @@ type compiler struct {
 	// see maxRefDepth's removal note in compileRefNamed.
 	depth int
 	// expansions counts every <ref> expanded during this compilation, bounded
-	// by maxRefExpansions.
+	// by refExpansions.
 	expansions int
 	// compiled holds each definition already compiled, keyed by name, so
 	// that every later <ref> to it shares the one pattern instead of
@@ -203,26 +204,32 @@ func (c *compiler) fetchCount() *fetchBudget {
 // fetchBudget is what the include/externalRef fetches of one compilation
 // have cost so far.
 //
-// The count alone (maxSchemaFetches) bounded how often a Resolver is asked,
+// The count alone (Options.MaxSchemaFetches) bounded how often a Resolver is asked,
 // not what it hands back: every fetch is parsed afresh and its definitions
 // stay reachable until the compile ends, so one 256 KB leaf included K times
 // held K times its tree, 207 MB at K=800, and 2.6 GB was in reach of the
 // count. The nodes and text the fetched documents hold are therefore summed
-// over the compilation and held to xdm's limits for one document
-// (DefaultMaxNodes, DefaultMaxBytes): a schema set may be spread over many
-// files, but not cost more than the largest single document would. The node
-// total also bounds the <ref> expansions of the externalRef sub-compilers,
-// each of which counts its own maxRefExpansions, since a definition is a
-// node of some fetched document.
+// over the compilation and held to Options.MaxFetchedNodes and
+// MaxFetchedBytes, by default xdm's limits for one document (DefaultMaxNodes,
+// DefaultMaxBytes): a schema set may be spread over many files, but not cost
+// more than the largest single document would. The node total also bounds the
+// <ref> expansions of the externalRef sub-compilers, each of which counts its
+// own refExpansions, since a definition is a node of some fetched document.
 type fetchBudget struct {
 	count int
 	nodes int
 	bytes int64
 }
 
+// fetchedLimits resolves Options.MaxFetchedNodes and MaxFetchedBytes.
+func (o Options) fetchedLimits() (int, int64) {
+	return budget(o.MaxFetchedNodes, xdm.DefaultMaxNodes, math.MaxInt),
+		budget(o.MaxFetchedBytes, xdm.DefaultMaxBytes, math.MaxInt64)
+}
+
 // charge adds a fetched document to the budget, reporting whether it is
 // still within the limits.
-func (b *fetchBudget) charge(doc *xdm.Node) bool {
+func (b *fetchBudget) charge(doc *xdm.Node, maxNodes int, maxBytes int64) bool {
 	b.nodes += doc.SubtreeEnd() - doc.Index()
 	for d := range doc.Descendants() {
 		b.bytes += int64(len(d.Value()))
@@ -230,7 +237,7 @@ func (b *fetchBudget) charge(doc *xdm.Node) bool {
 			b.bytes += int64(len(a.Value()))
 		}
 	}
-	return b.nodes <= xdm.DefaultMaxNodes && b.bytes <= xdm.DefaultMaxBytes
+	return b.nodes <= maxNodes && b.bytes <= maxBytes
 }
 
 func (c *compiler) active() *map[string]bool {
@@ -739,8 +746,8 @@ func (c *compiler) compileRef(n *xdm.Node) (pattern, error) {
 	return c.compileRefNamed(normalizeToken(n.AttrValue("name")))
 }
 
-// maxRefExpansions bounds the total number of <ref> expansions one compilation
-// may perform.
+// refExpansions is how many <ref> expansions one compilation may perform:
+// Options.MaxRefExpansions, DefaultMaxRefExpansions when zero.
 //
 // Each definition is compiled once and then shared (see
 // compiler.compiled), so the count is about the number of definitions:
@@ -749,7 +756,9 @@ func (c *compiler) compileRef(n *xdm.Node) (pattern, error) {
 // grew multiplicatively along a chain of definitions; DocBook had not
 // compiled after 140 s. The bound stays as a guard against a grammar that
 // still needs that many, the way MaxPatternSize bounds the derivative.
-const maxRefExpansions = 200_000
+func (c *compiler) refExpansions() int {
+	return budget(c.opts.MaxRefExpansions, DefaultMaxRefExpansions, math.MaxInt)
+}
 
 // noteBare records names as reached without an <element> by the innermost
 // definition being compiled, when it has crossed none since it began; the
@@ -822,11 +831,11 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 		return d.pat, nil
 	}
 	c.expansions++
-	if c.expansions > maxRefExpansions {
+	if limit := c.refExpansions(); c.expansions > limit {
 		return nil, fmt.Errorf(
 			"relaxng: compiling this grammar needs more than %d <ref> "+
 				"expansions; it is too large or too densely cross-referenced",
-			maxRefExpansions)
+			limit)
 	}
 	// No bound on c.depth. There was one — maxRefDepth = 500 — and because
 	// c.expanding above already catches every re-entry into a definition
@@ -935,20 +944,20 @@ func (c *compiler) fetch(n *xdm.Node) (*xdm.Node, string, error) {
 	}
 	// Then the resource bound, which is a refusal to spend more rather than a
 	// statement about the schema.
-	if c.includeDepth >= maxIncludeDepth {
+	if limit := c.opts.includeDepth(); c.includeDepth >= limit {
 		return nil, "", fmt.Errorf(
 			"relaxng: resource limit exceeded: schemas nest more than %d "+
-				"includes deep at %q", maxIncludeDepth, href)
+				"includes deep at %q", limit, href)
 	}
 	// The depth bound is per chain; this one is per compilation. A diamond is
 	// legal and re-fetched on every route, so without it a few schemas each
 	// including the next F times cost F^depth fetches and collects.
 	fetches := c.fetchCount()
-	if fetches.count >= maxSchemaFetches {
+	if limit := budget(c.opts.MaxSchemaFetches, DefaultMaxSchemaFetches, math.MaxInt); fetches.count >= limit {
 		return nil, "", fmt.Errorf(
 			"relaxng: resource limit exceeded: compiling this schema needs "+
 				"more than %d include/externalRef fetches at %q: %w",
-			maxSchemaFetches, href, xdm.ErrResourceLimit)
+			limit, href, xdm.ErrResourceLimit)
 	}
 	fetches.count++
 	doc, err := c.opts.Resolver.ResolveSchema(href)
@@ -961,12 +970,12 @@ func (c *compiler) fetch(n *xdm.Node) (*xdm.Node, string, error) {
 			"relaxng: <%s href=%q>: the resolver returned nothing",
 			n.Name().Local, href)
 	}
-	if !fetches.charge(doc) {
+	if maxNodes, maxBytes := c.opts.fetchedLimits(); !fetches.charge(doc, maxNodes, maxBytes) {
 		return nil, "", fmt.Errorf(
 			"relaxng: resource limit exceeded: the include/externalRef "+
 				"documents of this schema hold more than %d nodes or %d bytes "+
 				"of text at %q: %w",
-			xdm.DefaultMaxNodes, xdm.DefaultMaxBytes, href, xdm.ErrResourceLimit)
+			maxNodes, maxBytes, href, xdm.ErrResourceLimit)
 	}
 	return rootElement(doc), href, nil
 }
@@ -1118,7 +1127,7 @@ func (c *compiler) compileExternalRef(n *xdm.Node) (pattern, error) {
 	// how a schema is written once and used in several namespaces.
 	sub := &compiler{defines: map[string]*xdm.Node{},
 		combined: map[string][]*xdm.Node{}, how: map[string]string{},
-		opts:         Options{Resolver: c.opts.Resolver, BaseURI: href},
+		opts:         c.opts.withBase(href),
 		includeDepth: c.includeDepth + 1, depth: c.depth,
 		activeHrefs: c.active(), fetches: c.fetchCount(),
 		inheritedNs: inheritedNs(n, c.inheritedNs)}
