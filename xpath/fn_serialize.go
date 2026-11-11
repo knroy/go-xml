@@ -1052,6 +1052,17 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		sb.noteText(n.Value())
 		writeEscaped(sb, opts.normalized(n.Value()), false)
 	case xdm.KindComment:
+		// "<!-->" and "<!--->" are abruptly closed empty comments to an HTML
+		// parser, so the rest would be live markup. Refused as the tree
+		// serializer in package xslt refuses it (validateComment).
+		if v := n.Value(); (opts.method == "html" || opts.method == "xhtml") &&
+			(strings.HasPrefix(v, ">") || strings.HasPrefix(v, "->")) {
+			if sb.e == nil {
+				sb.latch(fmt.Errorf("SERE0003: comment content starts with %q, which "+
+					"ends the comment in an HTML parser", v[:strings.IndexByte(v, '>')+1]))
+			}
+			return
+		}
 		sb.WriteString("<!--")
 		sb.WriteString(n.Value())
 		sb.WriteString("-->")

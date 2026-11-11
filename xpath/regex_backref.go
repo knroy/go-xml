@@ -3,6 +3,7 @@ package xpath
 import (
 	"fmt"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -53,7 +54,14 @@ type backrefRegexp struct {
 	// follow it. Only the trailing form is supported, which is what the
 	// fixed-width restriction leaves.
 	refs []backrefUse
-	src  string
+	// width is the number of characters every match of stripped spans. The
+	// matcher is admitted only when that number is fixed, so the match at a
+	// start position, and every group's place in it, is the only one.
+	width int
+	// atStart and atEnd record a leading "^" and a trailing "$". Without them
+	// stripped holds no anchor at all, which is what lets it be run on a slice
+	// of the input without a slice boundary posing as the start of the text.
+	atStart, atEnd bool
 }
 
 // backrefUse is one \N occurrence and the repetition applied to it.
@@ -88,13 +96,14 @@ func hasBackref(p string) bool {
 // Only backreferences at the end are handled — after them may come "$" and
 // nothing else. A backreference in the middle would need the comparison to
 // feed back into the automaton, which is the backtracking this avoids.
-func splitBackrefs(p string) (string, []backrefUse, error) {
+func splitBackrefs(p string) (string, []backrefUse, bool, error) {
 	// Find the first backreference; everything from there must be
 	// backreferences, their quantifiers, and an optional trailing anchor.
 	i := firstBackref(p)
 	if i < 0 {
-		return p, nil, nil
+		return p, nil, false, nil
 	}
+	atEnd := false
 	head, tail := p[:i], p[i:]
 
 	var refs []backrefUse
@@ -102,7 +111,7 @@ func splitBackrefs(p string) (string, []backrefUse, error) {
 		switch {
 		case strings.HasPrefix(tail, "\\"):
 			if len(tail) < 2 || tail[1] < '1' || tail[1] > '9' {
-				return "", nil, fmt.Errorf(
+				return "", nil, false, fmt.Errorf(
 					"FORX0002: backreference is not supported here")
 			}
 			// A backreference number is greedy: "\11" is group 11 when eleven
@@ -123,7 +132,7 @@ func splitBackrefs(p string) (string, []backrefUse, error) {
 				use.star = true
 				tail = tail[1:]
 			} else if len(tail) > 0 && strings.ContainsRune("+?{", rune(tail[0])) {
-				return "", nil, fmt.Errorf(
+				return "", nil, false, fmt.Errorf(
 					"FORX0002: only \\N and \\N* are supported on a backreference")
 			}
 			refs = append(refs, use)
@@ -131,14 +140,15 @@ func splitBackrefs(p string) (string, []backrefUse, error) {
 			// An end anchor after the backreferences is honoured by requiring
 			// the comparison to consume the rest of the input.
 			tail = ""
+			atEnd = true
 		default:
-			return "", nil, fmt.Errorf(
+			return "", nil, false, fmt.Errorf(
 				"FORX0002: a backreference must be the last thing in the pattern")
 		}
 	}
 	// The anchor moves onto the stripped pattern's tail check rather than into
 	// RE2, so it is dropped from head only if it was there.
-	return head, refs, nil
+	return head, refs, atEnd, nil
 }
 
 func firstBackref(p string) int {
@@ -435,37 +445,51 @@ func splitAlternation(body string) []string {
 
 // MatchString reports whether s matches the pattern, backreferences included.
 //
-// The stripped pattern is matched at each position in turn, and at each match
-// the text that follows is compared against the captured groups. Trying every
-// position is what makes this a search rather than an anchored test; the cost
-// is one comparison pass per candidate, so the whole thing stays linear in the
-// input times the number of backreferences.
+// Every match of stripped spans exactly width characters, so each start
+// position has one candidate window and one submatch assignment. The scan
+// slides that window one character at a time, and each step runs stripped,
+// anchored, over the window alone plus one comparison per backreference: linear
+// in the input times the pattern, with no rescan of the remaining text.
 func (b *backrefRegexp) MatchString(s string) bool {
-	for start := 0; start <= len(s); {
-		loc := b.stripped.FindStringSubmatchIndex(s[start:])
-		if loc == nil {
-			return false
-		}
-		end := start + loc[1]
-		if b.tailMatches(s, end, loc, start) {
+	q, ok := advanceRunes(s, 0, b.width)
+	for p := 0; ok; p, q, ok = b.next(s, p, q) {
+		if _, _, matched := b.matchAt(s, p, q); matched {
 			return true
 		}
-		// A pattern anchored at the start has one candidate position, so a
-		// failed tail is a failed match. Retrying further along would let
-		// "^([a-z])\\1*$" find a later single character and report a match
-		// the anchor forbids.
-		if b.anchoredStart() {
-			return false
-		}
-		// Advance past this match's start to look for another. A zero-width
-		// match would otherwise loop.
-		next := start + loc[0] + 1
-		if next <= start {
-			next = start + 1
-		}
-		start = next
 	}
 	return false
+}
+
+// next slides the window [p, q) one character to the right. It stops after the
+// first window when the pattern began with "^", and at the end of the input.
+func (b *backrefRegexp) next(s string, p, q int) (int, int, bool) {
+	if b.atStart || q >= len(s) {
+		return 0, 0, false
+	}
+	return p + runeLenAt(s, p), q + runeLenAt(s, q), true
+}
+
+// matchAt tries the pattern at window [p, q): loc is stripped's submatch
+// against s[p:q] and end is where the backreferences' text stops.
+func (b *backrefRegexp) matchAt(s string, p, q int) ([]int, int, bool) {
+	loc := b.stripped.FindStringSubmatchIndex(s[p:q])
+	if loc == nil {
+		return nil, 0, false
+	}
+	end, ok := b.tailEnd(s, q, loc, p)
+	return loc, end, ok
+}
+
+// advanceRunes returns the offset n characters after i, and false when the
+// input ends first.
+func advanceRunes(s string, i, n int) (int, bool) {
+	for ; n > 0; n-- {
+		if i >= len(s) {
+			return 0, false
+		}
+		i += runeLenAt(s, i)
+	}
+	return i, true
 }
 
 // tailMatches checks the captured groups against the text after the match.
@@ -511,7 +535,7 @@ func (b *backrefRegexp) tailEnd(s string, at int, loc []int, base int) (int, boo
 	}
 	// A pattern that ended with "$" required the whole input; one that did not
 	// is a containment test and may leave a tail.
-	if b.anchoredEnd() {
+	if b.atEnd {
 		return pos, pos == len(s)
 	}
 	return pos, true
@@ -536,32 +560,29 @@ func (b *backrefRegexp) NumSubexp() int { return b.stripped.NumSubexp() }
 func (b *backrefRegexp) ReplaceAllString(s, repl string) string {
 	var sb strings.Builder
 	last := 0
-	for start := 0; start <= len(s); {
-		loc := b.stripped.FindStringSubmatchIndex(s[start:])
-		if loc == nil {
-			break
-		}
-		mStart, mEnd := start+loc[0], start+loc[1]
-		end, ok := b.tailEnd(s, mEnd, loc, start)
-		if ok {
-			sb.WriteString(s[last:mStart])
-			// Expand indexes into s[start:], so it is given that slice and the
-			// loc that belongs to it.
-			sb.Write(b.stripped.ExpandString(nil, repl, s[start:], loc))
-			last = end
-			// A zero-width span would not advance; step one rune past it so
-			// the scan terminates.
-			if end > mStart {
-				start = end
-				continue
-			}
-			start = mStart + runeLenAt(s, mStart)
+	q, ok := advanceRunes(s, 0, b.width)
+	for p := 0; ok; {
+		loc, end, matched := b.matchAt(s, p, q)
+		if !matched {
+			p, q, ok = b.next(s, p, q)
 			continue
 		}
-		if b.anchoredStart() {
+		sb.WriteString(s[last:p])
+		// Expand indexes into the window, so it is given that slice and the
+		// loc that belongs to it.
+		sb.Write(b.stripped.ExpandString(nil, repl, s[p:q], loc))
+		last = end
+		if b.atStart {
 			break
 		}
-		start = mStart + runeLenAt(s, mStart)
+		// A zero-width span would not advance; step one rune past it so the
+		// scan terminates.
+		if end == p {
+			end += runeLenAt(s, p)
+		}
+		p = end
+		q, ok = advanceRunes(s, p, b.width)
+		ok = ok && p <= len(s)
 	}
 	sb.WriteString(s[last:])
 	return sb.String()
@@ -578,14 +599,6 @@ func runeLenAt(s string, i int) int {
 		return 1
 	}
 	return size
-}
-
-func (b *backrefRegexp) anchoredEnd() bool {
-	return strings.HasSuffix(b.src, "$")
-}
-
-func (b *backrefRegexp) anchoredStart() bool {
-	return strings.HasPrefix(b.src, "^")
 }
 
 // compileArgBackref is compileArgRegexp for the backreference path.
@@ -639,7 +652,7 @@ func buildBackrefRegexp(pattern, flags string, v Version) (*backrefRegexp, error
 		}
 	}
 
-	head, refs, err := splitBackrefs(pattern)
+	head, refs, atEnd, err := splitBackrefs(pattern)
 	if err != nil {
 		return nil, err
 	}
@@ -653,7 +666,8 @@ func buildBackrefRegexp(pattern, flags string, v Version) (*backrefRegexp, error
 	if len(goFlags) > 0 {
 		translated = "(?" + strings.Join(goFlags, "") + ")" + translated
 	}
-	re, err := CompileBounded(translated)
+	// stripped runs anchored on one window at a time; see MatchString.
+	re, err := CompileBounded("^(?:" + translated + ")")
 	if err != nil {
 		return nil, regexCompileError(original, err)
 	}
@@ -705,10 +719,112 @@ func buildBackrefRegexp(pattern, flags string, v Version) (*backrefRegexp, error
 				refs[i].group)
 		}
 	}
+	// The checks above look at each group and what follows it. They miss
+	// what comes before: "a*(a)\\1" against "aa" needs a* to give one "a"
+	// back, and RE2's greedy split never does, so the answer came out false.
+	// The whole head must have one width and every referenced group one
+	// place in it, or the pattern goes to the backtracker or is refused.
+	tree, err := syntax.Parse(translated, syntax.Perl)
+	if err != nil {
+		return nil, regexCompileError(original, err)
+	}
+	atStart := startsWithBeginText(tree)
+	refd := make(map[int]bool, len(analysed))
+	for i, r := range refs {
+		refd[r.group] = true
+		// A "\\N*" is greedy-exact only as the last thing: a later
+		// backreference may need fewer copies. Unanchored with "$", every start
+		// would re-run it to the end of the input, so that shape goes too.
+		if r.star && (i != len(refs)-1 || r.literal != "" || (atEnd && !atStart)) {
+			return nil, fmt.Errorf(
+				"FORX0002: backreference \\%d* is not decided by the fixed-width "+
+					"matcher in this position", r.group)
+		}
+	}
+	if atStart {
+		tree = dropLeadingBeginText(tree)
+	}
+	// Under "m" a trailing "$" also matches before a newline, which the
+	// end-of-input check in tailEnd does not model.
+	width, ok := fixedShape(tree, refd, false)
+	if !ok || (atEnd && strings.ContainsRune(flags, 'm')) {
+		return nil, fmt.Errorf(
+			"FORX0002: backreference in a pattern whose groups can match in " +
+				"more than one place, which RE2 cannot resolve")
+	}
 	return &backrefRegexp{
-		stripped: re, refs: refs, src: original,
+		stripped: re, refs: refs, width: width,
+		atStart: atStart, atEnd: atEnd,
 		fold: strings.ContainsRune(flags, 'i'),
 	}, nil
+}
+
+// startsWithBeginText reports whether tree begins with "^" (not multi-line).
+func startsWithBeginText(tree *syntax.Regexp) bool {
+	if tree.Op == syntax.OpConcat && len(tree.Sub) > 0 {
+		tree = tree.Sub[0]
+	}
+	return tree.Op == syntax.OpBeginText
+}
+
+// dropLeadingBeginText removes the "^" startsWithBeginText found.
+func dropLeadingBeginText(tree *syntax.Regexp) *syntax.Regexp {
+	if tree.Op == syntax.OpConcat {
+		c := *tree
+		c.Sub = c.Sub[1:]
+		return &c
+	}
+	return &syntax.Regexp{Op: syntax.OpEmptyMatch}
+}
+
+// fixedShape returns the number of characters re always matches, and false
+// when that number can vary, when re holds an anchor, or when a group in refd
+// sits under an alternation or a repetition. Under those every match of re
+// has the same length and each referenced group the same offset and the same
+// participation, so RE2's one assignment is the only one. guarded is true below
+// an alternation or a repetition.
+func fixedShape(re *syntax.Regexp, refd map[int]bool, guarded bool) (int, bool) {
+	switch re.Op {
+	case syntax.OpEmptyMatch:
+		return 0, true
+	case syntax.OpLiteral:
+		return len(re.Rune), true
+	case syntax.OpCharClass, syntax.OpAnyChar, syntax.OpAnyCharNotNL:
+		return 1, true
+	case syntax.OpCapture:
+		if guarded && refd[re.Cap] {
+			return 0, false
+		}
+		return fixedShape(re.Sub[0], refd, guarded)
+	case syntax.OpConcat:
+		w := 0
+		for _, sub := range re.Sub {
+			sw, ok := fixedShape(sub, refd, guarded)
+			if !ok {
+				return 0, false
+			}
+			w += sw
+		}
+		return w, true
+	case syntax.OpAlternate:
+		w := -1
+		for _, sub := range re.Sub {
+			sw, ok := fixedShape(sub, refd, true)
+			if !ok || (w >= 0 && sw != w) {
+				return 0, false
+			}
+			w = sw
+		}
+		return w, w >= 0
+	case syntax.OpRepeat:
+		if re.Min != re.Max {
+			return 0, false
+		}
+		sw, ok := fixedShape(re.Sub[0], refd, true)
+		return sw * re.Min, ok
+	}
+	// Star, plus, quest, anchors and no-match.
+	return 0, false
 }
 
 // backrefAnalysisMax bounds the fixed-width analysis of one pattern, in bytes

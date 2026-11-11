@@ -88,7 +88,7 @@ type Collation interface {
 // collations search in linear time and are called as they are.
 func collationMatchRange(ctx *Context, c Collation, s, sub string) (start, end int, ok bool, err error) {
 	if u, is := c.(*ucaCollation); is {
-		return u.matchRange(s, sub, ctx.Err)
+		return u.matchRange(s, sub, ucaPoll(ctx))
 	}
 	if m, is := c.(interface {
 		MatchRange(s, sub string) (int, int, bool)
@@ -108,7 +108,7 @@ func collationMatchRange(ctx *Context, c Collation, s, sub string) (start, end i
 // collationMatchRange.
 func collationContains(ctx *Context, c Collation, s, sub string) (bool, error) {
 	if u, is := c.(*ucaCollation); is {
-		i, err := u.indexOf(s, sub, ctx.Err)
+		i, err := u.indexOf(s, sub, ucaPoll(ctx))
 		return i >= 0, err
 	}
 	return c.Contains(s, sub), nil
@@ -116,14 +116,14 @@ func collationContains(ctx *Context, c Collation, s, sub string) (bool, error) {
 
 func collationStartsWith(ctx *Context, c Collation, s, prefix string) (bool, error) {
 	if u, is := c.(*ucaCollation); is {
-		return u.startsWith(s, prefix, ctx.Err)
+		return u.startsWith(s, prefix, ucaPoll(ctx))
 	}
 	return c.StartsWith(s, prefix), nil
 }
 
 func collationEndsWith(ctx *Context, c Collation, s, suffix string) (bool, error) {
 	if u, is := c.(*ucaCollation); is {
-		return u.endsWith(s, suffix, ctx.Err)
+		return u.endsWith(s, suffix, ucaPoll(ctx))
 	}
 	return c.EndsWith(s, suffix), nil
 }
@@ -460,18 +460,29 @@ func (u *ucaCollation) MatchRange(s, sub string) (int, int, bool) {
 const ucaSpanSlack = 32
 
 // ucaSearch is one substring search under a UCA collation. The needle's keys
-// are built once rather than per candidate span, and poll, when set, is the
-// evaluation's cancellation, checked before every span is keyed: a haystack
-// of characters ignorable at the primary level never outgrows the needle, so
-// the scan over it stays quadratic in spans and only a deadline bounds it.
+// are built once rather than per candidate span, and poll, when set, is called
+// with each span's length before it is keyed: it checks the evaluation's
+// cancellation and charges the bytes keyed to its byte budget. A haystack of
+// characters ignorable at the primary level never outgrows the needle, so the
+// scan over it stays quadratic in spans and only those bound it.
 type ucaSearch struct {
 	u          *ucaCollation
 	key, prim  []byte
 	emptyMatch bool
-	poll       func() error
+	poll       func(n int) error
 }
 
-func (u *ucaCollation) search(sub string, poll func() error) *ucaSearch {
+// ucaPoll is the poll an evaluation hands a UCA scan.
+func ucaPoll(ctx *Context) func(int) error {
+	return func(n int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return ctx.countBytes(n)
+	}
+}
+
+func (u *ucaCollation) search(sub string, poll func(int) error) *ucaSearch {
 	q := &ucaSearch{u: u, key: u.key(sub), prim: u.primaryKey(sub), poll: poll}
 	q.emptyMatch = bytes.Equal(q.key, u.key(""))
 	return q
@@ -493,16 +504,77 @@ func (u *ucaCollation) primaryKey(s string) []byte {
 // the span has outgrown it by more than ucaSpanSlack, so that no longer span
 // from the same fixed end can match.
 func (q *ucaSearch) equal(span string) (eq, past bool, err error) {
-	if q.poll != nil {
-		if err := q.poll(); err != nil {
-			return false, false, err
-		}
+	p, err := q.primary(span)
+	if err != nil {
+		return false, false, err
 	}
-	p := q.u.primaryKey(span)
 	if !bytes.Equal(p, q.prim) {
 		return false, len(p) > len(q.prim)+ucaSpanSlack, nil
 	}
 	return bytes.Equal(q.u.key(span), q.key), false, nil
+}
+
+// primary is primaryKey with the poll applied.
+func (q *ucaSearch) primary(span string) ([]byte, error) {
+	if q.poll != nil {
+		if err := q.poll(len(span)); err != nil {
+			return nil, err
+		}
+	}
+	return q.u.primaryKey(span), nil
+}
+
+// skipShort returns an offset lo such that no span s[start:end] with end <= lo
+// can equal the needle, found in O(log) keyings rather than one per end.
+//
+// It is ucaSpanSlack read the other way: cutting characters off a span's end
+// can lengthen its primary key only by what a contraction at that edge gives
+// back, so a span whose primary key is ucaSpanSlack bytes shorter than the
+// needle's has no shorter prefix that matches. The span is grown by doubling
+// until its key reaches that floor, then the crossing is bisected. Without it
+// each start keyed every span up to the needle's length, O(n*m^2) for a
+// needle of m characters.
+func (q *ucaSearch) skipShort(s string, start int) (int, error) {
+	floor := len(q.prim) - ucaSpanSlack
+	lo := start
+	if floor <= 0 {
+		return lo, nil
+	}
+	hi := -1
+	for k := 1; hi < 0; k *= 2 {
+		e := start
+		for i := 0; i < k && e < len(s); i++ {
+			_, size := utf8.DecodeRuneInString(s[e:])
+			e += size
+		}
+		p, err := q.primary(s[start:e])
+		if err != nil {
+			return 0, err
+		}
+		if len(p) >= floor {
+			hi = e
+		} else if lo = e; e == len(s) {
+			return lo, nil
+		}
+	}
+	for {
+		mid := lo + (hi-lo)/2
+		for mid > lo && !utf8.RuneStart(s[mid]) {
+			mid--
+		}
+		if mid == lo {
+			return lo, nil
+		}
+		p, err := q.primary(s[start:mid])
+		if err != nil {
+			return 0, err
+		}
+		if len(p) < floor {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
 }
 
 // The substring operations are defined over collation units. Implementing them
@@ -523,7 +595,11 @@ func (q *ucaSearch) matchAt(s string, start int) (int, bool, error) {
 	if q.emptyMatch {
 		return start, true, nil
 	}
-	for end := start + 1; end <= len(s); end++ {
+	lo, err := q.skipShort(s, start)
+	if err != nil {
+		return 0, false, err
+	}
+	for end := lo + 1; end <= len(s); end++ {
 		if end < len(s) && !utf8.RuneStart(s[end]) {
 			continue
 		}
@@ -538,7 +614,7 @@ func (q *ucaSearch) matchAt(s string, start int) (int, bool, error) {
 	return 0, false, nil
 }
 
-func (u *ucaCollation) indexOf(s, sub string, poll func() error) (int, error) {
+func (u *ucaCollation) indexOf(s, sub string, poll func(int) error) (int, error) {
 	q := u.search(sub, poll)
 	for start := 0; start <= len(s); start++ {
 		if start < len(s) && !utf8.RuneStart(s[start]) {
@@ -570,7 +646,7 @@ func (u *ucaCollation) indexOf(s, sub string, poll func() error) (int, error) {
 // So the end comes from the shortest match, found by scanning forward, and the
 // start is then advanced as far as it can go while the span still matches,
 // which drops exactly the leading ignorables.
-func (u *ucaCollation) matchRange(s, sub string, poll func() error) (int, int, bool, error) {
+func (u *ucaCollation) matchRange(s, sub string, poll func(int) error) (int, int, bool, error) {
 	q := u.search(sub, poll)
 	for start := 0; start <= len(s); start++ {
 		if start < len(s) && !utf8.RuneStart(s[start]) {
@@ -602,14 +678,14 @@ func (u *ucaCollation) matchRange(s, sub string, poll func() error) (int, int, b
 	return 0, 0, false, nil
 }
 
-func (u *ucaCollation) startsWith(s, prefix string, poll func() error) (bool, error) {
+func (u *ucaCollation) startsWith(s, prefix string, poll func(int) error) (bool, error) {
 	_, ok, err := u.search(prefix, poll).matchAt(s, 0)
 	return ok, err
 }
 
 // endsWith grows the candidate suffix from the end of s leftwards, so that the
 // same ucaSpanSlack bound that stops matchAt stops it too.
-func (u *ucaCollation) endsWith(s, suffix string, poll func() error) (bool, error) {
+func (u *ucaCollation) endsWith(s, suffix string, poll func(int) error) (bool, error) {
 	q := u.search(suffix, poll)
 	if q.emptyMatch {
 		return true, nil

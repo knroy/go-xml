@@ -1995,6 +1995,12 @@ func parseFracPattern(pres string) (fracPattern, error) {
 		default:
 			// Literal separator text; applyFracPicture writes it back.
 		}
+		// Each digit is a place rendered, so the pattern is bounded as the
+		// width modifier is.
+		if fp.mandatory+fp.optional > maxPictureWidth {
+			return fracPattern{}, fmt.Errorf("FOFD1340: fractional-seconds pattern "+
+				"asks for more than %d digits: %w", maxPictureWidth, xdm.ErrResourceLimit)
+		}
 	}
 	// A bare "1" is the component's default presentation rather than a
 	// pattern the picture chose, which matters because a width modifier
@@ -3340,8 +3346,8 @@ func roundHalfToEvenFrac(r *big.Rat, places int) string {
 	digits := q.String()
 	// Left-pad to the requested width so that .05 at two places is "05"
 	// rather than "5", which the caller reads positionally.
-	for len(digits) < places {
-		digits = "0" + digits
+	if len(digits) < places {
+		digits = strings.Repeat("0", places-len(digits)) + digits
 	}
 	return "." + digits
 }
