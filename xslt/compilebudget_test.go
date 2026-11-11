@@ -3,6 +3,7 @@ package xslt
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -70,7 +71,7 @@ func TestMaxModuleVisitsOption(t *testing.T) {
 		t.Fatalf("lowered to 20: got %v", err)
 	}
 	deep := includeChain(400) // about 80,000 visits
-	for _, n := range []int{-1, 1 << 40} {
+	for _, n := range []int{-1, math.MaxInt} {
 		if err := compileWith(t, deep, CompileOptions{MaxModuleVisits: n}); !refused(err, maxModuleVisitsCeiling) {
 			t.Fatalf("MaxModuleVisits %d: got %v, want the %d ceiling", n, err, maxModuleVisitsCeiling)
 		}
