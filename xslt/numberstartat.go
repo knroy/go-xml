@@ -59,7 +59,8 @@ func rebaseNumbers(values []*big.Int, starts []int64) []*big.Int {
 		if i < len(starts) {
 			s = starts[i]
 		}
-		out[i] = new(big.Int).Add(v, big.NewInt(s-1))
+		// s-1 in big.Int: in int64 a start-at of math.MinInt64 wraps.
+		out[i] = new(big.Int).Sub(new(big.Int).Add(v, big.NewInt(s)), big.NewInt(1))
 	}
 	return out
 }
