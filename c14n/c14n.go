@@ -440,6 +440,11 @@ func Func(root *xdm.Node, f func(*xdm.Node) bool) NodeSet { return funcSet{root,
 // number("1e3") is NaN and string(1 div 0) is "Infinity", for instance. Namespace nodes the expression returns are ignored; see the package
 // documentation. ExcludeSubtree is faster and should be preferred where it
 // applies.
+//
+// The evaluation is bounded in what it holds (xpath.MaxItems,
+// xpath.MaxBytes) but not in time, and cannot be cancelled; a caller
+// evaluating an expression it does not trust should use FromXPathContext
+// with a deadline.
 func FromXPath(doc *xdm.Node, expr string, ns map[string]string) (NodeSet, error) {
 	return FromXPathContext(context.Background(), doc, expr, ns)
 }
@@ -511,10 +516,14 @@ type NamespaceSet interface {
 // FromXPathFilterHere is the form that provides it.
 //
 // The filter is compiled once, and every per-node evaluation spends one
-// shared item and byte budget (xpath.MaxItems, xpath.MaxBytes), so a filter
-// whose work per node is small but whose total is not is refused with an
-// error carrying xdm.ErrResourceLimit. Use FromXPathFilterContext to bound
-// the time as well.
+// shared item and byte budget (xpath.MaxItems, xpath.MaxBytes), which the
+// input node-set's namespace nodes are charged against too, so a filter that
+// materialises too much in total is refused with an error carrying
+// xdm.ErrResourceLimit. Those budgets bound what is held, not time: a filter
+// that iterates without materialising, such as nested quantified
+// expressions, runs as long as it iterates, and this form cannot be
+// cancelled. A caller applying a filter it does not trust should use
+// FromXPathFilterContext with a deadline.
 func FromXPathFilter(doc *xdm.Node, filter string, ns map[string]string) (NodeSet, error) {
 	return FromXPathFilterContext(context.Background(), doc, filter, ns)
 }
@@ -552,22 +561,17 @@ func FromXPathFilterHere(ctx context.Context, doc, here *xdm.Node, filter string
 	// changes on it, so they share its cancellation and, held, its item and
 	// byte counters, instead of each minting a fresh allowance.
 	base := filterContext(ctx, root, here).HoldItemBudget().HoldByteBudget()
-	seq, err := allNodes.Eval(base)
-	if err != nil {
-		return nil, err
-	}
 	set := filterSet{root: root, nodes: map[*xdm.Node]bool{}, ns: map[nsKey]bool{}}
-	for _, it := range seq {
+	visit := func(n *xdm.Node) error {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("c14n: XPath filter: %w", err)
+			return fmt.Errorf("c14n: XPath filter: %w", err)
 		}
-		n := it.(*xdm.Node) // a union of path expressions yields only nodes
 		if onFilterNode != nil {
 			onFilterNode(n)
 		}
 		keep, err := c.EvalBool(base.WithFocus(n, 1, 1))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		switch {
 		case !keep:
@@ -576,6 +580,10 @@ func FromXPathFilterHere(ctx context.Context, doc, here *xdm.Node, filter string
 		default:
 			set.nodes[n] = true
 		}
+		return nil
+	}
+	if err := walkFilterInput(root, base, visit); err != nil {
+		return nil, err
 	}
 	return set, nil
 }
@@ -627,9 +635,56 @@ var (
 	onFilterNode func(*xdm.Node)
 )
 
-// allNodes is XML-DSig's input node-set for a same-document XPath Filter:
-// every node of the document, namespace nodes included.
-var allNodes = xpath.MustCompile("//. | //@* | //namespace::*", prefixMap(nil))
+// walkFilterInput calls visit on XML-DSig's input node-set for a
+// same-document XPath Filter: every node of root's tree, namespace nodes
+// included, in document order (an element, then its namespace nodes, then its
+// attributes, then its children).
+//
+// It walks the tree rather than evaluating "//. | //@* | //namespace::*",
+// which held every (element, in-scope binding) namespace node at once: one
+// node per element per binding, so a few kilobytes declaring many prefixes
+// over many elements made millions of them, none charged. Walking holds one
+// element's namespace nodes at a time, and each is charged one item against
+// base's held budget, so the namespace axis, the one input dimension larger
+// than the document, is bounded by MaxItems like the filter's own work.
+func walkFilterInput(root *xdm.Node, base *xpath.Context, visit func(*xdm.Node) error) error {
+	// "//" is rooted at a document node, so a detached tree has no input
+	// node-set; this is the error evaluating the expression raised.
+	if root.Kind() != xdm.KindDocument {
+		return errors.New("XPDY0050: root of the context node is not a document node")
+	}
+	one := func(n *xdm.Node) error {
+		if err := visit(n); err != nil {
+			return err
+		}
+		if n.Kind() != xdm.KindElement {
+			return nil
+		}
+		for ns := range n.NamespaceNodes() {
+			if err := base.ChargeItems(1); err != nil {
+				return err
+			}
+			if err := visit(ns); err != nil {
+				return err
+			}
+		}
+		for a := range n.Attrs() {
+			if err := visit(a); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := one(root); err != nil {
+		return err
+	}
+	for d := range root.Descendants() {
+		if err := one(d); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type nsKey struct {
 	elem   *xdm.Node

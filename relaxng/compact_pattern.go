@@ -484,6 +484,14 @@ func (p *compactParser) parseNameClassExcept(n *cnode, owner *cnode) error {
 	if err := p.advance(); err != nil {
 		return err
 	}
+	// "* - * - ..." chains recurse through here without passing
+	// parseNameClass, so the depth bound is charged here too.
+	p.depth++
+	if p.depth > maxCompactDepth {
+		p.depth--
+		return p.errorf("name classes nest more than %d deep", maxCompactDepth)
+	}
+	defer func() { p.depth-- }()
 	inner, simple, err := p.parseNameClassPrimary(owner)
 	if err != nil {
 		return err

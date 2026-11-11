@@ -195,3 +195,44 @@ func TestSharedDefinitionCountsTwice(t *testing.T) {
 		}
 	}
 }
+
+// TestOverlapAcrossIsNotPairwise checks that the §7.3/§7.4 overlap test does
+// not compare every pair of single names. Two branches of n distinct names
+// each used to cost n*n representative-name tests, each allocating; a set
+// makes it linear.
+func TestOverlapAcrossIsNotPairwise(t *testing.T) {
+	const n = 500
+	var a, b []nameClass
+	for i := range n {
+		a = append(a, qnamePat{Name: xdm.QName{Local: "a" + itoa(i)}})
+		b = append(b, qnamePat{Name: xdm.QName{Local: "b" + itoa(i)}})
+	}
+	allocs := testing.AllocsPerRun(1, func() {
+		if s := overlapAcross(a, b); s != "" {
+			t.Fatalf("disjoint names reported overlapping at %s", s)
+		}
+	})
+	if allocs > 10*n {
+		t.Errorf("overlap of %d against %d names allocated %v times; it is pairwise", n, n, allocs)
+	}
+
+	// The result is unchanged: equal names, a name inside an open class,
+	// a name inside a choice, and two open classes still overlap.
+	x := xdm.QName{URI: "u", Local: "x"}
+	cases := []struct{ a, b nameClass }{
+		{qnamePat{x}, qnamePat{x}},
+		{qnamePat{x}, nsNamePat{Ns: "u"}},
+		{nsNamePat{Ns: "u"}, qnamePat{x}},
+		{nameChoicePat{qnamePat{xdm.QName{Local: "y"}}, qnamePat{x}}, qnamePat{x}},
+		{anyNamePat{}, nsNamePat{Ns: "v"}},
+	}
+	for i, c := range cases {
+		if overlapAcross([]nameClass{c.a}, []nameClass{c.b}) == "" {
+			t.Errorf("case %d: overlap not found", i)
+		}
+	}
+	if s := overlapAcross([]nameClass{nsNamePat{Ns: "u", Except: qnamePat{x}}},
+		[]nameClass{qnamePat{x}}); s != "" {
+		t.Errorf("an excepted name was reported overlapping at %s", s)
+	}
+}

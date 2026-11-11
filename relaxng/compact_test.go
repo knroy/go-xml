@@ -639,6 +639,36 @@ func TestCompactDepthIsBounded(t *testing.T) {
 	}
 }
 
+// TestCompactDepthIsBoundedOnEveryPath checks the depth bound on the recursive
+// paths that do not pass through parsePattern: nested div blocks, nested
+// include overrides, and a chain of name-class excepts. Each used to recurse
+// without charging the bound, so a long enough input was a fatal stack
+// overflow rather than an error.
+func TestCompactDepthIsBoundedOnEveryPath(t *testing.T) {
+	const n = 5000
+	cases := map[string]string{
+		"div":     strings.Repeat("div { ", n) + strings.Repeat("} ", n),
+		"include": strings.Repeat(`include "x" { `, n) + strings.Repeat("} ", n),
+		"except":  "element " + strings.Repeat("* - ", n) + "foo { empty }",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseCompact(src)
+			if err == nil {
+				t.Fatalf("input nested %d deep was accepted", n)
+			}
+			if !strings.Contains(err.Error(), "deep") {
+				t.Errorf("error %q should say the input nests too deeply", err)
+			}
+		})
+	}
+	// A real schema's nesting stays well inside the bound.
+	src := strings.Repeat("div { ", 100) + "start = element foo { empty }" + strings.Repeat(" }", 100)
+	if _, err := ParseCompact(src); err != nil {
+		t.Errorf("div nested 100 deep was refused: %v", err)
+	}
+}
+
 // compactResolver serves compact-syntax schemas, parsing each into the XML
 // syntax the Resolver contract requires.
 //
