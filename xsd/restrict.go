@@ -698,10 +698,16 @@ func inlineSameCompositorOnce(g *ModelGroup, memo map[*ModelGroup][]*Particle) [
 	return out
 }
 
-// inlinedTooLong reports whether inlineSameCompositor would return more than
-// limit particles for some model group reachable from p. memo holds each
-// group's flattened length, capped at limit+1, so a group-ref DAG is walked in
-// graph time.
+// inlinedTooLong reports whether inlineSameCompositor, or flattenAllGroups for
+// an all group, would return more than limit particles for some model group
+// reachable from p. memo holds each group's flattened length, capped at
+// limit+1, so a group-ref DAG is walked in graph time.
+//
+// All groups count too: under 1.1 allSubsumes and allWildcardShadow flatten
+// nested all-group refs, and a ladder of all groups each holding two refs to
+// the next flattens to 2^n particles. Such a model is refused by the position
+// budget when compiled anyway (buildAll flattens it the same way), so
+// measuring it here refuses nothing that would have loaded.
 func inlinedTooLong(p *Particle, limit int, memo map[*ModelGroup]int) bool {
 	long := false
 	var size func(g *ModelGroup) int
@@ -710,7 +716,6 @@ func inlinedTooLong(p *Particle, limit int, memo map[*ModelGroup]int) bool {
 			return n
 		}
 		memo[g] = 0 // a cycle is reported elsewhere; do not follow it
-		flat := g.Compositor == CompositorSequence || g.Compositor == CompositorChoice
 		n := 0
 		for _, q := range g.Particles {
 			mg, ok := q.Term.(*ModelGroup)
@@ -718,7 +723,7 @@ func inlinedTooLong(p *Particle, limit int, memo map[*ModelGroup]int) bool {
 				n++
 				continue
 			}
-			if m := size(mg); flat && inlinable(q, g.Compositor) {
+			if m := size(mg); inlinable(q, g.Compositor) {
 				n += m
 			} else {
 				n++
