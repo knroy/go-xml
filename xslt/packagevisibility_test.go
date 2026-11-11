@@ -2,6 +2,8 @@ package xslt
 
 import (
 	"context"
+	"fmt"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -276,5 +278,44 @@ func TestUsePackageCycleIsXTSE3005(t *testing.T) {
 	}
 	if _, err := compile(top("urn:b", "urn:c"), diamond); err != nil {
 		t.Errorf("diamond: %v", err)
+	}
+}
+
+// Whether a used package still references a private component is answered
+// for every component from one scan of the package. A scan per component made
+// C private functions of a 3C-node package cost C*3C, every scan allocating
+// an attribute list per element: about 8 million allocations at C = 2,000.
+// The answers stay the scan's: p:f0, which p:pub calls, is kept.
+func TestUsedPackageReferencesAreScannedOnce(t *testing.T) {
+	const c = 2000
+	var b strings.Builder
+	b.WriteString(`<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+		xmlns:p="urn:base" name="urn:base" package-version="1.0.0" version="3.0">
+		<xsl:function name="p:pub" visibility="public"><xsl:sequence select="p:f0()"/></xsl:function>`)
+	for i := range c {
+		fmt.Fprintf(&b, `<xsl:function name="p:f%d" visibility="private"><xsl:sequence select="%d"/></xsl:function>`, i, i)
+	}
+	b.WriteString(`</xsl:package>`)
+	tree, err := xdm.ParseString(`<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+		xmlns:p="urn:base" name="urn:top" package-version="1.0.0" expand-text="yes" version="3.0">
+		<xsl:output omit-xml-declaration="yes"/>
+		<xsl:use-package name="urn:base" package-version="1.0.0"/>
+		<xsl:template name="xsl:initial-template" visibility="public"><res>{p:pub()}</res></xsl:template>
+	</xsl:package>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after goruntime.MemStats
+	goruntime.ReadMemStats(&before)
+	s, err := Compile(tree.Root, CompileOptions{PackageResolver: fixedPackages{"urn:base": b.String()}})
+	goruntime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if got := after.Mallocs - before.Mallocs; got > 1_000_000 {
+		t.Errorf("compiling the use of %d private functions made %d allocations; want under 1,000,000", c, got)
+	}
+	if out, err := runMain(s, ""); err != nil || !strings.Contains(out, ">0</res>") {
+		t.Errorf("got %q, %v; want p:pub's call on the private p:f0 to work", out, err)
 	}
 }
