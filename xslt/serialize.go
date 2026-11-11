@@ -3,6 +3,7 @@ package xslt
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/knroy/go-xml/v2/internal/htmlser"
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -73,14 +75,20 @@ func Serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 // per token, so any writer that is not already in memory or buffered gets a
 // buffer. It is flushed before returning, error or not, so the bytes that
 // reach w are exactly those the serializer wrote; the first error is kept.
-func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
+//
+// Every exported way to serialize (Serialize, Result.Serialize and String,
+// SecondaryResult.Serialize and String) comes through here after the
+// transform's own recovery has gone out of scope, so a resource-limit refusal
+// raised under it (internal/xdmlimit) is recovered here and returned.
+func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) (err error) {
+	defer xdmlimit.Recover(&err)
 	switch w.(type) {
 	case *bytes.Buffer, *strings.Builder, *bufio.Writer:
 		return serializeTo(w.(stringWriter), seq, opts, charMap)
 	}
 	bw := writerPool.Get().(*bufio.Writer)
 	bw.Reset(w)
-	err := serializeTo(bw, seq, opts, charMap)
+	err = serializeTo(bw, seq, opts, charMap)
 	if ferr := bw.Flush(); err == nil {
 		err = ferr
 	}
@@ -261,7 +269,10 @@ func (s *serializer) run(seq xdm.Sequence) error {
 	// happens before the item separator is inserted, because the members are
 	// items of the sequence being separated: [1,2] with item-separator="-"
 	// is "1-2", not one item.
-	seq = flattenArrays(seq)
+	seq, err := flattenArrays(seq)
+	if err != nil {
+		return err
+	}
 
 	// Sequence normalisation, step 3 (XSLT/XQuery Serialization 3.1, 2):
 	// when an item separator is in force it is inserted between every pair
@@ -2959,7 +2970,12 @@ func insertItemSeparator(seq xdm.Sequence, sep *string) xdm.Sequence {
 //
 // The common case is a sequence with no array in it, which is returned as it
 // stands rather than copied.
-func flattenArrays(seq xdm.Sequence) xdm.Sequence {
+//
+// An array keeps its members by reference, so a result holding k doublings
+// describes 2^k leaves: a walk past xdm.FlattenContext's bound is returned as
+// its XPDY0130 error. Serialization runs after Transform or Eval has returned,
+// outside their recovery, so the panicking xdm.Flatten would reach the host.
+func flattenArrays(seq xdm.Sequence) (xdm.Sequence, error) {
 	has := false
 	for _, it := range seq {
 		if _, ok := it.(*xdm.ArrayItem); ok {
@@ -2968,7 +2984,7 @@ func flattenArrays(seq xdm.Sequence) xdm.Sequence {
 		}
 	}
 	if !has {
-		return seq
+		return seq, nil
 	}
-	return xdm.Flatten(seq)
+	return xdm.FlattenContext(context.Background(), seq)
 }

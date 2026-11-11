@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -99,5 +100,31 @@ func TestPatternRejectsOnNodeTestFirst(t *testing.T) {
 		}
 	}); n != 0 {
 		t.Errorf("rejecting <p> allocated %v times, want 0", n)
+	}
+}
+
+// Matches is an entry point a host calls outside any Transform. A predicate
+// past a resource limit is returned as the error -- not raised as a panic,
+// and not recovered as a non-match, which would let a budget change the
+// answer.
+func TestPatternMatchesReturnsTheResourceRefusal(t *testing.T) {
+	doc, err := xdm.ParseString(`<a/>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := doc.Root.FirstChild()
+	pat, err := CompilePattern(`a[let $x := fold-left(1 to 25, [], function($a, $i) { [$a, $a] }) `+
+		`return count(distinct-values($x)) ge 0]`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			t.Fatalf("Matches panicked: %v", p)
+		}
+	}()
+	ok, err := pat.Matches(a, xpath.NewContext(a, xpath.Builtins()).WithVersion(xpath.XPath31))
+	if ok || xdm.ErrorCode(err) != "XPDY0130" || !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("Matches: got %v, %v, want false and XPDY0130", ok, err)
 	}
 }
