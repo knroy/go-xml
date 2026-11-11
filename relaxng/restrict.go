@@ -2,6 +2,7 @@ package relaxng
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -526,32 +527,143 @@ var _ = xdm.QName{}
 
 // nameSet is what one branch of a group or interleave can match, as far as
 // these rules care: the attribute names it may consume, the element names it
-// may consume, and whether it can consume text.
+// may consume, and whether it can consume text. A nil classSet is empty.
 type nameSet struct {
-	attrs []nameClass
-	elems []nameClass
+	attrs *classSet
+	elems *classSet
 	text  bool
 }
 
 func (s *nameSet) merge(o nameSet) {
-	s.attrs = append(s.attrs, o.attrs...)
-	s.elems = append(s.elems, o.elems...)
+	s.attrs = absorb(s.attrs, o.attrs)
+	s.elems = absorb(s.elems, o.elems)
 	s.text = s.text || o.text
 }
 
-// distinct drops repeated name classes. A repeat cannot change whether two
-// sets overlap, and without this a definition referring twice to another
-// that does the same doubles its set at every link.
-func distinct(cs []nameClass) []nameClass {
-	seen := make(map[nameClass]bool, len(cs))
-	out := cs[:0:0]
+// share marks the set as held by the definition cache, so that a merge
+// copies it rather than writing into it.
+func (s nameSet) share() nameSet {
+	if s.attrs != nil {
+		s.attrs.shared = true
+	}
+	if s.elems != nil {
+		s.elems.shared = true
+	}
+	return s
+}
+
+// classSet is a set of name classes, choices flattened, in the order the
+// classes were first seen, so that a conflict is reported under the same
+// name on every run.
+//
+// It is kept as an index rather than rebuilt at every node: a group or
+// interleave of K members compiles to a left-deep chain of K-1 binary nodes,
+// and re-deriving lookup sets from the accumulated side at each one cost
+// O(K²), 5.3 s for 8000 attributes. Merging the smaller set into the larger
+// keeps the whole check O(K log K).
+type classSet struct {
+	// rank holds each single name by order of first appearance; the ranks
+	// in use lie in [lo, hi), and a set merged in front takes ranks below lo.
+	rank   map[xdm.QName]int
+	lo, hi int
+	// open holds the open classes (anyName, nsName), distinct, in order.
+	open []nameClass
+	// shared marks a set the definition cache holds; see nameSet.share.
+	shared bool
+}
+
+// classesOf is the set of cs.
+func classesOf(cs ...nameClass) *classSet {
+	s := &classSet{rank: map[xdm.QName]int{}}
 	for _, c := range cs {
-		if !seen[c] {
-			seen[c] = true
-			out = append(out, c)
+		s.add(c)
+	}
+	return s
+}
+
+func (s *classSet) add(c nameClass) {
+	switch x := c.(type) {
+	case qnamePat:
+		if _, ok := s.rank[x.Name]; !ok {
+			s.rank[x.Name] = s.hi
+			s.hi++
+		}
+	case nameChoicePat:
+		s.add(x.Left)
+		s.add(x.Right)
+	default:
+		if !slices.Contains(s.open, c) {
+			s.open = append(s.open, c)
 		}
 	}
+}
+
+func (s *classSet) size() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.rank) + len(s.open)
+}
+
+// names returns the single names in order.
+func (s *classSet) names() []xdm.QName {
+	if s == nil {
+		return nil
+	}
+	out := make([]xdm.QName, 0, len(s.rank))
+	for n := range s.rank {
+		out = append(out, n)
+	}
+	slices.SortFunc(out, func(a, b xdm.QName) int { return s.rank[a] - s.rank[b] })
 	return out
+}
+
+func (s *classSet) clone() *classSet {
+	return &classSet{rank: maps.Clone(s.rank), lo: s.lo, hi: s.hi, open: slices.Clone(s.open)}
+}
+
+// absorb returns the union of a and b, a's classes first, writing into the
+// larger of the two unless the cache holds it.
+func absorb(a, b *classSet) *classSet {
+	switch {
+	case b.size() == 0:
+		return a
+	case a.size() == 0:
+		return b
+	}
+	if len(a.rank) >= len(b.rank) {
+		if a.shared {
+			a = a.clone()
+		}
+		for _, n := range b.names() {
+			if _, ok := a.rank[n]; !ok {
+				a.rank[n] = a.hi
+				a.hi++
+			}
+		}
+		for _, c := range b.open {
+			if !slices.Contains(a.open, c) {
+				a.open = append(a.open, c)
+			}
+		}
+		return a
+	}
+	if b.shared {
+		b = b.clone()
+	}
+	an := a.names()
+	for i := len(an) - 1; i >= 0; i-- {
+		b.lo--
+		b.rank[an[i]] = b.lo // first seen in a, so earlier than in b
+	}
+	open := slices.Clone(a.open)
+	for _, c := range b.open {
+		if !slices.Contains(open, c) {
+			open = append(open, c)
+		}
+	}
+	b.open = open
+	return b
 }
 
 // checkCompetition applies §7.3 and §7.4 to a compiled pattern.
@@ -574,14 +686,13 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 		// A recursive definition is visited once: what it can match is
 		// already accounted for by the visit in progress, and following it
 		// again would not terminate. A shared one reached again elsewhere
-		// gives what it gave the first time; it is clipped so that a merge
+		// gives what it gave the first time, marked shared so that a merge
 		// copies it rather than writing into it.
 		if s, done := seen[r]; done {
 			if s == nil {
 				return nameSet{}, nil
 			}
-			return nameSet{attrs: slices.Clip(s.attrs),
-				elems: slices.Clip(s.elems), text: s.text}, nil
+			return *s, nil
 		}
 		seen[r] = nil
 		q, err := r.get()
@@ -592,16 +703,15 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 		if err != nil {
 			return nameSet{}, err
 		}
-		s.attrs, s.elems = distinct(s.attrs), distinct(s.elems)
+		s = s.share()
 		seen[r] = &s
-		return nameSet{attrs: slices.Clip(s.attrs),
-			elems: slices.Clip(s.elems), text: s.text}, nil
+		return s, nil
 	}
 	switch t := p.(type) {
 	case *attributePat:
 		// The attribute's own content is a separate world — §7.1 has already
 		// ruled out anything in it that could compete out here.
-		return nameSet{attrs: []nameClass{t.Name}}, nil
+		return nameSet{attrs: classesOf(t.Name)}, nil
 
 	case *elementPat:
 		// An element's content is checked, but its names do not escape: two
@@ -610,7 +720,7 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 		if _, err := competingSeen(t.Pattern, seen); err != nil {
 			return nameSet{}, err
 		}
-		return nameSet{elems: []nameClass{t.Name}}, nil
+		return nameSet{elems: classesOf(t.Name)}, nil
 
 	case textPat:
 		return nameSet{text: true}, nil
@@ -707,79 +817,61 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 }
 
 // overlapAcross returns a name that some class in a and some class in b both
-// admit, or "". The two slices come from different branches.
+// admit, or "". The two sets come from different branches.
 //
-// Comparing every pair made a branch of n single names against another of m
-// cost n*m representative-name tests, each allocating. Single names are what
-// nearly every class is, and two of them overlap only when they are equal, so
-// they are compared through a set; only an open class (anyName or nsName) is
-// tested against the other side one class at a time. Choices are flattened
-// first, since a choice overlaps a class exactly when one of its branches
-// does, and repeats are dropped, since they cannot change the answer.
+// Single names overlap only when they are equal, so they are probed through
+// the larger side's index from the smaller side; only an open class (anyName
+// or nsName) is tested against the other side one class at a time. The name
+// reported is the first of a's that b admits, as a walk of a in order finds
+// it, then the first overlap of a's open classes.
 //
 // ponytail: an open class is still tested against every class on the other
 // side, O(open * total); index nsName by namespace if schemas with thousands
 // of open classes per branch matter.
-func overlapAcross(a, b []nameClass) string {
-	an, ao := splitClasses(a)
-	bn, bo := splitClasses(b)
-	bset := make(map[xdm.QName]bool, len(bn))
-	for _, n := range bn {
-		bset[n] = true
+func overlapAcross(a, b *classSet) string {
+	if a.size() == 0 || b.size() == 0 {
+		return ""
 	}
-	for _, n := range an {
-		if bset[n] {
-			return showQName(n)
+	if len(b.open) == 0 && len(a.rank) > len(b.rank) {
+		best, at := xdm.QName{}, 0
+		found := false
+		for n := range b.rank {
+			if r, ok := a.rank[n]; ok && (!found || r < at) {
+				best, at, found = n, r, true
+			}
 		}
-		for _, y := range bo {
-			if y.contains(n) {
+		if found {
+			return showQName(best)
+		}
+	} else {
+		for _, n := range a.names() {
+			if _, ok := b.rank[n]; ok {
 				return showQName(n)
+			}
+			for _, y := range b.open {
+				if y.contains(n) {
+					return showQName(n)
+				}
 			}
 		}
 	}
-	for _, x := range ao {
+	if len(a.open) == 0 {
+		return ""
+	}
+	bn := b.names()
+	for _, x := range a.open {
 		for _, n := range bn {
 			if x.contains(n) {
 				return showQName(n)
 			}
 		}
-		for _, y := range bo {
+		for _, y := range b.open {
 			if s := describeOverlap(x, y); s != "" {
 				return s
 			}
 		}
 	}
 	return ""
-}
-
-// splitClasses flattens the choices in cs and separates its single names from
-// its open classes, each in first-seen order with repeats dropped, so that
-// the name a conflict is reported under does not depend on map order.
-func splitClasses(cs []nameClass) (names []xdm.QName, open []nameClass) {
-	seenName := map[xdm.QName]bool{}
-	seenOpen := map[nameClass]bool{}
-	var walk func(c nameClass)
-	walk = func(c nameClass) {
-		switch x := c.(type) {
-		case qnamePat:
-			if !seenName[x.Name] {
-				seenName[x.Name] = true
-				names = append(names, x.Name)
-			}
-		case nameChoicePat:
-			walk(x.Left)
-			walk(x.Right)
-		default:
-			if !seenOpen[c] {
-				seenOpen[c] = true
-				open = append(open, c)
-			}
-		}
-	}
-	for _, c := range cs {
-		walk(c)
-	}
-	return names, open
 }
 
 // describeOverlap names a name both classes admit, or returns "".

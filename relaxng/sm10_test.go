@@ -159,3 +159,69 @@ func TestSM10RestrictionWalkIsLinear(t *testing.T) {
 		t.Fatalf("400 levels cost %.0fx one level (%v vs %v); prune rescans subtrees again", r, deep, flat)
 	}
 }
+
+// competitionWidthCost is the time to compile one element of k distinct
+// attributes and an interleave of k distinct elements.
+func competitionWidthCost(t *testing.T, k int) time.Duration {
+	t.Helper()
+	var a, e strings.Builder
+	a.WriteString(`<element name="r" xmlns="http://relaxng.org/ns/structure/1.0">`)
+	e.WriteString(`<element name="r" xmlns="http://relaxng.org/ns/structure/1.0"><interleave>`)
+	for i := range k {
+		fmt.Fprintf(&a, `<attribute name="a%d"/>`, i)
+		fmt.Fprintf(&e, `<element name="e%d"><empty/></element>`, i)
+	}
+	a.WriteString(`</element>`)
+	e.WriteString(`</interleave></element>`)
+	var trees []*xdm.Node
+	for _, src := range []string{a.String(), e.String()} {
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		trees = append(trees, tree.Root)
+	}
+	best := time.Duration(1 << 62)
+	for range 3 {
+		start := time.Now()
+		for _, root := range trees {
+			if _, err := Compile(root); err != nil {
+				t.Fatal(err)
+			}
+		}
+		best = min(best, time.Since(start))
+	}
+	return best
+}
+
+// SECURITY (run-5). The §7.3/§7.4 check rebuilt lookup sets from the whole
+// accumulated side at every binary node of a wide group or interleave:
+// O(K²), 5.3 s at K=8000. Indexed, 8x the width costs about 8x.
+func TestSM10CompetitionWidthIsLinear(t *testing.T) {
+	small, large := competitionWidthCost(t, 500), competitionWidthCost(t, 4000)
+	if r := float64(large) / float64(small); r > 24 {
+		t.Fatalf("8x the members cost %.0fx the time (%v vs %v); the competition check is quadratic again", r, large, small)
+	}
+}
+
+// The index keeps the first-seen name the old walk reported, whichever side
+// is larger, and a shared definition merged twice is not written into.
+func TestSM10CompetitionReportsFirstName(t *testing.T) {
+	a := classesOf(qnamePat{xdm.QName{Local: "p"}}, qnamePat{xdm.QName{Local: "q"}}, qnamePat{xdm.QName{Local: "s"}})
+	b := classesOf(qnamePat{xdm.QName{Local: "s"}}, qnamePat{xdm.QName{Local: "q"}})
+	if got := overlapAcross(a, b); got != "q" {
+		t.Errorf("larger left: got %q, want q", got)
+	}
+	if got := overlapAcross(b, a); got != "s" {
+		t.Errorf("larger right: got %q, want s", got)
+	}
+	shared := classesOf(qnamePat{xdm.QName{Local: "x"}}, qnamePat{xdm.QName{Local: "y"}})
+	shared.shared = true
+	m := absorb(classesOf(qnamePat{xdm.QName{Local: "w"}}), shared)
+	if len(shared.rank) != 2 || m == shared {
+		t.Fatal("a shared set was written into")
+	}
+	if got := m.names(); len(got) != 3 || got[0].Local != "w" || got[2].Local != "y" {
+		t.Errorf("merged order %v, want w x y", got)
+	}
+}
