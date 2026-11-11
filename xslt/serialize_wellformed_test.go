@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -134,5 +135,32 @@ func TestSerializeHTML5DefaultNamespaceOnce(t *testing.T) {
 				t.Errorf("xhtml output does not parse: %v", err)
 			}
 		}
+	}
+}
+
+// TestSerializeIndexedNamespaceScope: past nsIndexFrom bindings in scope the
+// serializer looks prefixes up in an index rather than scanning, and the
+// index has to unwind as elements close: a rebinding of p1 on <a> is out of
+// scope again by <c>, and the default namespace <d> declares is gone by <f>.
+// Each binding is written once, where it is declared, so the document comes
+// back as it went in.
+func TestSerializeIndexedNamespaceScope(t *testing.T) {
+	var doc strings.Builder
+	doc.WriteString(`<r`)
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&doc, ` xmlns:p%d="u%d"`, i, i)
+	}
+	doc.WriteString(`><a xmlns:p1="v1"><b p1:x="1" p2:y="2"/></a><c p1:z="3"/>` +
+		`<d xmlns="w"><e/></d><f/></r>`)
+	tree, err := xdm.ParseString(doc.String(), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Serialize(&out, xdm.Sequence{tree.Root}, OutputSettings{Method: "xml", OmitXMLDecl: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != doc.String() {
+		t.Errorf("Serialize wrote\n%s\nwant\n%s", got, doc.String())
 	}
 }

@@ -638,11 +638,7 @@ func inheritNamespacesAt(rt *runtime, dst, src, dest *xdm.Node) int {
 func inheritNamespacesWhere(dst, src *xdm.Node, keep func(nsBinding) bool) int {
 	var arr [32]nsBinding
 	var own [32]string
-	declared := own[:0]
-	for prefix := range dst.DeclaredNamespaces() {
-		declared = append(declared, prefix)
-	}
-	slices.Sort(declared)
+	declared := declaredPrefixes(dst, own[:0])
 	var pairs []string
 	for _, b := range scopeBindings(src, arr[:0]) {
 		if _, found := slices.BinarySearch(declared, b.prefix); found {
@@ -654,6 +650,17 @@ func inheritNamespacesWhere(dst, src *xdm.Node, keep func(nsBinding) bool) int {
 	}
 	dst.AddNamespaces(pairs...)
 	return len(pairs) / 2
+}
+
+// declaredPrefixes appends to buf the prefixes el declares, sorted, for
+// slices.BinarySearch: a declares per binding in scope was K^2 for an
+// element declaring K of them.
+func declaredPrefixes(el *xdm.Node, buf []string) []string {
+	for prefix := range el.DeclaredNamespaces() {
+		buf = append(buf, prefix)
+	}
+	slices.Sort(buf)
+	return buf
 }
 
 // declares reports whether el carries a namespace node for prefix.
