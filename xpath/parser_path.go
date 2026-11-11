@@ -1197,7 +1197,7 @@ func schemaConstructorCast(name xdm.QName, args []Expr,
 			// matches none of them. Leaving it lexical made the constructor's
 			// own result fail "instance of" against the very type it was
 			// built for.
-			q.Val = q.Val.WithDerived(annotationKeyOf(lex, ns))
+			q.Val = withSchemaEnv(q.Val.WithDerived(annotationKeyOf(lex, ns)), schemaTypeEnvOf(ns))
 			return q, true
 		}
 		// XPath 3.0 admits a computed string here for the same reason it does

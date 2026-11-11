@@ -100,7 +100,7 @@ func (e *dynamicQName) annotate(a *xdm.Atomic) *xdm.Atomic {
 	if e.derived == "" {
 		return a
 	}
-	return a.WithDerived(e.derived)
+	return withSchemaEnv(a.WithDerived(e.derived), schemaTypeEnvOf(e.ns))
 }
 
 // resolveLexicalQName turns "prefix:local" into a QName using ns.

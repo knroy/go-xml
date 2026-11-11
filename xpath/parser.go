@@ -327,6 +327,10 @@ func (b bracedSchemaResolver) LookupSchemaType(name xdm.QName) (xdm.TypeCode, bo
 	return 0, false, false
 }
 
+func (b bracedSchemaResolver) SchemaTypeEnv() *xdm.TypeEnvironment {
+	return schemaTypeEnvOf(b.inner)
+}
+
 func (b bracedSchemaResolver) ValidateSchemaValue(name xdm.QName, value string) (bool, error) {
 	if v, ok := b.inner.(SchemaTypes); ok {
 		return v.ValidateSchemaValue(name, value)

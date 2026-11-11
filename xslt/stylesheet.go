@@ -1584,6 +1584,13 @@ func (r *nsResolver) SchemaDeclarationType(name xdm.QName, attribute bool) (stri
 	return local, true
 }
 
+// SchemaTypeEnv is the type environment of the imported schemas, which a
+// value an expression annotates with one of their types carries. See
+// xdm.TypeEnvOfAtomic.
+func (r *nsResolver) SchemaTypeEnv() *xdm.TypeEnvironment {
+	return r.schema.TypeEnv()
+}
+
 // ValidateSchemaValue implements xpath.SchemaTypes.
 func (r *nsResolver) ValidateSchemaValue(name xdm.QName, value string) (bool, error) {
 	if r.schema == nil || !r.schema.HasSimpleType(name) {
