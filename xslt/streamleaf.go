@@ -84,7 +84,9 @@ func (r *splitRun) tailOf(v *xdm.Node) (xdm.Sequence, error) {
 			return nil, errSplitGiveUp // not a path of nodes after all
 		}
 		if s.climbSort {
-			r.held = append(r.held, n)
+			if err := r.holdClimbed(n); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		if r.climbed != nil && n.Compare(r.climbed) <= 0 {
@@ -159,6 +161,31 @@ func inOrderClimb(tail xpath.Expr) bool {
 	return true
 }
 
+// holdClimbed adds n to what a climbSort tail holds. The matches' tails
+// give their ancestors again and again, so as the buffer fills it is put in
+// document order with each node once (climbFinish's order) and grown to
+// twice that: what is held stays within twice the distinct nodes the tails
+// gave, which are charged to the item budget as the tree's union of them
+// would be (here and at climbFinish), and each node costs a sort's share of
+// O(log n) on the way.
+func (r *splitRun) holdClimbed(n *xdm.Node) error {
+	if len(r.held) == cap(r.held) && len(r.held) >= 256 {
+		r.held = sortClimbed(r.held)
+		if err := r.ctx.ItemsRefused(int64(len(r.held))); err != nil {
+			return err
+		}
+		r.held = slices.Grow(r.held, len(r.held))
+	}
+	r.held = append(r.held, n)
+	return nil
+}
+
+// sortClimbed puts nodes in document order, each once.
+func sortClimbed(nodes []*xdm.Node) []*xdm.Node {
+	slices.SortStableFunc(nodes, func(a, b *xdm.Node) int { return a.Compare(b) })
+	return slices.CompactFunc(nodes, func(a, b *xdm.Node) bool { return a.Is(b) })
+}
+
 // climbFinish takes what a climbSort tail held: its nodes in document
 // order, each once, and what each gives.
 func (r *splitRun) climbFinish() error {
@@ -169,10 +196,11 @@ func (r *splitRun) climbFinish() error {
 	if !s.climbSort || len(r.held) == 0 {
 		return nil
 	}
-	nodes := r.held
+	nodes := sortClimbed(r.held)
 	r.held = nil
-	slices.SortStableFunc(nodes, func(a, b *xdm.Node) int { return a.Compare(b) })
-	nodes = slices.CompactFunc(nodes, func(a, b *xdm.Node) bool { return a.Is(b) })
+	if err := r.ctx.ItemsRefused(int64(len(nodes))); err != nil {
+		return err
+	}
 	for _, n := range nodes {
 		items := xdm.One(n)
 		if s.climbEach != nil {
