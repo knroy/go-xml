@@ -19,9 +19,14 @@ import (
 // cost linear in n grows about fourfold, a quadratic one sixteenfold.
 // Each timing repeats run until 10ms have passed and takes the mean, so a
 // timer tick (about 1ms on Windows) or a preemption on a busy two-core CI
-// runner cannot decide the ratio.
+// runner cannot decide the ratio. Under -race the ratio is the detector's
+// (8-12x on a two-core runner for a linear walk), so it is not asserted
+// there, as the memory ratios are not.
 func sm02Growth(t *testing.T, n int, ratio float64, setup func(n int) func()) {
 	t.Helper()
+	if raceEnabled {
+		t.Skip("timing ratios are not stable under -race")
+	}
 	best := func(n int) time.Duration {
 		run := setup(n)
 		d := time.Duration(1 << 62)
