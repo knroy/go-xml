@@ -132,25 +132,25 @@ and maintains it as a project of his own.
 | **XPath 2.0** | 100.00% of the W3C QT3 suite (15,217 of 15,217 in scope) |
 | **XPath 3.0** | 100.00% of the W3C QT3 suite (19,362 of 19,362 in scope) |
 | **XPath 3.1** | 100.00% of the W3C QT3 suite (22,054 of 22,054 in scope); maps, arrays, the lookup operator, the JSON family, and `fn:transform`, measured since it became callable from XPath |
-| **XQuery 3.1** | 100.00% of the W3C QT3 suite (30,516 of 30,517 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 318 more passes; the 1 remaining failure, `contextDecl-052`, is a W3C fixture defect catalogued in [conformance-gaps.md](docs/conformance-gaps.md) |
-| **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,193 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.80% of the W3C XSLT suite filtered to 3.0 (11,495 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 3 of the 23 failures want the XTSE3430 that more of the §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
-| **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
-| **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
+| **XQuery 3.1** | 100.00% of the W3C QT3 suite (30,529 of 30,530 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 318 more passes; the 1 remaining failure, `contextDecl-052`, is a W3C fixture defect catalogued in [conformance-gaps.md](docs/conformance-gaps.md) |
+| **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,194 of 6,202 in scope); verified against Saxon-HE 12.4 on two production corpora |
+| **XSLT 3.0** | 99.85% of the W3C XSLT suite filtered to 3.0 (11,505 of 11,522 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases; every one of the 151 cases that wants the XTSE3430 refusal gets it — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XSD 1.0** | 99.90% of the W3C xsdtests *instance* tests (24,974 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
+| **XSD 1.1** | 99.90% instance (26,218 of 26,244); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 2,999 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 3,688 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
 
-1. **Both halves of the XSD numbers carry a residue of disagreements** — 30 on
-   1.0 and 31 on 1.1 — and where they are schema-validity failures, a schema
+1. **Both halves of the XSD numbers carry a residue of disagreements** — 29 on
+   1.0 and 30 on 1.1 — and where they are schema-validity failures, a schema
    invalid in one of those ways is accepted rather than reported. They are
    listed in *Where it fails*, along with what the suite skips and why; **most
-   of them — 56 of 61 — are cases the W3C itself has queried or filed a bug
+   of them — 54 of 59 — are cases the W3C itself has queried or filed a bug
    against**, including every one of the 44 `MS-Regex` disagreements, which
    are a single open bug. A further 16 cases on 1.0 and 14 on 1.1 are excluded
    from both sides of the ratio because the suite marks them
@@ -164,11 +164,11 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.80%, and still
+3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.84%, and still
    the one to check against your own stylesheets first. It has no
-   concentration left: 3 of the 23 failures want the `XTSE3430` refusal that
-   more of the §19.8 streamability analysis would emit, and the other 20 are
-   fixture defects, deliberate divergences or implementation-defined, each
+   concentration left: none of the 19 failures wants the `XTSE3430` refusal
+   (the §19.8 analysis raises it for all 151 W3C cases that want it), and the
+   19 are fixture defects, deliberate divergences or implementation-defined, each
    recorded with its verdict. No single feature is systematically weak. The
    corpus differential against Saxon remains stronger evidence for real
    stylesheets than the percentage.
@@ -178,21 +178,36 @@ true here:
    each test's declared version dependency — a different kind of measurement
    from running a suite written for the version under test.
 
-   **Streamed execution is implemented only for two narrow shapes** (an
-   `xsl:source-document streamable="yes"` whose body is one `xsl:for-each` or
-   `xsl:iterate` over a record path such as `//rec` or `doc/rec`, or one `xsl:value-of`/`xsl:copy-of`/
-   `xsl:sequence` over one record path such as `sum(doc/rec/@v)`, read one
-   record at a time; see
-   [known gaps](docs/known-gaps.md)). Otherwise the streaming cases are in
+   **Streamed execution covers `xsl:source-document streamable="yes"` and a
+   principal input read through `Stylesheet.TransformReader`**:
+   one `xsl:for-each` or `xsl:iterate` over a record path such as `//rec` or
+   `doc/rec`, or one `xsl:value-of`/`xsl:copy-of`/`xsl:sequence` over one
+   record path such as `sum(doc/rec/@v)`, read one record at a time; and,
+   through the streamed core, sequence constructors of literal result
+   elements, `xsl:element`, `xsl:copy`, `xsl:choose`, loops, split selects,
+   `xsl:apply-templates` into streamable modes, `xsl:for-each-group`
+   (adjacent, starting-with, ending-with), `xsl:try`, streamable attribute
+   sets, calls on stylesheet functions whose body is one `xsl:sequence`
+   (recursive ones too, over values or a match's grounded copy), bodies with
+   instructions planned in the caller's plan, call frames for recursion, and
+   a used package's functions,
+   accumulators, `xsl:fork` and `xsl:map`, `xsl:merge` over streamable
+   sources, set operators, climbing paths, kept text nodes, `xsl:message`,
+   `xsl:comment`, `xsl:processing-instruction` and `xsl:result-document`, and
+   validated inputs; `TransformOptions.Output` and
+   `SecondaryOutput` write the results as they are made. Of the 2,930 W3C
+   cases that touch streaming, 2,661 stream; 262 are refused as the spec
+   requires or ask for no streamed input, and the 7 left are proved not
+   streamable (a cycle, an invalid URI, an input that is already a tree, a
+   mode the spec does not guarantee); a few that stream hold a copy of the
+   whole document and save no memory (see [known gaps](docs/known-gaps.md)).
+   Otherwise the streaming cases are in
    scope and counted: the stylesheet-level half of streaming, the §19.8
    streamability analysis that refuses a construct with `XTSE3430`, is
-   implemented and measured. What is absent is streamed *execution*, not the
-   vocabulary or the analysis:
-   `xsl:stream`, `xsl:fork`, `xsl:source-document`, `xsl:merge` and
-   `xsl:accumulator` all execute, by building the tree instead. §19.1 allows
-   exactly that — a processor not claiming the streaming option "must still
-   process a stylesheet and deliver the correct results, but is not required to
-   use streaming algorithms". What a streamable stylesheet *computes* is
+   implemented and measured. A construct the streamed core does not take
+   still executes, by building the tree instead: correct results, in memory
+   proportional to the document. `system-property('xsl:supports-streaming')`
+   reports `yes`; `streaming-fallback` is not claimed. What a streamable stylesheet *computes* is
    another question — the spec requires it to be the same as a non-streaming
    evaluation, so the `si-*` sets, which assert results rather than memory
    behaviour, are in scope and nearly all pass. *Where it fails* sets out the
@@ -255,7 +270,9 @@ Eight packages, each usable on its own:
   BaseX, Jing, Xerces-J, libxml2 and `encoding/xml` on DocBook, e-invoicing,
   XMark, schema validation and parsing, cold and warm, with outputs checked
   for agreement before anything is timed. The harness is
-  [go-xml-bench](https://github.com/knroy/go-xml-bench).
+  [go-xml-bench](https://github.com/knroy/go-xml-bench). Streaming against
+  the tree is measured in-repo (`go run ./tests/streambench`): 15–20 MB of RSS
+  at any input size, against 1.6–2.4 GB for the tree at 564 MB.
 * **[docs/profiling.md](docs/profiling.md)** — where v2's time and memory go
   per workload, how to profile and A/B a change, and the ideas measured and
   rejected.
@@ -343,7 +360,7 @@ sheet, err := xslt.Compile(sheetTree.Root, xslt.CompileOptions{})
 docTree, err := xdm.ParseString(documentSource, xdm.ParseOptions{})
 result, err := sheet.Transform(ctx, docTree.Root, xslt.TransformOptions{})
 
-fmt.Println(result.String())     // serialised per xsl:output
+fmt.Println(result.String())     // serialised per xsl:output (html defaults to HTML5)
 result.Tree()                    // or keep navigating it
 result.Messages                  // xsl:message output, collected not printed
 result.Secondary                 // documents from xsl:result-document
@@ -359,6 +376,86 @@ for _, doc := range result.Secondary {
 ```
 
 Nothing is written to disk unless you write it — see *Security defaults*.
+
+A large document can be streamed rather than built. `TransformReader` reads
+it once, as the transform runs, when the stylesheet starts in a mode declared
+`streamable="yes"` whose rules are guaranteed streamable; otherwise it is
+exactly `xdm.Parse` then `Transform`, so the result, errors and limits are the
+same either way. One difference from `Transform` of a parsed tree is the
+spec's: in a mode declared streamable the global context item is absent
+(XSLT 3.0 §2.3.2), on both paths:
+
+```go
+f, err := os.Open("big.xml")
+defer f.Close()
+result, err := sheet.TransformReader(ctx, f, xslt.TransformOptions{
+    SourceParseOptions: xdm.ParseOptions{
+        BaseURI:     "file:///data/big.xml", // fn:base-uri, relative fn:doc
+        DocumentURI: "file:///data/big.xml", // fn:document-uri
+        MaxBytes:    -1,                     // the default refuses over 64 MB
+        MaxNodes:    -1,
+    },
+})
+```
+
+With `Output` set, the principal result is serialized there as it is built,
+so memory holds only what is not yet written:
+
+```go
+result, err := sheet.TransformReader(ctx, f, xslt.TransformOptions{
+    Output: os.Stdout,
+})
+```
+
+`Result.Tree()` and `Result.Nodes` are then nil, and on an error the writer
+may already hold part of the result. An `xsl:try`'s output is written
+provisionally and taken back if the try catches an error.
+
+With `SecondaryOutput` set, each `xsl:result-document` is written to the writer
+the function returns for the result's absolute URI, as it is produced, and
+closed at its end, instead of being kept in `Result.Secondary`; a
+file-splitting transform then holds neither its input nor its outputs:
+
+```go
+result, err := sheet.TransformReader(ctx, f, xslt.TransformOptions{
+    Output: os.Stdout,
+    SecondaryOutput: func(uri string) (io.WriteCloser, error) {
+        // The URI is the stylesheet's choice: confine it (docs/security.md).
+        name := path.Base(uri)
+        if name == "." || name == "/" {
+            return nil, fmt.Errorf("unusable href %q", uri)
+        }
+        return os.Create(filepath.Join(outDir, name))
+    },
+})
+```
+
+Inside an `xsl:try`, or a streamed `xsl:source-document` or `xsl:merge` (which a
+failure may re-run on the tree), a result is written once it is final; an error
+returned by the function or by `Close` is the transform's.
+
+`SourceValidation` validates the principal input against the stylesheet's
+schema (`xsl:import-schema`); `TransformReader` validates it as it reads it,
+with the typed values and defaults of the tree's typed copy and the same
+error either way:
+
+```go
+sheet, err := xslt.Compile(sheetTree.Root, xslt.CompileOptions{SchemaResolver: &xsd.FileResolver{}})
+result, err := sheet.TransformReader(ctx, f, xslt.TransformOptions{
+    SourceValidation: xslt.SourceStrict, // XTTE1510 if the document is not valid
+    Output:           os.Stdout,
+})
+```
+
+Nothing outside the rules may read the document for it to stream: no typed
+`xsl:global-context-item`, no applicable accumulator that is not streamable or
+that the stream cannot compute. A global variable reading `.` does not read
+the document: the global context item is absent for a streamed input, so it
+raises XPDY0002, streamed or not. In a streamable
+mode the identity template's `<xsl:apply-templates select="@*|node()"/>` is
+refused with `XTSE3430` (§19.8.8.4 makes the union crawling); write it as
+`<xsl:apply-templates select="@*"/><xsl:apply-templates select="node()"/>`,
+which streams. See [known gaps](docs/known-gaps.md) for the full conditions.
 
 `Compile` is the expensive step and `Transform` does not mutate the compiled
 stylesheet, so compile once and transform concurrently — the test suite
@@ -437,10 +534,10 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 | `-xsl` | the stylesheet to apply (required) |
 | `-o` | write to a file instead of stdout |
 | `-p name=value` | supply a top-level `xsl:param`; repeatable |
-| `-allow-dir` | open `xsl:include`/`xsl:import`/`xsl:import-schema`/`doc()`/`document()` to further directories, each covering its subdirectories to any depth; the stylesheet's own directory is always readable. It says *where*, not *what*: raw text, external entities and XInclude each need their own flag as well |
+| `-allow-dir` | open `xsl:include`/`xsl:import`/`xsl:import-schema`/`doc()`/`document()` to further directories, each covering its subdirectories to any depth; the stylesheet's own directory is always readable. Empty or whitespace segments are ignored, never read as the working directory. It says *where*, not *what*: raw text, external entities and XInclude each need their own flag as well |
 | `-allow-doctype` | permit a `DOCTYPE` in the source |
 | `-catalog DIR` | answer `xsl:import-schema`'s references to the W3C schemas (`XMLSchema.xsd`, `xml.xsd`) from local copies in `DIR` instead of leaving them unresolved; see [validation.md](docs/validation.md#resolving-schemalocation) |
-| `-timeout` | bound the transform (default 60s) |
+| `-timeout` | bound the transform, and the `-xinclude` pass before it (default 60s) |
 | `-max-items N` | items the transform may materialise (default 5,000,000; `-1` removes the bound) |
 | `-max-bytes N` | largest input document (default 64 MB; `-1` removes the limit) |
 | `-initial-template` | start at a named template instead of matching the root; no input document is then needed |
@@ -656,7 +753,10 @@ from stylesheets and so form a fixed set; that is wrong, because
 long-running validator retained one compiled regexp per distinct pattern it had
 ever seen — 17.6 MB after 20,000 patterns, still climbing. It is now bounded at
 1024 entries and clears wholesale when full, which measures at 0.6 MB for the
-same load and stays flat at five times it.
+same load and stays flat at five times it. Each entry is also weighed by the
+bytes its compiled program retains, and the cache clears when the total would
+pass 32 MiB, so a large pattern is compiled once and cached rather than
+recompiled on every call; only an entry over about 4 MB is not kept.
 
 Clearing rather than evicting one entry at a time is deliberate: a true LRU
 needs a lock on every *read*, which costs more than it saves when the working
@@ -700,6 +800,10 @@ Two conditions guard every rewrite:
 * The rewrite must preserve **errors** as well as values. `1 idiv 0` is
   deliberately not folded — refusing a stylesheet at compile time for an error
   in a branch that is never taken would be wrong.
+
+Folding is bounded per compilation: every fold in one compile shares a
+4,096-item budget and `CompileOptions.Context`, and a fold that would exceed
+either is simply not done, so it runs at evaluation time instead.
 
 Foldable functions are an allowlist, not a denylist. A user-defined function is
 never folded even if it happens to be pure, because the library it resolves
@@ -802,7 +906,14 @@ shapes of work.
 Every remote-reference mechanism is off unless you turn it on.
 
 * **`DOCTYPE` is rejected** by the parser unless `ParseOptions.AllowDOCTYPE` is
-  set. It is the entry point for both XXE and entity-expansion blowup.
+  set. It is the entry point for both XXE and entity-expansion blowup. With
+  it on, entity expansion stays bounded (`ParseOptions.MaxEntityDepth`,
+  `MaxEntityBytes`, `MaxTotalEntityBytes`, `MaxEntities`) and so are external
+  reads (`MaxExternalFetches`, `MaxExternalFetchBytes`, `MaxExternalDepth`);
+  zero keeps each default, see [docs/options.md](docs/options.md).
+  `xslt.FileResolver` has the same seven fields; as a transform's `Documents`
+  they also bind `fn:parse-xml` and a nested `fn:transform`'s
+  `stylesheet-text`.
 * **`fn:doc` and `fn:document` fail closed** *as a library*. With no
   `DocumentResolver` configured, every URI is refused. The CLI is not
   fail-closed in the same sense: it always configures a resolver rooted at the
@@ -819,6 +930,10 @@ Every remote-reference mechanism is off unless you turn it on.
   `cmd/go-xml`, which the other three joined on 2026-09-10. Each read is
   bounded by `FileResolver.MaxBytes`, 64 MB by default, and a larger file is
   refused rather than truncated.
+  `FileResolver.OpenDocument`, its `xslt.StreamingDocumentResolver` method,
+  opens through the same `os.Root`; a host resolver that implements that
+  interface has a streamable `xsl:source-document` stream its documents (see
+  [docs/options.md](docs/options.md#xsltstreamingdocumentresolver)).
   `fn:transform`'s `stylesheet-location` and `source-location` read through
   the same resolver, so a nested transformation reaches nothing `fn:doc`
   could not — from a stylesheet, and from an XQuery query or `xpath.Eval`
@@ -836,7 +951,8 @@ Every remote-reference mechanism is off unless you turn it on.
   open by `os.Root`, the same per-file byte limit, nothing outside the roots. This matters more here than
   elsewhere, because with XInclude it is the *source document* — the party the
   threat model already treats as hostile — that names what to read. The CLI
-  exposes it as `-xinclude`.
+  exposes it as `-xinclude`. A pass reads at most 200 resources nested at most
+  40 deep, which `XIncludeOptions.MaxFetches` and `MaxDepth` change.
 * **`xs:import` and `xs:include` fail closed**, via `xsd.Options.Resolver`.
   The default reads a schema beside the one it was given and **refuses a
   remote URL outright**; `xsdnet.HTTPResolver` is how you opt in to the network.
@@ -982,24 +1098,30 @@ extension expression; and the string constructor.
 The version declaration is recorded rather than discarded. A module may open
 with `xquery version "1.0"`, `"3.0"` or `"3.1"`; anything else is `XQST0031`,
 and a module that declares nothing is compiled as 3.1. The engine implements
-3.1 throughout, but the three rules the versions are known to disagree on now
-ask which version applies: an unprefixed `declare option` name is `XPST0081`
+3.1 throughout, but the rules the versions are known to disagree on now ask
+which version applies: an unprefixed `declare option` name is `XPST0081`
 in 1.0 and legal from 3.0; a cast target naming a type not in scope is
 `XPST0051` in 1.0 and `XQST0052` from 3.0; and a variable circularity running
 through a function body is the static `XQST0054` in 1.0 and the dynamic
-`XQDY0054` from 3.0. See [docs/xquery.md](docs/xquery.md) for what stays at
+`XQDY0054` from 3.0. Three more follow the version the QT3 suite pairs them
+on: an empty `ordered {}` is `XPST0003` before 3.1, an unprefixed pragma name
+is `XPST0081` before 3.1, and a bare `namespace-node()` step is `XPST0017` in
+1.0 and `XQST0134` from 3.0. See [docs/xquery.md](docs/xquery.md) for what stays at
 3.1's reading whatever the module declares.
 
 Both halves of `import` are implemented, through a store the caller fills:
 `import module` resolves against `Options.Modules` and then
 `Options.ModuleResolver`, `import schema` against `Options.Schemas` and then
 `Options.SchemaResolver`. Both resolvers are nil by default, so nothing is
-fetched and an import the store cannot answer raises `XQST0059`. See
+fetched and an import the store cannot answer raises `XQST0059`; an imported
+schema is read as XSD 1.1, and an invalid one raises `XQST0012`. See
 [docs/xquery.md](docs/xquery.md).
 
-**Collations.** Two are implemented: codepoint, and the ASCII
-case-insensitive collation the spec defines, which needs no locale data. Both
-are *applied* rather than merely validated — an `xsl:sort/@collation` that was
+**Collations.** Three are implemented: codepoint, the HTML ASCII
+case-insensitive collation the spec defines, and the UCA family
+(`http://www.w3.org/2013/collation/UCA` with its strength, language and
+tailoring parameters, from `golang.org/x/text/collate`); a host can add its own
+with `xpath.RegisterCollation`. All are *applied* rather than merely validated — an `xsl:sort/@collation` that was
 accepted and then sorted by codepoint anyway would be the silent-wrong-answer
 this engine exists to avoid. Relative URIs such as `collation/codepoint`
 resolve, because stylesheets write them that way. Anything else is refused.
@@ -1008,15 +1130,15 @@ resolve, because stylesheets write them that way. Anything else is refused.
 Swedish orders "ä" after "z" where German orders it next to "a", and codepoint
 order gets both wrong. `fn:normalize-unicode` implements all four standard
 forms. Both use `golang.org/x/text`. A `@lang` naming a language with no
-collation data is refused rather than quietly falling back to codepoint order,
-and `@collation` accepts only the codepoint URI — a language-sensitive
-collation is spelled with `@lang`.
+collation data sorts as if `@lang` were omitted, as XSLT 3.0 §13.1.3 allows;
+a value outside `xs:language` is an error. `@collation` accepts any collation
+above.
 
 **Canonical XML.** All three W3C algorithms — Canonical XML 1.0, Exclusive
 Canonical XML 1.0 with its InclusiveNamespaces PrefixList, and Canonical XML
 1.1 with its `xml:base` fix-up — each with and without comments, over a whole
 document, a subtree, the enveloped-signature subset or any XPath-selected
-node set. Two inputs the specifications leave undefined are refused rather
+node set, XML-DSig's `here()` included. Two inputs the specifications leave undefined are refused rather
 than guessed at: an XML 1.1 document, and a relative namespace URI. See
 [docs/c14n.md](docs/c14n.md) for how namespace nodes are handled, including
 XPath filters that keep part of an element's namespace axis, and for where it
@@ -1135,8 +1257,8 @@ Two figures, and the second is the one that matters.
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
+| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,974 / 25,000 (99.90%) |
+| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,218 / 26,244 (99.90%) |
 
 **Earlier revisions of this file reported a single "99.56%" for XSD 1.0 and
 "XSD 1.1: 100%". Both were measured wrongly, and the correction is large enough
@@ -1310,7 +1432,8 @@ available behind `xpath.SetBacktrackingRegex(true)` (`-backtracking-regex` on
 the command line). It is off by default because it has no linear-time
 guarantee and patterns can come from document data; even enabled, a step
 budget bounds every match and exhausting it is an error rather than a silent
-"no match".
+"no match". `xpath.SetBacktrackBudget` and `xpath.SetBacktrackMaxDepth` change
+the step budget and the depth bound (see [options.md](docs/options.md)).
 
 Everything else about the XML Schema regex flavour *is* implemented, and most
 of it had to be, because RE2 silently disagrees rather than refusing: XML
@@ -1379,10 +1502,13 @@ the output looks fine and is wrong.
   categories included (`[\i-[:]]`, `[\p{L}-[x]]`). A hyphen between two classes (`[a-z]-[a-z]`, as in a UUID
   pattern) is not subtraction and is unaffected.
 
-One approximation is documented rather than hidden: `fn:id`/`fn:idref` use
-`xml:id` and conventional `id` attributes, because without a DTD or schema
-nothing declares which attributes are of type ID. A stylesheet relying on
-DTD-declared IDs gets an empty result rather than a wrong one.
+`fn:id`, `fn:element-with-id` and `fn:idref` find only the nodes a DTD or
+schema types as `ID`/`IDREF`/`IDREFS`, plus a valid `xml:id` (F&O §14.5.1-
+§14.5.3). An attribute merely named `id`, `idref` or `idrefs` is not matched:
+a document without declarations needs `xml:id`, or `xsl:key` on `@id`.
+When several elements hold the same ID value, `fn:id` and
+`fn:element-with-id` return only the first in document order; `fn:idref`
+returns every node that refers to a value.
 
 ## How this was tested
 
@@ -1393,11 +1519,12 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (2,999 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (3,688 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
-| **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,517 XQuery cases | XSLT (it is an XPath suite) |
-| **W3C xsdtests suite** | systematic XSD conformance across 25,000 instance and 14,388 schema-validity tests (XSD 1.0; 1.1 adds 26,222 and 15,354) | schemas nobody writes by hand |
+| **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,530 XQuery cases | XSLT (it is an XPath suite) |
+| **W3C xsdtests suite** | systematic XSD conformance across 25,000 instance and 14,388 schema-validity tests (XSD 1.0; 1.1 adds 26,244 and 15,354) | schemas nobody writes by hand |
+| **W3C xmlconf suite** | XML 1.0 well-formedness and DTD validity: all 1,965 cases, each guarded by ID (`tests/xmlconf/expected-pass.txt`) | anything past the DTD layer |
 | **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
 | **Fuzzing** (12 targets) | a crash, hang or wrong refusal on input no author would write | anything a coverage-guided search does not reach in the time it is given |
 **Every suite feeds the parser well-formed input**, which is the gap fuzzing
@@ -1644,8 +1771,8 @@ by 461 in one step.
 FOTS 3.1 and covers XQuery as well as XPath 3.0/3.1. Each is measured on its
 own denominator, because a case that needs a language the target does not
 claim says nothing about that target's conformance: the XPath targets exclude
-the XQuery-only cases, and the XQuery target runs 30,517 of the suite's 31,821
-with 1,304 skipped. Counting an out-of-scope case as a pass is how a
+the XQuery-only cases, and the XQuery target runs 30,530 of the suite's 31,821
+with 1,291 skipped. Counting an out-of-scope case as a pass is how a
 conformance number becomes meaningless.
 
 It found four real bugs on the first run, none of which the two production
@@ -1764,8 +1891,8 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
+| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,974 / 25,000 (99.90%) |
+| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,218 / 26,244 (99.90%) |
 
 Every failure is catalogued in
 [docs/conformance-gaps.md](docs/conformance-gaps.md), with a verdict on whether
@@ -1795,11 +1922,10 @@ include.
 ## Where this is going
 
 The conformance tail is no longer the interesting work. XPath is at 100% on all
-three versions, XQuery has one fixture case left, and XSLT 31 across both targets —
+three versions, XQuery has one fixture case left, and XSLT 27 across both targets —
 cases where the suite disagrees with the specification, where matching it would
 cost XSD tests, or which want byte-identical reproduction of another
-processor's indentation, plus three `XTSE3430` refusals whose known fixes each
-cost more passing cases than they gain. That leaves **none genuinely open**: the last two were
+processor's indentation. That leaves **none genuinely open**: the last two were
 `validation-0201` on both targets, and the engine defect behind them — a
 union's selected member type dropped on every tree copy, so that
 `xsl:strip-space` silently untyped a validated document — is fixed. The case

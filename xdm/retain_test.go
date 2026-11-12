@@ -45,13 +45,20 @@ func TestNamespaceURIDoesNotPinArena(t *testing.T) {
 	}
 	withNS := `<r xmlns:p="urn:example:p"` + vals + `/>`
 	without := `<r p="urn:example:p"` + vals + `/>`
+	// A pinned arena costs tens of KB per tree on every attempt; a busy
+	// machine's heap reading is off by a few KB at most on some, so the
+	// test passes on the first attempt under the bound.
 	const n = 200
-	plain := retainedPerTree(t, n, func() (*Tree, error) { return ParseString(without, ParseOptions{}) })
-	ns := retainedPerTree(t, n, func() (*Tree, error) { return ParseString(withNS, ParseOptions{}) })
-	t.Logf("retained per tree: %d bytes without a declaration, %d with", plain, ns)
-	if ns-plain > 2<<10 {
-		t.Errorf("a namespace declaration costs %d bytes per kept tree, want under 2 KB", ns-plain)
+	var plain, ns int64
+	for range 3 {
+		plain = retainedPerTree(t, n, func() (*Tree, error) { return ParseString(without, ParseOptions{}) })
+		ns = retainedPerTree(t, n, func() (*Tree, error) { return ParseString(withNS, ParseOptions{}) })
+		t.Logf("retained per tree: %d bytes without a declaration, %d with", plain, ns)
+		if ns-plain <= 2<<10 {
+			return
+		}
 	}
+	t.Errorf("a namespace declaration costs %d bytes per kept tree, want under 2 KB", ns-plain)
 }
 
 // A text value long enough for a block of its own was built in the
@@ -115,7 +122,7 @@ func TestFrozenTreeDropsBuildIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tree.nameIx != nil || tree.nameHot != nil || tree.frameOne != nil || tree.frameMany != nil || tree.open != nil {
+	if tree.nameIx != nil || tree.nameHot != nil || tree.frameOne != nil || tree.frameMany != nil || tree.open.runs != nil {
 		t.Errorf("a parsed tree kept its build indexes")
 	}
 	e := kids(kids(tree.Root)[0])

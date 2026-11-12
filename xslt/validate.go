@@ -236,7 +236,8 @@ func moduleDefaultValidation(n *xdm.Node) string {
 // A failure is a dynamic error rather than a recorded one: the stylesheet
 // declared what it was building and built something else, and continuing
 // would write output the author said was wrong.
-func (spec validationSpec) assess(rt *runtime, n *xdm.Node) (*xdm.Node, error) {
+func (spec validationSpec) assess(rt *runtime, n *xdm.Node) (_ *xdm.Node, err error) {
+	defer markInvalid(&err) // streamvalidin.go
 	orig := n
 	// XSLT 2.0 §11.9.1 and §11.9.2, in identical words for xsl:copy and
 	// xsl:copy-of: "These attributes are ignored when copying an item that is
@@ -465,7 +466,6 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) (*xdm.Node, error) {
 	// says are valid.
 	vopts := xsd.ValidateOptions{SkipIDConstraints: !docNode}
 	var typed *xdm.Node
-	var err error
 	if spec.mode == validateStrict {
 		// CanAssessStrictly rather than HasElementDeclaration: an element
 		// carrying xsi:type is assessed against the type it names even with

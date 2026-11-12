@@ -1,10 +1,13 @@
 package xdm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 )
 
 // XInclude processing, per XML Inclusions (XInclude) Version 1.0 (Second
@@ -75,6 +78,14 @@ const (
 	// and exceeding this bound reports "resource limit exceeded" so that a
 	// caller can tell a defective document from an expensive one.
 	maxIncludeDepth = 40
+
+	// includeDepthCeiling is the most XIncludeOptions.MaxDepth may raise
+	// maxIncludeDepth to. The stack an include chain spends is its length
+	// times the element depth of each document (the copy recurses per
+	// element), so 200 levels of documents at the default parse MaxDepth is
+	// at most 200,000 copy frames, a fraction of Go's 1 GB stack, whose
+	// overflow is fatal. A raised parse MaxDepth multiplies it.
+	includeDepthCeiling = 200
 )
 
 // XIncludeOptions configures ProcessXInclude.
@@ -93,7 +104,33 @@ type XIncludeOptions struct {
 	// bound the including document was held to. BaseURI and DocumentURI are
 	// overwritten per resource and anything set here for them is ignored.
 	Parse ParseOptions
+
+	// MaxFetches bounds how many resources one pass may read in total,
+	// counted across the whole recursion. Zero means 200, the default; a
+	// negative value means no limit. A cycle is caught separately, so this
+	// bounds only fan-out: a document including a thousand distinct small
+	// files repeats nothing and still costs a thousand parses.
+	MaxFetches int
+
+	// MaxDepth bounds how deeply inclusions may nest. Zero or a negative
+	// value means 40, the default; a value above 200 is treated as 200.
+	// There is no unlimited setting because a chain of inclusions recurses
+	// in Go once per level and once per element of each included document,
+	// and a Go stack overflow is fatal, not an error.
+	MaxDepth int
+
+	// Context carries cancellation. The pass checks it before each
+	// inclusion, before each fetch and every xincludeCheckEvery nodes a
+	// local xpointer search visits, and once it is done returns an error
+	// wrapping ctx.Err(). The input tree is never modified, cancelled or
+	// not: the pass builds a new tree, and a cancelled pass returns none.
+	// A nil Context is never cancelled.
+	Context context.Context
 }
+
+// xincludeCheckEvery is how many nodes the local xpointer searches of one
+// pass visit between two checks of XIncludeOptions.Context.
+const xincludeCheckEvery = 1024
 
 // ProcessXInclude performs XInclude processing on tree and returns the result
 // as a new tree.
@@ -102,7 +139,8 @@ type XIncludeOptions struct {
 // another, and that is what this does: the result is built top-down, in
 // document order, as any tree is, and tree itself is left as it was. Callers
 // use the returned tree; node identities in tree do not carry over.
-func ProcessXInclude(tree *Tree, opts XIncludeOptions) (*Tree, error) {
+func ProcessXInclude(tree *Tree, opts XIncludeOptions) (_ *Tree, err error) {
+	defer xdmlimit.Recover(&err)
 	if tree == nil || tree.Root == nil {
 		return tree, nil
 	}
@@ -119,11 +157,25 @@ func ProcessXInclude(tree *Tree, opts XIncludeOptions) (*Tree, error) {
 		// changed, and the caller is promised a tree separate from it.
 		return tree, nil
 	}
-	p := &includeProc{opts: opts, budget: &entityBudget{}}
+	p := &includeProc{opts: opts, budget: &entityBudget{},
+		maxFetches: budgetLimit(int64(opts.MaxFetches), maxIncludeFetches),
+		maxDepth:   depthLimit(opts.MaxDepth, maxIncludeDepth, includeDepthCeiling)}
 	if base != "" {
 		p.stack = append(p.stack, base)
 	}
 	return p.processTree(tree, base, 0)
+}
+
+// cancelled reports whether the pass's context is done, as a fatal error so
+// that no xi:fallback recovers from it.
+func (p *includeProc) cancelled() error {
+	if p.opts.Context == nil {
+		return nil
+	}
+	if err := p.opts.Context.Err(); err != nil {
+		return fatalInclude{fmt.Errorf("xi:include processing cancelled: %w", err)}
+	}
+	return nil
 }
 
 // fatalInclude marks an error that xi:fallback must NOT recover from.
@@ -161,10 +213,86 @@ type includeProc struct {
 	// instead of together — 95 KB of source expanded to 149 MB with
 	// MaxBytes 8192 and MaxNodes 50, neither of which can see an expansion.
 	budget *entityBudget
+	// maxFetches and maxDepth are XIncludeOptions.MaxFetches and MaxDepth
+	// as resolved.
+	maxFetches, maxDepth int
 	// done maps each element of a document being processed whose content
 	// processing has finished to its processed copy, which an href-less
 	// xpointer selects from in its place. See selectLocal.
 	done map[*Node]*Node
+	// nodes counts the nodes the pass's inclusions have copied in, against
+	// opts.Parse.MaxNodes: an href-less xpointer copies an element already
+	// expanded, so siblings each including the one before doubled the
+	// result per level, and fetches and depth never see it.
+	nodes int
+	// bytes counts the text and attribute values those nodes carry, against
+	// opts.Parse.MaxBytes: the node count cannot see a text node's length,
+	// and one 8000-byte text doubled per level held 65 MB in 25,000 nodes.
+	bytes int64
+	// visits counts the nodes the walks of href-less xpointers visit,
+	// against opts.Parse.MaxNodes: each walk starts at the root, so N
+	// includes naming an element after them cost N^2/2 visits.
+	visits int
+}
+
+// nodeLimit is the pass's node budget, or -1 for none.
+func (p *includeProc) nodeLimit() int {
+	switch limit := p.opts.Parse.MaxNodes; {
+	case limit == 0:
+		return DefaultMaxNodes
+	case limit < 0:
+		return -1
+	default:
+		return limit
+	}
+}
+
+// charge counts the nodes of picked, about to be copied in by an inclusion,
+// against the pass's node budget, and their values against its byte budget.
+func (p *includeProc) charge(picked []*Node) error {
+	for _, n := range picked {
+		c, b := subtreeCost(n)
+		p.nodes += c
+		p.bytes += b
+	}
+	return p.overBudget()
+}
+
+// overBudget refuses once the pass's counts are past its node or byte budget.
+func (p *includeProc) overBudget() error {
+	if limit := p.nodeLimit(); limit >= 0 && p.nodes > limit {
+		return fatalInclude{fmt.Errorf(
+			"resource limit exceeded: inclusions exceed %d nodes: %w",
+			limit, ErrResourceLimit)}
+	}
+	limit := p.opts.Parse.MaxBytes
+	if limit == 0 {
+		limit = DefaultMaxBytes
+	}
+	if limit >= 0 && p.bytes > limit {
+		return fatalInclude{fmt.Errorf(
+			"resource limit exceeded: inclusions exceed %d bytes: %w",
+			limit, ErrResourceLimit)}
+	}
+	return nil
+}
+
+// subtreeCost counts n and its descendants, attributes and namespace
+// declarations, as a parse counts them, and the bytes of their values.
+func subtreeCost(n *Node) (nodes int, bytes int64) {
+	nodes = 1 + n.NumAttrs() + n.NumNamespaceDecls()
+	for a := range n.Attrs() {
+		bytes += int64(len(a.Value()))
+	}
+	if n.Kind() != KindElement && n.Kind() != KindDocument {
+		bytes += int64(len(n.Value()))
+	}
+	for k := range n.Children() {
+		c, b := subtreeCost(k)
+		nodes += c
+		bytes += b
+	}
+	return nodes, bytes
 }
 
 // mentionsXInclude reports whether t could hold an XInclude-namespace element.
@@ -299,10 +427,13 @@ func newHolder() *Node { return NewTree().Root }
 
 // expandInclude appends to dst the replacement for one xi:include element.
 func (p *includeProc) expandInclude(dst, inc *Node, depth int) error {
-	if depth >= maxIncludeDepth {
+	if err := p.cancelled(); err != nil {
+		return err
+	}
+	if depth >= p.maxDepth {
 		return fatalInclude{fmt.Errorf(
 			"resource limit exceeded: xi:include nesting exceeds %d levels: %w",
-			maxIncludeDepth, ErrResourceLimit)}
+			p.maxDepth, ErrResourceLimit)}
 	}
 
 	// Section 3.2: an include element may have "zero or one fallback"
@@ -373,6 +504,7 @@ func (p *includeProc) expandInclude(dst, inc *Node, depth int) error {
 	}
 
 	var holder *Node
+	var picked []*Node // what a local xpointer selected, holder's originals
 	var err error
 	switch {
 	case href == "" && parse == "xml" && xptr != "":
@@ -390,7 +522,7 @@ func (p *includeProc) expandInclude(dst, inc *Node, depth int) error {
 		// own pointer back at the reader. And it would address a *reparse*
 		// rather than this tree, so an xpointer naming content an earlier
 		// inclusion brought in would not find it.
-		holder, err = p.selectLocal(inc, xptr, base)
+		holder, picked, err = p.selectLocal(inc, xptr, base)
 	case href == "" && parse == "text":
 		// parse="text" with no href asks for the including document as
 		// characters. That is not a subresource selection and the resource
@@ -405,8 +537,20 @@ func (p *includeProc) expandInclude(dst, inc *Node, depth int) error {
 		}
 	}
 	if holder != nil && err == nil {
+		i := 0
 		for n := range holder.Children() {
-			appendSubtreeKeep(dst, n)
+			// The copies have lost their ancestors, so the language of
+			// §4.5.6 is read off the node the xpointer selected.
+			if picked != nil && n.Kind() == KindElement {
+				c := appendElementKeep(dst, n)
+				fixupLanguage(c, picked[i], dst)
+				for k := range n.Children() {
+					appendSubtreeKeep(c, k)
+				}
+			} else {
+				appendSubtreeKeep(dst, n)
+			}
+			i++
 		}
 		return nil
 	}
@@ -453,28 +597,48 @@ func (p *includeProc) expandInclude(dst, inc *Node, depth int) error {
 //
 // The nodes are given the include element's base, because they are being
 // written where the include element sat, not where they were read.
-func (p *includeProc) selectLocal(inc *Node, xptr, base string) (*Node, error) {
+func (p *includeProc) selectLocal(inc *Node, xptr, base string) (*Node, []*Node, error) {
 	root := inc.Root()
-	picked, err := selectXPointerIn(root, xptr, p.viewOf)
+	picked, err := selectXPointerIn(root, xptr, func(n *Node) *Node {
+		p.visits++
+		if p.visits%xincludeCheckEvery == 0 {
+			// The view has no error return; the refusal is recovered by
+			// ProcessXInclude.
+			if err := p.cancelled(); err != nil {
+				xdmlimit.Refuse(err)
+			}
+		}
+		return p.viewOf(n)
+	})
+	if limit := p.nodeLimit(); limit >= 0 && p.visits > limit {
+		return nil, nil, fatalInclude{fmt.Errorf(
+			"resource limit exceeded: local xpointer searches visit more than %d nodes: %w",
+			limit, ErrResourceLimit)}
+	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(picked) == 0 {
-		return nil, fmt.Errorf("xpointer %q selected nothing in the including document", xptr)
+		return nil, nil, fmt.Errorf("xpointer %q selected nothing in the including document", xptr)
 	}
-	holder := newHolder()
 	for _, n := range picked {
 		// Section 4.5.1: an inclusion of the include element itself, or of
 		// one of its ancestors, is an inclusion loop and a fatal error. It
 		// cannot be caught by the URI stack, because the URI is the same
 		// document's and there is no second fetch to compare against.
 		if n == inc || isAncestorOf(n, inc) {
-			return nil, fatalInclude{fmt.Errorf(
+			return nil, nil, fatalInclude{fmt.Errorf(
 				"xpointer %q selects the include element or an ancestor of it", xptr)}
 		}
+	}
+	if err := p.charge(picked); err != nil {
+		return nil, nil, err
+	}
+	holder := newHolder()
+	for _, n := range picked {
 		copySubtree(holder, n, base)
 	}
-	return holder, nil
+	return holder, picked, nil
 }
 
 // viewOf is the node a local xpointer sees in place of n: the processed copy
@@ -488,13 +652,16 @@ func (p *includeProc) viewOf(n *Node) *Node {
 
 // fetchText reads a resource as characters.
 func (p *includeProc) fetchText(target, base, encoding string) (*Node, error) {
-	if p.fetches >= maxIncludeFetches {
+	if p.fetches >= p.maxFetches {
 		return nil, fatalInclude{fmt.Errorf(
 			"resource limit exceeded: document performs more than %d inclusions: %w",
-			maxIncludeFetches, ErrResourceLimit)}
+			p.maxFetches, ErrResourceLimit)}
 	}
 	if p.opts.Resolver == nil {
 		return nil, fmt.Errorf("no include resolver: inclusions are not permitted")
+	}
+	if err := p.cancelled(); err != nil {
+		return nil, err
 	}
 	p.fetches++
 	data, _, err := p.opts.Resolver.ResolveInclude(target, base, textEncodingMarker(encoding))
@@ -503,6 +670,14 @@ func (p *includeProc) fetchText(target, base, encoding string) (*Node, error) {
 	}
 	holder := newHolder()
 	holder.AppendText(string(data))
+	// The text is charged like any other inclusion: the fetch count and the
+	// resolver's per-resource cap alone let 200 reads each add a whole
+	// resource, past MaxBytes, where the same reads as XML were refused.
+	if t := holder.FirstChild(); t != nil {
+		if err := p.charge([]*Node{t}); err != nil {
+			return nil, err
+		}
+	}
 	return holder, nil
 }
 
@@ -565,13 +740,16 @@ func (p *includeProc) fetch(dst *Node, target, base, parse, xptr, encoding strin
 		}
 		return nil
 	}
-	if p.fetches >= maxIncludeFetches {
+	if p.fetches >= p.maxFetches {
 		return fatalInclude{fmt.Errorf(
 			"resource limit exceeded: document performs more than %d inclusions: %w",
-			maxIncludeFetches, ErrResourceLimit)}
+			p.maxFetches, ErrResourceLimit)}
 	}
 	if p.opts.Resolver == nil {
 		return fmt.Errorf("no include resolver: inclusions are not permitted")
+	}
+	if err := p.cancelled(); err != nil {
+		return err
 	}
 	p.fetches++
 
@@ -625,7 +803,19 @@ func (p *includeProc) fetch(dst *Node, target, base, parse, xptr, encoding strin
 	p.stack = append(p.stack, uri)
 	done := sub
 	if mentionsXInclude(sub) {
-		done, err = p.processTree(sub, uri, depth+1)
+		// The parsed document is live for the whole recursion, so it is
+		// charged before it, and credited back once the picked nodes are
+		// charged below: a chain of inclusions is refused as the sum of the
+		// documents it holds passes the budget, not on the unwind after every
+		// level was parsed.
+		subNodes, subBytes := subtreeCost(sub.Root)
+		p.nodes += subNodes
+		p.bytes += subBytes
+		if err = p.overBudget(); err == nil {
+			done, err = p.processTree(sub, uri, depth+1)
+		}
+		p.nodes -= subNodes
+		p.bytes -= subBytes
 	}
 	p.stack = p.stack[:len(p.stack)-1]
 	if err != nil {
@@ -657,6 +847,9 @@ func (p *includeProc) fetch(dst *Node, target, base, parse, xptr, encoding strin
 		}
 	}
 
+	if err := p.charge(picked); err != nil {
+		return err
+	}
 	for _, n := range picked {
 		copyFixedUp(dst, n, base)
 	}
@@ -664,7 +857,8 @@ func (p *includeProc) fetch(dst *Node, target, base, parse, xptr, encoding strin
 }
 
 // copyFixedUp appends a copy of n, a top-level included node, with the base
-// URI fixup of section 4.5.5 applied.
+// URI fixup of section 4.5.5 and the language fixup of section 4.5.6
+// (fixupLanguage) applied.
 //
 // The included elements are about to sit in a document retrieved from a
 // *different* URI, so a relative reference written inside them would resolve
@@ -687,11 +881,19 @@ func copyFixedUp(dst, n *Node, includeBase string) {
 	// PI included alongside the document element has a base URI in the data
 	// model, but nothing can be written on it and nothing resolves a relative
 	// reference from it.
-	if n.Kind() != KindElement || n.BaseURI() == "" || n.BaseURI() == includeBase {
+	if n.Kind() != KindElement {
 		appendSubtreeKeep(dst, n)
 		return
 	}
-	if xb := n.Attr(NSXML, "base"); xb != nil {
+	c := appendElementKeep(dst, n)
+	fixupLanguage(c, n, dst)
+	xb := n.Attr(NSXML, "base")
+	switch {
+	case n.BaseURI() == "" || n.BaseURI() == includeBase:
+		for k := range n.Children() {
+			appendSubtreeKeep(c, k)
+		}
+	case xb != nil:
 		// The element states its own base. Leaving it alone has a consequence
 		// the attribute alone does not show: a RELATIVE xml:base now sits in
 		// a different document, so it resolves against the include element's
@@ -702,16 +904,53 @@ func copyFixedUp(dst, n *Node, includeBase string) {
 		// included into a document based at fn/base-uri/ the surviving
 		// attribute reads fn/base-uri/dir5/data.xml, which is what the case
 		// expects.
-		c := appendElementKeep(dst, n)
 		c.SetBaseURI(resolveBase(includeBase, xb.Value()))
 		copyRebased(c, n, c.BaseURI())
+	default:
+		c.AppendAttr(QName{Prefix: "xml", Local: "base", URI: NSXML}, n.BaseURI())
+		for k := range n.Children() {
+			appendSubtreeKeep(c, k)
+		}
+	}
+}
+
+// fixupLanguage is XInclude §4.5.6 for c, the copy of the top-level included
+// element n just appended under the include parent: "Each element information
+// item in the top-level included items which has a different value of
+// language than its include parent (taking case-insensitivity into account
+// per [IETF RFC 3066]), or that has a value if its include parent is a
+// document information item, has an attribute information item added to its
+// attributes property", xml:lang with the element's language as its value, or
+// "" when it has none. It must run before c has children.
+//
+// An element carrying its own xml:lang already says its language, and the
+// attribute that would replace it has the same value, so it is left alone.
+func fixupLanguage(c, n, parent *Node) {
+	if c.Attr(NSXML, "lang") != nil {
 		return
 	}
-	c := appendElementKeep(dst, n)
-	c.AppendAttr(QName{Prefix: "xml", Local: "base", URI: NSXML}, n.BaseURI())
-	for k := range n.Children() {
-		appendSubtreeKeep(c, k)
+	lang, has := languageOf(n)
+	plang, phas := languageOf(parent)
+	if has == phas && strings.EqualFold(lang, plang) {
+		return
 	}
+	c.AppendAttr(QName{Prefix: "xml", Local: "lang", URI: NSXML}, lang)
+}
+
+// languageOf is §4.5.6's language property of n: "the normalized value of
+// the xml:lang attribute appearing on that element if one exists, with
+// xml:lang="" resulting in no value, otherwise ... the value of the language
+// property of the element's parent element if one exists, otherwise the
+// property has no value." A node that is not an element (the document node,
+// as an include parent) has none.
+func languageOf(n *Node) (string, bool) {
+	for cur := n; cur != nil && cur.Kind() == KindElement; cur = cur.Parent() {
+		if a := cur.Attr(NSXML, "lang"); a != nil {
+			v := a.Value()
+			return v, v != ""
+		}
+	}
+	return "", false
 }
 
 // copyRebased appends to dst, the copy of n whose base was just recomputed,

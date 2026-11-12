@@ -304,10 +304,14 @@ func TestManyDeclarationsParseInLinearTime(t *testing.T) {
 		}
 		return d
 	}
+	// 16x the declarations: linear is 16x, quadratic 256x. The bound sits
+	// between them with a factor of four either side, so a shared CI
+	// runner's noise cannot fail a linear parse (a 4x step with a bound of
+	// 8 did, at 8.7x on macOS) and a quadratic one cannot pass.
 	for _, big := range []bool{false, true} {
-		small, large := best(doc(5000, big)), best(doc(20000, big))
-		if r := float64(large) / float64(small); r > 8 {
-			t.Errorf("big tag %v: 4x the declarations took %.1fx as long (%v, %v), want linear", big, r, small, large)
+		small, large := best(doc(2500, big)), best(doc(40000, big))
+		if r := float64(large) / float64(small); r > 64 {
+			t.Errorf("big tag %v: 16x the declarations took %.1fx as long (%v, %v), want linear", big, r, small, large)
 		}
 	}
 }

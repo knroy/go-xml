@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"context"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -35,9 +36,9 @@ func TestCopyOriginOnlyWithAccumulators(t *testing.T) {
 		noteCopy(rt, doc.Root, copyItem(doc.Root))
 		noteCopy(rt, doc.Root, snapshotItem(doc.Root))
 	}
-	if n := len(rt.accumOrigin); n != 0 {
-		t.Errorf("no accumulator is declared, yet %d copied nodes are held "+
-			"against their originals", n)
+	if rt.accumOrigin != nil {
+		t.Errorf("no accumulator is declared, yet copied nodes are held " +
+			"against their originals")
 	}
 
 	const base = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
@@ -77,5 +78,38 @@ func TestCopyOriginOnlyWithAccumulators(t *testing.T) {
 	if got := res.String(); !strings.Contains(got, "<res>2</res>") {
 		t.Errorf("got %q, want <res>2</res>: a copy answers accumulator-after "+
 			"with its original's value", got)
+	}
+}
+
+// A copy's record lives only as long as the copy (audit A2-2). Keyed by the
+// node, the table held every copy and its original until the transform
+// ended: with one accumulator declared, a stream taking copy-of(.) of each
+// record held the whole document, 1.4x the tree's memory. Copies dropped
+// as they are made leave the table near empty.
+func TestCopyOriginReleasedWithCopy(t *testing.T) {
+	s := compileString(t, `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+		<xsl:accumulator name="c" initial-value="0"><xsl:accumulator-rule match="x" select="$value + 1"/></xsl:accumulator>
+		<xsl:template match="/"/></xsl:stylesheet>`)
+	rt, err := newRuntime(s, context.Background(), nil, TransformOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := xdm.ParseString(`<r><x/><x/><x/></r>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := noteCopy(rt, doc.Root, copyItem(doc.Root)).(*xdm.Node)
+	for i := range 2000 {
+		noteCopy(rt, doc.Root, copyItem(doc.Root))
+		if i%50 == 0 {
+			goruntime.GC()
+		}
+	}
+	if n := len(rt.accumOrigin.m); n > 300 {
+		t.Errorf("%d copies are still recorded, of which one is held", n)
+	}
+	x := kept.FirstChild().FirstChild().NextSibling()
+	if got := rt.accumulatorOrigin(x); got != doc.Root.FirstChild().FirstChild().NextSibling() {
+		t.Errorf("the copy kept does not answer with its original")
 	}
 }

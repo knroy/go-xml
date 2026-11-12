@@ -1,11 +1,15 @@
 package dtd
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xmldecode"
+	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -81,22 +85,41 @@ const (
 	// binds first rather than getting a fresh allowance per subset.
 	DefaultMaxEntityBytes = 1 << 20
 
-	// maxParameterDepth bounds how deep parameter-entity substitution may
-	// nest.
+	// DefaultMaxParameterDepth bounds how deep parameter-entity
+	// substitution may nest when LoadOptions.MaxParameterDepth is zero.
 	//
 	// A cycle is caught by name before this is reached (see loader.expand),
 	// so this is the bound on legitimate but pathological nesting rather
 	// than the recursion guard. DTD modularisation is two or three deep in
 	// practice; 40 is far above anything real and far below a stack
 	// problem.
-	maxParameterDepth = 40
+	DefaultMaxParameterDepth = 40
 
-	// maxConditionalDepth bounds nesting of INCLUDE/IGNORE sections.
+	// DefaultMaxConditionalDepth bounds nesting of INCLUDE/IGNORE sections
+	// when LoadOptions.MaxConditionalDepth is zero.
 	//
 	// XML 1.0 §3.4 permits them to nest arbitrarily, and DocBook nests
 	// three or four deep. A document may not spend the stack doing so.
-	maxConditionalDepth = 40
+	DefaultMaxConditionalDepth = 40
+
+	// maxDepthCeiling is the most either depth option may raise its bound
+	// to; a larger value is clamped to it. Each level is a Go recursion of
+	// loader.expand (and loader.conditional), a few hundred bytes of stack
+	// plus the strings.Builder it fills, so 1000 levels stay three orders
+	// of magnitude under Go's 1 GB stack limit, whose overflow is fatal
+	// rather than recoverable. That is why neither option has an unlimited
+	// setting.
+	maxDepthCeiling = 1000
 )
+
+// depthBound resolves a recursion-depth option: zero or negative means def,
+// and a value above maxDepthCeiling is clamped to it.
+func depthBound(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return min(v, maxDepthCeiling)
+}
 
 // ErrNoResolver reports that a DOCTYPE named an external subset and no
 // Resolver was configured to read it.
@@ -186,6 +209,23 @@ type LoadOptions struct {
 	// the bytes read, so a bomb whose halves live in different subsets meets
 	// one budget rather than one per subset.
 	MaxEntityBytes int64
+
+	// MaxParameterDepth bounds how deep parameter-entity references may
+	// nest, a reference inside a replacement text being one level. Zero or
+	// a negative value means DefaultMaxParameterDepth (40). There is no
+	// unlimited setting because substitution recurses: a value above 1000
+	// is clamped to 1000, which keeps the recursion far from a fatal Go
+	// stack overflow. A cycle is refused by name at any depth, so raising
+	// this admits only longer legitimate chains; each level costs a
+	// substitution charged to MaxEntityBytes.
+	MaxParameterDepth int
+
+	// MaxConditionalDepth bounds how deep INCLUDE sections may nest (XML
+	// 1.0 §3.4 sets no limit). Zero or a negative value means
+	// DefaultMaxConditionalDepth (40); a value above 1000 is clamped to
+	// 1000, for the same stack-safety reason as MaxParameterDepth. An
+	// IGNORE section is not expanded and does not count.
+	MaxConditionalDepth int
 }
 
 // Load reads a DOCTYPE, fetches the external subset it names, and returns the
@@ -209,17 +249,7 @@ func Load(directive string, opts LoadOptions) (*DTD, error) {
 	head, internal := splitSubset(directive)
 	systemID, publicID, hasExternal := externalSubsetOf(head)
 
-	if !hasExternal || opts.InternalSubsetOnly {
-		d, err := parseSubsets(internal, "", opts)
-		if err != nil {
-			return nil, err
-		}
-		if d != nil {
-			d.HasExternalSubset = hasExternal
-		}
-		return d, nil
-	}
-	if opts.Resolver == nil {
+	if hasExternal && !opts.InternalSubsetOnly && opts.Resolver == nil {
 		// Loud, per the note on ErrNoResolver: half a DTD proves nothing,
 		// and reporting success on it is how "could not check" becomes
 		// "checked and fine".
@@ -232,12 +262,31 @@ func Load(directive string, opts LoadOptions) (*DTD, error) {
 	}
 
 	l := newLoader(opts)
+	l.noFetch = opts.InternalSubsetOnly
 	// XML 1.0 §2.8: the internal subset is read first. Its parameter-entity
 	// declarations are therefore in scope while the external subset is being
 	// expanded, and they take precedence over any the external subset makes.
+	// It is expanded on every path, including a DOCTYPE with no external
+	// subset: "%e;" between declarations stands for the declarations its
+	// replacement text holds, and those bind like any written inline. An
+	// external parameter entity referenced there is fetched like any other,
+	// so with no Resolver it is ErrNoResolver (see fetch).
 	expandedInternal, err := l.expandSubset(internal, opts.BaseURI, false)
 	if err != nil {
 		return nil, err
+	}
+	if !hasExternal || opts.InternalSubsetOnly {
+		d, err := parseSubsets(expandedInternal, "", opts)
+		if err != nil {
+			return nil, err
+		}
+		if d != nil {
+			d.HasExternalSubset = hasExternal
+			d.name = doctypeName(head)
+			d.v11 = l.v11
+			d.nesting = l.nesting
+		}
+		return d, nil
 	}
 	text, resolved, err := l.fetch(systemID, publicID, opts.BaseURI)
 	if err != nil {
@@ -263,6 +312,9 @@ func Load(directive string, opts LoadOptions) (*DTD, error) {
 	if d != nil {
 		d.HasExternalSubset = true
 		d.ExternalSubset = expandedExternal
+		d.name = doctypeName(head)
+		d.v11 = l.v11
+		d.nesting = l.nesting
 	}
 	return d, nil
 }
@@ -299,6 +351,10 @@ type loader struct {
 	maxDocs   int
 	maxBytes  int64
 	maxExpand int64
+	// maxParams and maxSections are LoadOptions.MaxParameterDepth and
+	// MaxConditionalDepth as resolved by depthBound.
+	maxParams   int
+	maxSections int
 
 	docs  int
 	bytes int64
@@ -312,6 +368,33 @@ type loader struct {
 	// is looked at, which is how §2.8's precedence reaches parameter
 	// entities specifically.
 	params map[string]paramEntity
+
+	// noFetch leaves an external parameter-entity reference as written
+	// instead of reading it, for LoadOptions.InternalSubsetOnly, which
+	// promises to fetch nothing.
+	noFetch bool
+
+	// inDecl is set while the body of a markup declaration other than
+	// <!ENTITY> is expanded: the context in which a replacement text must
+	// nest properly with the declaration and its groups. An entity value
+	// is a literal, where any text may be included.
+	inDecl bool
+
+	// nesting holds the PE nesting validity errors found while expanding,
+	// first occurrence of each only, for Validate to report. See
+	// nestingViolation.
+	nesting []string
+	// nestingSeen is the set of nesting, for violation's once-per-message
+	// rule. Scanning the list instead cost the square of the messages.
+	nestingSeen map[string]struct{}
+
+	// sections counts the INCLUDE sections currently being expanded, for
+	// maxSections.
+	sections int
+
+	// v11 is the system identifier of the first external resource read
+	// whose text declaration says version="1.1", or "". See fetch.
+	v11 string
 
 	// active names the parameter entities currently being substituted. A
 	// name already in it is a cycle — "%a;" inside the replacement text of
@@ -340,6 +423,9 @@ func newLoader(opts LoadOptions) *loader {
 		maxExpand: opts.MaxEntityBytes,
 		params:    map[string]paramEntity{},
 		active:    map[string]bool{},
+
+		maxParams:   depthBound(opts.MaxParameterDepth, DefaultMaxParameterDepth),
+		maxSections: depthBound(opts.MaxConditionalDepth, DefaultMaxConditionalDepth),
 	}
 	if l.maxDocs == 0 {
 		l.maxDocs = DefaultMaxExternalDocuments
@@ -447,22 +533,55 @@ func (l *loader) fetch(systemID, publicID, base string) (text, resolved string, 
 			"external subset %q exceeds the remaining %d byte budget: %w",
 			systemID, limit, xdm.ErrResourceLimit)
 	}
+	l.bytes += int64(len(data))
+	// An external entity carries its own encoding (XML 1.0 §4.3.3), and a
+	// UTF-16 one begins with a byte order mark. It is decoded the way xdm
+	// decodes a document, by the same code, and the mark is dropped.
+	dec, err := xmldecode.Reader(bufio.NewReader(bytes.NewReader(data)))
+	if err == nil {
+		data, err = io.ReadAll(dec)
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("decoding external resource %q: %w", systemID, err)
+	}
 	// Charged before expansion, per the note above. Both counters move: the
 	// bytes were read, and they are also about to be substituted into the
 	// subset, so a bomb cannot launder its size by moving a level into a
-	// file.
-	l.bytes += int64(len(data))
+	// file. The expansion charge is the DECODED size, since UTF-16 text can
+	// grow by half as UTF-8 and the budget bounds what the expander is handed.
 	if err := l.chargeExpansion(len(data)); err != nil {
 		return "", "", err
 	}
 	if got == "" {
 		got = systemID
 	}
-	return stripTextDecl(string(data)), got, nil
+	text, version := stripTextDecl(string(data))
+	// XML 1.1 §4.3.4: "If an entity (including the document entity) is not
+	// labeled with a version number, it is treated as if labeled as version
+	// 1.0", and a 1.1 entity may be included only by a 1.1 document. The
+	// document is not in view here (Load takes the DOCTYPE alone), so a 1.1
+	// entity is recorded for Validate, which has the document, and a version
+	// neither 1.0 nor 1.1 is refused now, as xdm refuses it.
+	switch version {
+	case "", "1.0":
+	case "1.1":
+		if l.v11 == "" {
+			l.v11 = systemID
+		}
+	default:
+		return "", "", fmt.Errorf("external resource %q declares unsupported XML version %q (XML §4.3.4)", systemID, version)
+	}
+	return text, got, nil
 }
 
 // expandSubset substitutes parameter-entity references in one subset and, when
-// the subset is external, resolves its conditional sections.
+// the subset is external, resolves its conditional sections — both in one
+// pass, in document order, which is the order XML 1.0 gives them meaning in.
+// A parameter entity is in scope from its declaration on (§4.1 WFC/VC Entity
+// Declared), a declaration inside an INCLUDE section is an ordinary
+// declaration, and one inside an IGNORE section is not read at all (§3.4).
+// Collecting declarations over the whole subset first got all three wrong: it
+// could not see inside "<![", and would have seen into an IGNORE if it had.
 //
 // declLevel says which subset this is. XML 1.0 §2.8 draws a real line: in the
 // INTERNAL subset a parameter-entity reference may appear only where a whole
@@ -471,15 +590,7 @@ func (l *loader) fetch(systemID, publicID, base string) (text, resolved string, 
 // declarations, which is the mechanism DTD modularisation is built on.
 // Conditional sections (§3.4) are external-subset-only for the same reason.
 func (l *loader) expandSubset(subset, base string, declLevel bool) (string, error) {
-	l.collectParams(subset, base)
-	expanded, err := l.expand(subset, base, 0, declLevel)
-	if err != nil {
-		return "", err
-	}
-	if !declLevel {
-		return expanded, nil
-	}
-	return l.conditionals(expanded, 0)
+	return l.expand(subset, base, 0, declLevel)
 }
 
 // collectParams records the parameter-entity declarations a subset makes.
@@ -543,21 +654,32 @@ func (l *loader) collectParams(subset, base string) {
 //
 //   - Recursion is refused by name, not merely bounded. XML 1.0 §4.1 makes a
 //     recursive entity a well-formedness error, and l.active detects a cycle
-//     of any length on the first revisit rather than after maxParameterDepth
+//     of any length on the first revisit rather than after maxParams
 //     rounds of doubling.
 func (l *loader) expand(subset, base string, depth int, declLevel bool) (string, error) {
-	if depth > maxParameterDepth {
+	if depth > l.maxParams {
 		return "", fmt.Errorf(
 			"parameter entities nested more than %d deep: %w",
-			maxParameterDepth, xdm.ErrResourceLimit)
+			l.maxParams, xdm.ErrResourceLimit)
 	}
-	if !strings.Contains(subset, "%") {
+	if !strings.Contains(subset, "%") && !(declLevel && strings.Contains(subset, "<![")) {
 		return subset, nil
 	}
 	var sb strings.Builder
 	for i := 0; i < len(subset); {
+		if declLevel && strings.HasPrefix(subset[i:], "<![") {
+			n, err := l.conditional(&sb, subset[i:], base, depth, declLevel)
+			if err != nil {
+				return "", err
+			}
+			i += n
+			continue
+		}
 		if end := endOfConstruct(subset, i); end > i {
 			construct := subset[i:end]
+			// A parameter entity comes into scope as its declaration is
+			// passed, never earlier; first declaration wins.
+			l.collectParams(construct, base)
 			// In the external subset a reference may appear inside a
 			// declaration — "<!ELEMENT r %model;>" is the idiom — so the
 			// body is expanded while the delimiters are kept. In the
@@ -566,11 +688,21 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 			if declLevel && strings.HasPrefix(construct, "<!") &&
 				!strings.HasPrefix(construct, "<!--") &&
 				strings.Contains(construct, "%") {
-				inner, err := l.expand(construct[2:len(construct)-1], base, depth+1, declLevel)
+				// A declaration whose '>' is not in the raw text — it is in
+				// a replacement text, which is a nesting error — runs to the
+				// end of the subset, and has no '>' to strip.
+				body, closer := construct[2:], ""
+				if strings.HasSuffix(body, ">") {
+					body, closer = body[:len(body)-1], ">"
+				}
+				outer := l.inDecl
+				l.inDecl = !strings.HasPrefix(body, "ENTITY")
+				inner, err := l.expand(body, base, depth+1, declLevel)
+				l.inDecl = outer
 				if err != nil {
 					return "", err
 				}
-				sb.WriteString("<!" + inner + ">")
+				sb.WriteString("<!" + inner + closer)
 			} else {
 				sb.WriteString(construct)
 			}
@@ -584,9 +716,12 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 		}
 		j := strings.IndexByte(subset[i:], ';')
 		if j < 0 {
-			sb.WriteByte(subset[i])
-			i++
-			continue
+			// No ';' remains, so no reference in the tail can close, and no
+			// declaration in it can hold one either. Copying the tail whole
+			// keeps this linear: stepping one byte and rescanning for ';' at
+			// every later '%' cost the square of the subset.
+			sb.WriteString(subset[i:])
+			break
 		}
 		name := subset[i+1 : i+j]
 		p, ok := l.params[name]
@@ -604,6 +739,11 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 			return "", fmt.Errorf(
 				"parameter entity %%%s; is recursive", name)
 		}
+		if p.external && l.noFetch {
+			sb.WriteString(subset[i : i+j+1])
+			i += j + 1
+			continue
+		}
 		text, refBase := p.text, p.base
 		if p.external {
 			var err error
@@ -611,9 +751,6 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 			if err != nil {
 				return "", err
 			}
-			// A module may declare further parameter entities, which come
-			// into scope beneath everything already declared.
-			l.collectParams(text, refBase)
 		}
 		l.active[name] = true
 		text, err := l.expand(text, refBase, depth+1, declLevel)
@@ -632,8 +769,25 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 		// call and every subset a fresh allowance, which is the same defect
 		// one level up — a bomb split across the two subsets, or across two
 		// declarations, would meet the budget twice over and pass.
-		if err := l.chargeExpansion(len(text)); err != nil {
+		//
+		// A reference is charged at least its own length, so one that
+		// expands to nothing is not free: a ladder of rungs "%aN;%aN;" over
+		// an empty a0 doubles its calls a rung while producing no bytes, and
+		// without this floor the budget never moved.
+		//
+		// An internal entity is charged at least its raw replacement text
+		// too, which was scanned to produce text: at declaration level an
+		// IGNORE section reduces any amount of it to nothing, and a ladder
+		// of references to one scanned seconds of text per few bytes
+		// charged. A fetched one was charged its raw text by fetch, and
+		// p.text is empty for it.
+		if err := l.chargeExpansion(max(len(text), len(p.text), j+1)); err != nil {
 			return "", err
+		}
+		if l.inDecl {
+			if vc := nestingViolation(text); vc != "" {
+				l.violation("the replacement text of %%%s; is not properly nested (XML 1.0 %s)", name, vc)
+			}
 		}
 		sb.WriteString(text)
 		i += j + 1
@@ -641,7 +795,9 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 	return sb.String(), nil
 }
 
-// conditionals resolves INCLUDE and IGNORE sections.
+// conditional resolves the INCLUDE or IGNORE section that begins s, writes an
+// INCLUDE's expanded contents to sb, and returns how many bytes of s it
+// consumed.
 //
 // XML 1.0 §3.4:
 //
@@ -651,72 +807,143 @@ func (l *loader) expand(subset, base string, depth int, declLevel bool) (string,
 //
 // They are external-subset-only, and the keyword is usually a parameter
 // entity — "<![%draft;[ ... ]]>" with "%draft;" declared as "INCLUDE" or
-// "IGNORE" — which is why this runs AFTER expansion rather than before.
+// "IGNORE" — so the keyword is expanded before it is read.
 //
 // Nesting is the part that has to be right: the contents of an IGNORE section
 // are not parsed as declarations, but its "<![" and "]]>" delimiters still
 // have to be counted, or the first "]]>" of an inner section would end the
 // outer one and the declarations after it would be read when they should not
 // be. §3.4 says exactly that.
-func (l *loader) conditionals(subset string, depth int) (string, error) {
-	if depth > maxConditionalDepth {
-		return "", fmt.Errorf(
-			"conditional sections nested more than %d deep: %w",
-			maxConditionalDepth, xdm.ErrResourceLimit)
-	}
-	i := strings.Index(subset, "<![")
-	if i < 0 {
-		return subset, nil
-	}
-	var sb strings.Builder
-	for i >= 0 {
-		sb.WriteString(subset[:i])
-		rest := subset[i+len("<!["):]
-		kw := strings.TrimLeft(rest, " \t\r\n")
-		var include bool
-		switch {
-		case strings.HasPrefix(kw, "INCLUDE"):
-			include = true
-			kw = kw[len("INCLUDE"):]
-		case strings.HasPrefix(kw, "IGNORE"):
-			kw = kw[len("IGNORE"):]
-		default:
-			// Not a conditional section — a CDATA section cannot appear in a
-			// DTD, but an unexpanded "%kw;" can when the entity was never
-			// declared. Copying it through leaves the document less
-			// constrained rather than wrongly refused, which is the rule the
-			// rest of this package follows.
-			sb.WriteString(subset[i : i+len("<![")])
-			subset = rest
-			i = strings.Index(subset, "<![")
+func (l *loader) conditional(sb *strings.Builder, s, base string, depth int, declLevel bool) (int, error) {
+	rest := s[len("<!["):]
+	// The keyword is read up to its '[', expanding references as they come,
+	// so that a '[' supplied by the keyword's own entity is found. That is
+	// §3.4 VC Proper Conditional Section/PE Nesting — the "<![", "[" and
+	// "]]>" must all be in one replacement text — and a validity error, so
+	// the section is still read.
+	var kwb strings.Builder
+	open, extra := 0, ""
+	// semi is the first ';' at or after the last search, len(rest) when
+	// there is none. Searching at every byte cost the square of the
+	// keyword; searching only at a '%' it has passed keeps the searches
+	// disjoint, as in expand.
+	semi := -1
+	for open < len(rest) && rest[open] != '[' {
+		if rest[open] == '%' && semi < open {
+			if semi = strings.IndexByte(rest[open:], ';'); semi < 0 {
+				semi = len(rest)
+			} else {
+				semi += open
+			}
+		}
+		if j := semi - open; rest[open] == '%' && semi < len(rest) && j > 0 {
+			t, err := l.expand(rest[open:open+j+1], base, depth+1, declLevel)
+			if err != nil {
+				return 0, err
+			}
+			open += j + 1
+			if k := strings.IndexByte(t, '['); k >= 0 {
+				l.violation("a conditional section's '[' is in the replacement text of %s (XML 1.0 §3.4 VC Proper Conditional Section/PE Nesting)", rest[open-j-1:open])
+				kwb.WriteString(t[:k])
+				extra = t[k+1:]
+				open--
+				break
+			}
+			kwb.WriteString(t)
 			continue
 		}
-		kw = strings.TrimLeft(kw, " \t\r\n")
-		if !strings.HasPrefix(kw, "[") {
-			return "", fmt.Errorf("a conditional section is missing its '['")
-		}
-		body := kw[1:]
-		end := matchingSectionEnd(body)
-		if end < 0 {
-			return "", fmt.Errorf("a conditional section is not closed by ']]>'")
-		}
-		if include {
-			// The contents of an INCLUDE are ordinary declarations, and may
-			// contain further conditional sections of their own.
-			inner, err := l.conditionals(body[:end], depth+1)
-			if err != nil {
-				return "", err
-			}
-			sb.WriteString(inner)
-		}
-		// An IGNORE contributes nothing. Its contents are not even parsed,
-		// per §3.4 — only its delimiters were counted, which
-		// matchingSectionEnd did.
-		subset = body[end+len("]]>"):]
-		i = strings.Index(subset, "<![")
+		kwb.WriteByte(rest[open])
+		open++
 	}
-	sb.WriteString(subset)
-	return sb.String(), nil
+	if open >= len(rest) {
+		return 0, fmt.Errorf("a conditional section is missing its '['")
+	}
+	kw := strings.Trim(kwb.String(), " \t\r\n")
+	if kw != "INCLUDE" && kw != "IGNORE" {
+		// Not a conditional section — a CDATA section cannot appear in a
+		// DTD, but an unexpanded "%kw;" can when the entity was never
+		// declared. Copying it through leaves the document less
+		// constrained rather than wrongly refused, which is the rule the
+		// rest of this package follows.
+		sb.WriteString("<![")
+		return len("<!["), nil
+	}
+	body := rest[open+1:]
+	end := matchingSectionEnd(body)
+	if end < 0 {
+		return 0, fmt.Errorf("a conditional section is not closed by ']]>'")
+	}
+	// An IGNORE contributes nothing. Its contents are not even parsed, per
+	// §3.4 — only its delimiters were counted, which matchingSectionEnd did.
+	if kw == "INCLUDE" {
+		if l.sections >= l.maxSections {
+			return 0, fmt.Errorf(
+				"conditional sections nested more than %d deep: %w",
+				l.maxSections, xdm.ErrResourceLimit)
+		}
+		// The contents of an INCLUDE are ordinary declarations, and may
+		// contain further conditional sections of their own.
+		l.sections++
+		inner, err := l.expand(extra+body[:end], base, depth, declLevel)
+		l.sections--
+		if err != nil {
+			return 0, err
+		}
+		sb.WriteString(inner)
+	}
+	return len("<![") + open + 1 + end + len("]]>"), nil
+}
+
+// violation records a PE nesting validity error, once per message.
+func (l *loader) violation(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if _, dup := l.nestingSeen[msg]; dup {
+		return
+	}
+	if l.nestingSeen == nil {
+		l.nestingSeen = map[string]struct{}{}
+	}
+	l.nestingSeen[msg] = struct{}{}
+	l.nesting = append(l.nesting, msg)
+}
+
+// nestingViolation reports which nesting constraint the replacement text of a
+// parameter entity referenced inside a markup declaration breaks, or "".
+//
+// XML 1.0 §2.8 VC Proper Declaration/PE Nesting: "if either the first
+// character or the last character of a markup declaration ... is contained in
+// the replacement text for a parameter-entity reference, both MUST be
+// contained in the same replacement text." Inside a declaration's body that
+// means the text holds no '<' or '>' outside a literal.
+//
+// §3.2.1 VC Proper Group/PE Nesting: "if either of the opening or closing
+// parentheses in a choice, seq, or Mixed construct is contained in the
+// replacement text for a parameter entity, both MUST be contained in the same
+// replacement text": its parentheses balance.
+func nestingViolation(text string) string {
+	depth := 0
+	for i := 0; i < len(text); i++ {
+		switch c := text[i]; c {
+		case '"', '\'':
+			j := strings.IndexByte(text[i+1:], c)
+			if j < 0 {
+				return ""
+			}
+			i += j + 1
+		case '(':
+			depth++
+		case ')':
+			if depth--; depth < 0 {
+				return "§3.2.1 VC Proper Group/PE Nesting"
+			}
+		case '<', '>':
+			return "§2.8 VC Proper Declaration/PE Nesting"
+		}
+	}
+	if depth != 0 {
+		return "§3.2.1 VC Proper Group/PE Nesting"
+	}
+	return ""
 }
 
 // matchingSectionEnd returns the offset of the "]]>" that closes the section
@@ -760,7 +987,16 @@ func endOfConstruct(s string, i int) int {
 		}
 		return i + len("<!--") + end + len("-->")
 	}
-	if !strings.HasPrefix(rest, "<!") && !strings.HasPrefix(rest, "<?") {
+	if strings.HasPrefix(rest, "<?") {
+		// A PI ends at "?>" (XML 1.0 §2.6), not at its first ">", and its
+		// body is opaque: neither a quote nor a "%" in it means anything.
+		end := strings.Index(rest[len("<?"):], "?>")
+		if end < 0 {
+			return len(s)
+		}
+		return i + len("<?") + end + len("?>")
+	}
+	if !strings.HasPrefix(rest, "<!") {
 		return i
 	}
 	end := endOfDeclaration(rest)
@@ -798,28 +1034,31 @@ func endOfDeclaration(s string) int {
 	return -1
 }
 
-// stripTextDecl removes an external subset's text declaration.
+// stripTextDecl removes an external subset's text declaration, and returns
+// the version it declares ("" when it names none).
 //
 // XML 1.0 §4.3.1: "<?xml version='1.0' encoding='...'?>" at the very start of
 // an external parsed entity is a text declaration and is not part of the
 // entity's content. Leaving it would put a processing instruction where the
 // declaration reader would try to read one as markup.
-func stripTextDecl(s string) string {
+func stripTextDecl(s string) (text, version string) {
 	rest := strings.TrimLeft(s, " \t\r\n")
 	if !strings.HasPrefix(rest, "<?xml") {
-		return s
+		return s, ""
 	}
 	after := rest[len("<?xml"):]
 	// <?xml-stylesheet?> is content, not a text declaration: the target
 	// merely begins with "xml".
 	if after != "" && !isSpace(rune(after[0])) && !strings.HasPrefix(after, "?>") {
-		return s
+		return s, ""
 	}
 	end := strings.Index(rest, "?>")
 	if end < 0 {
-		return s
+		return s, ""
 	}
-	return rest[end+len("?>"):]
+	// [77] TextDecl: VersionInfo is optional and comes first when present.
+	version, _, _, _ = xml.ParseXMLDecl(strings.Trim(rest[len("<?xml"):end], " \t\r\n"))
+	return rest[end+len("?>"):], version
 }
 
 // externalSubsetOf returns the external subset a DOCTYPE head names.

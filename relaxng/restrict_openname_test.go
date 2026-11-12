@@ -110,7 +110,7 @@ func TestOpenNameAttributeInDefine(t *testing.T) {
 // Each definition is compiled once and shared by every <ref> naming it. Before
 // that, a <ref> re-compiled the definition's body, so a chain of definitions
 // each referring to the next twice cost 2^links expansions: DocBook 5.2 hit
-// maxRefExpansions, and this 40-link chain was refused by it. Shared, the
+// DefaultMaxRefExpansions, and this 40-link chain was refused by it. Shared, the
 // chain compiles in one expansion per definition.
 func TestRefExpansionIsShared(t *testing.T) {
 	var b strings.Builder
@@ -193,5 +193,47 @@ func TestSharedDefinitionCountsTwice(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.section) {
 			t.Errorf("%s: got %v, want a section %s refusal", c.combinator, err, c.section)
 		}
+	}
+}
+
+// TestOverlapAcrossIsNotPairwise checks that the §7.3/§7.4 overlap test does
+// not compare every pair of single names. Two branches of n distinct names
+// each used to cost n*n representative-name tests, each allocating; a set
+// makes it linear.
+func TestOverlapAcrossIsNotPairwise(t *testing.T) {
+	const n = 500
+	var a, b []nameClass
+	for i := range n {
+		a = append(a, qnamePat{Name: xdm.QName{Local: "a" + itoa(i)}})
+		b = append(b, qnamePat{Name: xdm.QName{Local: "b" + itoa(i)}})
+	}
+	as, bs := classesOf(a...), classesOf(b...)
+	allocs := testing.AllocsPerRun(1, func() {
+		if s := overlapAcross(as, bs); s != "" {
+			t.Fatalf("disjoint names reported overlapping at %s", s)
+		}
+	})
+	if allocs > 10*n {
+		t.Errorf("overlap of %d against %d names allocated %v times; it is pairwise", n, n, allocs)
+	}
+
+	// The result is unchanged: equal names, a name inside an open class,
+	// a name inside a choice, and two open classes still overlap.
+	x := xdm.QName{URI: "u", Local: "x"}
+	cases := []struct{ a, b nameClass }{
+		{qnamePat{x}, qnamePat{x}},
+		{qnamePat{x}, nsNamePat{Ns: "u"}},
+		{nsNamePat{Ns: "u"}, qnamePat{x}},
+		{nameChoicePat{qnamePat{xdm.QName{Local: "y"}}, qnamePat{x}}, qnamePat{x}},
+		{anyNamePat{}, nsNamePat{Ns: "v"}},
+	}
+	for i, c := range cases {
+		if overlapAcross(classesOf(c.a), classesOf(c.b)) == "" {
+			t.Errorf("case %d: overlap not found", i)
+		}
+	}
+	if s := overlapAcross(classesOf(nsNamePat{Ns: "u", Except: qnamePat{x}}),
+		classesOf(qnamePat{x})); s != "" {
+		t.Errorf("an excepted name was reported overlapping at %s", s)
 	}
 }

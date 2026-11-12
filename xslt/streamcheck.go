@@ -294,7 +294,9 @@ func walkElements(el *xdm.Node, visit func(*xdm.Node) bool) {
 	if !visit(el) {
 		return
 	}
-	for _, c := range el.ChildElements() {
-		walkElements(c, visit)
+	for c := el.FirstChild(); c != nil; c = c.NextSibling() {
+		if c.Kind() == xdm.KindElement {
+			walkElements(c, visit)
+		}
 	}
 }

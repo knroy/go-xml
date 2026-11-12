@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/xdm"
-	"github.com/knroy/go-xml/v2/xdmbuild"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
@@ -37,9 +37,15 @@ type applyTemplatesInstr struct {
 }
 
 func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if f := rt.burstsFor(i); f != nil && f.apply != nil {
+		// Streamed (streamapply.go): dispatched as the cursor reads.
+		return i.executeStream(rt, out, f.run, f.apply)
+	} else if f != nil && f.treeApply {
+		return i.executeTreeApply(rt, out, f) // streamcopy_l3apply.go
+	}
 	var seq xdm.Sequence
 	if i.sel != nil {
-		v, err := i.sel.Eval(rt.ctx)
+		v, err := rt.evalSelect(i, i.sel) // streamcopy_l3apply.go: the copies read off the cursor
 		if err != nil {
 			return err
 		}
@@ -70,6 +76,13 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 	}
 
+	return i.applySelected(rt, out, seq)
+}
+
+// applySelected sorts seq, the selection i's select gave, evaluates the
+// parameters and dispatches each item: the rest of Execute, which an apply
+// over copies of streamed matches runs too (streamsplit_l6.go).
+func (i *applyTemplatesInstr) applySelected(rt *runtime, out *outputBuilder, seq xdm.Sequence) error {
 	if len(i.sorts) > 0 {
 		var err error
 		if seq, err = applySorts(rt, seq, i.sorts); err != nil {
@@ -81,6 +94,12 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
+	return i.applyWith(rt, out, seq, params, tunnels)
+}
+
+// applyWith dispatches each item of seq, already sorted, with the
+// parameters evaluated: the rest of applySelected.
+func (i *applyTemplatesInstr) applyWith(rt *runtime, out *outputBuilder, seq xdm.Sequence, params, tunnels paramValues) error {
 
 	if err := rt.descend(); err != nil {
 		return err
@@ -168,6 +187,9 @@ func applyToNode(rt *runtime, node *xdm.Node, mode string,
 	// xsl:apply-templates of its own: the document node it starts from
 	// carries no type annotation to object to, and only the descent into
 	// <book> reaches an element that does.
+	if err := rt.ctx.Err(); err != nil {
+		return err // the built-in rules recurse through here
+	}
 	if err := rt.sheet.checkModeTyped(node, mode); err != nil {
 		return err
 	}
@@ -180,6 +202,14 @@ func applyToNode(rt *runtime, node *xdm.Node, mode string,
 		rt.sheet.warnNoMatch(rt, node, mode)
 		return applyBuiltInRule(rt, node, mode, params, tunnels, out)
 	}
+	return applyRule(rt, node, mode, t, next, params, tunnels, out)
+}
+
+// applyRule runs t, selected for node (applyToNode), next the index to
+// resume the scan after it at.
+func applyRule(rt *runtime, node *xdm.Node, mode string, t *Template, next int,
+	params, tunnels paramValues, out *outputBuilder) error {
+
 	if err := rt.sheet.warnMultipleMatch(
 		rt, node, mode, t, next, rt.ctx); err != nil {
 		return err
@@ -231,7 +261,8 @@ func (s *Stylesheet) findTemplateFrom(node *xdm.Node, mode string,
 	ctx *xpath.Context, start int) (*Template, int, error) {
 
 	if cand, ok := s.candidates(node, mode); ok {
-		for _, i := range cand[sort.SearchInts(cand, start):] {
+		cand.from(start)
+		for i, more := cand.next(); more; i, more = cand.next() {
 			t := s.templates[i]
 			ok, err := t.Match.Matches(node, ctx)
 			if err != nil {
@@ -416,8 +447,7 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 		size, idx := node.NumChildren(), 0
 		for ch := range node.Children() {
 			idx++
-			sub := rt.builtInFocus(mode, ch, idx, size)
-			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
+			if err := applyBuiltInChild(rt, ch, idx, size, mode, params, tunnels, out); err != nil {
 				return err
 			}
 		}
@@ -480,6 +510,11 @@ func runTemplateBody(rt *runtime, t *Template,
 	// into it — which is what makes current-merge-group() in a called template
 	// the XTDE3480 that merge-087 and merge-088 require.
 	sub := rt.clearMergeContext()
+	// The body's context carries its template depth, so that a stylesheet
+	// function it calls, and a template that function applies, continue
+	// the count (runtimeFrom). An xsl:apply-templates's rule has it already
+	// (withCurrent); call-template and next-match make the copy here.
+	sub = sub.withDepth()
 	if t.baseURI != "" {
 		if c := sub.ctx.WithStaticBaseURI(t.baseURI); c != sub.ctx {
 			n := *sub
@@ -740,8 +775,13 @@ type userFunction struct {
 	// an obligation, not a licence: 10.3.7 makes such a function
 	// deterministic in F&O 1.7.4's sense, so two calls with identical
 	// arguments must return identical results -- the SAME nodes, not merely
-	// equal ones.
+	// equal ones. cache="yes" on an elidable function sets it too.
 	deterministic bool
+	// cacheAtomic is cache="yes" on a proactive function: a result is
+	// reused only when it holds no node -- atomic values, alone or in
+	// arrays and maps -- since 10.3.7 makes such a function create new
+	// nodes on each invocation, and a function item may capture nodes.
+	cacheAtomic bool
 	// baseURI is the xsl:function element's base URI; see Template.baseURI.
 	baseURI string
 }
@@ -770,7 +810,7 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	// must be keyed on the setting and not merely be an optimisation.
 	var cacheKey callHash
 	var haveKey bool
-	if f.deterministic {
+	if f.deterministic || f.cacheAtomic {
 		switch k, err := rt.functionCallKey(f, args); {
 		case errors.Is(err, errNotCacheable):
 			// An argument functionCallKey cannot key, so this call is
@@ -819,10 +859,12 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	// the current captured substrings.
 	sub = sub.clearFunctionContext()
 
-	if err := sub.descend(); err != nil {
-		return nil, err
-	}
-	defer sub.ascend()
+	// The body runs at its caller's template depth (runtimeFrom), adding
+	// none: a nest of calls is bounded by the XPath call depth, whose
+	// XPDY0001 it raises (FuncCall.Eval), as an inlined streamed call is
+	// (streamfn_inline.go). Adding one here made a template applied
+	// through a function count two levels where one applied directly
+	// counts one.
 
 	// A stylesheet function's body builds a temporary tree, which is
 	// temporary output state for XTDE1480.
@@ -853,14 +895,58 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	if err != nil {
 		return nil, err
 	}
-	if f.deterministic && haveKey {
+	if haveKey && (f.deterministic || allAtomic(res)) {
 		// Only a successful call is remembered. An error is not a result, and
 		// caching one would make a failure that depended on transient state
 		// -- an unavailable document, say -- permanent for the rest of the
 		// transform.
+		//
+		// What the memo holds stays until the transform ends, so its items
+		// are totalled across calls and checked against the item bound;
+		// each call's body was only bounded on its own. Refusing rather than
+		// not storing: the same-result promise above needs the store.
+		rt.funcResultItems += int64(len(res))
+		if err := sub.ctx.ItemsRefused(rt.funcResultItems); err != nil {
+			return nil, err
+		}
 		rt.funcResults[cacheKey] = res
 	}
 	return res, nil
+}
+
+// allAtomic reports whether seq holds atomic values only, directly or as
+// the members and entries of arrays and maps: such a result holds no node,
+// so reusing it is unobservable. A function item may capture nodes, and
+// nesting past 500 levels is treated like one -- not reused.
+func allAtomic(seq xdm.Sequence) bool { return atomicOnly(seq, 0) }
+
+func atomicOnly(seq xdm.Sequence, depth int) bool {
+	if depth >= 500 {
+		return false
+	}
+	for _, it := range seq {
+		switch it := it.(type) {
+		case *xdm.Atomic:
+		case *xdm.ArrayItem:
+			for _, m := range it.Members() {
+				if !atomicOnly(m, depth+1) {
+					return false
+				}
+			}
+		case *xdm.MapItem:
+			if it.Entries(func(_ *xdm.Atomic, v xdm.Sequence) error {
+				if !atomicOnly(v, depth+1) {
+					return errNotCacheable
+				}
+				return nil
+			}) != nil {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // callHash is the first 128 bits of the SHA-256 of a functionCallKey. The memo
@@ -1050,6 +1136,11 @@ type nextMatchInstr struct {
 }
 
 func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
+	// Streamed (streamapply.go), the next rule runs on the cursor.
+	var run *streamRun
+	if f := rt.burstsFor(i); f != nil && f.apply != nil {
+		run = f.run
+	}
 	name := "xsl:next-match"
 	if i.applyImports {
 		name = "xsl:apply-imports"
@@ -1113,9 +1204,15 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if tunnels == nil {
 		tunnels = rt.selected().tunnels
 	}
+	if run != nil && run.used {
+		return errStreamPlan
+	}
 
 	if t == nil {
 		// Falling off the end of the template list lands on the built-in rule.
+		if run != nil {
+			return run.builtIn(rt, node, rt.selected().mode, params, tunnels, out)
+		}
 		return applyBuiltInRule(rt, node, rt.selected().mode, params, tunnels, out)
 	}
 	if err := rt.descend(); err != nil {
@@ -1123,6 +1220,9 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	defer rt.ascend()
 	sub := rt.withSelection(t, nxt, rt.selected().mode, params, tunnels)
+	if run != nil {
+		return run.rule(sub, t, node, params, tunnels, out)
+	}
 	return runTemplate(sub, t, params, tunnels, out)
 }
 
@@ -1141,8 +1241,7 @@ func builtInDescend(rt *runtime, node *xdm.Node, mode string,
 		size, idx := node.NumChildren(), 0
 		for ch := range node.Children() {
 			idx++
-			sub := rt.builtInFocus(mode, ch, idx, size)
-			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
+			if err := applyBuiltInChild(rt, ch, idx, size, mode, params, tunnels, out); err != nil {
 				return err
 			}
 		}
@@ -1180,20 +1279,56 @@ func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
 	// the identity rule.
 	for idx := range node.NumAttrs() {
 		a := node.AttrAt(idx)
-		an := rt.builtInFocus(mode, a, idx+1, node.NumAttrs())
-		if err := applyToNode(an, a, mode, params, tunnels, out); err != nil {
+		if err := applyBuiltInChild(rt, a, idx+1, node.NumAttrs(), mode, params, tunnels, out); err != nil {
 			return err
 		}
 	}
 	size, idx := node.NumChildren(), 0
 	for ch := range node.Children() {
 		idx++
-		cn := rt.builtInFocus(mode, ch, idx, size)
-		if err := applyToNode(cn, ch, mode, params, tunnels, out); err != nil {
+		if err := applyBuiltInChild(rt, ch, idx, size, mode, params, tunnels, out); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// applyBuiltInChild is applyToNode for node, a child (or attribute) the
+// built-in rule running in rt visits at position pos of size, in
+// builtInFocus's runtime -- made only when something reads it. When every
+// rule that may match node is matched on its kind, name and ancestors alone
+// (bareMatch), no warning-on-no-match is asked for, and the mode's built-in
+// rule is a skip or text-only-copy -- which reads its runtime only to count
+// the depth and as the base of its children's focus, which replaces this
+// one -- a node no rule matches is given the built-in rule in rt. That
+// focus (a runtime, a context and its host) was most of the allocations of
+// a skipping mode with rules (audit A3-3).
+func applyBuiltInChild(rt *runtime, node *xdm.Node, pos, size int, mode string,
+	params, tunnels paramValues, out *outputBuilder) error {
+
+	s := rt.sheet
+	lazy := false
+	switch s.modeNoMatch[mode] {
+	case "shallow-skip", "deep-skip", "text-only-copy", "":
+		lazy = !s.modeWarnNoMatch[mode] && bareMatch(s, node, mode)
+	}
+	if !lazy {
+		return applyToNode(rt.builtInFocus(mode, node, pos, size), node, mode, params, tunnels, out)
+	}
+	if err := rt.ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.checkModeTyped(node, mode); err != nil {
+		return err
+	}
+	t, next, err := s.findTemplateFrom(node, mode, rt.ctx, 0)
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		return applyBuiltInRule(rt, node, mode, params, tunnels, out)
+	}
+	return applyRule(rt.withCurrent(node, pos, size), node, mode, t, next, params, tunnels, out)
 }
 
 // builtInFocus is rt.withCurrent for a child the built-in rules are about to
@@ -1236,7 +1371,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 			// building them and copying them into a document afterwards,
 			// which held the result twice. Should one ever arrive, the
 			// builder raises XTDE0420 as ToDocument does.
-			sub, root := xdmbuild.InPlaceDocument(xsltPolicy{nodes: rt.nodeBudget()})
+			sub, root := inPlaceDocument(rt, out)
 			if err := builtInDescend(rt, node, mode, params, tunnels, sub, false); err != nil {
 				return err
 			}
@@ -1246,7 +1381,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 			root.Tree().Finalize()
 			doc = root
 		} else {
-			sub := newOutputBuilder(rt)
+			sub := documentBuilder(rt, out)
 			if err := builtInDescend(rt, node, mode, params, tunnels, sub, false); err != nil {
 				return err
 			}
@@ -1273,7 +1408,9 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		if out.Open() == nil && sub.Open().BaseURI() == "" {
 			sub.Open().SetBaseURI(node.BaseURI())
 		}
-		copyNamespacesTo(rt, sub, node)
+		var buf [32]nsBinding
+		shared, local := copyShallowScope(rt, sub, node, true, buf[:0]) // nsscope.go
+		defer leaveNS(rt, enterNS(rt, sub.Open(), node, shared, local))
 		// The attributes are processed first so that they reach the element
 		// before any child content closes it to them; section 6.7's rule
 		// selects attributes as well as children.
@@ -1282,19 +1419,18 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		}
 		defer rt.ascend()
 		for a := range node.Attrs() {
-			an := rt.builtInFocus(mode, a, 1, node.NumAttrs())
-			if err := applyToNode(an, a, mode, params, tunnels, sub); err != nil {
+			if err := applyBuiltInChild(rt, a, 1, node.NumAttrs(), mode, params, tunnels, sub); err != nil {
 				return err
 			}
 		}
 		size, idx := node.NumChildren(), 0
 		for ch := range node.Children() {
 			idx++
-			cn := rt.builtInFocus(mode, ch, idx, size)
-			if err := applyToNode(cn, ch, mode, params, tunnels, sub); err != nil {
+			if err := applyBuiltInChild(rt, ch, idx, size, mode, params, tunnels, sub); err != nil {
 				return err
 			}
 		}
+		xdmsink.Release(sub) // its builder is reused once it is written (A3-4)
 		return nil
 	default:
 		// Text, comments, processing instructions and attributes have no

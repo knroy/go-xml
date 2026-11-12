@@ -40,9 +40,10 @@ const (
 // than after it, and because boundary-space policy decides what text a
 // constructor even produces.
 //
-// It is copied on entry to an element constructor, so that namespace
-// declarations on that element go out of scope with it. The copy is shallow
-// and the map is cloned, which is the whole of the scoping discipline.
+// It is copied on entry to an element constructor that declares a namespace,
+// so that the declarations go out of scope with it. The copy is shallow and
+// the two namespace scopes are linked to the parent's rather than cloned; see
+// nsScope.
 type staticContext struct {
 	// xqVersion is the version of XQuery named by the module's version
 	// declaration (§4.1), or defaultXQVersion when it declared none.
@@ -82,7 +83,7 @@ type staticContext struct {
 
 	// ns maps a prefix to the URI bound to it. The XML prefix is bound from
 	// the start, as §4.1 requires, and cannot be rebound.
-	ns map[string]string
+	ns *nsScope
 
 	// defaultElementNS is applied to an unprefixed element name, in a
 	// constructor and in a name test alike. It is not applied to attribute
@@ -146,7 +147,7 @@ type staticContext struct {
 	// *and of every element constructed within it* -- so the inner <e/> of
 	// K2-InScopePrefixesFunc-18 reports p even though nothing in it uses p,
 	// and even before it is attached to anything.
-	ctorNS map[string]string
+	ctorNS *nsScope
 
 	// ctorPrefixes is the union of every constructor namespace declaration in
 	// the module, set on the module's context once the whole module has been
@@ -207,7 +208,7 @@ func newStaticContext() *staticContext {
 		// engine implements 3.1. parseVersionDecl overwrites this when the
 		// module does name a version.
 		xqVersion: defaultXQVersion,
-		ns: map[string]string{
+		ns: &nsScope{own: map[string]string{
 			"xml":   xdm.NSXML,
 			"xs":    xdm.NSXS,
 			"xsi":   xdm.NSXSI,
@@ -224,7 +225,7 @@ func newStaticContext() *staticContext {
 			// prolog may rebind it, which is why it sits in the map rather
 			// than being special-cased at lookup.
 			"err": xdm.NSErr,
-		},
+		}},
 		defaultFunctionNS: xdm.NSFN,
 		boundarySpace:     StripSpace,
 		construction:      PreserveTypes,
@@ -241,25 +242,74 @@ const nsLocal = "http://www.w3.org/2005/xquery-local-functions"
 // disturbing the parent.
 //
 // Element constructors nest, and a namespace declared on an inner element is
-// out of scope on the way back out. Copying on the way in is cheaper than
+// out of scope on the way back out. A new scope on the way in is cheaper than
 // unwinding on the way out and cannot be got wrong by an early return.
+//
+// The scopes are linked, not cloned. A clone cost every element the whole
+// map, and the element kept its copy in its AST, so K declarations on an
+// outer element and N children retained K*N entries from K+N of query text.
 func (sc *staticContext) child() *staticContext {
 	c := *sc
-	c.ns = make(map[string]string, len(sc.ns))
-	for k, v := range sc.ns {
-		c.ns[k] = v
-	}
-	c.ctorNS = make(map[string]string, len(sc.ctorNS)+1)
-	for k, v := range sc.ctorNS {
-		c.ctorNS[k] = v
-	}
+	c.ns = &nsScope{parent: sc.ns}
+	c.ctorNS = &nsScope{parent: sc.ctorNS}
 	return &c
+}
+
+// nsScope is one level of prefix bindings over its parent's: a binding here
+// shadows the parent's, and the empty URI records an undeclaration, which no
+// binding can otherwise have (§3.9.1.2 makes a prefixed one XQST0085, and the
+// default namespace is not kept here). A scope is never changed once a child
+// has been linked to it, except at module level by the prolog, which runs
+// before any constructor.
+//
+// ponytail: a lookup walks the chain, which is as long as the run of nested
+// constructors that declare a namespace; a persistent map would make it
+// logarithmic if that nesting is ever deep in practice.
+type nsScope struct {
+	own    map[string]string
+	parent *nsScope
+}
+
+// lookup returns the URI bound to prefix in scope.
+func (s *nsScope) lookup(prefix string) (string, bool) {
+	for ; s != nil; s = s.parent {
+		if uri, ok := s.own[prefix]; ok {
+			return uri, uri != ""
+		}
+	}
+	return "", false
+}
+
+// set binds prefix in this scope; the empty URI undeclares it.
+func (s *nsScope) set(prefix, uri string) {
+	if s.own == nil {
+		s.own = map[string]string{}
+	}
+	s.own[prefix] = uri
+}
+
+// flatten returns every binding in scope as one map, for evaluation.
+func (s *nsScope) flatten() map[string]string {
+	var chain []*nsScope
+	for ; s != nil; s = s.parent {
+		chain = append(chain, s)
+	}
+	out := map[string]string{}
+	for i := len(chain) - 1; i >= 0; i-- {
+		for k, v := range chain[i].own {
+			if v == "" {
+				delete(out, k)
+			} else {
+				out[k] = v
+			}
+		}
+	}
+	return out
 }
 
 // ResolvePrefix implements xpath.NamespaceResolver.
 func (sc *staticContext) ResolvePrefix(prefix string) (string, bool) {
-	uri, ok := sc.ns[prefix]
-	return uri, ok
+	return sc.ns.lookup(prefix)
 }
 
 // DefaultElementNamespace implements xpath.NamespaceResolver.
@@ -292,7 +342,7 @@ func (sc *staticContext) bind(prefix, uri string) error {
 		return fmt.Errorf("XQST0070: only the prefix %q may be bound to %q",
 			"xml", xdm.NSXML)
 	}
-	sc.ns[prefix] = uri
+	sc.ns.set(prefix, uri)
 	return nil
 }
 
@@ -305,7 +355,7 @@ func (sc *staticContext) resolveElementName(prefix, local string) (xdm.QName, er
 	if prefix == "" {
 		return xdm.QName{URI: sc.defaultElementNS, Local: local}, nil
 	}
-	uri, ok := sc.ns[prefix]
+	uri, ok := sc.ns.lookup(prefix)
 	if !ok {
 		return xdm.QName{}, fmt.Errorf(
 			"XPST0081: the prefix %q is not bound to a namespace", prefix)
@@ -323,7 +373,7 @@ func (sc *staticContext) resolveAttributeName(prefix, local string) (xdm.QName, 
 	if prefix == "" {
 		return xdm.QName{Local: local}, nil
 	}
-	uri, ok := sc.ns[prefix]
+	uri, ok := sc.ns.lookup(prefix)
 	if !ok {
 		return xdm.QName{}, fmt.Errorf(
 			"XPST0081: the prefix %q is not bound to a namespace", prefix)

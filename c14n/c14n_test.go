@@ -2,6 +2,7 @@ package c14n
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"io"
@@ -503,6 +504,220 @@ func TestFromXPathEnvelopedSignature(t *testing.T) {
 	want := "<?p?>\n<doc xmlns=\"urn:d\" xmlns:ds=\"" + dsigNS + "\" xml:lang=\"en\"><!--c--><item id=\"1\">v</item><tail></tail></doc>"
 	if got := canonSet(t, ExcludeSubtree(doc, sig), Inclusive10WithComments); got != want {
 		t.Errorf("enveloped:\n got %q\nwant %q", got, want)
+	}
+}
+
+// hereXPath is XML-DSig section 6.6.4's enveloped-signature filter written
+// with here(): it drops only the ds:Signature that bears the expression.
+const hereXPath = `count(ancestor-or-self::dsig:Signature | here()/ancestor::dsig:Signature[1]) > count(ancestor-or-self::dsig:Signature)`
+
+// The here() filter, with here the text node of the ds:XPath element that
+// bears it. want is xmlsec1 1.2.41's (Debian trixie) pre-digest output for
+// the same document signed with this filter as the Reference's one
+// transform, C14N 1.0 after it: the bearing signature goes, the other
+// ds:Signature stays.
+func TestFromXPathFilterHereEnvelopedSignature(t *testing.T) {
+	doc := parse(t, `<doc xmlns="urn:d" xml:lang="en"><!--c--><item id="1">v</item><ds:Signature xmlns:ds="`+dsigNS+`"><ds:SignedInfo><ds:Reference URI=""><ds:Transforms><ds:Transform Algorithm="http://www.w3.org/TR/1999/REC-xpath-19991116"><ds:XPath xmlns:dsig="`+dsigNS+`">`+
+		strings.ReplaceAll(hereXPath, ">", "&gt;")+`</ds:XPath></ds:Transform></ds:Transforms></ds:Reference></ds:SignedInfo></ds:Signature><other><ds:Signature xmlns:ds="`+dsigNS+`" Id="o">kept</ds:Signature></other></doc>`)
+	text := find(t, doc, "XPath").FirstChild()
+	set, err := FromXPathFilterHere(context.Background(), doc, text, hereXPath, map[string]string{"dsig": dsigNS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `<doc xmlns="urn:d" xml:lang="en"><item id="1">v</item><other><ds:Signature xmlns:ds="` + dsigNS + `" Id="o">kept</ds:Signature></other></doc>`
+	if got := canonSet(t, set, Inclusive10); got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+// here() returns the parent element of a text node passed as here, refuses a
+// node outside doc's tree, and is an unknown function without a here node.
+func TestFromXPathHere(t *testing.T) {
+	ctx := context.Background()
+	doc := parse(t, `<r><x>t</x><y a="1"/></r>`)
+	x := find(t, doc, "x")
+	set, err := FromXPathHere(ctx, doc, x.FirstChild(), "here()", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !set.Contains(x) || set.Contains(x.FirstChild()) {
+		t.Errorf("here() of a text node: element in set %v, text in set %v", set.Contains(x), set.Contains(x.FirstChild()))
+	}
+	attr := find(t, doc, "y").Attr("", "a")
+	set, err = FromXPathHere(ctx, doc, attr, "here()", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !set.Contains(attr) {
+		t.Error("here() of an attribute is not the attribute")
+	}
+
+	outside := find(t, parse(t, `<r><x>t</x></r>`), "x").FirstChild()
+	if _, err := FromXPathHere(ctx, doc, outside, "here()", nil); err == nil || !strings.Contains(err.Error(), "not in the document") {
+		t.Errorf("FromXPathHere outside node: err = %v", err)
+	}
+	if _, err := FromXPathFilterHere(ctx, doc, outside, "true()", nil); err == nil || !strings.Contains(err.Error(), "not in the document") {
+		t.Errorf("FromXPathFilterHere outside node: err = %v", err)
+	}
+
+	for name, f := range map[string]func() (NodeSet, error){
+		"FromXPath":           func() (NodeSet, error) { return FromXPath(doc, "here()", nil) },
+		"FromXPathFilter":     func() (NodeSet, error) { return FromXPathFilter(doc, "here()", nil) },
+		"FromXPathHere":       func() (NodeSet, error) { return FromXPathHere(ctx, doc, nil, "here()", nil) },
+		"FromXPathFilterHere": func() (NodeSet, error) { return FromXPathFilterHere(ctx, doc, nil, "here()", nil) },
+	} {
+		if _, err := f(); err == nil || !strings.Contains(err.Error(), "XPST0017") {
+			t.Errorf("%s with no here node: err = %v, want an unknown-function error", name, err)
+		}
+	}
+}
+
+// XML-DSig transforms are XPath 1.0, where a relational comparison of two
+// attribute values converts both to numbers: "10" < "9" is false. Under plain
+// XPath 2.0 the untyped operands compare as strings and it is true.
+func TestXPathTransformsUseXPath10Comparison(t *testing.T) {
+	doc := parse(t, `<r><i p="10" m="9">A</i><i p="5" m="9">B</i></r>`)
+	set, err := FromXPathFilter(doc, `not(ancestor-or-self::i[@p < @m])`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := canonSet(t, set, Inclusive10), `<r><i m="9" p="10">A</i></r>`; got != want {
+		t.Errorf("FromXPathFilter:\n got %q\nwant %q", got, want)
+	}
+	set, err = FromXPath(doc, `//i[@p < @m]`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := canonSet(t, set, Inclusive10), `<i></i>`; got != want {
+		t.Errorf("FromXPath:\n got %q\nwant %q", got, want)
+	}
+}
+
+// The XPath 1.0 behaviours an XML-DSig filter relies on (XPath 1.0 §3.4
+// comparisons, §4.2 number(), §4.3 boolean(), §4.1 count(), §5.4 namespace
+// nodes per element), under the XPath 1.0 evaluation FromXPathFilter uses.
+// Each want is xmlsec1 1.2.41's pre-digest output for the same ds:Reference
+// (enveloped signature, this filter, C14N 1.0), so a difference here is a
+// difference from libxml2's XPath 1.0 engine.
+func TestXPathFilterXPath10Semantics(t *testing.T) {
+	const src = `<r xmlns:a="urn:a" xmlns:b="urn:b"><x n="10">5</x><y n="abc"/><z/></r>`
+	for _, tc := range []struct{ filter, want string }{
+		// A node-set converts to boolean by emptiness; | unions two of them.
+		{`not(ancestor-or-self::y | ancestor-or-self::z)`, `<r xmlns:a="urn:a" xmlns:b="urn:b"><x n="10">5</x></r>`},
+		// A node-set against a number compares number(string(node)): "abc" is NaN.
+		{`not(ancestor-or-self::*[@n > 5])`, `<r xmlns:a="urn:a" xmlns:b="urn:b"><y n="abc"></y><z></z></r>`},
+		{`not(ancestor-or-self::*[@n = 10.0])`, `<r xmlns:a="urn:a" xmlns:b="urn:b"><y n="abc"></y><z></z></r>`},
+		// < converts both operands to numbers, even a string: 5 < 10, where "5" < "10" is false.
+		{`not(ancestor-or-self::x[. < "10"])`, `<r xmlns:a="urn:a" xmlns:b="urn:b"><y n="abc"></y><z></z></r>`},
+		// Arithmetic on an empty node-set is NaN, and NaN != NaN is true.
+		{`not(@n + 0 != @n + 0)`, `<x></x>`},
+		// Each element has its own namespace nodes: . is in ../namespace::* only for namespace nodes.
+		{`count(. | ../namespace::*) != count(../namespace::*) or name() != 'b'`, `<r xmlns:a="urn:a"><x n="10">5</x><y n="abc"></y><z></z></r>`},
+		// A child's namespace nodes are distinct from its parent's, so the union doubles the count.
+		{`not(self::*) or count(namespace::* | ../namespace::*) = 2 * count(namespace::*)`,
+			` xmlns:a="urn:a" xmlns:b="urn:b"<x xmlns:a="urn:a" xmlns:b="urn:b" n="10">5</x><y xmlns:a="urn:a" xmlns:b="urn:b" n="abc"></y><z xmlns:a="urn:a" xmlns:b="urn:b"></z>`},
+		{`count(ancestor::*) != 1 or count(@*) = 0`, `<r xmlns:a="urn:a" xmlns:b="urn:b"> n="10"5 n="abc"<z></z></r>`},
+	} {
+		if got := canonFilter(t, src, tc.filter, nil, Inclusive10); got != tc.want {
+			t.Errorf("%s\n got %q\nwant %q", tc.filter, got, tc.want)
+		}
+	}
+}
+
+// P1. XPath 2.0 Appendix I lists where 1.0 compatibility mode still differs
+// from XPath 1.0 (from memory; the appendix is not vendored). Each row is an
+// expression a filter can reach whose value under FromXPathFilter is the XPath
+// 1.0 value: the compatibility rules for comparisons (§3.5.2, boolean and
+// relational operands), arithmetic as xs:double, and the 1.0 rounding,
+// substring and mod rules. They held under compatibility mode alone and must
+// still hold under the 1.0 number model the filters now use.
+func TestXPathFilterCompatModeAgreesWithXPath10(t *testing.T) {
+	doc := parse(t, `<r n="abc"/>`)
+	r := doc.ChildElements()[0]
+	for _, ex := range []string{
+		`@n = true()`,                            // node-set vs boolean is boolean(node-set)
+		`@zz = false()`,                          // an empty node-set is false
+		`"5" < "10"`,                             // < compares numbers, not strings
+		`"abc" != 0`,                             // NaN against a number
+		`"a" != "A"`,                             // codepoint equality
+		`string(7 div 2) = "3.5"`,                // div is double division
+		`string(1 div 3) = "0.3333333333333333"`, // shortest round-trip digits
+		`string(0.1 + 0.2) = "0.30000000000000004"`,  // arithmetic as double
+		`substring("12345", 1.5, 2.6) = "234"`,       // round() on the bounds
+		`substring("12345", 0 div 0, 3) = ""`,        // NaN start selects nothing
+		`substring("12345", -1 div 0, 1 div 0) = ""`, // -INF + INF is NaN
+		`string(round(-2.5)) = "-2"`,                 // round half towards +INF
+		`string(-5 mod 3) = "-2"`,                    // mod takes the dividend's sign
+		`number(" 12 ") = 12 and number("12.") = 12`, // the 1.0 Number production
+		`string(number("abc")) = "NaN"`,              // NaN's string value
+		`boolean(0 div 0) = false()`,                 // NaN is false
+		`string(4 div 2) = "2"`,                      // an integral double has no ".0"
+	} {
+		set, err := FromXPathFilter(doc, `self::r and (`+ex+`)`, nil)
+		if err != nil {
+			t.Errorf("%s: %v", ex, err)
+			continue
+		}
+		if !set.Contains(r) {
+			t.Errorf("%s is false; XPath 1.0 says true", ex)
+		}
+	}
+	// The rows where compatibility mode and XPath 1.0 differ are asserted by
+	// TestXPathFilterXPath10NumberModel, which the filters now compile with
+	// xpath.CompileOptions.XPath10.
+}
+
+// The rows where XPath 2.0 compatibility mode differs from XPath 1.0, which
+// the filters now evaluate by the 1.0 number model (xpath.CompileOptions.
+// XPath10). Sections are XPath 1.0's, from memory. Each row was a different
+// node-set or an error before.
+func TestXPathFilterXPath10NumberModel(t *testing.T) {
+	doc := parse(t, `<r n="abc" p="+1" e="1e3"/>`)
+	r := doc.ChildElements()[0]
+	for _, ex := range []string{
+		// §4.2 number(): optional whitespace, optional "-", a Number, optional
+		// whitespace; "any other string is converted to NaN".
+		`string(number("+1")) = "NaN"`,
+		`string(number("1e3")) = "NaN"`,
+		`string(number("INF")) = "NaN"`,
+		`not(@p > 0) and not(@e > 5)`, // the same conversion inside a comparison
+		`number(" -.5 ") = -0.5`,
+		// §4.2 string(): an integer has no decimal point and no exponent,
+		// infinities are "Infinity"/"-Infinity", negative zero is "0", and a
+		// non-integer is decimal with only as many digits as distinguish it.
+		`string(10000 * 1000) = "10000000"`,
+		`string(1 div 0) = "Infinity"`,
+		`string(-1 div 0) = "-Infinity"`,
+		`string(0 * -1) = "0"`,
+		`string(1 div 10000000) = "0.0000001"`,
+		`concat(1 div 0, "") = "Infinity"`,
+		`string-length(10000 * 1000) = 8`,
+		// §3.7 Number ::= Digits ('.' Digits?)? | '.' Digits: every number is a
+		// double, so a large integer literal is the nearest double.
+		`string(12345678901234567890) = "12345678901234567168"`,
+		// §4.4 sum(): each node's string-value converted to a number.
+		`string(sum(@n)) = "NaN"`,
+		// §3.4: relational operators are left-associative and convert both
+		// operands to numbers, a boolean included: (1 < 2) < 3 is 1 < 3.
+		`1 < 2 < 3`,
+		`not(3 > 2 > 1)`,
+		`true() > 0.5`,
+		`not(0 = 1 < 2)`, // = binds looser than <: 0 = (1 < 2), not (0 = 1) < 2
+		// §3.7: an OperatorName may follow a Number without whitespace.
+		`10div 2 = 5`,
+	} {
+		set, err := FromXPathFilter(doc, `self::r and (`+ex+`)`, nil)
+		if err != nil {
+			t.Errorf("%s: %v", ex, err)
+			continue
+		}
+		if !set.Contains(r) {
+			t.Errorf("%s is false; XPath 1.0 says true", ex)
+		}
+	}
+	// FromXPath compiles the same way.
+	if _, err := FromXPath(doc, `//*[1 < 2 < 3]`, nil); err != nil {
+		t.Errorf("FromXPath: %v", err)
 	}
 }
 

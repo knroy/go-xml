@@ -626,3 +626,113 @@ func TestNamespaceScopeNotQuadratic(t *testing.T) {
 			"elements that declare nothing are scanning the scope again", decls, elements, c.considered, bound)
 	}
 }
+
+// TestExclusivePrefixListNotPerElement bounds the work an Exclusive C14N
+// PrefixList costs. Every in-set element used to consider every listed
+// prefix, though a prefix not in scope, or already rendered with its value,
+// renders nothing: (elements × PrefixList) with no output for it. Now an
+// element considers only the listed prefixes whose binding differs from what
+// is rendered.
+func TestExclusivePrefixListNotPerElement(t *testing.T) {
+	const elements, listed = 2000, 2000
+	prefixes := make([]string, listed)
+	for i := range prefixes {
+		prefixes[i] = fmt.Sprintf("q%d", i)
+	}
+	// One listed prefix is in scope, so it renders once, at r.
+	prefixes[0] = "p"
+	doc := parse(t, `<r xmlns:p="urn:p">`+strings.Repeat("<a/>", elements)+`</r>`)
+	var out strings.Builder
+	c, err := run(&out, Document(doc), Options{Algorithm: Exclusive10, InclusiveNamespacePrefixes: prefixes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound := 2*(elements+1) + listed; c.considered > bound {
+		t.Errorf("%d listed prefixes over %d elements considered %d, bound %d",
+			listed, elements, c.considered, bound)
+	}
+	if want := `<r xmlns:p="urn:p">` + strings.Repeat("<a></a>", elements) + `</r>`; out.String() != want {
+		t.Errorf("output changed: %.80s", out.String())
+	}
+}
+
+// TestInheritedXMLAttrsNotQuadratic bounds the work of inheriting K xml:*
+// attributes, every one of which C14N 1.0 carries onto an apex. Each was
+// deduplicated by scanning the list built so far, and again against the apex's
+// own attributes, so the cost grew as K^2 per apex; it now uses a set, and the
+// work counted in inspected is the attributes read, once each.
+func TestInheritedXMLAttrsNotQuadratic(t *testing.T) {
+	const k, apexes = 4000, 4
+	var b strings.Builder
+	b.WriteString("<r")
+	for i := range k {
+		fmt.Fprintf(&b, ` xml:a%d=""`, i)
+	}
+	b.WriteString("><s>")
+	b.WriteString(strings.Repeat(`<b xml:a0="own"/>`, apexes))
+	b.WriteString("</s></r>")
+	ns, err := FromXPath(parse(t, b.String()), "//b | //b/@*", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	c, err := run(&out, ns, Options{Algorithm: Inclusive10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound := 2*k + 2*apexes; c.inspected > bound {
+		t.Errorf("%d inherited attributes over %d apexes inspected %d, bound %d", k, apexes, c.inspected, bound)
+	}
+	// Each apex keeps its own xml:a0 and inherits the other k-1.
+	if got := strings.Count(out.String(), `xml:a0="own"`); got != apexes {
+		t.Errorf("%d apexes kept their own xml:a0, want %d", got, apexes)
+	}
+	if got := strings.Count(out.String(), `xml:a1=""`); got != apexes {
+		t.Errorf("%d apexes inherited xml:a1, want %d", got, apexes)
+	}
+}
+
+// TestApexesDoNotRescanScope bounds the work at apexes: elements in the set
+// whose parent is not. Under '/r | //b' every b is one. Each used to scan
+// every binding in scope and every attribute of every ancestor, though r had
+// already rendered the bindings and none of the attributes is inheritable, so
+// the work grew as (apexes × bindings) with nothing written for it. Now an
+// apex considers only the bindings that differ from what is rendered, and
+// what it inherits is computed once per parent.
+func TestApexesDoNotRescanScope(t *testing.T) {
+	const decls, attrs, apexes = 1000, 1000, 2000
+	var b strings.Builder
+	b.WriteString(`<r xml:lang="en"`)
+	for i := 0; i < decls; i++ {
+		fmt.Fprintf(&b, ` xmlns:p%d="urn:%d"`, i, i)
+	}
+	for i := 0; i < attrs; i++ {
+		fmt.Fprintf(&b, ` a%d="v"`, i)
+	}
+	b.WriteString("><s>")
+	b.WriteString(strings.Repeat("<b/>", apexes))
+	b.WriteString("</s></r>")
+	doc := parse(t, b.String())
+	ns, err := FromXPath(doc, "/r | //b", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, alg := range []Algorithm{Inclusive10, Inclusive11} {
+		var out strings.Builder
+		c, err := run(&out, ns, Options{Algorithm: alg})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bound := decls + apexes; c.considered > bound {
+			t.Errorf("%v: %d apexes under %d bindings examined %d bindings, bound %d",
+				alg, apexes, decls, c.considered, bound)
+		}
+		if bound := 2*(attrs+1) + apexes; c.inspected > bound {
+			t.Errorf("%v: %d apexes under %d attributes inspected %d, bound %d",
+				alg, apexes, attrs, c.inspected, bound)
+		}
+		if got := strings.Count(out.String(), `<b xml:lang="en"></b>`); got != apexes {
+			t.Errorf("%v: %d apexes rendered with their inherited xml:lang, want %d", alg, got, apexes)
+		}
+	}
+}

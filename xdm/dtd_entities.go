@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"math"
 	"strconv"
 	"strings"
 
@@ -120,10 +121,10 @@ func (t *entityTable) total() int { return t.budget.spent }
 // expanded past the ceiling.
 func (t *entityTable) charge(n int) error {
 	t.budget.spent += n
-	if t.budget.spent > maxTotalEntityBytes {
+	if t.budget.spent > t.lim.total {
 		return fmt.Errorf(
 			"entity expansion exceeds %d bytes in total: %w",
-			maxTotalEntityBytes, ErrResourceLimit)
+			t.lim.total, ErrResourceLimit)
 	}
 	return nil
 }
@@ -147,6 +148,9 @@ type entityTable struct {
 	// boundary because the proc is one object. The byte budget has no such
 	// object to live on, so it is threaded explicitly instead.
 	budget *entityBudget
+	// lim holds the expansion and fetch limits this table enforces,
+	// resolved from ParseOptions; see ParseOptions.entityLimits.
+	lim entityLimits
 	// resolver, when non-nil, permits external entities to be read. It is
 	// nil by default and is NOT implied by AllowDOCTYPE — see dtd_external.go
 	// for why those two are separate gates.
@@ -201,6 +205,25 @@ type entityTable struct {
 	// doing it here as well turns "&amp;lt;" into "<", manufacturing markup
 	// out of data the document escaped.
 	reparsed bool
+
+	// outside names the general entities declared only in the external
+	// subset (see mergeUnder), and standalone says the document declared
+	// standalone="yes". Together they are WFC: Entity Declared: resolve
+	// refuses a reference to an outside entity in a standalone document.
+	outside    map[string]bool
+	standalone bool
+	// peSpans are where, in the internal subset as expandParameterEntities
+	// returned it, parameter entities' replacement text was substituted, in
+	// order: what lies in them is an external markup declaration (XML 1.0
+	// §2.9), however internal the entity.
+	peSpans [][2]int
+
+	// contentErr memoises contentOK per entity, and stubs is the entity map
+	// its tokeniser reads nested references through.
+	contentErr map[string]error
+	stubs      map[string]string
+	// attrErr memoises attrRefOK per entity.
+	attrErr map[string]error
 }
 
 // parseInternalEntities reads the <!ENTITY ...> declarations out of a DOCTYPE
@@ -209,26 +232,26 @@ type entityTable struct {
 // A parameter entity — "<!ENTITY % name ...>" — is skipped. Parameter entities
 // are expanded inside the DTD itself rather than in content, and reading one
 // would mean interpreting the subset as a grammar rather than scanning it.
-func parseInternalEntities(subset string) *entityTable {
-	return parseEntityDecls(subset, "", nil)
+func parseInternalEntities(subset string, lim entityLimits) *entityTable {
+	return parseEntityDecls(subset, "", nil, lim)
 }
 
 // parseEntityDecls reads entity declarations, recording base as the URI that
 // external system identifiers in them resolve against. Declarations read from
 // an external subset carry that subset's URI, per XML section 4.4.3.
-func parseEntityDecls(subset, base string, b *entityBudget) *entityTable {
-	t := newEntityTable(base, b)
+func parseEntityDecls(subset, base string, b *entityBudget, lim entityLimits) *entityTable {
+	t := newEntityTable(base, b, lim)
 	t.subsetText = subset
 	return t.parseDecls(subset, base)
 }
 
 // newEntityTable returns an empty table whose external system identifiers
-// resolve against base, sharing the expansion budget b.
+// resolve against base, sharing the expansion budget b and bounded by lim.
 //
 // A nil b mints a fresh budget, which is right for a parse that is nobody's
 // nested document. A caller that IS parsing on behalf of an outer document —
 // XInclude, above all — passes the outer budget so the ceiling spans both.
-func newEntityTable(base string, b *entityBudget) *entityTable {
+func newEntityTable(base string, b *entityBudget, lim entityLimits) *entityTable {
 	if b == nil {
 		b = &entityBudget{}
 	}
@@ -239,6 +262,7 @@ func newEntityTable(base string, b *entityBudget) *entityTable {
 		externalBase: map[string]string{},
 		docBase:      base,
 		budget:       b,
+		lim:          lim,
 	}
 }
 
@@ -247,7 +271,7 @@ func (t *entityTable) parseDecls(subset, base string) *entityTable {
 		if kw != "ENTITY" {
 			continue
 		}
-		if len(t.raw)+len(t.external) >= maxEntityCount {
+		if len(t.raw)+len(t.external) >= t.lim.count {
 			break
 		}
 		body = strings.TrimSpace(body)
@@ -331,57 +355,88 @@ func (t *entityTable) parseDecls(subset, base string) *entityTable {
 // seen, as they were before.
 func markupDecls(subset string) iter.Seq2[string, string] {
 	return func(yield func(string, string) bool) {
-		s := subset
-		for i := 0; i < len(s); {
-			rest := s[i:]
-			switch {
-			case strings.HasPrefix(rest, "<!--"):
-				// A comment is yielded as "--" and its body, for the [15]
-				// check; an unterminated one ends the scan.
-				j := strings.Index(s[i+len("<!--"):], "-->")
-				if j < 0 {
-					return
-				}
-				if !yield("--", s[i+len("<!--"):i+len("<!--")+j]) {
-					return
-				}
-				i += len("<!--") + j + len("-->")
-			case strings.HasPrefix(rest, "<?"):
-				i = skipPast(s, i+len("<?"), "?>")
-			case strings.HasPrefix(rest, "<!["):
-				i += len("<![")
-			case strings.HasPrefix(rest, "<!"):
-				j := i + len("<!")
-				for j < len(s) && 'A' <= s[j] && s[j] <= 'Z' {
-					j++
-				}
-				end := endOfDeclaration(s[j:])
-				if end < 0 {
-					return
-				}
-				if !yield(s[i+len("<!"):j], s[j:j+end]) {
-					return
-				}
-				i = j + end + 1
-			case s[i] == '"' || s[i] == '\'':
-				i = skipPast(s, i+1, s[i:i+1])
-			case s[i] == '%':
-				// A parameter-entity reference between declarations is
-				// yielded with the keyword "%" and its name.
-				j := strings.IndexByte(rest, ';')
-				if j > 1 && isEntityName(rest[1:j]) {
-					if !yield("%", rest[1:j]) {
-						return
-					}
-					i += j + 1
-					continue
-				}
-				i++
-			default:
-				i++
+		scanMarkupDecls(subset, func(_ int, kw, body string) bool { return yield(kw, body) })
+	}
+}
+
+// scanMarkupDecls is markupDecls with the offset in subset at which each item
+// begins: the "<!" of a declaration or comment, the "%" of a reference.
+func scanMarkupDecls(subset string, yield func(at int, kw, body string) bool) {
+	s := subset
+	semis := semiFinder{s: s, at: -1}
+	for i := 0; i < len(s); {
+		rest := s[i:]
+		switch {
+		case strings.HasPrefix(rest, "<!--"):
+			// A comment is yielded as "--" and its body, for the [15]
+			// check; an unterminated one ends the scan.
+			j := strings.Index(s[i+len("<!--"):], "-->")
+			if j < 0 {
+				return
 			}
+			if !yield(i, "--", s[i+len("<!--"):i+len("<!--")+j]) {
+				return
+			}
+			i += len("<!--") + j + len("-->")
+		case strings.HasPrefix(rest, "<?"):
+			i = skipPast(s, i+len("<?"), "?>")
+		case strings.HasPrefix(rest, "<!["):
+			i += len("<![")
+		case strings.HasPrefix(rest, "<!"):
+			j := i + len("<!")
+			for j < len(s) && 'A' <= s[j] && s[j] <= 'Z' {
+				j++
+			}
+			end := endOfDeclaration(s[j:])
+			if end < 0 {
+				return
+			}
+			if !yield(i, s[i+len("<!"):j], s[j:j+end]) {
+				return
+			}
+			i = j + end + 1
+		case s[i] == '"' || s[i] == '\'':
+			i = skipPast(s, i+1, s[i:i+1])
+		case s[i] == '%':
+			// A parameter-entity reference between declarations is
+			// yielded with the keyword "%" and its name.
+			j := semis.from(i)
+			if j > 1 && isEntityName(rest[1:j]) {
+				if !yield(i, "%", rest[1:j]) {
+					return
+				}
+				i += j + 1
+				continue
+			}
+			i++
+		default:
+			i++
 		}
 	}
+}
+
+// semiFinder finds the next ";" for a scan that only moves forward. It keeps
+// the last one found, so a run of "&" or "%" with no ";" after them, or with
+// one far away, costs one search in all rather than one per character, which
+// was quadratic in the run.
+type semiFinder struct {
+	s  string
+	at int // the ";" found by the last search, len(s) for none, -1 before any
+}
+
+// from returns the offset from i of the first ";" at or after i, or -1. i
+// must not be less than in the previous call.
+func (f *semiFinder) from(i int) int {
+	if f.at < i {
+		f.at = len(f.s)
+		if j := strings.IndexByte(f.s[i:], ';'); j >= 0 {
+			f.at = i + j
+		}
+	}
+	if f.at == len(f.s) {
+		return -1
+	}
+	return f.at - i
 }
 
 // skipPast returns the offset just past the first end at or after i, or
@@ -436,6 +491,13 @@ func isEntityName(s string) bool {
 // function, so the expansion is done once up front for every declared entity
 // and the result handed over as a plain map.
 func (t *entityTable) resolve(name string) (string, error) {
+	// XML 1.0 §4.1, WFC: Entity Declared: in a standalone document a
+	// reference must match a declaration "that does not occur within the
+	// external subset or a parameter entity".
+	if t.standalone && t.outside[name] {
+		return "", fmt.Errorf("entity %q is declared in the external subset or a "+
+			"parameter entity, and the document says standalone=\"yes\" (WFC: Entity Declared)", name)
+	}
 	if s, ok := t.expanded[name]; ok {
 		return s, nil
 	}
@@ -453,6 +515,9 @@ func (t *entityTable) resolve(name string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if err := t.contentOK(name, text); err != nil {
+			return "", err
+		}
 		t.expanded[name] = ""
 		out, err := t.expand(text, 0, map[string]bool{name: true}, false)
 		if err != nil {
@@ -468,6 +533,9 @@ func (t *entityTable) resolve(name string) (string, error) {
 	}
 	// A placeholder guards against a cycle: an entity that refers to itself,
 	// directly or through others, would otherwise recurse forever.
+	if err := t.contentOK(name, replacementText(raw)); err != nil {
+		return "", err
+	}
 	t.expanded[name] = ""
 	out, err := t.expand(replacementText(raw), 0, map[string]bool{name: true}, false)
 	if err != nil {
@@ -487,11 +555,12 @@ func (t *entityTable) resolve(name string) (string, error) {
 // replacement text recursively: its literal TAB, LF and CR become spaces,
 // while a character written as a reference inside it is kept.
 func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr bool) (string, error) {
-	if depth > maxEntityDepth {
+	if depth > t.lim.depth {
 		return "", fmt.Errorf("entity expansion exceeds %d levels: %w",
-			maxEntityDepth, ErrResourceLimit)
+			t.lim.depth, ErrResourceLimit)
 	}
 	var sb strings.Builder
+	semis := semiFinder{s: s, at: -1}
 	for i := 0; i < len(s); {
 		c := s[i]
 		// "&foo;" inside a CDATA section or a comment is text, not a
@@ -516,11 +585,12 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 			i++
 			continue
 		}
-		j := strings.IndexByte(s[i:], ';')
+		// Replacement text is parsed (XML 1.0 §4.5), so a "&" in it begins a
+		// reference: one decoded from "&#38;" with nothing after it to name
+		// is not well formed wherever the entity is referenced.
+		j := semis.from(i)
 		if j < 0 {
-			sb.WriteByte(c)
-			i++
-			continue
+			return "", fmt.Errorf("entity replacement text has an & that begins no reference")
 		}
 		name := s[i+1 : i+j]
 		// s is replacement text: the character references written in the
@@ -569,6 +639,13 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 		if seen[name] {
 			return "", fmt.Errorf("entity %q refers to itself", name)
 		}
+		// Every nested reference costs at least its own length, so a ladder
+		// whose leaves are empty still spends the budget: resolve charges
+		// only the expanded length, which for <!ENTITY a0 ''> and each
+		// <!ENTITY aN '&aN-1;&aN-1;'> is zero across 2^N expansions.
+		if err := t.charge(j + 1); err != nil {
+			return "", err
+		}
 		if t.external[name] && attr {
 			return "", fmt.Errorf("external entity %q is referenced in an attribute value", name)
 		}
@@ -582,6 +659,11 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 			if err != nil {
 				return "", err
 			}
+			if !attr {
+				if err := t.contentOK(name, text); err != nil {
+					return "", err
+				}
+			}
 			seen[name] = true
 			sub, err := t.expand(text, depth+1, seen, attr)
 			delete(seen, name)
@@ -589,10 +671,10 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 				return "", err
 			}
 			sb.WriteString(sub)
-			if sb.Len() > maxEntityBytes {
+			if sb.Len() > t.lim.bytes {
 				return "", fmt.Errorf(
 					"entity expansion exceeds %d bytes: %w",
-					maxEntityBytes, ErrResourceLimit)
+					t.lim.bytes, ErrResourceLimit)
 			}
 			i += j + 1
 			continue
@@ -601,6 +683,11 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 		if !ok {
 			return "", fmt.Errorf("entity %q is not declared", name)
 		}
+		if !attr {
+			if err := t.contentOK(name, replacementText(raw)); err != nil {
+				return "", err
+			}
+		}
 		seen[name] = true
 		sub, err := t.expand(replacementText(raw), depth+1, seen, attr)
 		delete(seen, name)
@@ -608,14 +695,80 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 			return "", err
 		}
 		sb.WriteString(sub)
-		if sb.Len() > maxEntityBytes {
+		if sb.Len() > t.lim.bytes {
 			return "", fmt.Errorf(
 				"entity expansion exceeds %d bytes: %w",
-				maxEntityBytes, ErrResourceLimit)
+				t.lim.bytes, ErrResourceLimit)
 		}
 		i += j + 1
 	}
 	return sb.String(), nil
+}
+
+// contentOK is WFC: Parsed Entity (XML 1.0 §4.3.2): the replacement text of
+// an entity referenced in content matches content ON ITS OWN, so markup it
+// opens is closed in it and a CDATA section or comment it begins ends in it.
+// Pasting the text into the document and parsing the result cannot tell:
+// "<foo>" balances a "</foo>" written after the reference. Each entity is
+// checked once, alone; a nested reference reads as empty here, since expand
+// checks that entity in its turn. Text with no "<" is trivially content.
+func (t *entityTable) contentOK(name, text string) error {
+	if strings.IndexByte(text, '<') < 0 {
+		return nil
+	}
+	if err, ok := t.contentErr[name]; ok {
+		return err
+	}
+	if t.stubs == nil {
+		t.stubs = make(map[string]string, len(t.raw)+len(t.external))
+		for n := range t.raw {
+			t.stubs[n] = ""
+		}
+		for n := range t.external {
+			t.stubs[n] = ""
+		}
+	}
+	err := checkContent(text, t.stubs)
+	if err != nil {
+		err = fmt.Errorf("replacement text of entity %q is not content (WFC: Parsed Entity): %w", name, err)
+	}
+	if t.contentErr == nil {
+		t.contentErr = map[string]error{}
+	}
+	t.contentErr[name] = err
+	return err
+}
+
+// checkContent reports whether text matches [43] content: balanced elements
+// and no markup declaration. ents is the decoder's entity map.
+func checkContent(text string, ents map[string]string) error {
+	d := xml.NewDecoder(strings.NewReader(text))
+	d.Entity = ents
+	var open []xml.Name
+	for {
+		tok, err := d.RawToken()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		switch tok := tok.(type) {
+		case *xml.StartElement:
+			open = append(open, tok.Name)
+		case *xml.EndElement:
+			if len(open) == 0 || open[len(open)-1] != tok.Name {
+				return fmt.Errorf("end tag </%s> closes no element the text opened", tok.Name.Local)
+			}
+			open = open[:len(open)-1]
+		case *xml.Directive:
+			return fmt.Errorf("a markup declaration is not content")
+		}
+	}
+	if len(open) > 0 {
+		return fmt.Errorf("element <%s> is not closed", open[len(open)-1].Local)
+	}
+	return nil
 }
 
 // replacementText is XML 1.0 §4.5: an entity's replacement text is its
@@ -629,9 +782,10 @@ func replacementText(raw string) string {
 		return raw
 	}
 	var sb strings.Builder
+	semis := semiFinder{s: raw, at: -1}
 	for i := 0; i < len(raw); {
 		if strings.HasPrefix(raw[i:], "&#") {
-			if j := strings.IndexByte(raw[i:], ';'); j > 0 {
+			if j := semis.from(i); j > 0 {
 				if r, ok := decodeCharRef(raw[i+1 : i+j]); ok {
 					sb.WriteRune(r)
 					i += j + 1
@@ -707,16 +861,18 @@ func (t *entityTable) entityMap() map[string]string {
 // whose replacement text holds "<". t may be nil when nothing was declared.
 //
 // wfc says whether WFC: Entity Declared governs the document (see
-// entityDeclaredIsWFC). When it does not, a reference to an entity with no
-// declaration is a validity error, which a non-validating processor does not
-// report: the reference is dropped, and declaration order is not checked.
-func normalizeAttDefaults(defs []attDefault, t *entityTable, v11, wfc bool) ([]attDefault, error) {
+// entityDeclaredIsWFC). When it does not, declaration order is not checked,
+// and a reference to an entity with no declaration is handled as it is in
+// content: with every external entity read it is declared nowhere, so drop,
+// when non-nil, is told its name and the reference stands for no text;
+// otherwise it is an error (see undeclaredNote).
+func normalizeAttDefaults(defs []attDefault, t *entityTable, v11, wfc bool, drop func(name string)) ([]attDefault, error) {
 	if t == nil {
-		t = newEntityTable("", nil)
+		t = newEntityTable("", nil, defaultEntityLimits)
 		t.version11 = v11
 	}
 	for k, d := range defs {
-		v, err := t.normalizeDefault(d, wfc)
+		v, err := t.normalizeDefault(d, wfc, drop)
 		if err != nil {
 			return nil, fmt.Errorf("default for attribute %s of %s: %w", d.name, d.element, err)
 		}
@@ -725,7 +881,7 @@ func normalizeAttDefaults(defs []attDefault, t *entityTable, v11, wfc bool) ([]a
 	return defs, nil
 }
 
-func (t *entityTable) normalizeDefault(d attDefault, wfc bool) (string, error) {
+func (t *entityTable) normalizeDefault(d attDefault, wfc bool, drop func(string)) (string, error) {
 	v := d.value
 	if strings.IndexByte(v, '<') >= 0 {
 		return "", fmt.Errorf("%q contains <", v)
@@ -763,7 +919,11 @@ func (t *entityTable) normalizeDefault(d attDefault, wfc bool) (string, error) {
 			continue
 		}
 		if !wfc && !t.declares(name) {
-			continue
+			if drop != nil {
+				drop(name)
+				continue
+			}
+			return "", fmt.Errorf("entity %q is not declared (%s)", name, undeclaredNote(name, t.resolver != nil))
 		}
 		if at, ok := d.entities[name]; wfc && (!ok || at > d.at) {
 			return "", fmt.Errorf("entity %q is not declared before the ATTLIST that refers to it", name)
@@ -819,6 +979,29 @@ func declsBeforeUnreadPE(subset string) string {
 	return subset
 }
 
+// undeclaredNote explains a reference to an undeclared entity in a document
+// where XML 1.0 §4.1's WFC: Entity Declared does not apply, for which the
+// VC of the same name does: "In a document with an external subset or
+// parameter entity references, if the document is not standalone ... the
+// Name given in the entity reference MUST match that in an entity
+// declaration."
+//
+// The reference is refused, not dropped. The XDM has no entity-reference
+// node to keep it in, and dropping it was silent: §4.4.3 requires a
+// non-validating processor that does not include an entity's replacement
+// text to "inform the application that it recognized, but did not read, the
+// entity", and the declaration may well be in the part of the DTD that was
+// not read. read says whether external entities were read, in which case it
+// is not there either and the document is simply invalid.
+func undeclaredNote(name string, read bool) string {
+	if read {
+		return "XML 1.0 §4.1, VC: Entity Declared: no declaration of " + name + " in either subset"
+	}
+	return "XML 1.0 §4.1, VC: Entity Declared: " + name + " may be declared in the external " +
+		"subset or a parameter entity, which were not read (ParseOptions.ExternalEntities); " +
+		"the reference cannot be kept or dropped"
+}
+
 // declares reports whether the DTD declares a general entity name, internal
 // or external. t may be nil, which declares nothing.
 func (t *entityTable) declares(name string) bool {
@@ -871,6 +1054,48 @@ func (t *entityTable) attrEntityMap(content map[string]string) map[string]string
 		out[name] = a
 	}
 	return out
+}
+
+// escapedSpaceMap is the decoder's EscapedEntity, given the map entityMap
+// returned: the entities whose value is white space that a character
+// reference in the replacement text, or in a nested entity's, produced.
+// "<!ENTITY s '&#38;#32;'>" is one; "<!ENTITY s '&#32;'>" is not, since that
+// reference is decoded at declaration and the replacement text is a space.
+func (t *entityTable) escapedSpaceMap(content map[string]string) map[string]bool {
+	var out map[string]bool
+	for name, s := range content {
+		if s == "" || !onlySpace([]byte(s)) || !t.spaceByCharRef(name, 0, map[string]bool{}) {
+			continue
+		}
+		if out == nil {
+			out = map[string]bool{}
+		}
+		out[name] = true
+	}
+	return out
+}
+
+// spaceByCharRef reports whether the replacement text of the internal entity
+// name, or of one it refers to, holds a character reference. seen holds the
+// entities already looked in, which held none, so that each is read once.
+func (t *entityTable) spaceByCharRef(name string, depth int, seen map[string]bool) bool {
+	if seen[name] {
+		return false
+	}
+	seen[name] = true
+	s := replacementText(t.raw[name])
+	for i := strings.IndexByte(s, '&'); i >= 0 && depth < t.lim.depth; i = strings.IndexByte(s, '&') {
+		s = s[i+1:]
+		j := strings.IndexByte(s, ';')
+		if j < 0 {
+			return false
+		}
+		if ref := s[:j]; strings.HasPrefix(ref, "#") || t.spaceByCharRef(ref, depth+1, seen) {
+			return true
+		}
+		s = s[j+1:]
+	}
+	return false
 }
 
 // charRef decodes the character reference "&name;" and checks it against
@@ -1012,11 +1237,12 @@ func declaresMarkup(raw string) bool {
 	if strings.ContainsRune(raw, '<') {
 		return true
 	}
+	semis := semiFinder{s: raw, at: -1}
 	for i := 0; i < len(raw); i++ {
 		if raw[i] != '&' || i+1 >= len(raw) || raw[i+1] != '#' {
 			continue
 		}
-		j := strings.IndexByte(raw[i:], ';')
+		j := semis.from(i)
 		if j < 0 {
 			continue
 		}
@@ -1059,12 +1285,20 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 	sb.WriteString(src[:start])
 
 	var count, written int
+	spanMemo := map[string][]entityBaseSpan{}
 	// inTag and attrQuote track whether the scanner is inside a start-tag and,
 	// within one, inside a quoted attribute value. That context changes what a
 	// substitution may write, not merely where it happens: see the escaping
 	// below.
 	var inTag bool
 	var attrQuote byte
+	// depth counts the document's own open elements, so that a reference
+	// outside the document element is refused: [1] document admits only
+	// Misc around it, and content is where a reference may occur (§3.1).
+	// endTag says the tag being read is one.
+	var depth int
+	var endTag bool
+	semis := semiFinder{s: src, at: -1}
 	for i := start; i < len(src); {
 		// CDATA sections, comments and processing instructions are regions
 		// where XML does *not* recognise an entity reference: inside them
@@ -1098,6 +1332,9 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 					attrQuote = c
 				case '>':
 					inTag = false
+					if !endTag && src[i-1] == '/' {
+						depth--
+					}
 				}
 			case c == '<':
 				// A "<" that opens a comment, CDATA section or PI never
@@ -1105,13 +1342,19 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 				// tag has no attributes, but tracking it as a tag costs
 				// nothing and keeps the state machine total.
 				inTag = true
+				endTag = i+1 < len(src) && src[i+1] == '/'
+				if endTag {
+					depth--
+				} else {
+					depth++
+				}
 			}
 			sb.WriteByte(c)
 			i++
 			written++
 			continue
 		}
-		j := strings.IndexByte(src[i:], ';')
+		j := semis.from(i)
 		if j < 0 {
 			sb.WriteByte(c)
 			i++
@@ -1133,6 +1376,14 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 			i += j + 1
 			written += j + 1
 			continue
+		}
+		if depth <= 0 {
+			return "", fmt.Errorf("entity reference &%s; outside the document element", name)
+		}
+		if attrQuote != 0 {
+			if err := t.attrRefOK(name); err != nil {
+				return "", err
+			}
 		}
 		rep, err := t.resolve(name)
 		if err != nil {
@@ -1174,45 +1425,83 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 		// <!ENTITY primary 'normalize-space(concat(primary/@sortas, " ",
 		// primary))'> and every stylesheet that uses it inside a double-
 		// quoted attribute would otherwise become malformed. Escaping the
-		// three characters that are markup in an attribute value restores the
-		// literal reading; the decoder turns them back on the second parse.
-		// "<" is escaped too rather than left to corrupt the tag, matching
-		// the well-formedness constraint that forbids it there.
+		// two quote characters restores the literal reading; the decoder turns
+		// them back on the second parse. A "<" is refused: WFC No < in
+		// Attribute Values (§3.1) forbids it in the replacement text of any
+		// entity referenced, directly or not, in an attribute value.
 		if attrQuote != 0 {
+			if strings.IndexByte(rep, '<') >= 0 {
+				return "", fmt.Errorf("replacement text of entity %q in an attribute value contains <", name)
+			}
 			rep = escapeAttrLiteral(rep)
 		}
 		count++
-		if count > maxEntityCount {
+		if count > t.lim.count {
 			return "", fmt.Errorf(
 				"document references more than %d entities: %w",
-				maxEntityCount, ErrResourceLimit)
+				t.lim.count, ErrResourceLimit)
+		}
+		// Each substitution is charged to the shared budget, as the dec.Entity
+		// path's entityChargeReader charges it: written bounds this one
+		// rewrite, and resolve charges an entity once however often it is
+		// referenced, so neither alone bounds the parses that share a budget.
+		if err := t.charge(len(rep)); err != nil {
+			return "", err
 		}
 		written += len(rep)
-		if written > maxTotalEntityBytes {
+		if written > t.lim.total {
 			return "", fmt.Errorf(
 				"entity expansion exceeds %d bytes: %w",
-				maxTotalEntityBytes, ErrResourceLimit)
+				t.lim.total, ErrResourceLimit)
 		}
 		// Where this replacement lands is recorded so the second parse can
 		// give the nodes it produces the base URI of the entity they were
 		// written in rather than of the including document. See
-		// entityBaseSpan.
-		at := sb.Len()
-		if t.external[name] {
-			t.baseSpans = append(t.baseSpans, entityBaseSpan{
-				start: at, end: at + len(rep), base: t.externalBase[name],
-			})
-			if inner, ok := t.externalText[name]; ok {
-				t.baseSpans = append(t.baseSpans,
-					t.externalSpansIn(inner, at, 1)...)
+		// entityBaseSpan. An entity's spans relative to its own text are the
+		// same at every reference, so they are found once per entity rather
+		// than by re-walking its text for each.
+		rel, ok := spanMemo[name]
+		if !ok {
+			if t.external[name] {
+				rel = []entityBaseSpan{{end: len(rep), base: t.externalBase[name]}}
+				if inner, ok := t.externalText[name]; ok {
+					rel = append(rel, t.externalSpansIn(inner, 0, 1)...)
+				}
+			} else if src, ok := t.raw[name]; ok {
+				rel = t.externalSpansIn(src, 0, 1)
 			}
-		} else if src, ok := t.raw[name]; ok {
-			t.baseSpans = append(t.baseSpans, t.externalSpansIn(src, at, 1)...)
+			spanMemo[name] = rel
 		}
+		t.addBaseSpans(rel, sb.Len())
 		sb.WriteString(rep)
 		i += j + 1
 	}
 	return sb.String(), nil
+}
+
+// attrRefOK is XML 1.0 §3.1, WFC: No External Entity References, for a
+// reference to name in an attribute value of a document being rewritten:
+// "Attribute values MUST NOT contain direct or indirect entity references to
+// external entities." expand's attribute mode holds a nested reference to it,
+// as it does a default's; an undeclared name is left to resolve and the
+// decoder. Each entity is checked once.
+func (t *entityTable) attrRefOK(name string) error {
+	if t.external[name] {
+		return fmt.Errorf("external entity %q is referenced in an attribute value", name)
+	}
+	raw, ok := t.raw[name]
+	if !ok {
+		return nil
+	}
+	if err, done := t.attrErr[name]; done {
+		return err
+	}
+	_, err := t.expand(replacementText(raw), 0, map[string]bool{name: true}, true)
+	if t.attrErr == nil {
+		t.attrErr = map[string]error{}
+	}
+	t.attrErr[name] = err
+	return err
 }
 
 // endOfInternalSubset returns the offset just past the DOCTYPE declaration, or
@@ -1402,7 +1691,7 @@ func (t *Tree) UnparsedEntity(name string) (systemID, publicID, notation string,
 	if subset == "" {
 		return "", "", "", false
 	}
-	tbl := parseInternalEntities(subset)
+	tbl := parseInternalEntities(subset, t.entityLimits())
 	if tbl == nil {
 		return "", "", "", false
 	}
@@ -1434,7 +1723,7 @@ func (t *Tree) HasUnparsedEntities() bool {
 	if subset == "" {
 		return false
 	}
-	tbl := parseInternalEntities(subset)
+	tbl := parseInternalEntities(subset, t.entityLimits())
 	return tbl != nil && len(tbl.unparsed) > 0
 }
 
@@ -1442,7 +1731,8 @@ func (t *Tree) HasUnparsedEntities() bool {
 // attribute value, so that replacement text spliced there is read as literal
 // characters — XML section 4.4.5, "Included in Literal".
 //
-// Only three are escaped. "&" is deliberately not: on the rewrite path expand
+// Only the two quotes are escaped; "<" never arrives (substituteMarkupEntities
+// refuses it). "&" is deliberately not: on the rewrite path expand
 // leaves "&amp;" as written for the second parse to decode (see the
 // t.reparsed branch there), so escaping "&" here would turn it into "&amp;amp;"
 // and change what the document says. A "&" that replacementText decoded from
@@ -1455,7 +1745,7 @@ func (t *Tree) HasUnparsedEntities() bool {
 // into one character. A character the text holds as a reference is still
 // written as one, and so is kept.
 func escapeAttrLiteral(s string) string {
-	if !strings.ContainsAny(s, "\"'<\t\n\r") {
+	if !strings.ContainsAny(s, "\"'\t\n\r") {
 		return s
 	}
 	var sb strings.Builder
@@ -1468,80 +1758,11 @@ func escapeAttrLiteral(s string) string {
 			sb.WriteString("&#34;")
 		case '\'':
 			sb.WriteString("&#39;")
-		case '<':
-			sb.WriteString("&#60;")
 		default:
 			sb.WriteByte(s[i])
 		}
 	}
 	return sb.String()
-}
-
-// chargeReferences charges every entity reference in src against the shared
-// expansion budget, and reports an error when the document's references add up
-// to more than maxTotalEntityBytes.
-//
-// This exists because the budget is otherwise charged in the wrong unit. The
-// t.total accounting in resolve runs once per DISTINCT ENTITY, at the point
-// the entity is first expanded and memoised — so a document declaring one
-// 64 KB entity and referencing it a hundred thousand times charges the budget
-// 64 KB while the decoder substitutes 6.5 GB into the tree. Neither MaxBytes
-// nor MaxNodes catches that: the input stays small (a reference is three
-// bytes) and the result is one text node however long it is. Measured before
-// this check existed, 356 KB of input expanded to 6.5 GB in 19 seconds.
-//
-// substituteMarkupEntities has always charged per reference — it accumulates
-// "written" as it splices — which is why the same document was refused on the
-// rewrite path and accepted on the plain one. This gives the plain path the
-// same accounting, so which path a document takes no longer decides whether
-// its expansion is bounded.
-//
-// Only the document's own bytes are scanned, with the internal subset skipped
-// and the three regions XML does not recognise a reference in passed over, for
-// the same reasons substituteMarkupEntities does it: a reference inside a
-// CDATA section, comment or PI is not a reference and must not be charged.
-func (t *entityTable) chargeReferences(src string) error {
-	total := t.total()
-	for i := endOfInternalSubset(src); i < len(src); {
-		if skip := unscannedRegion(src, i); skip > i {
-			i = skip
-			continue
-		}
-		if src[i] != '&' {
-			i++
-			continue
-		}
-		j := strings.IndexByte(src[i:], ';')
-		if j < 0 {
-			i++
-			continue
-		}
-		name := src[i+1 : i+j]
-		i += j + 1
-		// A character reference and the five predefined entities expand to a
-		// single character each and are the decoder's business, not the
-		// table's.
-		if name == "" || name[0] == '#' {
-			continue
-		}
-		if _, ok := predefinedRune(name); ok {
-			continue
-		}
-		// An entity that does not resolve is not charged: the decoder reports
-		// the reference as an error, and charging it here would replace that
-		// specific message with a budget one.
-		rep, err := t.resolve(name)
-		if err != nil {
-			continue
-		}
-		total += len(rep)
-		if total > maxTotalEntityBytes {
-			return fmt.Errorf(
-				"entity expansion exceeds %d bytes in total: %w",
-				maxTotalEntityBytes, ErrResourceLimit)
-		}
-	}
-	return nil
 }
 
 // entityChargeReader charges entity references against the shared expansion
@@ -1711,3 +1932,58 @@ func (c *entityChargeReader) charge(b []byte) error {
 // this is not a name any real document uses, and holding an unbounded run of
 // bytes that merely began with "&" would be its own small leak.
 const maxEntityNameLen = 1024
+
+// entityLimits holds the entity limits one entityTable enforces, resolved
+// from ParseOptions. A budget that is off is math.MaxInt, so every check
+// reads the same way whatever was configured.
+type entityLimits struct {
+	depth, bytes, total, count, fetches, fetchBytes, extDepth int
+}
+
+// Ceilings of the recursive limits, which have no unlimited setting. Each
+// level is a level of Go recursion, and a Go stack overflow is fatal, not an
+// error. An expansion level costs under 2 KB of stack
+// (TestEntityDepthCeilingStack runs 1,000 levels under a 2 MB stack), so
+// entityDepthCeiling levels need under 20 MB and externalDepthCeiling²
+// parameter-in-external levels about as much, against Go's 1 GB maximum.
+const (
+	entityDepthCeiling   = 10000
+	externalDepthCeiling = 100
+)
+
+// defaultEntityLimits is what the zero ParseOptions resolves to.
+var defaultEntityLimits = ParseOptions{}.entityLimits()
+
+// entityLimits resolves the entity fields of o: zero is the default, a
+// negative budget is off, and a depth is clamped to its ceiling.
+func (o ParseOptions) entityLimits() entityLimits {
+	return entityLimits{
+		depth:      depthLimit(o.MaxEntityDepth, maxEntityDepth, entityDepthCeiling),
+		bytes:      budgetLimit(o.MaxEntityBytes, maxEntityBytes),
+		total:      budgetLimit(o.MaxTotalEntityBytes, maxTotalEntityBytes),
+		count:      budgetLimit(int64(o.MaxEntities), maxEntityCount),
+		fetches:    budgetLimit(int64(o.MaxExternalFetches), maxExternalFetches),
+		fetchBytes: budgetLimit(o.MaxExternalFetchBytes, maxExternalFetchBytes),
+		extDepth:   depthLimit(o.MaxExternalDepth, maxExternalDepth, externalDepthCeiling),
+	}
+}
+
+// budgetLimit resolves a count or byte budget: zero is def, negative is off.
+func budgetLimit(v int64, def int) int {
+	switch {
+	case v == 0:
+		return def
+	case v < 0 || v > math.MaxInt:
+		return math.MaxInt
+	}
+	return int(v)
+}
+
+// depthLimit resolves a recursion bound: zero or negative is def, and a
+// value above ceiling is ceiling.
+func depthLimit(v, def, ceiling int) int {
+	if v <= 0 {
+		return def
+	}
+	return min(v, ceiling)
+}

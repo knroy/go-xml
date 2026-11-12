@@ -44,6 +44,28 @@ type DTD struct {
 	// caller can see what the DOCTYPE actually pulled in, which for a modular
 	// DTD is not something any single file contains.
 	ExternalSubset string
+
+	// name is the root element type the DOCTYPE names, as written. Validate
+	// holds a document's root to it (XML 1.0 §2.8 VC Root Element Type).
+	// Empty for a DTD a caller assembled, which then names no root and is
+	// checked as before.
+	name string
+	// v11 is the system identifier of an external resource Load read whose
+	// text declaration says version="1.1", or "". Validate refuses it for a
+	// document that is not XML 1.1 (XML 1.1 §4.3.4).
+	v11 string
+	// declErrs are the validity faults of the declarations themselves —
+	// a repeated element type, a default that does not fit its type — in
+	// the order read. They are validity errors, not syntax errors, so
+	// reading the DTD succeeds and Validate reports them.
+	declErrs []string
+	// ndata pairs each unparsed entity with the notation its NDATA names,
+	// for XML 1.0 §4.2.2 VC Notation Declared. Validate checks it because
+	// only Validate knows whether the DTD was read whole.
+	ndata [][2]string
+	// nesting holds the parameter-entity nesting validity errors Load found
+	// (XML 1.0 §2.8, §3.2.1, §3.4), which Validate reports.
+	nesting []string
 }
 
 // ContentKind is what an element's content model permits.
@@ -132,6 +154,7 @@ func Parse(directive string) (*DTD, error) {
 	}
 	d := newDTD()
 	head, subset := splitSubset(directive)
+	d.name = doctypeName(head)
 	// A SYSTEM or PUBLIC identifier in the head names an external subset.
 	if f := fields(head); len(f) >= 2 {
 		for _, tok := range f[1:] {
@@ -146,6 +169,15 @@ func Parse(directive string) (*DTD, error) {
 		return nil, err
 	}
 	return d, nil
+}
+
+// doctypeName is the root element name in a DOCTYPE head, "DOCTYPE name ...",
+// or "" when the head is not in that form.
+func doctypeName(head string) string {
+	if f := fields(head); len(f) >= 2 && f[0] == "DOCTYPE" {
+		return f[1]
+	}
+	return ""
 }
 
 // newDTD is the empty ruleset both entry points start from.
@@ -166,7 +198,16 @@ func newDTD() *DTD {
 // that ordering is by itself XML 1.0 §2.8's precedence: where both subsets
 // declare a name the internal one binds and the external one is ignored, which
 // §2.8 makes not an error.
+//
+// A declaration that breaks a validity constraint of its own is recorded in
+// declErrs rather than returned, so that the DTD is still read and applied.
 func declarationsInto(d *DTD, subset string) error {
+	// bound keys the attributes already bound, element then name, and ids
+	// the first ID attribute of each element. Scanning d.Attributes for
+	// either cost the square of an element's attributes, 1.7 s for one
+	// 40,000-attribute ATTLIST.
+	bound := map[[2]string]struct{}{}
+	ids := map[string]string{}
 	for _, decl := range declarations(subset) {
 		switch {
 		case strings.HasPrefix(decl, "ELEMENT"):
@@ -175,11 +216,23 @@ func declarationsInto(d *DTD, subset string) error {
 				return err
 			}
 			if el != nil {
-				// XML §3.2: an element may be declared only once. A repeat is
-				// a validity error, but reporting it here would refuse
-				// documents this package is only asked to validate, so the
-				// first declaration binds — matching how entities work.
-				if _, dup := d.Elements[el.Name]; !dup {
+				if el.Kind == ContentMixed {
+					// §3.2.2 VC No Duplicate Types: "The same name MUST
+					// NOT appear more than once in a single
+					// mixed-content declaration."
+					if n := dupMixedName(decl); n != "" {
+						d.declErrs = append(d.declErrs, fmt.Sprintf(
+							"element type %s names %s more than once in its mixed content (XML §3.2.2 No Duplicate Types)", el.Name, n))
+					}
+				}
+				// §3.2 VC Unique Element Type Declaration: "An element
+				// type MUST NOT be declared more than once." The first
+				// declaration still binds, so the content model applied
+				// is the same either way.
+				if _, dup := d.Elements[el.Name]; dup {
+					d.declErrs = append(d.declErrs, fmt.Sprintf(
+						"element type %s is declared more than once (XML §3.2 Unique Element Type Declaration)", el.Name))
+				} else {
 					d.Elements[el.Name] = el
 				}
 			}
@@ -189,9 +242,15 @@ func declarationsInto(d *DTD, subset string) error {
 				// for the same element, the FIRST definition binds and the
 				// rest are ignored. With the internal subset placed first
 				// that is exactly §2.8's precedence, so the two rules are
-				// one line of code.
-				if attrDeclared(d.Attributes[a.Element], a.Name) {
+				// one line of code. An ignored definition is not checked.
+				key := [2]string{a.Element, a.Name}
+				if _, dup := bound[key]; dup {
 					continue
+				}
+				bound[key] = struct{}{}
+				d.declErrs = append(d.declErrs, attributeDeclFaults(a, ids[a.Element])...)
+				if a.Type == "ID" && ids[a.Element] == "" {
+					ids[a.Element] = a.Name
 				}
 				d.Attributes[a.Element] = append(d.Attributes[a.Element], a)
 			}
@@ -205,21 +264,13 @@ func declarationsInto(d *DTD, subset string) error {
 			// runs, and a parsed general entity is not a permissible value
 			// of an ENTITY attribute, so recording it would defeat the check
 			// rather than inform it.
-			if n := unparsedEntityName(decl[len("ENTITY"):]); n != "" {
+			if n, notation := unparsedEntity(decl[len("ENTITY"):]); n != "" {
 				d.Unparsed[n] = true
+				d.ndata = append(d.ndata, [2]string{n, notation})
 			}
 		}
 	}
 	return nil
-}
-
-func attrDeclared(decls []*Attribute, name string) bool {
-	for _, a := range decls {
-		if a.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 // splitSubset separates the DOCTYPE head from the bracketed internal subset.
@@ -352,8 +403,9 @@ func notationName(body string) string {
 	return f[0]
 }
 
-// unparsedEntityName reads the name from an <!ENTITY> declaration that
-// declares an unparsed entity, and returns "" for any other entity.
+// unparsedEntity reads the name and the NDATA notation from an <!ENTITY>
+// declaration that declares an unparsed entity, and returns "" for any other
+// entity.
 //
 // The two unparsed forms are
 //
@@ -364,16 +416,36 @@ func notationName(body string) string {
 // parameter entity — "% name ..." — is excluded by the same token, since a
 // parameter entity has no NDATA form; the leading "%" would otherwise make
 // the name "%".
-func unparsedEntityName(body string) string {
+func unparsedEntity(body string) (name, notation string) {
 	f := attFields(body)
 	if len(f) < 2 || f[0] == "%" || strings.HasPrefix(f[0], "%") {
-		return ""
+		return "", ""
 	}
 	for i, tok := range f[1:] {
 		// The notation name must follow NDATA for the declaration to be one.
 		if tok == "NDATA" && i+2 < len(f) {
-			return f[0]
+			return f[0], f[i+2]
 		}
+	}
+	return "", ""
+}
+
+// dupMixedName returns a name a mixed-content declaration lists twice, or "".
+// It reads the declaration text because Element.Mixed is a set and has
+// already folded the repeat away.
+func dupMixedName(decl string) string {
+	seen := map[string]bool{}
+	_, model, _ := strings.Cut(decl, "(")
+	for _, n := range strings.FieldsFunc(model, func(r rune) bool {
+		return strings.ContainsRune("()|*+? \t\n\r", r)
+	}) {
+		if n == "#PCDATA" {
+			continue
+		}
+		if seen[n] {
+			return n
+		}
+		seen[n] = true
 	}
 	return ""
 }

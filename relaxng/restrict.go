@@ -2,6 +2,7 @@ package relaxng
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -84,7 +85,7 @@ func directStep(s steps, i int) bool {
 // checkRestrictions applies §7 to a schema document.
 func checkRestrictions(root *xdm.Node) error {
 	r := &restrictor{defines: map[string]*xdm.Node{}, root: root,
-		startStack: []string{"start"}}
+		startStack: []string{"start"}, pruned: map[*xdm.Node]bool{}}
 	r.collect(root)
 	// A schema that is not a <grammar> is a pattern standing where a <start>
 	// would: §7.1.5 constrains it the same way, so a schema that is simply
@@ -96,12 +97,24 @@ func checkRestrictions(root *xdm.Node) error {
 	return r.walk(root, stack)
 }
 
+// restrictNoMemo turns off followRef's memo. It is a var only so the
+// differential test can compare verdicts with and without it; it is never
+// assigned in production.
+var restrictNoMemo = false
+
 type restrictor struct {
 	defines map[string]*xdm.Node
 	// root is the schema's document element; any other <grammar> is nested.
 	root *xdm.Node
 	// active guards a definition that reaches itself while being expanded.
 	active map[string]bool
+	// checked records each definition already walked without error, keyed by
+	// name, inDefine and the stack's signature (stackSig). Without it every
+	// <ref> re-walked its definition, so a chain of definitions each choosing
+	// between two refs to the next cost 2^N walks: 1.9 KB of schema took
+	// 8.7 s. A second walk from the same key does exactly what the first did,
+	// so skipping it changes no verdict.
+	checked map[string]bool
 	// inDefine is set while walking a <define> body that no <ref> has led to.
 	//
 	// §4.19 expands every <ref> in place and then discards the <define>, so a
@@ -122,6 +135,11 @@ type restrictor struct {
 	// and adds no step: it is constrained by §7.1.5 only if the position is
 	// itself under the schema's start.
 	startStack []string
+	// pruned holds prune's answer for each node met, shared with the nested
+	// grammars' restrictors. walk asks at every node, and each answer
+	// rescanned the subtree: D levels of <optional> over a wide <group> cost
+	// D times its size, 1.15 s for 177 KB.
+	pruned map[*xdm.Node]bool
 }
 
 func (r *restrictor) collect(n *xdm.Node) {
@@ -152,7 +170,7 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 	local := n.Name().Local
 
 	// A pattern that simplification erases cannot violate anything.
-	if prune(n) {
+	if r.prune(n) {
 		return nil
 	}
 
@@ -162,8 +180,12 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 		}
 	}
 
+	// The stacks below extend stack in place rather than copying it, which
+	// cost the depth again at every node. The walk is depth-first and no
+	// stack outlives the call it was passed to, so a sibling overwriting the
+	// slot past a shared stack's end disturbs nothing still reading it.
 	if !transparent(n, local) {
-		if err := matchProhibited(append(append([]string{}, stack...), local)); err != nil {
+		if err := matchProhibited(append(stack, local)); err != nil {
 			return err
 		}
 	}
@@ -201,12 +223,12 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 		// (§4.12), so it contributes no step to the path. Keeping it would
 		// make oneOrMore//group//attribute match a group that is not there.
 		if effectiveChildren(n) < 2 {
-			kids = append([]string{}, stack...)
+			kids = stack
 			break
 		}
-		kids = append(append([]string{}, stack...), local)
+		kids = append(stack, local)
 	default:
-		kids = append(append([]string{}, stack...), local)
+		kids = append(stack, local)
 	}
 
 	for _, kid := range n.ChildElements() {
@@ -238,7 +260,7 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 // <start> standing where the grammar does.
 func (r *restrictor) walkNested(g *xdm.Node, stack []string) error {
 	sub := &restrictor{defines: map[string]*xdm.Node{}, inDefine: r.inDefine,
-		startStack: stack}
+		startStack: stack, pruned: r.pruned}
 	sub.collect(g)
 	for _, kid := range g.ChildElements() {
 		if kid.Name().URI != NS {
@@ -271,8 +293,13 @@ func (r *restrictor) followRef(n *xdm.Node, stack []string) error {
 			"relaxng: definition %q is recursive within <list> or <attribute> "+
 				"(section 7.1)", name)
 	}
+	key := fmt.Sprintf("%s\x00%t\x00%s", name, r.inDefine, stackSig(stack))
+	if r.checked[key] && !restrictNoMemo {
+		return nil
+	}
 	if r.active == nil {
 		r.active = map[string]bool{}
+		r.checked = map[string]bool{}
 	}
 	r.active[name] = true
 	defer delete(r.active, name)
@@ -284,7 +311,48 @@ func (r *restrictor) followRef(n *xdm.Node, stack []string) error {
 			return fmt.Errorf("%w, through <ref name=%q>", err, name)
 		}
 	}
+	r.checked[key] = true
 	return nil
+}
+
+// stackSig reduces a stack to what the checks below it can observe, so that
+// two stacks a definition cannot tell apart share one memo entry in
+// followRef. Keying on the whole stack would not do: a chain that reaches
+// each definition once through <choice> and once through <group> gives it
+// 2^N distinct stacks.
+//
+// Everything a walk asks of its stack is one of: which prefixes of each
+// prohibited path it holds as a subsequence (matchSteps; greedy matching
+// makes the longest such prefix all that an extension can build on), whether
+// it holds a repetition (checkInfiniteAttributeName) or a restricted step
+// (restrictedStack), and its last step, which a data/except path needs to
+// see directly. Two stacks equal on all of these behave alike under every
+// extension. The last step is what covers the one adjacency rule, data/except:
+// a stack ending in data completes that prefix when the extension begins with
+// except, whatever the path's length after it. TestStackSigIsSound checks the
+// claim over every stack of up to three steps, and the memo-off differentials
+// in restrict_memo_test.go check the verdicts.
+func stackSig(stack []string) string {
+	var b strings.Builder
+	for _, p := range prohibited {
+		for k := 1; k < len(p.steps); k++ {
+			if matchSteps(stack, p.steps[:k]) {
+				b.WriteByte('1')
+			} else {
+				b.WriteByte('0')
+			}
+		}
+	}
+	if restrictedStack(stack) {
+		b.WriteByte('r')
+	}
+	if slices.Contains(stack, "oneOrMore") || slices.Contains(stack, "zeroOrMore") {
+		b.WriteByte('m')
+	}
+	if len(stack) > 0 {
+		b.WriteString(stack[len(stack)-1])
+	}
+	return b.String()
 }
 
 // restrictedStack reports whether the path so far is one whose contents §7.1
@@ -346,10 +414,21 @@ func matchSteps(stack []string, steps steps) bool {
 // present in the simplified grammar at all, and the suite tests exactly that —
 // an <attribute> inside an <attribute> is legal when a sibling <notAllowed/>
 // removes the whole group first.
-func prune(n *xdm.Node) bool {
+//
+// The answer depends on the subtree alone, so r remembers it per node.
+func (r *restrictor) prune(n *xdm.Node) bool {
 	if n.Name().URI != NS {
 		return false
 	}
+	if v, ok := r.pruned[n]; ok {
+		return v
+	}
+	v := r.pruneOnce(n)
+	r.pruned[n] = v
+	return v
+}
+
+func (r *restrictor) pruneOnce(n *xdm.Node) bool {
 	switch n.Name().Local {
 	case "notAllowed":
 		return true
@@ -364,7 +443,7 @@ func prune(n *xdm.Node) bool {
 			return false
 		}
 		for _, kid := range kids {
-			if prune(kid) {
+			if r.prune(kid) {
 				return true
 			}
 		}
@@ -377,7 +456,7 @@ func prune(n *xdm.Node) bool {
 			return false
 		}
 		for _, kid := range kids {
-			if !prune(kid) {
+			if !r.prune(kid) {
 				return false
 			}
 		}
@@ -448,32 +527,143 @@ var _ = xdm.QName{}
 
 // nameSet is what one branch of a group or interleave can match, as far as
 // these rules care: the attribute names it may consume, the element names it
-// may consume, and whether it can consume text.
+// may consume, and whether it can consume text. A nil classSet is empty.
 type nameSet struct {
-	attrs []nameClass
-	elems []nameClass
+	attrs *classSet
+	elems *classSet
 	text  bool
 }
 
 func (s *nameSet) merge(o nameSet) {
-	s.attrs = append(s.attrs, o.attrs...)
-	s.elems = append(s.elems, o.elems...)
+	s.attrs = absorb(s.attrs, o.attrs)
+	s.elems = absorb(s.elems, o.elems)
 	s.text = s.text || o.text
 }
 
-// distinct drops repeated name classes. A repeat cannot change whether two
-// sets overlap, and without this a definition referring twice to another
-// that does the same doubles its set at every link.
-func distinct(cs []nameClass) []nameClass {
-	seen := make(map[nameClass]bool, len(cs))
-	out := cs[:0:0]
+// share marks the set as held by the definition cache, so that a merge
+// copies it rather than writing into it.
+func (s nameSet) share() nameSet {
+	if s.attrs != nil {
+		s.attrs.shared = true
+	}
+	if s.elems != nil {
+		s.elems.shared = true
+	}
+	return s
+}
+
+// classSet is a set of name classes, choices flattened, in the order the
+// classes were first seen, so that a conflict is reported under the same
+// name on every run.
+//
+// It is kept as an index rather than rebuilt at every node: a group or
+// interleave of K members compiles to a left-deep chain of K-1 binary nodes,
+// and re-deriving lookup sets from the accumulated side at each one cost
+// O(K²), 5.3 s for 8000 attributes. Merging the smaller set into the larger
+// keeps the whole check O(K log K).
+type classSet struct {
+	// rank holds each single name by order of first appearance; the ranks
+	// in use lie in [lo, hi), and a set merged in front takes ranks below lo.
+	rank   map[xdm.QName]int
+	lo, hi int
+	// open holds the open classes (anyName, nsName), distinct, in order.
+	open []nameClass
+	// shared marks a set the definition cache holds; see nameSet.share.
+	shared bool
+}
+
+// classesOf is the set of cs.
+func classesOf(cs ...nameClass) *classSet {
+	s := &classSet{rank: map[xdm.QName]int{}}
 	for _, c := range cs {
-		if !seen[c] {
-			seen[c] = true
-			out = append(out, c)
+		s.add(c)
+	}
+	return s
+}
+
+func (s *classSet) add(c nameClass) {
+	switch x := c.(type) {
+	case qnamePat:
+		if _, ok := s.rank[x.Name]; !ok {
+			s.rank[x.Name] = s.hi
+			s.hi++
+		}
+	case nameChoicePat:
+		s.add(x.Left)
+		s.add(x.Right)
+	default:
+		if !slices.Contains(s.open, c) {
+			s.open = append(s.open, c)
 		}
 	}
+}
+
+func (s *classSet) size() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.rank) + len(s.open)
+}
+
+// names returns the single names in order.
+func (s *classSet) names() []xdm.QName {
+	if s == nil {
+		return nil
+	}
+	out := make([]xdm.QName, 0, len(s.rank))
+	for n := range s.rank {
+		out = append(out, n)
+	}
+	slices.SortFunc(out, func(a, b xdm.QName) int { return s.rank[a] - s.rank[b] })
 	return out
+}
+
+func (s *classSet) clone() *classSet {
+	return &classSet{rank: maps.Clone(s.rank), lo: s.lo, hi: s.hi, open: slices.Clone(s.open)}
+}
+
+// absorb returns the union of a and b, a's classes first, writing into the
+// larger of the two unless the cache holds it.
+func absorb(a, b *classSet) *classSet {
+	switch {
+	case b.size() == 0:
+		return a
+	case a.size() == 0:
+		return b
+	}
+	if len(a.rank) >= len(b.rank) {
+		if a.shared {
+			a = a.clone()
+		}
+		for _, n := range b.names() {
+			if _, ok := a.rank[n]; !ok {
+				a.rank[n] = a.hi
+				a.hi++
+			}
+		}
+		for _, c := range b.open {
+			if !slices.Contains(a.open, c) {
+				a.open = append(a.open, c)
+			}
+		}
+		return a
+	}
+	if b.shared {
+		b = b.clone()
+	}
+	an := a.names()
+	for i := len(an) - 1; i >= 0; i-- {
+		b.lo--
+		b.rank[an[i]] = b.lo // first seen in a, so earlier than in b
+	}
+	open := slices.Clone(a.open)
+	for _, c := range b.open {
+		if !slices.Contains(open, c) {
+			open = append(open, c)
+		}
+	}
+	b.open = open
+	return b
 }
 
 // checkCompetition applies §7.3 and §7.4 to a compiled pattern.
@@ -496,14 +686,13 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 		// A recursive definition is visited once: what it can match is
 		// already accounted for by the visit in progress, and following it
 		// again would not terminate. A shared one reached again elsewhere
-		// gives what it gave the first time; it is clipped so that a merge
+		// gives what it gave the first time, marked shared so that a merge
 		// copies it rather than writing into it.
 		if s, done := seen[r]; done {
 			if s == nil {
 				return nameSet{}, nil
 			}
-			return nameSet{attrs: slices.Clip(s.attrs),
-				elems: slices.Clip(s.elems), text: s.text}, nil
+			return *s, nil
 		}
 		seen[r] = nil
 		q, err := r.get()
@@ -514,16 +703,15 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 		if err != nil {
 			return nameSet{}, err
 		}
-		s.attrs, s.elems = distinct(s.attrs), distinct(s.elems)
+		s = s.share()
 		seen[r] = &s
-		return nameSet{attrs: slices.Clip(s.attrs),
-			elems: slices.Clip(s.elems), text: s.text}, nil
+		return s, nil
 	}
 	switch t := p.(type) {
 	case *attributePat:
 		// The attribute's own content is a separate world — §7.1 has already
 		// ruled out anything in it that could compete out here.
-		return nameSet{attrs: []nameClass{t.Name}}, nil
+		return nameSet{attrs: classesOf(t.Name)}, nil
 
 	case *elementPat:
 		// An element's content is checked, but its names do not escape: two
@@ -532,7 +720,7 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 		if _, err := competingSeen(t.Pattern, seen); err != nil {
 			return nameSet{}, err
 		}
-		return nameSet{elems: []nameClass{t.Name}}, nil
+		return nameSet{elems: classesOf(t.Name)}, nil
 
 	case textPat:
 		return nameSet{text: true}, nil
@@ -629,11 +817,55 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 }
 
 // overlapAcross returns a name that some class in a and some class in b both
-// admit, or "". The two slices come from different branches, so every pair is
-// compared.
-func overlapAcross(a, b []nameClass) string {
-	for _, x := range a {
-		for _, y := range b {
+// admit, or "". The two sets come from different branches.
+//
+// Single names overlap only when they are equal, so they are probed through
+// the larger side's index from the smaller side; only an open class (anyName
+// or nsName) is tested against the other side one class at a time. The name
+// reported is the first of a's that b admits, as a walk of a in order finds
+// it, then the first overlap of a's open classes.
+//
+// ponytail: an open class is still tested against every class on the other
+// side, O(open * total); index nsName by namespace if schemas with thousands
+// of open classes per branch matter.
+func overlapAcross(a, b *classSet) string {
+	if a.size() == 0 || b.size() == 0 {
+		return ""
+	}
+	if len(b.open) == 0 && len(a.rank) > len(b.rank) {
+		best, at := xdm.QName{}, 0
+		found := false
+		for n := range b.rank {
+			if r, ok := a.rank[n]; ok && (!found || r < at) {
+				best, at, found = n, r, true
+			}
+		}
+		if found {
+			return showQName(best)
+		}
+	} else {
+		for _, n := range a.names() {
+			if _, ok := b.rank[n]; ok {
+				return showQName(n)
+			}
+			for _, y := range b.open {
+				if y.contains(n) {
+					return showQName(n)
+				}
+			}
+		}
+	}
+	if len(a.open) == 0 {
+		return ""
+	}
+	bn := b.names()
+	for _, x := range a.open {
+		for _, n := range bn {
+			if x.contains(n) {
+				return showQName(n)
+			}
+		}
+		for _, y := range b.open {
 			if s := describeOverlap(x, y); s != "" {
 				return s
 			}
@@ -644,64 +876,62 @@ func overlapAcross(a, b []nameClass) string {
 
 // describeOverlap names a name both classes admit, or returns "".
 //
-// The classes are small and the interesting cases few, so this decides
-// overlap structurally rather than building the intersection: two QNames
-// overlap when equal, anyName overlaps everything it does not except, and an
-// nsName overlaps another class in its namespace.
+// It is exact, by James Clark's representative-name method (jing's
+// NameClass overlap test): two classes overlap only if one of finitely many
+// representative names is in both. The representatives are every QName either
+// class mentions, exceptions included; for every namespace an nsName mentions,
+// a name in it that no QName can equal; and, for anyName, a name in a
+// namespace no class mentions. Comparing the open classes structurally
+// instead ignored their exceptions, and refused xspec.rnc's
+// attribute xml:* {text}* beside attribute * - (local:* | xml:* | p:*) {text}*
+// as the same attribute twice, which jing accepts.
 func describeOverlap(a, b nameClass) string {
-	switch x := a.(type) {
-	case nameChoicePat:
-		if s := describeOverlap(x.Left, b); s != "" {
-			return s
+	var reps []xdm.QName
+	collectReps(a, &reps)
+	collectReps(b, &reps)
+	for _, n := range reps {
+		if !a.contains(n) || !b.contains(n) {
+			continue
 		}
-		return describeOverlap(x.Right, b)
-	}
-	switch y := b.(type) {
-	case nameChoicePat:
-		if s := describeOverlap(a, y.Left); s != "" {
-			return s
-		}
-		return describeOverlap(a, y.Right)
-	}
-
-	switch x := a.(type) {
-	case qnamePat:
-		switch y := b.(type) {
-		case qnamePat:
-			if x.Name == y.Name {
-				return showQName(x.Name)
-			}
-		case anyNamePat:
-			if y.contains(x.Name) {
-				return showQName(x.Name)
-			}
-		case nsNamePat:
-			if y.contains(x.Name) {
-				return showQName(x.Name)
-			}
-		}
-	case anyNamePat:
-		switch b.(type) {
-		case qnamePat:
-			return describeOverlap(b, a)
-		case anyNamePat, nsNamePat:
-			// Two open classes always share a name unless one excepts the
-			// whole of the other, which no schema in practice writes.
+		switch {
+		case n.URI == repNs:
 			return "any name"
+		case n.Local == repLocal:
+			return "any name in " + showNs(n.URI)
 		}
-	case nsNamePat:
-		switch y := b.(type) {
-		case qnamePat:
-			return describeOverlap(b, a)
-		case anyNamePat:
-			return "any name in " + showNs(x.Ns)
-		case nsNamePat:
-			if x.Ns == y.Ns {
-				return "any name in " + showNs(x.Ns)
-			}
-		}
+		return showQName(n)
 	}
 	return ""
+}
+
+// repNs and repLocal are a namespace URI and a local name no schema can
+// write, since neither is an NCName nor a URI an XML name can carry: names
+// built from them stand for "some other namespace" and "some other local
+// name" in describeOverlap.
+const (
+	repNs    = "\x00"
+	repLocal = "\x00"
+)
+
+// collectReps appends c's representative names for describeOverlap.
+func collectReps(c nameClass, reps *[]xdm.QName) {
+	switch x := c.(type) {
+	case qnamePat:
+		*reps = append(*reps, x.Name)
+	case nsNamePat:
+		*reps = append(*reps, xdm.QName{URI: x.Ns, Local: repLocal})
+		if x.Except != nil {
+			collectReps(x.Except, reps)
+		}
+	case anyNamePat:
+		*reps = append(*reps, xdm.QName{URI: repNs, Local: repLocal})
+		if x.Except != nil {
+			collectReps(x.Except, reps)
+		}
+	case nameChoicePat:
+		collectReps(x.Left, reps)
+		collectReps(x.Right, reps)
+	}
 }
 
 func showQName(n xdm.QName) string {

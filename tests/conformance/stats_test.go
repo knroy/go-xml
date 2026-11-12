@@ -453,8 +453,8 @@ func TestCorporaStayOutOfTheTotal(t *testing.T) {
 	// And the shipped file keeps the two apart as separate lists, which is
 	// what makes the exclusion impossible to undo by an arithmetic change.
 	sr := shipped(t)
-	if got := sr.Total(); got != 93 {
-		t.Fatalf("shipped Total() = %d, want 93", got)
+	if got := sr.Total(); got != 85 {
+		t.Fatalf("shipped Total() = %d, want 85", got)
 	}
 	for _, c := range sr.Corpora {
 		for _, su := range sr.Suites {
@@ -613,38 +613,35 @@ func TestUnknownLookupPanics(t *testing.T) {
 	}
 }
 
-// The shipped breakdown is the figure that was wrong in three files at once.
-func TestShippedXTSE3430Breakdown(t *testing.T) {
+// The XTSE3430 block is closed: every W3C case that wants the refusal gets it,
+// so the shipped file has no "xtse3430" breakdown, and the two templates that
+// quoted it say so instead of publishing a stale count.
+func TestShippedXTSE3430BlockIsClosed(t *testing.T) {
 	r := shipped(t)
-	b := r.Breakdown("xtse3430")
-	if b.Of != 3 {
-		t.Errorf("xtse3430 = %d of the XSLT 3.0 failures, want 3", b.Of)
+	if b, ok := r.lookupBreakdown("xtse3430"); ok {
+		t.Fatalf("xtse3430 breakdown still shipped (%d of the XSLT 3.0 failures)", b.Of)
 	}
-	s := r.Suite(b.Suite)
-	if s.Disagreements != 23 {
-		t.Errorf("xslt-3.0 has %d disagreements, want 23", s.Disagreements)
+	s := r.Suite("xslt-3.0")
+	if len(s.Cases) != s.Disagreements {
+		t.Errorf("%d enumerated cases, want every one of the %d disagreements", len(s.Cases), s.Disagreements)
 	}
-	// The two published halves must account for the whole, once the declared
-	// overlap is discounted: 20 enumerated + 3 in the block is exactly 23.
-	// This shipped so wrong -- 21 + 14 = 35 -- because each half was only
-	// ever checked against the total.
-	if b.Overlap != 0 {
-		t.Errorf("xtse3430 declares overlap %d, want 0", b.Overlap)
-	}
-	if n := len(s.Cases) + b.Of - b.Overlap; n != s.Disagreements {
-		t.Errorf("%d enumerated + %d in the block - %d overlap = %d, want the suite's %d",
-			len(s.Cases), b.Of, b.Overlap, n, s.Disagreements)
+	if got := r.renderGapsXtse(); !strings.HasPrefix(got, "**None of the "+itoa(s.Disagreements)+" wants an `XTSE3430`") {
+		t.Errorf("renderGapsXtse = %q, want the closed sentence", got)
 	}
 	// merge-097sf must not be enumerated: it is skipped for
 	// streaming-fallback rather than failing.
-	var haveSF bool
 	for _, c := range s.Cases {
 		if c.ID == "merge-097sf" {
-			haveSF = true
+			t.Error("merge-097sf is enumerated as a disagreement; it is skipped for streaming-fallback")
 		}
 	}
-	if haveSF {
-		t.Error("merge-097sf is enumerated as a disagreement; it is skipped for streaming-fallback")
+	// An open block still renders its count from the breakdown.
+	open := &Results{
+		Suites:     []Suite{{ID: "xslt-3.0", Passed: 90, Disagreements: 10, Total: 100}},
+		Breakdowns: []Breakdown{{ID: "xtse3430", Suite: "xslt-3.0", Of: 3}},
+	}
+	if got := open.renderGapsXtse(); !strings.Contains(got, "**3 of the 10 want an `XTSE3430`**") {
+		t.Errorf("open block: renderGapsXtse = %q", got)
 	}
 }
 

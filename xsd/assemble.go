@@ -44,6 +44,63 @@ type Options struct {
 	// Zero means DefaultMaxContentModelPositions.
 	MaxContentModelPositions int
 
+	// MaxUPAStateWidth bounds how many competing positions one state of a
+	// content model may hold for the Unique Particle Attribution check, which
+	// compares them pairwise. A model with a wider state is refused with an
+	// error wrapping xdm.ErrResourceLimit: its ambiguity is undecided, not
+	// known. The same width bounds the follow sets compiled at validation, so
+	// a schema validates under the width it was checked under.
+	//
+	// Zero or negative means DefaultMaxUPAStateWidth. There is no unlimited
+	// setting, as for MaxContentModelPositions: the scan costs the square of
+	// the width per state, and a dense model of width 2048 took 12 s, so
+	// raising it grants CPU to whoever wrote the schema. Name a number.
+	MaxUPAStateWidth int
+
+	// MaxUPAPairTests bounds the position-pair comparisons the Unique
+	// Particle Attribution check makes across all the states of one content
+	// model. Past it the schema is refused, as for MaxUPAStateWidth. The
+	// width bound alone does not bound the total: 8192 states of width 255
+	// each pass it and still cost ~260 million comparisons.
+	//
+	// Zero or negative means DefaultMaxUPAPairTests. There is no unlimited
+	// setting; raising it is a grant of CPU time, linear in the value.
+	MaxUPAPairTests int
+
+	// MaxSubsumptionStates bounds the automaton XSD 1.1 unrolls for each side
+	// of a restriction when it decides Content type restricts (Part 1
+	// §3.4.6.4) by language inclusion. Past it the exact check DECLINES and
+	// the XSD 1.0 structural table decides instead, which may reject a
+	// restriction the exact check would admit but never admits one it would
+	// reject. A rejection the table gives after such a decline wraps
+	// xdm.ErrResourceLimit: the restriction is undecided, not known to be
+	// invalid. XSD 1.0 schemas never reach it.
+	//
+	// Zero or negative means DefaultMaxSubsumptionStates. There is no
+	// unlimited setting: unrolling is exponential in the schema text and
+	// Load cannot be cancelled, so raising it grants memory and time to
+	// whoever wrote the schema.
+	MaxSubsumptionStates int
+
+	// MaxSubsumptionProduct bounds the pairs the same inclusion check visits
+	// while exploring the derived model against the determinised base. Past
+	// it the check declines, as for MaxSubsumptionStates. It is reached by an
+	// adversarially branchy model rather than a merely repetitive one.
+	//
+	// Zero or negative means DefaultMaxSubsumptionProduct. There is no
+	// unlimited setting, for the reason MaxSubsumptionStates gives.
+	MaxSubsumptionProduct int
+
+	// MaxRestrictionBranches bounds the branches XSD 1.1 enumerates through
+	// a model restricting an all group (the counting form of §3.4.6.4). The
+	// count is the product of the choice arities on a path, so it grows
+	// exponentially with nesting. Past it the check declines, as for
+	// MaxSubsumptionStates.
+	//
+	// Zero or negative means DefaultMaxRestrictionBranches. There is no
+	// unlimited setting, for the reason MaxSubsumptionStates gives.
+	MaxRestrictionBranches int
+
 	// Version selects XSD 1.0 or 1.1. The zero value is 1.0, because a
 	// schema written for 1.0 must not acquire 1.1's relaxations by
 	// accident — 1.1 changes which schemas are legal, not only which
@@ -88,6 +145,56 @@ type Options struct {
 func (o Options) checkOptions() CheckOptions {
 	return CheckOptions{LaxUPA: o.LaxUPA, Version: o.Version}
 }
+
+// Defaults for the Options budgets that a zero (or negative) field selects.
+// The measurements behind each are on the package variables they seed:
+// maxUPAStateWidth and maxUPAPairTests (upa.go), subsumeMaxStates and
+// subsumeMaxProduct (subsume.go) and branchLimit (restrict.go).
+const (
+	// DefaultMaxUPAStateWidth is 3.5 times the widest state any real schema
+	// in this tree produces (72).
+	DefaultMaxUPAStateWidth = 256
+
+	// DefaultMaxUPAPairTests is 4,194,304 comparisons per content model.
+	DefaultMaxUPAPairTests = 1 << 22
+
+	// DefaultMaxSubsumptionStates covers every occurrence range the suites
+	// and the production corpora spell (the largest is maxOccurs="10").
+	DefaultMaxSubsumptionStates = 4096
+
+	// DefaultMaxSubsumptionProduct bounds the inclusion check's product.
+	DefaultMaxSubsumptionProduct = 20000
+
+	// DefaultMaxRestrictionBranches bounds the all-group branch count.
+	DefaultMaxRestrictionBranches = 4096
+)
+
+// loadBudgets is what a Schema retains of the Options budgets, so that the
+// checks Load runs and the models validation compiles use the same values.
+// A field of zero or below reads the package variable at the point of use,
+// as Schema.maxPositions does, so tests that lower the variables still reach
+// every path.
+type loadBudgets struct {
+	upaWidth, upaPairs, subsumeStates, subsumeProduct, branches int
+}
+
+func (o Options) budgets() loadBudgets {
+	return loadBudgets{o.MaxUPAStateWidth, o.MaxUPAPairTests,
+		o.MaxSubsumptionStates, o.MaxSubsumptionProduct, o.MaxRestrictionBranches}
+}
+
+func budgetOr(n, def int) int {
+	if n > 0 {
+		return n
+	}
+	return def
+}
+
+func (b loadBudgets) width() int   { return budgetOr(b.upaWidth, maxUPAStateWidth) }
+func (b loadBudgets) pairs() int   { return budgetOr(b.upaPairs, maxUPAPairTests) }
+func (b loadBudgets) states() int  { return budgetOr(b.subsumeStates, subsumeMaxStates) }
+func (b loadBudgets) product() int { return budgetOr(b.subsumeProduct, subsumeMaxProduct) }
+func (b loadBudgets) branchN() int { return budgetOr(b.branches, branchLimit) }
 
 // DefaultMaxDocuments bounds an assembly that does not set MaxDocuments.
 const DefaultMaxDocuments = 512
@@ -150,6 +257,7 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	s.Version = opts.Version
 	s.xpathVersion = opts.XPathVersion
 	s.maxPositions = opts.MaxContentModelPositions
+	s.budgets = opts.budgets()
 	a := &assembler{
 		schema:    s,
 		opts:      opts,
@@ -397,7 +505,17 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 	case 1:
 		return LoadFile(paths[0], opts)
 	}
+	return loadFiles(paths, opts, nil)
+}
 
+// loadFiles is LoadFiles for two or more paths. named, keyed by index into
+// paths, marks the documents WithInstanceLocations added for an instance, with
+// the location and namespace the instance gave. Such a document is a hint
+// (§4.3.2): one the resolver cannot supply, or that does not define the
+// namespace the policy allowed it for, is declined and skipped, and an error
+// about one quotes the instance's own location rather than the host path it
+// was joined into.
+func loadFiles(paths []string, opts Options, named map[int]instanceLocation) (*Schema, error) {
 	if opts.Resolver == nil {
 		// As in LoadFile, confined to what the caller named. Several
 		// paths may sit in several directories, so the grant is the set
@@ -412,6 +530,7 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 	s.Version = opts.Version
 	s.xpathVersion = opts.XPathVersion
 	s.maxPositions = opts.MaxContentModelPositions
+	s.budgets = opts.budgets()
 	s.sourcePaths = append([]string(nil), paths...)
 	a := &assembler{
 		schema:    s,
@@ -421,8 +540,26 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		p:         &parser{schema: s, attrsDone: map[*ComplexType]bool{}, assembled: true},
 	}
 
-	for _, path := range paths {
+	// A declined instance location is charged to MaxDocuments as a
+	// document read, which is what it cost: a resolver call, and a parse
+	// when the namespace is wrong. It never enters the queue admitFetch
+	// counts, so without the charge an instance naming N locations cost N
+	// fetches whatever the bound.
+	for i, path := range paths {
+		if err := a.admitFetch(); err != nil {
+			return nil, err
+		}
+		inst, isInst := named[i]
 		rc, resolved, err := opts.Resolver.Resolve("", path, "")
+		if isInst && (err != nil || rc == nil) {
+			// A hint that cannot be followed is not taken, as for an
+			// xs:import whose location does not resolve.
+			if rc != nil {
+				rc.Close()
+			}
+			a.count++
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -432,7 +569,21 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		tree, err := xdm.Parse(rc, schemaParseOptions(rc, opts.ParseOptions))
 		rc.Close()
 		if err != nil {
-			return nil, fmt.Errorf("parsing schema %q: %w", path, err)
+			shown := path
+			if isInst {
+				shown = inst.location
+			}
+			return nil, fmt.Errorf("parsing schema %q: %w", shown, err)
+		}
+		// The check src-import.3.1 makes for an xs:import: without it an
+		// instance could pair a namespace its policy allows with a
+		// document defining components in one it does not. Such a
+		// document is declined like a namespace the policy refuses.
+		if isInst {
+			if got, has := targetNSOf(tree.Root); has != (inst.namespace != "") || got != inst.namespace {
+				a.count++
+				continue
+			}
 		}
 		// A document named directly by the caller adopts no namespace, so
 		// its key carries an empty adoptedNS; a later chameleon include of
@@ -444,6 +595,10 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		// faults are not attributed to a file they did not expect.
 		a.rootBases[resolved] = true
 		a.push(tree.Root, resolved, "", false)
+		if isInst {
+			a.queue[len(a.queue)-1].shown = inst.location
+			a.queue[len(a.queue)-1].fromInstance = true
+		}
 	}
 
 	if err := a.run(); err != nil {
@@ -611,6 +766,14 @@ type pending struct {
 
 	// redefining marks a document reached through xs:redefine.
 	redefining bool
+
+	// shown, when set, is how errors name the document instead of base: the
+	// location as written by the instance or by the document referring to
+	// it, rather than the host path it resolved to.
+	shown string
+
+	// fromInstance is schemaDoc.fromInstance for the document once read.
+	fromInstance bool
 }
 
 // assembler reads a schema document and everything it references.
@@ -626,6 +789,10 @@ type assembler struct {
 	queue  []pending
 	p      *parser
 	count  int
+
+	// limitErr is the MaxDocuments refusal admitFetch made inside parseAndQueue,
+	// which has no error result; run returns it after the document.
+	limitErr error
 
 	// rootBases holds the locations of the documents the caller named
 	// directly. Faults in those are reported without naming the file — the
@@ -838,40 +1005,68 @@ func (a *assembler) run() error {
 
 		a.count++
 		if a.count > a.opts.MaxDocuments {
-			return fmt.Errorf(
-				"schema assembly read more than %d documents; raise "+
-					"Options.MaxDocuments if this is legitimate",
-				a.opts.MaxDocuments)
+			return a.tooManyDocuments()
 		}
 
+		shown := item.base
+		if item.shown != "" {
+			shown = item.shown
+		}
 		root := item.root
 		if root.Kind() == xdm.KindDocument {
 			els := root.ChildElements()
 			if len(els) == 0 {
-				return fmt.Errorf("schema document at %q is empty", item.base)
+				return fmt.Errorf("schema document at %q is empty", shown)
 			}
 			root = els[0]
 		}
 		if !root.IsElement(NSSchema, "schema") {
 			return fmt.Errorf(
 				"schema document at %q has root {%s}%s, want {%s}schema",
-				item.base, root.Name().URI, root.Name().Local, NSSchema)
+				shown, root.Name().URI, root.Name().Local, NSSchema)
 		}
 
 		if err := a.readOne(root, item); err != nil {
 			return err
 		}
+		if a.limitErr != nil {
+			return a.limitErr
+		}
 	}
 	return nil
 }
 
+// admitFetch reports the MaxDocuments refusal when the documents already read
+// or queued fill the allowance. It runs before a new document is parsed:
+// counting only as a document is dequeued let every reference of the document
+// read last, and every path given to LoadFiles, be fetched and parsed past the
+// limit first. A reference to a document already read is not charged; see
+// parseAndQueue.
+func (a *assembler) admitFetch() error {
+	if a.count+len(a.queue) >= a.opts.MaxDocuments {
+		return a.tooManyDocuments()
+	}
+	return nil
+}
+
+func (a *assembler) tooManyDocuments() error {
+	return fmt.Errorf(
+		"schema assembly read more than %d documents; raise "+
+			"Options.MaxDocuments if this is legitimate",
+		a.opts.MaxDocuments)
+}
+
 // readOne reads one document's components and queues what it references.
 func (a *assembler) readOne(root *xdm.Node, item pending) error {
-	doc := &schemaDoc{root: root, baseURI: item.base}
+	doc := &schemaDoc{root: root, baseURI: item.base, fromInstance: item.fromInstance}
 	// A fault in this document should name it — unless it is the document
 	// the caller handed to Load, which they are already looking at.
 	if !a.rootBases[item.base] {
-		a.p.noteDocument(root, item.base)
+		name := item.base
+		if item.shown != "" {
+			name = item.shown
+		}
+		a.p.noteDocument(root, name)
 	}
 	if attr := root.Attr("", "targetNamespace"); attr != nil {
 		// §3.15.2 (schema-namespace): targetNamespace names a
@@ -1022,6 +1217,9 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 
 // queueRef resolves and queues a referenced document.
 func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location string, isInclude, redefining bool) {
+	if a.limitErr != nil {
+		return
+	}
 	if location == "" {
 		if !isInclude {
 			// An import with no schemaLocation declares a dependency
@@ -1075,7 +1273,8 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 			// refused: that is a decision, not a miss, and a
 			// schema silently missing what sat outside the root
 			// would be reported as having loaded.
-			a.p.errs = append(a.p.errs, errorAt(el, "src-resolve", "%v", err))
+			a.p.errs = append(a.p.errs, errorAt(el, "src-resolve", "%v",
+				scrubResolveErr(doc, location, err)))
 			return
 		}
 		// A redefine that redefines nothing costs nothing when its
@@ -1122,7 +1321,8 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 			err = fmt.Errorf("resolved to nothing")
 		}
 		a.p.errs = append(a.p.errs, errorAt(el, "src-resolve",
-			"cannot resolve schemaLocation %q: %v", location, err))
+			"cannot resolve schemaLocation %q: %v", location,
+			scrubResolveErr(doc, location, err)))
 		return
 	}
 
@@ -1130,10 +1330,29 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 }
 
 func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespace string, doc *schemaDoc, isInclude, redefining bool) {
+	// MaxDocuments counts documents read, so only a document not read yet is
+	// charged, and it is charged here, before it is parsed. Charging every
+	// reference before it was resolved refused a set of exactly MaxDocuments
+	// documents as soon as one of them referred back to another: an import
+	// cycle, a second include of one file, or an import naming no location.
+	// Which document a reference names is known only once it is resolved,
+	// so this is the earliest the two can be told apart.
+	//
+	// The key read below also carries the namespace a chameleon include
+	// adopts, which only the parsed document settles. A reference whose
+	// location is already read under either key it could have is parsed
+	// first and charged after, exactly; any other is charged now.
+	loc := a.canon.location(resolved)
+	if !a.seen[docKey{location: loc}] && !a.seen[docKey{location: loc, adoptedNS: doc.targetNS}] {
+		if a.limitErr = a.admitFetch(); a.limitErr != nil {
+			return
+		}
+	}
+	shown := a.shownAs(el, doc, resolved, namespace)
 	tree, err := xdm.Parse(rc, schemaParseOptions(rc, a.opts.ParseOptions))
 	if err != nil {
 		a.p.errs = append(a.p.errs, errorAt(el, "src-resolve",
-			"parsing %q: %v", resolved, err))
+			"parsing %q: %v", shown, err))
 		return
 	}
 
@@ -1152,20 +1371,20 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 			}
 			a.p.errs = append(a.p.errs, errorAt(el, code,
 				"the document at %q has target namespace %q, "+
-					"which differs from %q", resolved, refNS, doc.targetNS))
+					"which differs from %q", shown, refNS, doc.targetNS))
 			return
 		}
 	} else if namespace != "" {
 		if !refHasNS || refNS != namespace {
 			a.p.errs = append(a.p.errs, errorAt(el, "src-import.3.1",
 				"import names namespace %q but the document at %q "+
-					"has target namespace %q", namespace, resolved, refNS))
+					"has target namespace %q", namespace, shown, refNS))
 			return
 		}
 	} else if refHasNS {
 		a.p.errs = append(a.p.errs, errorAt(el, "src-import.3.2",
 			"import has no namespace attribute but the document at %q "+
-				"has target namespace %q", resolved, refNS))
+				"has target namespace %q", shown, refNS))
 		return
 	}
 
@@ -1222,8 +1441,52 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 	if alreadySeen {
 		return
 	}
+	if a.limitErr = a.admitFetch(); a.limitErr != nil {
+		return
+	}
 
 	a.push(tree.Root, resolved, chameleon, redefining)
+	if doc.fromInstance {
+		a.queue[len(a.queue)-1].shown = shown
+		a.queue[len(a.queue)-1].fromInstance = true
+	}
+}
+
+// shownAs is how errors name the document el references, resolved to
+// resolved. A document in the caller's own load is named by its resolved
+// path, which the caller chose and which helps them find it. One reached from
+// a location an instance named is named by the location text as written in
+// the referring document (its namespace, for an import that gives none),
+// because its resolved path is a host path the instance's author has no
+// business learning.
+func (a *assembler) shownAs(el *xdm.Node, doc *schemaDoc, resolved, namespace string) string {
+	if !doc.fromInstance {
+		return resolved
+	}
+	if loc := el.AttrValue("schemaLocation"); loc != "" {
+		return loc
+	}
+	return namespace
+}
+
+// scrubResolveErr is err as a resolver error is shown for a reference from
+// doc. In the caller's own load it is err itself. From a document an instance
+// reached, the resolver's text can carry the host path it tried (an os.Open
+// error does), so only what kind of failure it was is kept, with the
+// sentinels errors.Is looks for.
+func scrubResolveErr(doc *schemaDoc, location string, err error) error {
+	if !doc.fromInstance {
+		return err
+	}
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errRefusedByPolicy):
+		return fmt.Errorf("schemaLocation %q: %w", location, errRefusedByPolicy)
+	case errors.Is(err, errNoResolver):
+		return fmt.Errorf("schemaLocation %q: %w", location, errNoResolver)
+	}
+	return fmt.Errorf("schemaLocation %q cannot be read", location)
 }
 
 // targetNSOf returns a schema document's target namespace and whether it

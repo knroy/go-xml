@@ -328,7 +328,12 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 		if uri == xdm.NSXML {
 			continue
 		}
-		if uri == xdm.NSXSL || excluded[uri] {
+		// A generated xsl:original namespace is the XSLT namespace under
+		// another name -- rewriteOverride rebinds the override's XSLT
+		// prefixes to it -- and is excluded as that namespace is. Only the
+		// URIs this compilation generated: one the stylesheet declares under
+		// the same prefix is an ordinary namespace.
+		if uri == xdm.NSXSL || c.env.originalNSs[uri] || excluded[uri] {
 			// Section 11.1.4: "a namespace node whose string value is a
 			// target namespace URI is copied to the result tree, whether or
 			// not the URI identifies an excluded namespace". Whether a URI is
@@ -375,6 +380,7 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 			}
 		}
 		instr.attrs = append(instr.attrs, attrTemplate{name: an, value: avt})
+		c.noteStreamAVT(n, avt, ns)
 	}
 
 	body, err := c.compileSequence(n, n)
@@ -435,6 +441,9 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		if err != nil {
 			return nil, err
 		}
+		if v.Select != nil {
+			c.noteStreamParam(n, v.Select, ns) // streamvariable.go
+		}
 		return &varInstr{v: v}, nil
 	case "element":
 		return c.compileElement(n, ns)
@@ -447,6 +456,7 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			if instr.sel, err = compileExpr(sel, ns); err != nil {
 				return nil, err
 			}
+			c.noteStreamSelect(n, instr, instr.sel, ns)
 			return instr, nil
 		}
 		body, err := c.compileSequence(n, n)
@@ -475,7 +485,10 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			validation:       spec,
 			baseURI:          n.BaseURI(),
 		}
-		c.noteBurstSelect(n, instr, sel, ns)
+		if inl := c.inlineInstrFor(n, instr, sel, ns); inl != nil { // streamfn_inline.go
+			return inl, nil
+		}
+		c.noteStreamSelect(n, instr, sel, ns)
 		return instr, nil
 	case "evaluate":
 		return c.compileEvaluate(n, ns)
@@ -524,7 +537,10 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			}
 		}
 		instr := &sequenceInstr{sel: sel}
-		c.noteBurstSelect(n, instr, sel, ns)
+		if inl := c.inlineInstrFor(n, instr, sel, ns); inl != nil { // streamfn_inline.go
+			return inl, nil
+		}
+		c.noteStreamSelect(n, instr, sel, ns)
 		return instr, nil
 	case "message":
 		return c.compileMessage(n, ns)
@@ -542,18 +558,14 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		return c.compileNamespace(n, ns)
 	case "perform-sort":
 		return c.compilePerformSort(n, ns)
-	case "next-match":
+	case "next-match", "apply-imports":
 		params, _, err := c.compileParamsAndSorts(n, ns)
 		if err != nil {
 			return nil, err
 		}
-		return &nextMatchInstr{params: params}, nil
-	case "apply-imports":
-		params, _, err := c.compileParamsAndSorts(n, ns)
-		if err != nil {
-			return nil, err
-		}
-		return &nextMatchInstr{applyImports: true, params: params}, nil
+		instr := &nextMatchInstr{applyImports: n.Name().Local == "apply-imports", params: params}
+		c.noteStreamApply(n, instr, nil, nil)
+		return instr, nil
 	case "document":
 		body, err := c.compileSequence(n, n)
 		if err != nil {
@@ -566,10 +578,7 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		return &documentInstr{body: body, validation: spec}, nil
 	case "result-document":
 		return c.compileResultDocument(n, ns)
-	case "source-document", "stream":
-		// xsl:stream is the same instruction under the name the vendored
-		// working draft uses; compileSourceDocument reads attributes rather
-		// than the element name, and xsl:stream has no @streamable to read.
+	case "source-document":
 		return c.compileSourceDocument(n)
 	case "fallback":
 		// xsl:fallback is instantiated only when its containing instruction is
@@ -672,6 +681,7 @@ func (c *compiler) compileValueOf(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 			return nil, fmt.Errorf("in xsl:value-of/@separator: %w", err)
 		}
 		instr.separator, instr.hasSeparator = sep, true
+		c.noteStreamAVT(n, sep, ns) // streamavt_k2.go
 	}
 	if sel := n.AttrValue("select"); sel != "" {
 		comp, err := compileExpr(sel, ns)
@@ -684,7 +694,7 @@ func (c *compiler) compileValueOf(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 			return nil, fmt.Errorf(
 				"XTSE0870: xsl:value-of has both a select attribute and content")
 		}
-		c.noteBurstSelect(n, instr, comp, ns)
+		c.noteStreamSelect(n, instr, comp, ns)
 		return instr, nil
 	}
 	body, err := c.compileSequence(n, n)
@@ -768,6 +778,12 @@ func (c *compiler) compileApplyTemplates(n *xdm.Node, ns xpath.NamespaceResolver
 		return nil, err
 	}
 	instr.params, instr.sorts = params, sorts
+	if instr.sel != nil {
+		if inl := c.inlineInstrFor(n, instr, instr.sel, ns); inl != nil { // streamfn_inline.go
+			return inl, nil
+		}
+	}
+	c.noteStreamApply(n, instr, instr.sel, ns)
 	return instr, nil
 }
 
@@ -804,6 +820,9 @@ func (c *compiler) compileParamsAndSorts(n *xdm.Node, ns xpath.NamespaceResolver
 			v, err := c.compileVariable(ch)
 			if err != nil {
 				return nil, nil, err
+			}
+			if v.Select != nil {
+				c.noteStreamParam(ch, v.Select, ns)
 			}
 			params = append(params, v)
 		case isXSL(ch, "sort"):
@@ -977,7 +996,7 @@ func (c *compiler) compileForEach(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 		return nil, err
 	}
 	instr := &forEachInstr{sel: sel, sorts: sorts, body: body}
-	c.noteBurstLoop(n, instr, sel, ns)
+	c.noteStreamLoop(n, instr, sel, ns)
 	return instr, nil
 }
 
@@ -986,6 +1005,7 @@ func (c *compiler) compileIf(n *xdm.Node, ns xpath.NamespaceResolver) (Instructi
 	if err != nil {
 		return nil, err
 	}
+	c.noteStreamTest(n, test, ns)
 	body, err := c.compileSequence(n, n)
 	if err != nil {
 		return nil, err
@@ -1002,6 +1022,7 @@ func (c *compiler) compileChoose(n *xdm.Node, ns xpath.NamespaceResolver) (Instr
 			if err != nil {
 				return nil, err
 			}
+			c.noteStreamTest(ch, test, newNSResolver(ch, ""))
 			body, err := c.compileSequence(ch, ch)
 			if err != nil {
 				return nil, err
@@ -1032,6 +1053,7 @@ func (c *compiler) compileElement(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	}
 	instr := &elementInstr{name: nameAVT, scope: inScopeNamespacesShared(n), attrSets: sets,
 		baseURI: n.BaseURI(), noInherit: noAttr(n, "inherit-namespaces")}
+	c.noteStreamAVT(n, nameAVT, ns) // streamavt_k2.go
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
 	}
@@ -1044,6 +1066,7 @@ func (c *compiler) compileElement(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 			return nil, err
 		}
 		instr.namespace = avt
+		c.noteStreamAVT(n, avt, ns) // streamavt_k2.go
 	}
 	body, err := c.compileSequence(n, n)
 	if err != nil {
@@ -1059,12 +1082,14 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 		return nil, err
 	}
 	instr := &attributeInstr{name: nameAVT, scope: inScopeNamespacesShared(n)}
+	c.noteStreamAVT(n, nameAVT, ns) // streamavt_k2.go
 	if sepAttr := n.Attr("", "separator"); sepAttr != nil {
 		sep, err := compileAVT(sepAttr.Value(), ns)
 		if err != nil {
 			return nil, err
 		}
 		instr.separator, instr.hasSeparator = sep, true
+		c.noteStreamAVT(n, sep, ns) // streamavt_k2.go
 	}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
@@ -1078,6 +1103,7 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 			return nil, err
 		}
 		instr.namespace = avt
+		c.noteStreamAVT(n, avt, ns) // streamavt_k2.go
 	}
 	if sel := n.AttrValue("select"); sel != "" {
 		comp, err := compileExpr(sel, ns)
@@ -1085,6 +1111,7 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 			return nil, err
 		}
 		instr.sel = comp
+		c.noteStreamSelect(n, instr, comp, ns)
 		return instr, nil
 	}
 	body, err := c.compileSequence(n, n)
@@ -1105,6 +1132,7 @@ func (c *compiler) compilePI(n *xdm.Node, ns xpath.NamespaceResolver) (Instructi
 		if instr.sel, err = compileExpr(sel, ns); err != nil {
 			return nil, err
 		}
+		c.noteStreamSelect(n, instr, instr.sel, ns)
 		return instr, nil
 	}
 	if instr.body, err = c.compileSequence(n, n); err != nil {
@@ -1144,6 +1172,7 @@ func (c *compiler) compileCopy(n *xdm.Node, ns xpath.NamespaceResolver) (Instruc
 			return nil, fmt.Errorf("in xsl:copy/@select: %w", err)
 		}
 		instr.sel = sel
+		c.noteStreamLoop(n, instr, sel, ns) // a consuming select (streamcopy.go)
 	}
 	return instr, nil
 }
@@ -1170,6 +1199,7 @@ func (c *compiler) compileMessage(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 			return nil, err
 		}
 		instr.sel = comp
+		c.noteStreamSelect(n, instr, comp, ns)
 	}
 	body, err := c.compileSequence(n, n)
 	if err != nil {
@@ -1275,6 +1305,7 @@ func (c *compiler) compileResultDocument(n *xdm.Node, ns xpath.NamespaceResolver
 			return nil, fmt.Errorf("in xsl:result-document/@format: %w", err)
 		}
 		instr.format = a
+		c.noteStreamAVT(n, a, ns) // streamresult.go
 	}
 	// Serialisation attributes written on the instruction itself override
 	// whatever the selected definition supplies, so they are kept separately
@@ -1300,6 +1331,7 @@ func (c *compiler) compileResultDocument(n *xdm.Node, ns xpath.NamespaceResolver
 			return nil, fmt.Errorf("in xsl:result-document/@%s: %w", a.Name().Local, err)
 		}
 		instr.overrideAVTs[a.Name().Local] = t
+		c.noteStreamAVT(n, t, ns) // streamresult.go
 	}
 	// §19.2.2: a result document is a document node, and validation on it is
 	// document-node validation — the sole element child is assessed, and the
@@ -1316,6 +1348,7 @@ func (c *compiler) compileResultDocument(n *xdm.Node, ns xpath.NamespaceResolver
 			return nil, fmt.Errorf("in xsl:result-document/@href: %w", err)
 		}
 		instr.href = a
+		c.noteStreamAVT(n, a, ns) // streamresult.go
 	}
 
 	body, err := c.compileSequence(n, n)
@@ -2058,7 +2091,7 @@ func (i *breakInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// of the xsl:iterate instruction as a whole" — so it writes to the same
 	// output builder before the loop unwinds, not after.
 	if i.sel != nil {
-		seq, err := i.sel.Eval(rt.ctx)
+		seq, err := rt.evalSelect(i, i.sel)
 		if err != nil {
 			return err
 		}
@@ -2182,6 +2215,14 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 					for _, j := range nx.from.byDecl {
 						k := nx.from.slots[j]
 						p, v := i.params[k], nx.vals[j]
+						// A value passed back as itself ($p for $p) is the
+						// one converted when it was carried in, and its
+						// conversion again is the identity: skipped, since
+						// it walked every item on every turn (20 000
+						// strings over 20 000 turns took 16 s).
+						if len(v) > 0 && len(v) == len(carried[k]) && &v[0] == &carried[k][0] {
+							continue
+						}
 						conv, err := p.asType.convertAsLazy(v, func() string {
 							return "parameter $" + p.Name.Lexical() + " of xsl:iterate"
 						}, "XTTE0590")
@@ -2208,7 +2249,7 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 			pos++
 			live.begin(rt, out)
-			if err := step(pos, it, 0); err != errStopIterate {
+			if err := step(pos, it, feed.size); err != errStopIterate { // a sized feed's, or 0
 				if err == nil {
 					live.end(rt, out, carried)
 				}
@@ -2307,7 +2348,7 @@ func (c *compiler) compileIterate(n *xdm.Node, ns *nsResolver) (Instruction, err
 		return nil, err
 	}
 	instr.body = body
-	c.noteBurstLoop(n, instr, sel, ns)
+	c.noteStreamLoop(n, instr, sel, ns)
 	return instr, nil
 }
 
@@ -2319,6 +2360,7 @@ func (c *compiler) compileBreak(n *xdm.Node, ns *nsResolver) (Instruction, error
 			return nil, fmt.Errorf("in xsl:break/@select: %w", err)
 		}
 		instr.sel = sel
+		c.noteStreamSelect(n, instr, sel, ns)
 		return instr, nil
 	}
 	body, err := c.compileSequence(n, n)

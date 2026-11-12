@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -48,6 +49,17 @@ func (p *parser) checkParticleRestriction() error {
 	// anonymously — which is how the suite writes most of them. The slice
 	// is in document order, so the errors below stay stable between runs
 	// where a map walk would not.
+	// recurse flattens nested same-compositor groups with
+	// inlineSameCompositor, and group refs share one *ModelGroup, so a
+	// flattened list is as long as the number of paths through the group
+	// DAG — 2^(n-1) for n groups each referencing the next twice. The
+	// lengths are measured first, memoised per group, against the position
+	// budget the content-model compile applies anyway.
+	limit := p.schema.maxPositions
+	if limit <= 0 {
+		limit = maxPositions
+	}
+	inlined := map[*ModelGroup]int{}
 	for _, ct := range p.schema.allComplexTypes {
 		if ct.DerivationMethod != DerivationRestriction {
 			continue
@@ -124,7 +136,22 @@ func (p *parser) checkParticleRestriction() error {
 			}
 			continue
 		}
-		if err := particleValidRestrictionVersion(ct.Particle, base.Particle, p.schema.Version); err != nil {
+		if inlinedTooLong(ct.Particle, limit, inlined) || inlinedTooLong(base.Particle, limit, inlined) {
+			// Returned at once rather than collected: the list below is
+			// rebuilt from its text, which would strip the sentinel.
+			return fmt.Errorf(
+				"%s: Particle Valid (Restriction) cannot be checked: a model group "+
+					"flattens to more than %d particles; the schema is refused because "+
+					"the restriction is undecided, not because it is known to be invalid: %w",
+				typeLabel(name, ct), limit, xdm.ErrResourceLimit)
+		}
+		if err := particleValidRestrictionIn(ct.Particle, base.Particle, p.schema.Version, p.schema.budgets); err != nil {
+			// Returned at once, like the flattening refusal above, so
+			// the sentinel survives the list being rebuilt from text.
+			if errors.Is(err, xdm.ErrResourceLimit) {
+				return fmt.Errorf("%s: Particle Valid (Restriction) against %s: %w",
+					typeLabel(name, ct), typeLabel(base.Name, base), err)
+			}
 			errs = append(errs, fmt.Errorf(
 				"%s is not a valid restriction of %s: %w",
 				typeLabel(name, ct), typeLabel(base.Name, base), err))
@@ -251,13 +278,61 @@ func isUrType(ct *ComplexType) bool {
 // columns. Every cell not named is Forbidden, which is why the fallthrough is
 // an error rather than a pass.
 func particleValidRestriction(r, b *Particle) error {
-	return particleRestricts(r, b, false, Version10)
+	return particleValidRestrictionVersion(r, b, Version10)
 }
 
 // particleValidRestrictionVersion is particleValidRestriction with the schema
 // version, which decides whether the 1.1 all-group subsumption rule applies.
+//
+// A rejection reached after an exact 1.1 check declined for its budget is not a
+// verdict: the 1.0 table that answered instead is conservative and may refuse
+// a restriction §3.4.6.4 admits. It is returned wrapping xdm.ErrResourceLimit,
+// the package's form for "undecided" (see the UPA refusal in upa.go), so it is
+// never mistaken for "known to be invalid".
 func particleValidRestrictionVersion(r, b *Particle, v Version) error {
-	return particleRestricts(r, b, false, v)
+	return particleValidRestrictionIn(r, b, v, loadBudgets{})
+}
+
+// particleValidRestrictionIn is particleValidRestrictionVersion under a
+// schema's retained budgets (Options.MaxSubsumptionStates and the rest). It is
+// the one decision point the comment above describes: a rejection that follows
+// a budget decline is wrapped with xdm.ErrResourceLimit here.
+func particleValidRestrictionIn(r, b *Particle, v Version, lb loadBudgets) error {
+	w := &restrictWalk{v: v, lb: lb, memo: map[restrictPair]error{}}
+	err := particleRestricts(r, b, false, w)
+	if err != nil && w.overBudget {
+		return fmt.Errorf("%v; the restriction is undecided, not known to be "+
+			"invalid, because %s: %w", err, errBudgetDeclined, xdm.ErrResourceLimit)
+	}
+	return err
+}
+
+// restrictWalk is the state one Particle Valid (Restriction) check carries
+// down its recursion.
+//
+// memo holds the verdict for every (R, B, expanded) already decided. The
+// recursion has no other bound on how often it revisits a pair: group
+// references make both particle trees DAGs, and two parallel chains
+// g_i = sequence(g_{i+1}, g_{i+1}) and h_i likewise, restricted one by the
+// other, reach each level's pair 2^i times — never sharing a particle, so the
+// r == b shortcut does not fire, and with maxOccurs="2" refs, which
+// inlinedTooLong does not flatten. An 11 KB schema ran for hours. The verdict
+// is a function of the pair, the flag and the version alone, so each pair is
+// now decided once and the walk is bounded by the number of distinct pairs.
+type restrictWalk struct {
+	v    Version
+	lb   loadBudgets
+	memo map[restrictPair]error
+	// inlined memoises inlineSameCompositor per group for the walk.
+	inlined map[*ModelGroup][]*Particle
+	// overBudget records that an exact 1.1 check declined for its budget
+	// somewhere in the walk, so a rejection is undecided rather than final.
+	overBudget bool
+}
+
+type restrictPair struct {
+	r, b     *Particle
+	expanded bool
 }
 
 // particleRestricts carries the clause 2.1 state that particleValidRestriction
@@ -268,7 +343,18 @@ func particleValidRestrictionVersion(r, b *Particle, v Version) error {
 // a member of its own substitution group: expanding again on the way down
 // through RecurseAsIfGroup and RecurseLax reproduces the same head particle
 // forever.
-func particleRestricts(r, b *Particle, expanded bool, v Version) error {
+func particleRestricts(r, b *Particle, expanded bool, w *restrictWalk) error {
+	key := restrictPair{r, b, expanded}
+	if err, ok := w.memo[key]; ok {
+		return err
+	}
+	err := particleRestrictsOnce(r, b, expanded, w)
+	w.memo[key] = err
+	return err
+}
+
+// particleRestrictsOnce is particleRestricts without the memo.
+func particleRestrictsOnce(r, b *Particle, expanded bool, w *restrictWalk) error {
 	// Clause 1: the same particle restricts itself. This is not merely an
 	// optimisation — a group reference shared between base and derived
 	// resolves to one *Particle, and the structural rules below would have
@@ -287,7 +373,7 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 	// preserve and stripping it is what lets the derivation reach a cell at
 	// all: particlesR001 restricts a sequence-with-wildcard by a one-member
 	// choice, which is valid only once the choice is gone.
-	keepChoice := v >= Version11 && bothChoices(r, b)
+	keepChoice := w.v >= Version11 && bothChoices(r, b)
 	r = stripPointless(r, keepChoice)
 	b = stripPointless(b, keepChoice)
 
@@ -330,7 +416,7 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 	// otherwise expand forever.
 	if !expanded && !sameElementDecl(r, b) {
 		if sub := asSubstitutionChoice(b); sub != nil {
-			return particleRestricts(r, sub, true, v)
+			return particleRestricts(r, sub, true, w)
 		}
 	}
 
@@ -349,16 +435,20 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 	// 1.0 table, which stays sound under 1.1 — the table is a conservative
 	// approximation of the same inclusion, never wrong in the accepting
 	// direction.
-	if v >= Version11 {
-		if err, ok := allSubsumes(r, b); ok {
+	if w.v >= Version11 {
+		if err, ok := allSubsumes(r, b, w.lb); ok {
 			return err
+		} else if err != nil {
+			w.overBudget = true
 		}
 		// The general form of the same 1.1 constraint, decided by
 		// language inclusion where the models can be unrolled exactly.
 		// It declines for an all group, a recursive model or a range
 		// too wide to unroll, and the table below then answers.
-		if err, ok := particleSubsumes(r, b); ok {
+		if err, ok := particleSubsumesIn(r, b, w.lb); ok {
 			return err
+		} else if err != nil {
+			w.overBudget = true
 		}
 	}
 
@@ -370,7 +460,7 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 		case *Wildcard:
 			return nsCompat(r, rt, b, bt)
 		case *ModelGroup:
-			return recurseAsIfGroup(r, b, bt, expanded, v)
+			return recurseAsIfGroup(r, b, bt, expanded, w)
 		}
 	case *Wildcard:
 		switch bt := b.Term.(type) {
@@ -394,7 +484,7 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 			// wrap costs nothing — recurseUnordered re-derives the
 			// range from the wrapped particle — and the base's other
 			// bucket is emptiable, which clause 2.3 still checks.
-			if v >= Version11 && bt.Compositor == CompositorAll {
+			if w.v >= Version11 && bt.Compositor == CompositorAll {
 				wrapped := &Particle{
 					MinOccurs: 1, MaxOccurs: 1,
 					Term: &ModelGroup{
@@ -403,13 +493,13 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 					},
 				}
 				return recurseUnordered(wrapped,
-					wrapped.Term.(*ModelGroup), b, bt, expanded, v)
+					wrapped.Term.(*ModelGroup), b, bt, expanded, w)
 			}
 		}
 	case *ModelGroup:
 		switch bt := b.Term.(type) {
 		case *Wildcard:
-			return nsRecurseCheckCardinality(r, rt, b, bt, expanded, v)
+			return nsRecurseCheckCardinality(r, rt, b, bt, expanded, w)
 		case *ModelGroup:
 			switch {
 			case rt.Compositor == CompositorAll && bt.Compositor == CompositorAll:
@@ -417,10 +507,10 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 				// unordered retry is an acceptance, so they
 				// compose: whatever the shadow rule forbids is
 				// forbidden however the members are walked.
-				if err := allWildcardShadow(rt, bt, v); err != nil {
+				if err := allWildcardShadow(rt, bt, w.v); err != nil {
 					return err
 				}
-				err := recurse(r, rt, b, bt, expanded, v)
+				err := recurse(r, rt, b, bt, expanded, w)
 				// Recurse walks B's members in order and never
 				// reconsiders one it has passed. For a sequence
 				// that is the point; for an all group, whose
@@ -446,21 +536,21 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 				// Only tried when the ordered walk has already
 				// failed, so no derivation Recurse accepts can
 				// change its answer here.
-				if err != nil && v >= Version11 {
-					if err2 := recurseUnordered(r, rt, b, bt, expanded, v); err2 == nil {
+				if err != nil && w.v >= Version11 {
+					if err2 := recurseUnordered(r, rt, b, bt, expanded, w); err2 == nil {
 						return nil
 					}
 				}
 				return err
 			case rt.Compositor == CompositorSequence && bt.Compositor == CompositorSequence:
-				return recurse(r, rt, b, bt, expanded, v)
+				return recurse(r, rt, b, bt, expanded, w)
 			case rt.Compositor == CompositorChoice && bt.Compositor == CompositorChoice:
-				return recurseLax(r, rt, b, bt, expanded, v)
+				return recurseLax(r, rt, b, bt, expanded, w)
 			case rt.Compositor == CompositorSequence && bt.Compositor == CompositorAll:
-				return recurseUnordered(r, rt, b, bt, expanded, v)
+				return recurseUnordered(r, rt, b, bt, expanded, w)
 			case rt.Compositor == CompositorSequence && bt.Compositor == CompositorChoice:
-				return mapAndSum(r, rt, b, bt, expanded, v)
-			case v >= Version11 && rt.Compositor == CompositorChoice &&
+				return mapAndSum(r, rt, b, bt, expanded, w)
+			case w.v >= Version11 && rt.Compositor == CompositorChoice &&
 				bt.Compositor == CompositorSequence:
 				// The 1.0 table has no Choice:Sequence cell, so this
 				// pair had no answer at all. Under 1.1 the question is
@@ -484,7 +574,7 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 						Particles:  []*Particle{r},
 					},
 				}
-				return recurse(wrapped, wrapped.Term.(*ModelGroup), b, bt, expanded, v)
+				return recurse(wrapped, wrapped.Term.(*ModelGroup), b, bt, expanded, w)
 			}
 		}
 	}
@@ -569,10 +659,24 @@ func stripPointless(p *Particle, keepChoice bool) *Particle {
 // Only a wrapper with the *same* compositor is inlined. A choice inside a
 // sequence orders nothing the sequence orders and flattening it would change
 // the language; the clause names only the matching pair.
-func inlineSameCompositor(g *ModelGroup) []*Particle {
+//
+// memo holds each group's result for the walk: group refs share their
+// definition's *ModelGroup, so a DAG of groups each holding two refs to the
+// next is reached by 2^n paths, and an empty leaf keeps the inlinedTooLong
+// gate at zero however many there are. Callers only read the result.
+func inlineSameCompositor(g *ModelGroup, memo map[*ModelGroup][]*Particle) []*Particle {
 	if g.Compositor != CompositorSequence && g.Compositor != CompositorChoice {
 		return g.Particles
 	}
+	if out, ok := memo[g]; ok {
+		return out
+	}
+	out := inlineSameCompositorOnce(g, memo)
+	memo[g] = out
+	return out
+}
+
+func inlineSameCompositorOnce(g *ModelGroup, memo map[*ModelGroup][]*Particle) []*Particle {
 	changed := false
 	for _, p := range g.Particles {
 		if inlinable(p, g.Compositor) {
@@ -586,12 +690,54 @@ func inlineSameCompositor(g *ModelGroup) []*Particle {
 	out := make([]*Particle, 0, len(g.Particles))
 	for _, p := range g.Particles {
 		if inlinable(p, g.Compositor) {
-			out = append(out, inlineSameCompositor(p.Term.(*ModelGroup))...)
+			out = append(out, inlineSameCompositor(p.Term.(*ModelGroup), memo)...)
 			continue
 		}
 		out = append(out, p)
 	}
 	return out
+}
+
+// inlinedTooLong reports whether inlineSameCompositor, or flattenAllGroups for
+// an all group, would return more than limit particles for some model group
+// reachable from p. memo holds each group's flattened length, capped at
+// limit+1, so a group-ref DAG is walked in graph time.
+//
+// All groups count too: under 1.1 allSubsumes and allWildcardShadow flatten
+// nested all-group refs, and a ladder of all groups each holding two refs to
+// the next flattens to 2^n particles. Such a model is refused by the position
+// budget when compiled anyway (buildAll flattens it the same way), so
+// measuring it here refuses nothing that would have loaded.
+func inlinedTooLong(p *Particle, limit int, memo map[*ModelGroup]int) bool {
+	long := false
+	var size func(g *ModelGroup) int
+	size = func(g *ModelGroup) int {
+		if n, ok := memo[g]; ok {
+			return n
+		}
+		memo[g] = 0 // a cycle is reported elsewhere; do not follow it
+		n := 0
+		for _, q := range g.Particles {
+			mg, ok := q.Term.(*ModelGroup)
+			if !ok {
+				n++
+				continue
+			}
+			if m := size(mg); inlinable(q, g.Compositor) {
+				n += m
+			} else {
+				n++
+			}
+			n = min(n, limit+1)
+		}
+		memo[g] = n
+		long = long || n > limit
+		return n
+	}
+	if g, ok := p.Term.(*ModelGroup); ok {
+		size(g)
+	}
+	return long
 }
 
 // inlinable reports whether a member particle is a pointless wrapper of the
@@ -613,15 +759,33 @@ func inlinable(p *Particle, outer Compositor) bool {
 // not the same as being ·emptiable·: an optional element is emptiable but is
 // still a particle the table has a row for, and collapsing it here would
 // discard the name check that makes a restriction meaningful.
+//
+// Whether a group's members are all ignorable depends on the group alone, so
+// it is decided once per *ModelGroup, as effectiveTotalRange's total is.
 func particleIgnorable(p *Particle) bool {
+	return particleIgnorableIn(p, map[*ModelGroup]bool{})
+}
+
+func particleIgnorableIn(p *Particle, memo map[*ModelGroup]bool) bool {
 	g, ok := p.Term.(*ModelGroup)
 	if !ok {
 		return false
 	}
-	for _, child := range g.Particles {
-		if !particleIgnorable(child) {
-			return false
+	members, done := memo[g]
+	if !done {
+		memo[g] = false // a cycle is reported elsewhere; do not follow it
+		countRangeStep()
+		members = true
+		for _, child := range g.Particles {
+			if !particleIgnorableIn(child, memo) {
+				members = false
+				break
+			}
 		}
+		memo[g] = members
+	}
+	if !members {
+		return false
 	}
 	// A <choice> with no alternatives matches nothing at all rather than
 	// the empty sequence, so the spec erases it only when the containing
@@ -811,6 +975,16 @@ func blockSet(s DerivationSet) DerivationSet {
 // the base chain, plus the union-member case that lets a restriction name one
 // member of the base's union.
 func typeRestricts(t, want Type) bool {
+	return typeRestrictsSeen(t, want, nil)
+}
+
+// typeRestrictsSeen is typeRestricts remembering the union members already
+// tried against t. With t fixed the answer depends on want alone, so a member
+// reached a second time has already failed: a ladder of pure unions each
+// listing the previous one twice is reached by 2^n paths and costs one visit
+// per union. It also ends a union whose members lead back to itself, which
+// checkUnionMemberCycles reports only after the postFixups that call this.
+func typeRestrictsSeen(t, want Type, seen map[Type]bool) bool {
 	if want == nil || t == want {
 		return true
 	}
@@ -833,10 +1007,18 @@ func typeRestricts(t, want Type) bool {
 	// than the restricted union was.
 	if st, ok := want.(*SimpleType); ok && st.Variety == VarietyUnion &&
 		unionIsPure(st) {
+		if seen == nil {
+			seen = map[Type]bool{}
+		}
+		seen[want] = true
 		for _, m := range st.MemberTypes {
-			if m != nil && typeRestricts(t, m) {
+			if m == nil || seen[m] {
+				continue
+			}
+			if typeRestrictsSeen(t, m, seen) {
 				return true
 			}
+			seen[m] = true
 		}
 	}
 	// The walk stops on self as well as nil: the ur-type is its own base
@@ -872,13 +1054,19 @@ func typeRestricts(t, want Type) bool {
 // from a union it was itself restricted from: the facets of a derivation chain
 // accumulate, and a member is unconstrained by all of them alike. The walk
 // stops when it leaves the union variety, which is where xs:anySimpleType sits.
+//
+// The chain may be circular — checkUnionMemberCycles and checkTypeBaseCycles
+// report that only after the postFixups that reach this — so a type seen
+// before ends the walk.
 func unionIsPure(st *SimpleType) bool {
-	for cur := st; cur != nil && cur.Variety == VarietyUnion; {
+	seen := map[*SimpleType]bool{}
+	for cur := st; cur != nil && cur.Variety == VarietyUnion && !seen[cur]; {
+		seen[cur] = true
 		if !cur.Facets.IsEmpty() {
 			return false
 		}
 		base, ok := cur.Base.(*SimpleType)
-		if !ok || base == cur {
+		if !ok {
 			break
 		}
 		cur = base
@@ -902,7 +1090,7 @@ func nsCompat(r *Particle, rd *ElementDecl, b *Particle, bw *Wildcard) error {
 // recurseAsIfGroup is Particle Derivation OK (Elt:All/Choice/Sequence)
 // (§3.9.6): an element restricting a group is checked as a one-member group of
 // the base's variety.
-func recurseAsIfGroup(r *Particle, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+func recurseAsIfGroup(r *Particle, b *Particle, bg *ModelGroup, expanded bool, w *restrictWalk) error {
 	inner, outerMin, outerMax := r, 1, 1
 	// An *optional* element against a non-repeating choice puts its own range
 	// on the wrapper. particlesHa161 is <element name="a" minOccurs="0"/>
@@ -922,7 +1110,7 @@ func recurseAsIfGroup(r *Particle, b *Particle, bg *ModelGroup, expanded bool, v
 	// effectiveTotalRange, where a group of one repeating N times contributes
 	// N elements, so one range cannot serve both uses. A non-repeating base
 	// has no such sum to get wrong.
-	if v >= Version11 && bg.Compositor == CompositorChoice &&
+	if w.v >= Version11 && bg.Compositor == CompositorChoice &&
 		b.MaxOccurs != Unbounded && b.MaxOccurs <= 1 &&
 		r.MaxOccurs != Unbounded && r.MaxOccurs <= 1 &&
 		r.MinOccurs >= b.MinOccurs {
@@ -935,9 +1123,9 @@ func recurseAsIfGroup(r *Particle, b *Particle, bg *ModelGroup, expanded bool, v
 	}
 	switch bg.Compositor {
 	case CompositorChoice:
-		return recurseLax(wrapped, wrapped.Term.(*ModelGroup), b, bg, expanded, v)
+		return recurseLax(wrapped, wrapped.Term.(*ModelGroup), b, bg, expanded, w)
 	default:
-		return recurse(wrapped, wrapped.Term.(*ModelGroup), b, bg, expanded, v)
+		return recurse(wrapped, wrapped.Term.(*ModelGroup), b, bg, expanded, w)
 	}
 }
 
@@ -1006,10 +1194,8 @@ func wildcardSubset(sub, super *Wildcard) bool {
 		if super.Kind != NSNot {
 			return false
 		}
-		for _, ns := range super.Namespace {
-			if !containsNamespace(sub.Namespace, ns) {
-				return false
-			}
+		if !namespacesSubset(super.Namespace, sub.Namespace) {
+			return false
 		}
 		// Excluding the absent namespace narrows in the same
 		// direction: sub may exclude it where super does not, but not
@@ -1019,17 +1205,19 @@ func wildcardSubset(sub, super *Wildcard) bool {
 		// Clause 3: an enumerated set is a subset of a superset of
 		// itself, or of a negation excluding nothing the set contains.
 		if super.Kind == NSEnumerated {
-			for _, ns := range sub.Namespace {
-				if !containsNamespace(super.Namespace, ns) {
-					return false
-				}
-			}
-			return true
+			return namespacesSubset(sub.Namespace, super.Namespace)
 		}
 		// super is a negation: clause 3.2.2 requires that neither the
 		// negated value nor the absent namespace appear in sub's set.
+		excluded := namespaceSet(super.Namespace)
 		for _, ns := range sub.Namespace {
-			if !super.Allows(ns) {
+			if ns == "" {
+				if super.ExcludesAbsent {
+					return false
+				}
+				continue
+			}
+			if _, ok := excluded[ns]; ok {
 				return false
 			}
 		}
@@ -1037,13 +1225,30 @@ func wildcardSubset(sub, super *Wildcard) bool {
 	}
 }
 
-func containsNamespace(set []string, ns string) bool {
-	for _, s := range set {
-		if s == ns {
-			return true
+// namespacesSubset reports whether every namespace in sub is in super.
+//
+// The lists are an author's namespace= words, kept as written with no cap, so
+// membership goes through a set: a nested scan was |sub| x |super| per check,
+// 14 s for a 64000-word pair in an 885 KB schema.
+func namespacesSubset(sub, super []string) bool {
+	if len(sub) == 0 {
+		return true
+	}
+	set := namespaceSet(super)
+	for _, ns := range sub {
+		if _, ok := set[ns]; !ok {
+			return false
 		}
 	}
-	return false
+	return true
+}
+
+func namespaceSet(list []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(list))
+	for _, ns := range list {
+		set[ns] = struct{}{}
+	}
+	return set
 }
 
 // disallowedNamesSubset is the {disallowed names} half of Wildcard Subset
@@ -1082,29 +1287,44 @@ func disallowedNamesSubset(sub, super *Wildcard) bool {
 	if super.DisallowDefinedSibling && !sub.DisallowDefinedSibling {
 		return false
 	}
+	if len(super.DisallowedNames) == 0 {
+		return true
+	}
+	// Sets, not scans: both lists are as long as the author wrote them.
+	subNS := namespaceSet(sub.Namespace)
+	allows := func(ns string) bool {
+		_, in := subNS[ns]
+		switch sub.Kind {
+		case NSAny:
+			return true
+		case NSNot:
+			if ns == "" {
+				return !sub.ExcludesAbsent
+			}
+			return !in
+		case NSEnumerated:
+			return in
+		}
+		return false
+	}
+	refused := make(map[xdm.QName]struct{}, len(sub.DisallowedNames))
+	for _, name := range sub.DisallowedNames {
+		refused[name] = struct{}{}
+	}
 	for _, name := range super.DisallowedNames {
-		if !sub.Allows(name.URI) {
+		if !allows(name.URI) {
 			continue
 		}
-		if !containsQName(sub.DisallowedNames, name) {
+		if _, ok := refused[name]; !ok {
 			return false
 		}
 	}
 	return true
 }
 
-func containsQName(set []xdm.QName, name xdm.QName) bool {
-	for _, n := range set {
-		if n == name {
-			return true
-		}
-	}
-	return false
-}
-
 // nsRecurseCheckCardinality is Particle Derivation OK (All/Choice/Sequence:Any)
 // (§3.9.6): a group restricting a wildcard.
-func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wildcard, expanded bool, v Version) error {
+func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wildcard, expanded bool, w *restrictWalk) error {
 	// Clause 1 says each member must be a valid restriction of "the
 	// wildcard" — the {term}, not the particle B. A wildcard term carries a
 	// namespace constraint and a processContents, but no occurrence range;
@@ -1133,7 +1353,7 @@ func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wil
 	// which leaves exactly the namespace test clause 1 is for.
 	anyOccurs := &Particle{MinOccurs: 0, MaxOccurs: Unbounded, Term: bw}
 	for _, member := range rg.Particles {
-		if err := particleRestricts(member, anyOccurs, expanded, v); err != nil {
+		if err := particleRestricts(member, anyOccurs, expanded, w); err != nil {
 			return err
 		}
 	}
@@ -1154,22 +1374,25 @@ func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wil
 // single left-to-right walk rather than a search over permutations: each
 // particle of R must match the next particle of B that it can, and every
 // particle of B skipped along the way must be emptiable.
-func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, w *restrictWalk) error {
 	if err := occurrenceRangeOK(r, b); err != nil {
 		return fmt.Errorf("%s group: %w", rg.Compositor, err)
 	}
 	// Clause 2.2 again, this time on the member lists: a same-compositor
 	// wrapper among the members is pointless, and leaving it in place makes
 	// the walk compare one side's elements against the other's groups.
-	rps := inlineSameCompositor(rg)
-	bps := inlineSameCompositor(bg)
+	if w.inlined == nil {
+		w.inlined = map[*ModelGroup][]*Particle{}
+	}
+	rps := inlineSameCompositor(rg, w.inlined)
+	bps := inlineSameCompositor(bg, w.inlined)
 	bi := 0
 	for _, rp := range rps {
 		matched := false
 		for bi < len(bps) {
 			bp := bps[bi]
 			bi++
-			if particleRestricts(rp, bp, expanded, v) == nil {
+			if particleRestricts(rp, bp, expanded, w) == nil {
 				matched = true
 				break
 			}
@@ -1205,7 +1428,7 @@ func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded 
 // Like Recurse, the mapping is order-preserving — but unlike Recurse, the
 // unmapped particles of B need not be emptiable: dropping an alternative from
 // a choice is exactly what restricting a choice means.
-func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, w *restrictWalk) error {
 	if err := occurrenceRangeOK(r, b); err != nil {
 		return fmt.Errorf("choice group: %w", err)
 	}
@@ -1218,8 +1441,8 @@ func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expand
 	// forbid it: particlesT002 and T009 are marked invalid under 1.0 and valid
 	// under 1.1, and they are the base's two alternatives swapped. So the
 	// relaxation is version-gated, exactly like the one-member-choice strip.
-	if v >= Version11 {
-		return recurseLaxUnordered(rg, b, bg, expanded, v)
+	if w.v >= Version11 {
+		return recurseLaxUnordered(rg, b, bg, expanded, w)
 	}
 	bi := 0
 	for _, rp := range rg.Particles {
@@ -1227,7 +1450,7 @@ func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expand
 		for bi < len(bg.Particles) {
 			bp := bg.Particles[bi]
 			bi++
-			if particleRestricts(rp, bp, expanded, v) == nil {
+			if particleRestricts(rp, bp, expanded, w) == nil {
 				matched = true
 				break
 			}
@@ -1251,7 +1474,7 @@ func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expand
 // the first free base alternative that fits is enough when each derived
 // alternative fits only one, and the fallback scan handles the case where an
 // earlier choice consumed the only match a later one had.
-func recurseLaxUnordered(rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+func recurseLaxUnordered(rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, w *restrictWalk) error {
 	used := make([]bool, len(bg.Particles))
 	for _, rp := range rg.Particles {
 		matched := false
@@ -1259,7 +1482,7 @@ func recurseLaxUnordered(rg *ModelGroup, b *Particle, bg *ModelGroup, expanded b
 			if used[i] {
 				continue
 			}
-			if particleRestricts(rp, bp, expanded, v) == nil {
+			if particleRestricts(rp, bp, expanded, w) == nil {
 				used[i] = true
 				matched = true
 				break
@@ -1279,7 +1502,7 @@ func recurseLaxUnordered(rg *ModelGroup, b *Particle, bg *ModelGroup, expanded b
 // group's particles in any order, which is the whole point of restricting an
 // all group to a sequence — but it must still be injective: clause 2.1 forbids
 // two particles of R mapping to one of B.
-func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, w *restrictWalk) error {
 	if err := occurrenceRangeOK(r, b); err != nil {
 		return fmt.Errorf("sequence restricting an all group: %w", err)
 	}
@@ -1299,13 +1522,13 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 			// alone claims the bucket here. Asking particleRestricts
 			// would fold in Occurrence Range OK against this one
 			// derived particle and refuse a bucket the sum fits.
-			if v >= Version11 && wildcardCovers(rp, bp) {
+			if w.v >= Version11 && wildcardCovers(rp, bp) {
 				used[i] = true
 				matched = true
 				spent[i] = effectiveTotalRange(rp)
 				break
 			}
-			if particleRestricts(rp, bp, expanded, v) == nil {
+			if particleRestricts(rp, bp, expanded, w) == nil {
 				used[i] = true
 				matched = true
 				spent[i] = effectiveTotalRange(rp)
@@ -1336,7 +1559,7 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 		// naming the same element are already summed by the element
 		// path, and an all group's elements are distinct by Unique
 		// Particle Attribution, so there is nothing to share.
-		if v >= Version11 {
+		if w.v >= Version11 {
 			for i, bp := range bg.Particles {
 				if !used[i] {
 					continue
@@ -1344,7 +1567,7 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 				if _, ok := bp.Term.(*Wildcard); !ok {
 					continue
 				}
-				if particleRestricts(rp, bp, expanded, v) != nil &&
+				if particleRestricts(rp, bp, expanded, w) != nil &&
 					!wildcardCovers(rp, bp) {
 					continue
 				}
@@ -1376,7 +1599,7 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 		// exceed what the base can supply. It is instead charged to the
 		// combined budget, and each bucket's own minimum is met by the
 		// clause 2.3 emptiability check below.
-		if !matched && v >= Version11 {
+		if !matched && w.v >= Version11 {
 			if cover := unionCovers(rp, bg.Particles); len(cover) > 1 {
 				var union occRange
 				for _, i := range cover {
@@ -1559,11 +1782,11 @@ func unionCovers(rp *Particle, bps []*Particle) []int {
 // nor injective — the same alternative may be chosen repeatedly — and clause 2
 // compares the *total* length of the unfolded sequence against the choice's
 // range.
-func mapAndSum(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+func mapAndSum(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, w *restrictWalk) error {
 	for _, rp := range rg.Particles {
 		matched := false
 		for _, bp := range bg.Particles {
-			if particleRestricts(rp, bp, expanded, v) == nil {
+			if particleRestricts(rp, bp, expanded, w) == nil {
 				matched = true
 				break
 			}
@@ -1607,19 +1830,66 @@ func particleEmptiable(p *Particle) bool {
 // The distinction from the particle's own occurrence range is the point: a
 // sequence of three elements repeated twice contributes six, and it is that
 // total — not the two — that a wildcard restriction must accommodate.
+//
+// A group's total before its own occurrence range depends on the group alone,
+// so it is computed once per *ModelGroup: named groups are shared, and a walk
+// per particle visits a group once per path to it, 2^(n-1) times for n groups
+// that each reference the next twice.
 func effectiveTotalRange(p *Particle) occRange {
+	return effectiveTotalRangeIn(p, map[*ModelGroup]groupTotal{})
+}
+
+// groupTotal is the part of a group's Effective Total Range its particle's
+// occurrence range does not touch.
+type groupTotal struct {
+	acc                         occRange
+	maxUnbounded, anyNonZeroMax bool
+}
+
+func effectiveTotalRangeIn(p *Particle, memo map[*ModelGroup]groupTotal) occRange {
 	g, ok := p.Term.(*ModelGroup)
 	if !ok {
 		return occursOf(p)
 	}
+	// An empty group contributes nothing, whatever its occurrence range.
+	if len(g.Particles) == 0 {
+		return occRange{}
+	}
+	tot, done := memo[g]
+	if !done {
+		memo[g] = groupTotal{} // a cycle is reported elsewhere; do not follow it
+		countRangeStep()
+		tot = groupTotalOf(g, memo)
+		memo[g] = tot
+	}
+	acc, maxUnbounded, anyNonZeroMax := tot.acc, tot.maxUnbounded, tot.anyNonZeroMax
 
+	out := occRange{}
+	out.min, out.eMin = mulExact(acc.min, acc.eMin, p.MinOccurs, p.exactMin)
+	switch {
+	case maxUnbounded:
+		out.max = Unbounded
+	case p.MaxOccurs == Unbounded:
+		if anyNonZeroMax {
+			out.max = Unbounded
+		} else {
+			out.max = 0
+		}
+	default:
+		out.max, out.eMax = mulExact(acc.max, acc.eMax, p.MaxOccurs, p.exactMax)
+	}
+	return out
+}
+
+// groupTotalOf folds g's members' Effective Total Ranges.
+func groupTotalOf(g *ModelGroup, memo map[*ModelGroup]groupTotal) groupTotal {
 	var acc occRange
 	first := true
 	maxUnbounded := false
 	anyNonZeroMax := false
 
 	for _, child := range g.Particles {
-		c := effectiveTotalRange(child)
+		c := effectiveTotalRangeIn(child, memo)
 		if c.max == Unbounded {
 			maxUnbounded = true
 			anyNonZeroMax = true
@@ -1647,26 +1917,7 @@ func effectiveTotalRange(p *Particle) occRange {
 		}
 		first = false
 	}
-	// An empty group contributes nothing, whatever its occurrence range.
-	if len(g.Particles) == 0 {
-		return occRange{}
-	}
-
-	out := occRange{}
-	out.min, out.eMin = mulExact(acc.min, acc.eMin, p.MinOccurs, p.exactMin)
-	switch {
-	case maxUnbounded:
-		out.max = Unbounded
-	case p.MaxOccurs == Unbounded:
-		if anyNonZeroMax {
-			out.max = Unbounded
-		} else {
-			out.max = 0
-		}
-	default:
-		out.max, out.eMax = mulExact(acc.max, acc.eMax, p.MaxOccurs, p.exactMax)
-	}
-	return out
+	return groupTotal{acc, maxUnbounded, anyNonZeroMax}
 }
 
 // asSubstitutionChoice expands an element declaration particle into the choice
@@ -1754,7 +2005,7 @@ func sameElementDecl(a, b *Particle) bool {
 //
 // R is then included in B exactly when every branch through R produces counts
 // inside every budget. allBranchCounts enumerates the branches.
-func allSubsumes(r, b *Particle) (error, bool) {
+func allSubsumes(r, b *Particle, lb loadBudgets) (error, bool) {
 	bg, ok := b.Term.(*ModelGroup)
 	if !ok || bg.Compositor != CompositorAll {
 		return nil, false
@@ -1858,8 +2109,13 @@ func allSubsumes(r, b *Particle) (error, bool) {
 		}
 	}
 
-	branches, ok := allBranchCounts(r)
-	if !ok {
+	branches, err := allBranchCountsIn(r, lb.branchN())
+	if err != nil {
+		// errBudgetDeclined reaches the caller; a shape it cannot count
+		// does not, as no budget would have decided it.
+		if err == errBudgetDeclined {
+			return err, false
+		}
 		return nil, false
 	}
 	for _, br := range branches {
@@ -2079,23 +2335,54 @@ func (c branchCount) add(name xdm.QName, r occRange) {
 // its members, which is what makes all216 (the same name taken twice) and
 // all234 (one name split across two particles) come out right.
 //
-// The second result is false when the model contains something this counting
-// cannot describe — a wildcard, or an element with no resolvable name — in
-// which case the caller falls back to the structural table.
-func allBranchCounts(p *Particle) ([]branchCount, bool) {
+// The error is non-nil, and the slice nil, when the enumeration declines and
+// the caller falls back to the structural table: errBudgetDeclined when the
+// branch budget (branchLimit, or Options.MaxRestrictionBranches through
+// allBranchCountsIn) stopped it, errNotCountable when the model contains
+// something this counting cannot describe — a wildcard, or an element with no
+// resolvable name.
+func allBranchCounts(p *Particle) ([]branchCount, error) {
+	return allBranchCountsIn(p, branchLimit)
+}
+
+// allBranchCountsIn is allBranchCounts with the branch budget given.
+func allBranchCountsIn(p *Particle, limit int) ([]branchCount, error) {
+	return branchCountsMemo(p, limit, map[*ModelGroup]groupBranches{})
+}
+
+// groupBranches is one model group's enumeration, kept for the walk.
+type groupBranches struct {
+	brs []branchCount
+	err error
+}
+
+// branchCountsMemo is allBranchCountsIn with each group enumerated once.
+//
+// Group refs share their definition's *ModelGroup, so a DAG of groups each
+// referencing the next twice is reached by 2^n paths, and a sequence-only
+// DAG yields one branch at every level: the branch budget never trips while
+// the walk makes 2^n calls. A group's branches depend on the group alone, the
+// containing particle's range being applied by the caller into fresh maps, so
+// the memoised slices are only ever read.
+func branchCountsMemo(p *Particle, limit int, memo map[*ModelGroup]groupBranches) ([]branchCount, error) {
 	if p.MaxOccurs == 0 {
-		return []branchCount{{}}, true
+		return []branchCount{{}}, nil
 	}
 	switch t := p.Term.(type) {
 	case *ElementDecl:
 		c := branchCount{}
 		c.add(t.Name, occursOf(p))
-		return []branchCount{c}, true
+		return []branchCount{c}, nil
 
 	case *ModelGroup:
-		inner, ok := groupBranchCounts(t)
+		gb, ok := memo[t]
 		if !ok {
-			return nil, false
+			gb.brs, gb.err = groupBranchCounts(t, limit, memo)
+			memo[t] = gb
+		}
+		inner, err := gb.brs, gb.err
+		if err != nil {
+			return nil, err
 		}
 		// A group that may be skipped is a disjunction, not a range:
 		// <all minOccurs="0"> around a required e1 means "nothing, or
@@ -2131,44 +2418,47 @@ func allBranchCounts(p *Particle) ([]branchCount, bool) {
 			}
 			out = append(out, scaled)
 		}
-		return out, true
+		return out, nil
 	}
 	// A wildcard cannot be counted per name.
 	declineBranchStructural()
-	return nil, false
+	return nil, errNotCountable
 }
+
+// errNotCountable is allBranchCounts declining for the model's shape.
+var errNotCountable = errorString("the model has a term with no per-name count")
 
 // groupBranchCounts enumerates the branches of a model group's particles.
 //
 // The number of branches is the product of the choice arities on the path, so
 // a deeply nested model could in principle blow up; branchLimit caps it and
 // falls back to the structural table rather than spending unbounded time.
-// Exceeding it makes allBranchCounts return (nil, false), which means the
+// Exceeding it makes allBranchCounts return (nil, errBudgetDeclined): the
 // enumeration DECLINED — explicitly NOT "no violation was found". The caller
 // must fall back to the structural table, which is a conservative
 // approximation. Enforced by TestRestrictionBudgetSoundness and TestBranchCountsDeclineIsNotAcceptance.
 //
 // It is a var only so tests may lower it; it is never assigned in production.
-var branchLimit = 4096
+var branchLimit = DefaultMaxRestrictionBranches
 
-func groupBranchCounts(g *ModelGroup) ([]branchCount, bool) {
+func groupBranchCounts(g *ModelGroup, limit int, memo map[*ModelGroup]groupBranches) ([]branchCount, error) {
 	if g.Compositor == CompositorChoice {
 		if len(g.Particles) == 0 {
-			return []branchCount{{}}, true
+			return []branchCount{{}}, nil
 		}
 		var out []branchCount
 		for _, child := range g.Particles {
-			brs, ok := allBranchCounts(child)
-			if !ok {
-				return nil, false
+			brs, err := branchCountsMemo(child, limit, memo)
+			if err != nil {
+				return nil, err
 			}
 			out = append(out, brs...)
-			if len(out) > branchLimit {
+			if len(out) > limit {
 				declineBranchBudget()
-				return nil, false
+				return nil, errBudgetDeclined
 			}
 		}
-		return out, true
+		return out, nil
 	}
 
 	// <sequence> and <all> both concatenate: the counts of the members
@@ -2177,13 +2467,13 @@ func groupBranchCounts(g *ModelGroup) ([]branchCount, bool) {
 	// the base is an all group, whose language is likewise order-blind.
 	out := []branchCount{{}}
 	for _, child := range g.Particles {
-		brs, ok := allBranchCounts(child)
-		if !ok {
-			return nil, false
+		brs, err := branchCountsMemo(child, limit, memo)
+		if err != nil {
+			return nil, err
 		}
-		if len(out)*len(brs) > branchLimit {
+		if len(out)*len(brs) > limit {
 			declineBranchBudget()
-			return nil, false
+			return nil, errBudgetDeclined
 		}
 		next := make([]branchCount, 0, len(out)*len(brs))
 		for _, base := range out {
@@ -2201,7 +2491,7 @@ func groupBranchCounts(g *ModelGroup) ([]branchCount, bool) {
 		}
 		out = next
 	}
-	return out, true
+	return out, nil
 }
 
 // branchFitsSkippableBudget decides one branch of R against a base all group

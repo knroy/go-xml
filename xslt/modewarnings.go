@@ -23,12 +23,24 @@ func stylesheetYes(v string) bool {
 	return false
 }
 
+// maxWarnings bounds the warnings one transform records in Result.Warnings;
+// past it one summary is recorded and the rest dropped. It is the bound
+// xdm's ParseOptions.Warn applies to a parse's xml:id warnings (maxIDWarnings).
+const maxWarnings = 100
+
 // warn records one warning for the caller. A warning never stops the
 // transform: it reports a condition the spec asks a processor to notice, and
-// the transform's result is unaffected.
+// the transform's result is unaffected. A warning per node would otherwise
+// grow with the input, so the first maxWarnings are kept, then one summary.
 func (rt *runtime) warn(msg string) {
-	if rt.warnings != nil {
+	if rt.warnings == nil {
+		return
+	}
+	switch n := len(*rt.warnings); {
+	case n < maxWarnings:
 		*rt.warnings = append(*rt.warnings, msg)
+	case n == maxWarnings:
+		*rt.warnings = append(*rt.warnings, fmt.Sprintf("further warnings suppressed after %d", maxWarnings))
 	}
 }
 

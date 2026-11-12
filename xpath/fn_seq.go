@@ -65,7 +65,22 @@ func registerSeqFuncs(l *Library) {
 		// Checked, because atomising a function item is FOTY0013 rather than
 		// something to skip over: fn:data is the one function whose whole job
 		// is atomisation, so it must be the one that reports it.
-		return xdm.AtomizeChecked(in)
+		//
+		// The arrays are flattened first, under the evaluation's context, so
+		// that a host deadline stops a large flatten; AtomizeChecked then sees
+		// no array and flattens nothing again.
+		flat, err := xdm.FlattenContext(ctx.ev().Ctx, in)
+		if err != nil {
+			return nil, err
+		}
+		out, err := xdm.AtomizeChecked(flat)
+		if err != nil {
+			return nil, err
+		}
+		if err := ctx.countItems(len(out) - len(in)); err != nil {
+			return nil, err
+		}
+		return out, nil
 	})
 
 	l.registerFn("position", []int{0}, func(ctx *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
@@ -145,7 +160,7 @@ func registerSeqFuncs(l *Library) {
 	l.registerFn("remove", []int{2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		// The position is declared xs:integer, so a decimal is a type error
 		// rather than a value to truncate: remove(1 to 10, 1.0) is XPTY0004.
-		if err := requireIntegerArg("remove", args, 1); err != nil {
+		if err := requireIntegerArg(ctx, "remove", args, 1); err != nil {
 			return nil, err
 		}
 		pos, err := argNumber(args, 1)
@@ -344,7 +359,10 @@ func fnSubsequence(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 // inexact values remains quadratic, and float and double have finitely many
 // values in a range an attacker can reach cheaply only by widening the input.
 func fnDistinctValues(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-	atoms := xdm.Atomize(args[0])
+	atoms, err := ctx.atomize(args[0])
+	if err != nil {
+		return nil, err
+	}
 	var out xdm.Sequence
 	seen := map[string]bool{}
 	// The distinct *inexact* numerics kept so far -- the floats and doubles,
@@ -566,13 +584,20 @@ func ctxImplicitTimezone(ctx *Context) int {
 }
 
 func fnIndexOf(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-	target := xdm.Atomize(args[1])
+	target, err := ctx.atomize(args[1])
+	if err != nil {
+		return nil, err
+	}
 	if len(target) != 1 {
 		return nil, xdm.ErrType("index-of: search value must be a single item")
 	}
 	t := target[0].(*xdm.Atomic)
 	var out xdm.Sequence
-	for i, it := range xdm.Atomize(args[0]) {
+	atoms, err := ctx.atomize(args[0])
+	if err != nil {
+		return nil, err
+	}
+	for i, it := range atoms {
 		eq, err := compareValues(ctx, it.(*xdm.Atomic), t, "eq", true)
 		if err != nil {
 			continue // incomparable types simply do not match
@@ -590,7 +615,10 @@ func fnIndexOf(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 // sequence. That is the mechanism a stylesheet uses to distinguish "no values"
 // from "values summing to zero".
 func fnSum(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-	atoms := xdm.Atomize(args[0])
+	atoms, err := ctx.atomize(args[0])
+	if err != nil {
+		return nil, err
+	}
 	if len(atoms) == 0 {
 		if len(args) > 1 {
 			return args[1], nil
@@ -639,7 +667,10 @@ func fnSum(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 }
 
 func fnAvg(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-	atoms := xdm.Atomize(args[0])
+	atoms, err := ctx.atomize(args[0])
+	if err != nil {
+		return nil, err
+	}
 	if len(atoms) == 0 {
 		return xdm.Empty(), nil
 	}
@@ -688,7 +719,10 @@ func toNumericOrDuration(a *xdm.Atomic) (*xdm.Atomic, error) {
 // value is NaN the result is NaN, because no total order exists over the
 // sequence otherwise.
 func minMax(ctx *Context, seq xdm.Sequence, wantMin bool) (xdm.Sequence, error) {
-	atoms := xdm.Atomize(seq)
+	atoms, err := ctx.atomize(seq)
+	if err != nil {
+		return nil, err
+	}
 	if len(atoms) == 0 {
 		return xdm.Empty(), nil
 	}
@@ -914,11 +948,14 @@ func exactRound(r *big.Rat, places int, halfToEven bool) *big.Rat {
 // argNumber accepts any numeric type and the callers then truncate, which is
 // right for a parameter declared xs:double but wrong for one declared
 // xs:integer: there the spec wants a type error, not a rounded value.
-func requireIntegerArg(fn string, args []xdm.Sequence, i int) error {
+func requireIntegerArg(ctx *Context, fn string, args []xdm.Sequence, i int) error {
 	if i >= len(args) || len(args[i]) == 0 {
 		return nil
 	}
-	atoms := xdm.Atomize(args[i])
+	atoms, err := ctx.atomize(args[i])
+	if err != nil {
+		return err
+	}
 	if len(atoms) != 1 {
 		return nil // arity is the caller's problem
 	}

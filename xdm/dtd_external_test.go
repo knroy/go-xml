@@ -1,10 +1,12 @@
 package xdm
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -375,6 +377,161 @@ func TestExternalSubsetSuppliesEntities(t *testing.T) {
 	}
 }
 
+// WFC: Entity Declared (XML 1.0 §4.1): under standalone="yes" a reference in
+// the document must match a declaration outside the external subset or a
+// parameter entity, so one the external subset alone declares, or one an
+// internal parameter entity brings in, is refused, in content and in an
+// attribute value, while the internal declaration of the same name binds.
+// W3C xmlconf not-wf-sa03, ibm32n09, ibm68n06.
+func TestStandaloneRefusesExternallyDeclaredEntity(t *testing.T) {
+	const sa = `<?xml version="1.0" standalone="yes"?>`
+	dir := writeFiles(t, map[string]string{
+		"d.dtd":     `<!ENTITY greeting "from-external"><!ENTITY other "external-only"><!ENTITY frag "<b/>">`,
+		"text.xml":  sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
+		"attr.xml":  sa + `<!DOCTYPE r SYSTEM "d.dtd"><r a="&other;"/>`,
+		"frag.xml":  sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>&frag;</r>`,
+		"ok.xml":    sa + `<!DOCTYPE r SYSTEM "d.dtd" [<!ENTITY greeting "from-internal">]><r>&greeting;</r>`,
+		"nosa.xml":  `<!DOCTYPE r SYSTEM "d.dtd"><r>&other;</r>`,
+		"pe.xml":    sa + `<!DOCTYPE r [<!ENTITY % p "<!ENTITY e 'by-pe'>">%p;]><r>&e;</r>`,
+		"pe2.xml":   sa + `<!DOCTYPE r [<!ENTITY e 'literal'><!ENTITY % p "<!ENTITY e 'by-pe'>">%p;]><r>&e;</r>`,
+		"nosa2.xml": `<!DOCTYPE r [<!ENTITY % p "<!ENTITY e 'by-pe'>">%p;]><r>&e;</r>`,
+	})
+	for _, name := range []string{"text.xml", "attr.xml", "frag.xml", "pe.xml"} {
+		if err := parseExternalErr(t, dir, name); err == nil {
+			t.Errorf("%s: parsed, want WFC: Entity Declared refused", name)
+		}
+	}
+	if got := mustParseExternal(t, dir, "ok.xml").Root.StringValue(); got != "from-internal" {
+		t.Errorf("ok.xml: got %q, want from-internal", got)
+	}
+	if got := mustParseExternal(t, dir, "nosa.xml").Root.StringValue(); got != "external-only" {
+		t.Errorf("nosa.xml: got %q, want external-only", got)
+	}
+	if got := mustParseExternal(t, dir, "pe2.xml").Root.StringValue(); got != "literal" {
+		t.Errorf("pe2.xml: got %q, want literal", got)
+	}
+	if got := mustParseExternal(t, dir, "nosa2.xml").Root.StringValue(); got != "by-pe" {
+		t.Errorf("nosa2.xml: got %q, want by-pe", got)
+	}
+}
+
+// WFC: No External Entity References (XML 1.0 §3.1): "Attribute values MUST
+// NOT contain direct or indirect entity references to external entities."
+// With a resolver, a declared external entity sends the document down the
+// rewrite path, which substituted the fetched text into the attribute.
+func TestAttributeValueRefusesExternalEntity(t *testing.T) {
+	const decls = `<!ENTITY x SYSTEM "x.ent"><!ENTITY y "&x;"><!ENTITY m "<b/>"><!ENTITY s "v">`
+	dir := writeFiles(t, map[string]string{
+		"x.ent":      "hello",
+		"direct.xml": `<!DOCTYPE r [` + decls + `]><r a="&x;"/>`,
+		"nested.xml": `<!DOCTYPE r [` + decls + `]><r a="&y;"/>`,
+		"ok.xml":     `<!DOCTYPE r [` + decls + `]><r a="&s;">&x;&m;</r>`,
+	})
+	for _, name := range []string{"direct.xml", "nested.xml"} {
+		if err := parseExternalErr(t, dir, name); err == nil || !strings.Contains(err.Error(), "in an attribute value") {
+			t.Errorf("%s: err = %v, want WFC: No External Entity References", name, err)
+		}
+	}
+	r := mustParseExternal(t, dir, "ok.xml").Root.ChildElements()[0]
+	if r.Attr("", "a").Value() != "v" || r.StringValue() != "hello" {
+		t.Errorf("ok.xml: a=%q, content %q", r.Attr("", "a").Value(), r.StringValue())
+	}
+}
+
+// The validity faults a parse records for dtd.Validate (dtdnote.go) are
+// bounded, as Validate's own report is, and one recurring in a row is kept
+// once: here an external default applied to 150 elements under
+// standalone="yes", and white space written five times by character reference
+// in one element's element content.
+func TestDTDNotesAreBounded(t *testing.T) {
+	const sa = `<?xml version="1.0" standalone="yes"?>`
+	dir := writeFiles(t, map[string]string{
+		"d.dtd":    `<!ELEMENT r (c*)><!ELEMENT c EMPTY><!ATTLIST c a CDATA "v">`,
+		"many.xml": sa + `<!DOCTYPE r SYSTEM "d.dtd"><r>` + strings.Repeat("<c/>", 150) + `</r>`,
+		"runs.xml": `<!DOCTYPE r [<!ELEMENT r (c*)><!ELEMENT c EMPTY>]><r>` + strings.Repeat("&#32;<c/>", 5) + `</r>`,
+	})
+	if n := len(mustParseExternal(t, dir, "many.xml").source.dtdNotes); n != maxDTDNotes {
+		t.Errorf("many.xml: %d notes, want %d", n, maxDTDNotes)
+	}
+	if n := len(mustParseExternal(t, dir, "runs.xml").source.dtdNotes); n != 1 {
+		t.Errorf("runs.xml: %d notes, want 1", n)
+	}
+}
+
+// WFC: PE Between Declarations (XML 1.0 §2.8 [28a]): a parameter entity
+// referenced between declarations has replacement text matching extSubsetDecl,
+// so it cannot open a comment or a declaration that the text after the
+// reference closes (xmlconf not-wf-not-sa-009, ibm28an01). A reference INSIDE
+// a declaration is only VC: Proper Declaration/PE Nesting, so a document that
+// splits a declaration that way still parses (invalid--005, invalid--006), and
+// so does one whose conditional-section keyword is a reference.
+func TestParameterEntityBetweenDeclarationsIsWhole(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"comment.dtd": `<!ELEMENT r EMPTY><!ENTITY % e "<!--">%e; -->`,
+		"decl.dtd":    `<!ENTITY % e "<!ELEMENT r ">%e;EMPTY>`,
+		"inner1.dtd":  `<!ENTITY % e ">"><!ELEMENT r EMPTY %e;`,
+		"inner2.dtd":  `<!ENTITY % e "EMPTY>"><!ELEMENT r %e;`,
+		"cond.dtd":    `<!ENTITY % on "INCLUDE"><![%on;[<!ELEMENT r EMPTY>]]>`,
+		"whole.dtd":   `<!ENTITY % m "<!ELEMENT r EMPTY><!-- c -->">%m;`,
+	})
+	for name, wantErr := range map[string]bool{
+		"comment.dtd": true, "decl.dtd": true,
+		"inner1.dtd": false, "inner2.dtd": false, "cond.dtd": false, "whole.dtd": false,
+	} {
+		src := `<!DOCTYPE r SYSTEM "` + name + `"><r/>`
+		_, err := ParseString(src, ParseOptions{
+			AllowDOCTYPE:     true,
+			ExternalEntities: &dirResolver{root: dir},
+			BaseURI:          fileuri.Of(filepath.Join(dir, "doc.xml")),
+		})
+		if gotErr := err != nil; gotErr != wantErr {
+			t.Errorf("%s: err = %v, want error %v", name, err, wantErr)
+		}
+	}
+}
+
+// The ATTLIST types an external subset declares govern the document even when
+// that subset declares no entities: XML 1.0 §3.3.1 (from memory) makes an
+// attribute declared ID an ID wherever the declaration lives, and the XDM
+// is-id property follows it. A subset with no entities used to be dropped
+// before its ATTLIST was read.
+func TestExternalSubsetAttlistWithoutEntities(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"d.dtd":   `<!ATTLIST e id ID #IMPLIED>`,
+		"doc.xml": `<!DOCTYPE r SYSTEM "d.dtd"><r><e id="x"/></r>`,
+	})
+	tree := mustParseExternal(t, dir, "doc.xml")
+	if a := kids(kids(tree.Root)[0])[0].AttrAt(0); !a.IsID() {
+		t.Fatal("id declared ID in the external subset is not is-id")
+	}
+}
+
+// An IGNORE section of the external subset contributes no declarations: XML
+// 1.0 §3.4 (from memory), "the contents of ignored conditional sections MUST
+// be ignored when parsing the DTD". The keyword here comes from a parameter
+// entity of the internal subset (xmlconf valid-not-sa-015); the ATTLIST inside
+// used to default @a1 onto the element anyway. A "%" inside one is no
+// reference either ([63]): substituting %bad; there broke WFC: PE Between
+// Declarations, and %gone; was fetched.
+func TestExternalSubsetIgnoreSection(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"d.dtd": `<!ELEMENT doc (#PCDATA)><!ENTITY % bad "<!ELEMENT"><!ENTITY % gone SYSTEM "absent.ent">` +
+			`<![ %e; [<!ATTLIST doc a1 CDATA "v1"><![INCLUDE[<!ATTLIST doc a3 CDATA "v3">]]> %bad; %gone; ]]>` +
+			`<![IGNORE[ %bad; <![ %gone; ]]> %gone; ]]>` +
+			`<![INCLUDE[<!ATTLIST doc a4 CDATA "v4">]]>` +
+			`<!ATTLIST doc a2 CDATA "v2">`,
+		"doc.xml": `<!DOCTYPE doc SYSTEM "d.dtd" [<!ENTITY % e "IGNORE">]><doc></doc>`,
+	})
+	tree := mustParseExternal(t, dir, "doc.xml")
+	var got []string
+	for a := range kids(tree.Root)[0].Attrs() {
+		got = append(got, a.Name().Local+"="+a.Value())
+	}
+	if strings.Join(got, " ") != "a4=v4 a2=v2" {
+		t.Fatalf("attributes %v, want [a4=v4 a2=v2]", got)
+	}
+}
+
 // A relative system identifier inside an external subset resolves against the
 // SUBSET's URI, not the document's — XML section 4.4.3. Getting this wrong
 // makes a modular DTD resolve against the wrong directory, and it is only
@@ -543,7 +700,9 @@ func TestEntityUnknownVersionIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an unknown entity version refused, got no error")
 	}
-	if !strings.Contains(err.Error(), "unsupported XML version") {
+	// Refused as malformed: [26] VersionNum is '1.' [0-9]+, so a text
+	// declaration naming 2.0 does not match [77].
+	if !strings.Contains(err.Error(), `version="2.0"`) {
 		t.Fatalf("refused for the wrong reason: %v", err)
 	}
 }
@@ -696,13 +855,16 @@ func TestDeclarationsAfterUnreadParameterEntity(t *testing.T) {
 		}
 		return s
 	}
-	cases := []struct{ name, prolog, decl, want string }{
-		{"external PE unread", "", `<!ENTITY % p SYSTEM "p.ent">`, "[B] c=C"},
-		{"internal PE unread", "", `<!ENTITY % p "">`, "[B] c=C"},
-		{"standalone", `<?xml version="1.0" standalone="yes"?>`, `<!ENTITY % p "">`, "[Bv] c=C a=d"},
+	// The &e; the unprocessed declaration would define is refused rather
+	// than dropped (X2; see TestUndeclaredEntityWFCOrVC), so the first two
+	// documents leave it out and a third checks the refusal.
+	cases := []struct{ name, prolog, decl, ref, want string }{
+		{"external PE unread", "", `<!ENTITY % p SYSTEM "p.ent">`, "", "[B] c=C"},
+		{"internal PE unread", "", `<!ENTITY % p "">`, "", "[B] c=C"},
+		{"standalone", `<?xml version="1.0" standalone="yes"?>`, `<!ENTITY % p "">`, "&e;", "[Bv] c=C a=d"},
 	}
 	for _, c := range cases {
-		src := c.prolog + "<!DOCTYPE r [" + c.decl + subset + "]><r>[&b;&e;]</r>"
+		src := c.prolog + "<!DOCTYPE r [" + c.decl + subset + "]><r>[&b;" + c.ref + "]</r>"
 		tree, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
 		if err != nil {
 			t.Errorf("%s: %v", c.name, err)
@@ -711,6 +873,10 @@ func TestDeclarationsAfterUnreadParameterEntity(t *testing.T) {
 		if got := summary(tree); got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
+	}
+	if _, err := ParseString("<!DOCTYPE r [<!ENTITY % p \"\">"+subset+"]><r>[&b;&e;]</r>",
+		ParseOptions{AllowDOCTYPE: true}); err == nil || !strings.Contains(err.Error(), "VC: Entity Declared") {
+		t.Errorf("a reference to an unprocessed declaration: %v, want it refused", err)
 	}
 	dir := writeFiles(t, map[string]string{
 		"p.ent":   "",
@@ -755,5 +921,112 @@ func TestParameterEntityCharRefsAreLegal(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "illegal character code U+FFFE") {
 		t.Errorf("external subset PE: err = %v, want it refused", err)
+	}
+}
+
+// A "%" or "&" with no ";" after it, or with one far away, used to be
+// searched from again at every later "%" or "&": a run of them was quadratic
+// (200,000 "%" in an internal subset took 2.5 s). semiFinder searches once per
+// ";" and must give every position the answer strings.IndexByte would.
+func TestSemiFinderMatchesIndexByte(t *testing.T) {
+	for _, s := range []string{"", ";", "%%%%", "&a;&&b;;x&", strings.Repeat("&#", 50) + ";" + strings.Repeat("%", 50)} {
+		f := semiFinder{s: s, at: -1}
+		for i := 0; i < len(s); i++ {
+			if got, want := f.from(i), strings.IndexByte(s[i:], ';'); got != want {
+				t.Fatalf("%q at %d: got %d, want %d", s, i, got, want)
+			}
+		}
+	}
+	// With no ";" at all, one search settles every later position.
+	f := semiFinder{s: strings.Repeat("%", 1000), at: -1}
+	f.from(0)
+	if f.at != len(f.s) {
+		t.Fatalf("after a miss at = %d, want %d", f.at, len(f.s))
+	}
+}
+
+// A stray "%" run is not a [28a] DeclSep, so the subset is not well formed
+// (it used to be read past, the declarations around it applied), and a ladder
+// of parameter entities over an empty one is refused by the byte budget:
+// each level's text pays for the references it holds, so an empty leaf is
+// not free.
+func TestParameterEntityStrayPercentAndEmptyLadder(t *testing.T) {
+	opts := ParseOptions{AllowDOCTYPE: true, ExternalEntities: &dirResolver{root: t.TempDir()}}
+	doc := `<!DOCTYPE r [<!ENTITY % p "<!ENTITY e 'x'>">%p;` + strings.Repeat("%", 1000) + `]><r>&e;</r>`
+	if _, err := ParseString(doc, opts); err == nil || !strings.Contains(err.Error(), "malformed entity reference") {
+		t.Errorf("a stray %% run: err = %v, want it refused", err)
+	}
+	// The ladder is in an external subset: in the internal one a reference
+	// inside an entity value is not well formed (WFC: PEs in Internal
+	// Subset), and is refused before any budget is spent.
+	ladder := `<!ENTITY % e0 "">`
+	for i := 1; i <= 9; i++ {
+		ladder += fmt.Sprintf(`<!ENTITY %% e%d "%s">`, i, strings.Repeat(fmt.Sprintf("%%e%d;", i-1), 10))
+	}
+	ladder += `%e9;`
+	dir := writeFiles(t, map[string]string{"l.dtd": ladder})
+	opts = ParseOptions{AllowDOCTYPE: true, ExternalEntities: &dirResolver{root: dir},
+		BaseURI: fileuri.Of(filepath.Join(dir, "doc.xml"))}
+	if _, err := ParseString(`<!DOCTYPE r SYSTEM "l.dtd"><r/>`, opts); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("10^9 empty references: err = %v, want ErrResourceLimit", err)
+	}
+}
+
+// TestResolveConditionals: INCLUDE unwrapped, IGNORE dropped, an unknown
+// keyword copied through with its "]]>", in one pass whose allocation is
+// linear: the old unwrap re-copied the tail per INCLUDE, 7.4 GB for 32,000
+// sections (run-4, resolveConditionals).
+func TestResolveConditionals(t *testing.T) {
+	for in, want := range map[string]string{
+		"a<![INCLUDE[b]]>c":                              "abc",
+		"a<![ IGNORE [b<![x]]>]]>c":                      "ac",
+		"<![INCLUDE[x<![IGNORE[y]]>z<![INCLUDE[w]]>]]>v": "xzwv",
+		"<![%k;[d]]>e":                                   "<![%k;[d]]>e",
+		"<![INCLUDE[<![%k;[d]]>]]>e":                     "<![%k;[d]]>e",
+		"]]>":                                            "]]>",
+		"a<![IGNORE[b":                                   "a<![IGNORE[b",
+	} {
+		if got := resolveConditionals(in); got != want {
+			t.Errorf("resolveConditionals(%q) = %q, want %q", in, got, want)
+		}
+	}
+	s := strings.Repeat("<![INCLUDE[ ]]>", 8000)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	out := resolveConditionals(s)
+	runtime.ReadMemStats(&after)
+	if out != strings.Repeat(" ", 8000) {
+		t.Errorf("8000 INCLUDEs resolved to %d bytes", len(out))
+	}
+	if got := after.TotalAlloc - before.TotalAlloc; got > uint64(8*len(s)) {
+		t.Errorf("resolving %d bytes allocated %d", len(s), got)
+	}
+}
+
+// TestBaseSpans: zero-length spans are dropped, each span links to its
+// innermost enclosing one, and baseAt agrees with a scan for the last span
+// containing the offset (run-4, baseAt: one full scan per node).
+func TestBaseSpans(t *testing.T) {
+	tb := &entityTable{}
+	tb.addBaseSpans([]entityBaseSpan{{start: 0, end: 10, base: "A"}, {start: 2, end: 2, base: "Z"},
+		{start: 2, end: 5, base: "B"}, {start: 3, end: 4, base: "C"}, {start: 6, end: 8, base: "D"}}, 10)
+	tb.addBaseSpans([]entityBaseSpan{{start: 0, end: 0, base: "Z"}}, 20)
+	tb.addBaseSpans([]entityBaseSpan{{start: 0, end: 3, base: "E"}, {start: 0, end: 3, base: "F"}}, 20)
+	if len(tb.baseSpans) != 6 {
+		t.Fatalf("%d spans kept, want 6 (zero-length dropped)", len(tb.baseSpans))
+	}
+	scan := func(off int) string {
+		base := ""
+		for _, s := range tb.baseSpans {
+			if off >= s.start && off < s.end {
+				base = s.base
+			}
+		}
+		return base
+	}
+	for off := 0; off < 30; off++ {
+		if got, want := baseAt(tb.baseSpans, off), scan(off); got != want {
+			t.Errorf("baseAt(%d) = %q, want %q", off, got, want)
+		}
 	}
 }

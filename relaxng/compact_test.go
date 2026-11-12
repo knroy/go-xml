@@ -639,6 +639,36 @@ func TestCompactDepthIsBounded(t *testing.T) {
 	}
 }
 
+// TestCompactDepthIsBoundedOnEveryPath checks the depth bound on the recursive
+// paths that do not pass through parsePattern: nested div blocks, nested
+// include overrides, and a chain of name-class excepts. Each used to recurse
+// without charging the bound, so a long enough input was a fatal stack
+// overflow rather than an error.
+func TestCompactDepthIsBoundedOnEveryPath(t *testing.T) {
+	const n = 5000
+	cases := map[string]string{
+		"div":     strings.Repeat("div { ", n) + strings.Repeat("} ", n),
+		"include": strings.Repeat(`include "x" { `, n) + strings.Repeat("} ", n),
+		"except":  "element " + strings.Repeat("* - ", n) + "foo { empty }",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseCompact(src)
+			if err == nil {
+				t.Fatalf("input nested %d deep was accepted", n)
+			}
+			if !strings.Contains(err.Error(), "deep") {
+				t.Errorf("error %q should say the input nests too deeply", err)
+			}
+		})
+	}
+	// A real schema's nesting stays well inside the bound.
+	src := strings.Repeat("div { ", 100) + "start = element foo { empty }" + strings.Repeat(" }", 100)
+	if _, err := ParseCompact(src); err != nil {
+		t.Errorf("div nested 100 deep was refused: %v", err)
+	}
+}
+
 // compactResolver serves compact-syntax schemas, parsing each into the XML
 // syntax the Resolver contract requires.
 //
@@ -702,16 +732,11 @@ func TestCompactParsesRealSchemas(t *testing.T) {
 	// grammar, where §4.20 has already rewritten <zeroOrMore>p as
 	// choice(oneOrMore p, empty) — and it is fixed, so the excuse is gone.
 	//
-	// Removing it exposed a refusal the old one had been hiding, which is not
-	// this parser's doing: xspec.rnc sequences xml-ns-attributes with
-	// common-attributes, which itself begins with xml-ns-attributes, so
-	// attribute xml:* {text}* appears twice in one group. §7.3's first clause
-	// refuses that. Two <zeroOrMore>s can each match nothing, so whether
-	// "required twice" is the right reading of that shape is a question about
-	// §7.3's first clause and not one this change settles — see docs/todo.md.
-	//
-	// It is excused by message here so that this test keeps asserting what
-	// it was written to assert, which is that the grammar parses.
+	// Removing it exposed a second false refusal: xspec.rnc's
+	// attribute xml:* {text}* beside attribute * - (local:* | xml:* | p:*)
+	// {text}* was refused as the same attribute twice, because the overlap
+	// test ignored anyName's exception. jing accepts it, and so does this
+	// package now.
 	for _, f := range files {
 		src, err := os.ReadFile(f)
 		if err != nil {
@@ -724,8 +749,7 @@ func TestCompactParsesRealSchemas(t *testing.T) {
 			continue
 		}
 		if _, err := Compile(doc); err != nil {
-			if strings.Contains(err.Error(), "Resolver") ||
-				strings.Contains(err.Error(), "required twice") {
+			if strings.Contains(err.Error(), "Resolver") {
 				continue // see above; none of these is this parser's doing
 			}
 			t.Errorf("%s: parsed but did not compile: %v", f, err)

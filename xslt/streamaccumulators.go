@@ -343,7 +343,7 @@ func patternExprFreeRangingIn(e xpath.Expr, at *xdm.Node, matchedAllowsChildren 
 		// "a | b" and "a union b": a union of patterns is motionless only if
 		// every alternative is. The operator is the only binary form that
 		// can appear at the top level of a pattern.
-		if x.Op != "|" && x.Op != "union" {
+		if x.Op != "|" && x.Op != "union" && !patternSetOp(x.Op) { // streampattern_setops.go
 			return false, false
 		}
 		lf, lk := patternExprFreeRanging(x.Left, at)
@@ -380,6 +380,11 @@ func patternExprFreeRangingIn(e xpath.Expr, at *xdm.Node, matchedAllowsChildren 
 	case *xpath.Step:
 		return patternStepFreeRanging(x, at, matchedAllowsChildren)
 
+	case *xpath.ContextItem:
+		// The pattern "." (§5.5.2) has no RootedPath and no predicate, so
+		// §19.8.10 makes it motionless.
+		return false, true
+
 	case *xpath.FilterExpr:
 		// XSLT 3.0 extends the pattern grammar with "." as a PatternAxis-free
 		// alternative, so ".[starts-with(., ':B:')]" is a legal pattern that
@@ -395,7 +400,7 @@ func patternExprFreeRangingIn(e xpath.Expr, at *xdm.Node, matchedAllowsChildren 
 		// absorbing and hence not motionless, which is precisely why
 		// streamable-142 marks its rule "NOT MOTIONLESS".
 		if _, ok := x.Base.(*xpath.ContextItem); !ok {
-			return false, false
+			return parenPatternFreeRanging(x, at, matchedAllowsChildren) // streampattern_setops.go
 		}
 		return patternPredicatesFreeRanging(x.Predicates, true, matchedAllowsChildren)
 

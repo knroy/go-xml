@@ -125,3 +125,33 @@ func TestIncludedGrammarIsRestrictionChecked(t *testing.T) {
 			"section 7 was not enforced on the included document")
 	}
 }
+
+// TestPatternParamCompiledOnce checks that a pattern param is compiled when the
+// schema is, not once for every value checked. Compiling per value made each
+// text value, attribute value and list token pay a full regex compile, which
+// for a large pattern is milliseconds per one-character token.
+func TestPatternParamCompiledOnce(t *testing.T) {
+	s, err := Compile(parseSchemaDoc(t, dataSchema("string", "pattern", "[a-z]+")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, ok := s.start.(*elementPat).Pattern.(*dataPat)
+	if !ok {
+		t.Fatalf("content is %T, want *dataPat", s.start.(*elementPat).Pattern)
+	}
+	p := d.Params[0]
+	if p.re == nil || p.reErr != nil {
+		t.Fatalf("pattern param not compiled at schema compile: re=%v err=%v", p.re, p.reErr)
+	}
+	allocs := testing.AllocsPerRun(20, func() {
+		if err := d.Type.check("abc", d.Params); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs > 2 {
+		t.Errorf("checking a value allocated %v times; the pattern is being recompiled", allocs)
+	}
+	if d.Type.check("ABC", d.Params) == nil {
+		t.Error("a value outside the pattern was accepted")
+	}
+}

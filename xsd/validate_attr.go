@@ -401,10 +401,13 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 func (v *validator) validateWildcardAttribute(a *xdm.Node, w *Wildcard, name xdm.QName) {
 	switch w.ProcessContents {
 	case ProcessSkip:
+		v.markUntypedAttr(a, v.schema.Version >= Version11)
 		return
 	case ProcessLax:
 		if d, ok := v.schema.Attributes[name]; ok {
 			v.validateAttribute(a, d, nil)
+		} else {
+			v.markUntypedAttr(a, false)
 		}
 	case ProcessStrict:
 		d, ok := v.schema.Attributes[name]
@@ -416,6 +419,18 @@ func (v *validator) validateWildcardAttribute(a *xdm.Node, w *Wildcard, name xdm
 		}
 		v.validateAttribute(a, d, nil)
 	}
+}
+
+// markUntypedAttr records an attribute a wildcard left unassessed, and whether
+// it is ·skipped·; see untypedAttrs.
+func (v *validator) markUntypedAttr(a *xdm.Node, skipped bool) {
+	if v.icScopes == 0 {
+		return
+	}
+	if v.untypedAttrs == nil {
+		v.untypedAttrs = map[*xdm.Node]bool{}
+	}
+	v.untypedAttrs[a] = skipped
 }
 
 // checkNoForeignAttributes reports attributes on an element whose type permits
@@ -803,13 +818,20 @@ func isDatePart(v string, version Version) bool {
 	// well-formed numbers and not a day, and -0003-02-29 is the same trap
 	// with the proleptic Gregorian leap rule: year -3 is 4 BCE in
 	// astronomical numbering, which is not divisible by four.
+	//
+	// The year is unbounded (yearFrag), and the leap rule needs only the
+	// year mod 400, which its last four digits settle because 10000 is a
+	// multiple of 400. Reading the whole year as an int64 refused every
+	// date with a year of more than 18 digits. The sign does not matter:
+	// a year is a leap year exactly when its negation is.
 	var year, month, day int64
-	if !parseInt(v[:mid], &year) || !parseInt(v[mid+1:last], &month) ||
-		!parseInt(v[last+1:], &day) {
-		return false
+	tail := v[:mid]
+	if len(tail) > 4 {
+		tail = tail[len(tail)-4:]
 	}
-	if v[0] == '-' {
-		year = -year
+	if !parseInt(strings.TrimPrefix(tail, "-"), &year) ||
+		!parseInt(v[mid+1:last], &month) || !parseInt(v[last+1:], &day) {
+		return false
 	}
 	return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month)
 }

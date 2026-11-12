@@ -69,12 +69,16 @@ func (p *compactParser) parsePattern() (*cnode, error) {
 //
 // They stack: "a?*" is legal, if pointless, and each wraps the last. Reading
 // them in a loop rather than allowing one keeps that from being a special
-// case the grammar does not actually make.
+// case the grammar does not actually make. Each wrap is a level of nesting,
+// charged to maxCompactDepth like a parenthesis: uncharged, a run of 2,000,000
+// "?" built a chain the emitter recursed through to a fatal stack overflow.
 func (p *compactParser) parseRepeated() (*cnode, error) {
 	n, err := p.parsePrimary()
 	if err != nil {
 		return nil, err
 	}
+	wraps := 0
+	defer func() { p.depth -= wraps }()
 	for {
 		var local string
 		switch {
@@ -92,6 +96,10 @@ func (p *compactParser) parseRepeated() (*cnode, error) {
 		}
 		if err := p.advance(); err != nil {
 			return nil, err
+		}
+		wraps++
+		if p.depth++; p.depth > maxCompactDepth {
+			return nil, p.errorf("patterns nest more than %d deep", maxCompactDepth)
 		}
 		wrap := p.b.el(local)
 		wrap.add(n)
@@ -484,6 +492,14 @@ func (p *compactParser) parseNameClassExcept(n *cnode, owner *cnode) error {
 	if err := p.advance(); err != nil {
 		return err
 	}
+	// "* - * - ..." chains recurse through here without passing
+	// parseNameClass, so the depth bound is charged here too.
+	p.depth++
+	if p.depth > maxCompactDepth {
+		p.depth--
+		return p.errorf("name classes nest more than %d deep", maxCompactDepth)
+	}
+	defer func() { p.depth-- }()
 	inner, simple, err := p.parseNameClassPrimary(owner)
 	if err != nil {
 		return err

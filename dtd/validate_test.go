@@ -1,6 +1,8 @@
 package dtd
 
 import (
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -14,6 +16,23 @@ func check(t *testing.T, src string) error {
 		t.Fatalf("parse: %v", err)
 	}
 	d, err := Parse(tree.DocType)
+	if err != nil {
+		t.Fatalf("parse DTD: %v", err)
+	}
+	return Validate(tree.Root, d, Options{})
+}
+
+// checkDirective is check for a DOCTYPE xdm refuses as malformed (X3): the
+// directive goes to Parse directly, as a caller holding one would pass it,
+// and the document is parsed without it.
+func checkDirective(t *testing.T, src string) error {
+	t.Helper()
+	i := strings.Index(src, "]>")
+	tree, err := xdm.ParseString(src[i+2:], xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	d, err := Parse(src[2 : i+1])
 	if err != nil {
 		t.Fatalf("parse DTD: %v", err)
 	}
@@ -67,6 +86,13 @@ func TestEmptyAndAny(t *testing.T) {
 	if err := check(t, dt+`<r><e>text</e><x/></r>`); err == nil {
 		t.Error("an EMPTY element with content should be invalid")
 	}
+	// XML 1.0 §3 VC Element Valid: EMPTY means no content at all, so a
+	// comment, a PI or white space is content too (rmt-e2e-15b, c, d).
+	for _, e := range []string{`<e><!-- c --></e>`, `<e><?pi x?></e>`, `<e> </e>`} {
+		if err := check(t, dt+`<r>`+e+`<x/></r>`); err == nil {
+			t.Errorf("%s should be invalid for an EMPTY e", e)
+		}
+	}
 }
 
 // Mixed content constrains which elements may appear, but not their order or
@@ -118,6 +144,68 @@ func TestAttributes(t *testing.T) {
 	}
 	if err := check(t, dt+`<r req="x" col="blue"/>`); err == nil {
 		t.Error("a value outside the enumeration should be invalid")
+	}
+}
+
+// XML 1.0 §3.3.1 VC Attribute Value Type: every attribute must be declared,
+// and names are matched as written, prefix included, as a DTD declares them.
+func TestUndeclaredAndPrefixedAttributes(t *testing.T) {
+	const dt = `<!DOCTYPE order [<!ELEMENT order EMPTY>` +
+		`<!ATTLIST order id CDATA #REQUIRED xml:lang (en) #IMPLIED>` +
+		`<!ELEMENT r EMPTY>]>`
+	for _, c := range []struct{ doc, want string }{
+		{`<order id="1"/>`, ""},
+		{`<order id="1" xml:lang="en"/>`, ""},
+		{`<order xmlns="urn:other" id="1"/>`, "attribute xmlns is not declared"},
+		{`<order/>`, "required attribute id is missing"},
+		{`<order id="1" admin="true"/>`, "attribute admin is not declared"},
+		{`<order id="1" xml:lang="zz"/>`, `attribute xml:lang = "zz" is not one of en`},
+		{`<o:order xmlns:o="urn:other" id="1"/>`, "element o:order is not declared"},
+		{`<r evil="1"/>`, "attribute evil is not declared"},
+	} {
+		err := check(t, dt+c.doc)
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: %v", c.doc, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: got %v, want %q", c.doc, err, c.want)
+		}
+	}
+	tree, err := xdm.ParseString(dt+`<order id="1" admin="true"/>`, xdm.ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := Parse(tree.DocType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(tree.Root, d, Options{AllowUndeclared: true}); err != nil {
+		t.Errorf("AllowUndeclared should skip an undeclared attribute: %v", err)
+	}
+}
+
+// XML 1.0 §3.3.1 VC Attribute Value Type covers namespace declarations too:
+// to XML 1.0 xmlns and xmlns:p are attributes, and Namespaces in XML makes no
+// exception for validity, so a valid document declares them. Each want is
+// what xmllint --valid (libxml2 2.9.13) reports for the same document.
+func TestNamespaceDeclarationsAreAttributes(t *testing.T) {
+	const dt = `<!DOCTYPE r [<!ELEMENT r (c)><!ELEMENT c EMPTY>` +
+		`<!ATTLIST r xmlns CDATA #FIXED "urn:r" xmlns:p CDATA #REQUIRED>]>`
+	for _, c := range []struct{ doc, want string }{
+		{`<r xmlns="urn:r" xmlns:p="urn:p"><c/></r>`, ""},
+		{`<r xmlns:p="urn:p"><c/></r>`, ""}, // #FIXED xmlns may be omitted
+		{`<r xmlns="urn:x" xmlns:p="urn:p"><c/></r>`, `attribute xmlns is #FIXED "urn:r" but is "urn:x"`},
+		{`<r xmlns="urn:r"><c/></r>`, "required attribute xmlns:p is missing"},
+		// c redeclares p with the same URI; it is still an attribute of c.
+		{`<r xmlns="urn:r" xmlns:p="urn:p"><c xmlns:p="urn:p"/></r>`, "attribute xmlns:p is not declared"},
+	} {
+		err := check(t, dt+c.doc)
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: %v", c.doc, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: got %v, want %q", c.doc, err, c.want)
+		}
 	}
 }
 
@@ -243,8 +331,9 @@ func TestAllowUndeclared(t *testing.T) {
 // attribute went unreported. A component may decline to answer; it must not
 // turn "I could not check this" into "this is valid".
 func TestUnrecognisedAttributeDefault(t *testing.T) {
+	// xdm now refuses this DOCTYPE as malformed; Parse is reached directly.
 	const bad = `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #REQUIRE>]><r/>`
-	err := check(t, bad)
+	err := checkDirective(t, bad)
 	if err == nil {
 		t.Fatal("a #-prefixed token that is not a keyword must be reported")
 	}
@@ -253,7 +342,7 @@ func TestUnrecognisedAttributeDefault(t *testing.T) {
 	}
 	// The report does not depend on the attribute being absent: the
 	// declaration itself is what could not be applied.
-	if err := check(t, `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #REQUIRE>]><r a="x"/>`); err == nil {
+	if err := checkDirective(t, `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #REQUIRE>]><r a="x"/>`); err == nil {
 		t.Error("the declaration is unenforceable whether or not the attribute is present")
 	}
 
@@ -264,6 +353,10 @@ func TestUnrecognisedAttributeDefault(t *testing.T) {
 		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #FIXED "v">]><r a="v"/>`,
 		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA "dflt">]><r/>`,
 		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA "dflt">]><r a="other"/>`,
+		// §3.3.2 normalizes the #FIXED default (§3.3.3) before it is
+		// compared: "&#41;" is ")" (xmlconf ibm-valid-P32-ibm32v03.xml).
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #FIXED "&#41;&#x29;&amp;">]><r a="))&amp;"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #FIXED "&#41;">]><r/>`,
 	}
 	for _, src := range valid {
 		if err := check(t, src); err != nil {
@@ -292,15 +385,16 @@ func TestUnrecognisedAttributeDefault(t *testing.T) {
 // reference validate clean. An unrecognised type is a type this package cannot
 // enforce, and the caller has to be told which of the two it got.
 func TestUnrecognisedAttributeType(t *testing.T) {
+	// xdm now refuses this DOCTYPE as malformed; Parse is reached directly.
 	const bad = `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r ref IDREFF #IMPLIED>]><r ref="nowhere"/>`
-	err := check(t, bad)
+	err := checkDirective(t, bad)
 	if err == nil {
 		t.Fatal("a type outside XML 1.0 3.3.1 must be reported, not skipped")
 	}
 	if want := "unrecognised type IDREFF"; !strings.Contains(err.Error(), want) {
 		t.Errorf("error = %q, want it to contain %q", err, want)
 	}
-	if err := check(t, `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r n NMTOKENN #IMPLIED>]><r n="a b"/>`); err == nil {
+	if err := checkDirective(t, `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r n NMTOKENN #IMPLIED>]><r n="a b"/>`); err == nil {
 		t.Error("a misspelt NMTOKEN must be reported")
 	}
 
@@ -515,5 +609,217 @@ func TestHandBuiltDTDWithoutNameSets(t *testing.T) {
 	}
 	if err := Validate(tree.Root, d, Options{}); err != nil {
 		t.Errorf("nil name sets must not make everything undeclared: %v", err)
+	}
+}
+
+// SECURITY. XML 1.0 §2.8 VC Root Element Type: the root must be the element
+// the DOCTYPE names. Without the check a document could send any other
+// declared element as its root and skip the named one's required attribute
+// and content model.
+func TestRootElementTypeIsChecked(t *testing.T) {
+	const subset = `<!ELEMENT envelope (item)><!ATTLIST envelope sig CDATA #REQUIRED><!ELEMENT item EMPTY>`
+	if err := check(t, `<!DOCTYPE envelope [`+subset+`]><item/>`); err == nil ||
+		!strings.Contains(err.Error(), "DOCTYPE") {
+		t.Errorf("a root other than the DOCTYPE's was accepted: %v", err)
+	}
+	if err := check(t, `<!DOCTYPE envelope [`+subset+`]><envelope sig="s"><item/></envelope>`); err != nil {
+		t.Errorf("the named root was refused: %v", err)
+	}
+	// Load records the name too.
+	err := loadCheck(t, `<!DOCTYPE envelope SYSTEM "e.dtd"><item/>`,
+		mapOpts(map[string]string{"e.dtd": subset}))
+	if err == nil || !strings.Contains(err.Error(), "DOCTYPE") {
+		t.Errorf("Load: a root other than the DOCTYPE's was accepted: %v", err)
+	}
+}
+
+// A DTD has no UPA gate, so its content models are not bounded by follow
+// width: a repeated choice of n alternatives is n wide in every state, is
+// deterministic, and XML 1.0 allows it at any width. Its follow relation has
+// n² edges, and copying every follow set refused n=1100 at the edge budget;
+// the follow sets of a repeated group now share one reference to its first
+// set, so the model costs O(n).
+func TestWideRepeatedChoiceValidates(t *testing.T) {
+	const n = 2000
+	var b strings.Builder
+	b.WriteString("<!DOCTYPE r [\n<!ELEMENT r (")
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteByte('|')
+		}
+		fmt.Fprintf(&b, "a%d", i)
+	}
+	b.WriteString(")*>\n")
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, "<!ELEMENT a%d EMPTY>\n", i)
+	}
+	b.WriteString("]><r><a1999/><a0/><a500/><a0/></r>")
+	if err := check(t, b.String()); err != nil {
+		t.Fatalf("a repeated %d-alternative choice must validate: %v", n, err)
+	}
+	bad := strings.Replace(b.String(), "<a500/>", "<b/>", 1)
+	if err := check(t, bad); err == nil {
+		t.Fatal("an undeclared child of the same model must be rejected")
+	}
+}
+
+// XML 1.0 §3.3.1 VCs ID, IDREF, Entity Name and Name Token: a tokenized
+// attribute's value must match its production, and a list type is one or
+// more tokens separated by single spaces.
+func TestTokenizedValuesAreLexicallyChecked(t *testing.T) {
+	const dt = `<!DOCTYPE r [
+<!ELEMENT r ANY>
+<!NOTATION n SYSTEM "n">
+<!ENTITY u SYSTEM "u" NDATA n>
+<!ATTLIST r id ID #IMPLIED ref IDREF #IMPLIED refs IDREFS #IMPLIED
+  tok NMTOKEN #IMPLIED toks NMTOKENS #IMPLIED ent ENTITY #IMPLIED ents ENTITIES #IMPLIED>
+]>`
+	if err := check(t, dt+`<r id="a1" ref="a1" refs="a1 a1" tok="-1.x" toks=" 1  2 " ent="u" ents="u u"/>`); err != nil {
+		t.Errorf("lexically valid values should be valid: %v", err)
+	}
+	for _, attrs := range []string{
+		`id="42a"`,
+		`id="@c"`,
+		`id="x" ref="x" refs=""`,
+		`tok="dev@null"`,
+		`tok="x : image"`,
+		`toks=""`,
+		`toks="abc / def"`,
+		`toks="abc&#9;xyz"`,
+	} {
+		if err := check(t, dt+`<r `+attrs+`/>`); err == nil {
+			t.Errorf("<r %s/> should be invalid", attrs)
+		}
+	}
+}
+
+// Namespaces in XML 1.0 §7: in a namespace-valid document, every token XML
+// 1.0 requires to match Name must match NCName, so an ID or IDREF holds no
+// colon (rmt-ns10-045, 046).
+func TestNameTypedValuesHoldNoColon(t *testing.T) {
+	const dt = `<!DOCTYPE r [
+<!ELEMENT r ANY>
+<!ATTLIST r id ID #IMPLIED ref IDREF #IMPLIED tok NMTOKEN #IMPLIED>
+]>`
+	if err := check(t, dt+`<r id="a" ref="a" tok="a:b"/>`); err != nil {
+		t.Errorf("a colon in an NMTOKEN is legal: %v", err)
+	}
+	for _, attrs := range []string{`id="a:b"`, `id="a" ref="a:b"`} {
+		if err := check(t, dt+`<r `+attrs+`/>`); err == nil {
+			t.Errorf("<r %s/> should be invalid", attrs)
+		}
+	}
+}
+
+// The validity constraints on the declarations themselves are reported by
+// Validate whether or not the document uses what they declare: XML 1.0
+// §3.2 Unique Element Type Declaration, §3.2.2 No Duplicate Types, §3.3.1
+// ID Attribute Default, One ID per Element Type and No Duplicate Tokens,
+// §3.3.2 Attribute Default Value Syntactically Correct, and §4.2.2 Notation
+// Declared.
+func TestDeclarationValidityConstraints(t *testing.T) {
+	const head = `<!DOCTYPE r [<!ELEMENT r ANY><!NOTATION n SYSTEM "n">`
+	valid := []string{
+		// A repeated ATTLIST for the same attribute: the first binds.
+		`<!ATTLIST r a CDATA #IMPLIED><!ATTLIST r a ID #IMPLIED>`,
+		// Only the syntax of an ENTITY or IDREF default is checked.
+		`<!ATTLIST e a ENTITY "undef" b IDREF "undef">`,
+		`<!ATTLIST r a NMTOKENS " x  y " b NOTATION (n) "n" c (x|y) #FIXED "y">`,
+		`<!ENTITY u SYSTEM "u" NDATA n>`,
+	}
+	for _, decl := range valid {
+		if err := check(t, head+decl+`]><r/>`); err != nil {
+			t.Errorf("%s should be valid: %v", decl, err)
+		}
+	}
+	// Declared on e, which the document never uses: these are faults in the
+	// DTD, not in an attribute value.
+	invalid := []string{
+		`<!ATTLIST e a ENTITY "2x">`,
+		`<!ATTLIST e a ENTITIES "x 2x">`,
+		`<!ATTLIST e a IDREF "34">`,
+		`<!ATTLIST e a NMTOKEN "a/b">`,
+		`<!ATTLIST e a NMTOKENS "a $b">`,
+		`<!ATTLIST e a NMTOKEN #FIXED "a/b">`,
+		`<!ATTLIST e a NOTATION (n) "m">`,
+		`<!ATTLIST e a (x|y) "z">`,
+		`<!ATTLIST e a ID #FIXED "x">`,
+		`<!ATTLIST e a ID "x">`,
+		`<!ATTLIST e a ID #IMPLIED><!ATTLIST e b ID #IMPLIED>`,
+		`<!ELEMENT e EMPTY><!ELEMENT e ANY>`,
+		`<!ELEMENT e (#PCDATA|x|x)*>`,
+		`<!ATTLIST e a (x|x) #IMPLIED>`,
+		`<!ATTLIST e a NOTATION (n|n) #IMPLIED>`,
+		`<!ENTITY u SYSTEM "u" NDATA undeclared>`,
+	}
+	for _, decl := range invalid {
+		if err := check(t, head+decl+`]><r/>`); err == nil {
+			t.Errorf("%s should be invalid", decl)
+		}
+	}
+}
+
+// xdmEntities lends a MapResolver to xdm.Parse.
+type xdmEntities struct{ *MapResolver }
+
+func (r xdmEntities) ResolveEntity(sys, pub, base string) (io.ReadCloser, string, error) {
+	return r.ResolveExternal(sys, pub, base)
+}
+
+// TestFaultsOnlyTheParseSees: what a tree cannot show — which attribute values
+// an external declaration defaulted or normalized, and whether white space was
+// written as a reference or a CDATA section — is recorded by xdm as it parses
+// and reported here. XML 1.0 §2.9 VC: Standalone Document Declaration, and §3
+// VC: Element Valid as erratum E15 reads it, and §4.1 VC: Entity Declared
+// for a reference xdm dropped (erratum E13).
+func TestFaultsOnlyTheParseSees(t *testing.T) {
+	const sa = `<?xml version="1.0" standalone="yes"?>`
+	const ext = `<!ELEMENT r (c*)><!ELEMENT c EMPTY>` +
+		`<!ATTLIST r d CDATA "x" n NMTOKEN #IMPLIED>`
+	const in = `<!DOCTYPE r [<!ELEMENT r (c|e)*><!ELEMENT c EMPTY><!ELEMENT e EMPTY>` +
+		`<!ENTITY s1 " "><!ENTITY s2 "&#32;"><!ENTITY s3 "&#38;#32;"><!ENTITY s4 "&s3;"><!ENTITY z "">`
+	cases := []struct{ name, src, want string }{
+		{"external default applied", sa + `<!DOCTYPE r SYSTEM "r.dtd"><r/>`, "takes its default"},
+		{"external default given", sa + `<!DOCTYPE r SYSTEM "r.dtd"><r d="x"/>`, ""},
+		{"not standalone", `<!DOCTYPE r SYSTEM "r.dtd"><r> <c/> </r>`, ""},
+		{"parameter entity default", sa + `<!DOCTYPE r [<!ENTITY % p "<!ATTLIST r d CDATA 'x'>">%p;` +
+			`<!ELEMENT r EMPTY>]><r/>`, "takes its default"},
+		{"internal default", sa + `<!DOCTYPE r [<!ATTLIST r d CDATA 'x'><!ELEMENT r EMPTY>]><r/>`, ""},
+		{"external normalization", sa + `<!DOCTYPE r SYSTEM "r.dtd"><r d="x" n=" t "/>`, "is normalized"},
+		{"external value normal already", sa + `<!DOCTYPE r SYSTEM "r.dtd"><r d="x" n="t"/>`, ""},
+		{"external element content", sa + `<!DOCTYPE r SYSTEM "r.dtd"><r d="x"> <c/></r>`, "white space in element content"},
+		{"internal element content", sa + in + `]><r> <c/> </r>`, ""},
+		{"character reference", in + `]><r><c/>&#32;<c/></r>`, "is not white space"},
+		{"CDATA section", in + `]><r><![CDATA[ ]]><c/></r>`, "is not white space"},
+		{"empty CDATA section", in + `]><r><![CDATA[]]><c/></r>`, "is not white space"},
+		{"preserved character reference", in + `<!ATTLIST r xml:space (preserve) "preserve">]><r>&#10;<c/></r>`, "is not white space"},
+		{"entity of white space", in + `]><r>&s1;<c/>&s2;&z;</r>`, ""},
+		{"entity of a character reference", in + `]><r>&s3;<c/></r>`, "is not white space"},
+		{"nested entity of a character reference", in + `]><r>&s4;<c/></r>`, "is not white space"},
+		{"EMPTY with an empty entity", in + `]><r><e>&z;</e></r>`, "declared EMPTY"},
+		{"EMPTY with an empty CDATA section", in + `]><r><e><![CDATA[]]></e></r>`, "declared EMPTY"},
+		{"EMPTY", in + `]><r><e/><e></e></r>`, ""},
+		{"undeclared entity", `<!DOCTYPE r SYSTEM "r.dtd"><r>&u;</r>`, "VC: Entity Declared"},
+		{"undeclared entity after a parameter entity", `<!DOCTYPE r [<!ENTITY % p "<!ELEMENT r ANY>">%p;]><r>&u;</r>`, "VC: Entity Declared"},
+	}
+	res := xdmEntities{&MapResolver{Docs: map[string]string{"r.dtd": ext}}}
+	for _, c := range cases {
+		tree, err := xdm.ParseString(c.src, xdm.ParseOptions{AllowDOCTYPE: true, ExternalEntities: res})
+		if err != nil {
+			t.Errorf("%s: parse: %v", c.name, err)
+			continue
+		}
+		d, err := Load(tree.DocType, LoadOptions{Resolver: res.MapResolver})
+		if err != nil {
+			t.Errorf("%s: load: %v", c.name, err)
+			continue
+		}
+		err = Validate(tree.Root, d, Options{})
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: should be valid: %v", c.name, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: err = %v, want one containing %q", c.name, err, c.want)
+		}
 	}
 }

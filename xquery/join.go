@@ -65,7 +65,8 @@ func planJoins(cs []clause) []clause {
 // plainXPath returns e's compiled form when evaluating it is exactly
 // evaluating that form: no lifted operands, no declared type.
 func plainXPath(e *compiledExpr) *xpath.Compiled {
-	if e == nil || e.items != nil || len(e.ops) != 0 || e.typed || e.check != nil {
+	if e == nil || e.items != nil || len(e.ops) != 0 || e.typed || e.check != nil ||
+		e.spine != 0 {
 		return nil
 	}
 	return e.xpc

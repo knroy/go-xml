@@ -70,8 +70,8 @@ func specCases() []specCase {
 			// unparsed entity and is never read.
 			specCase{dir: "c14n10", name: "3.5-entity-refs", alg: v.plain, want: ".c14n", external: true},
 			specCase{dir: "c14n10", name: "3.6-utf8", alg: v.plain, want: ".c14n"},
-			// The spec's XPath 1.0 expression is used unchanged: it is also
-			// valid XPath 2.0, which is what c14n.FromXPath compiles.
+			// The spec's XPath 1.0 expression is used unchanged: c14n.FromXPath
+			// compiles it in XPath 1.0 compatibility mode.
 			specCase{dir: "c14n10", name: "3.7-document-subset", subset: "3.7-document-subset", ns: ietf, alg: v.plain, want: ".c14n"},
 			// Section 4.7 (both specs) gives two inputs and says only that
 			// e3 must not take on e1's default namespace when e2 is omitted.

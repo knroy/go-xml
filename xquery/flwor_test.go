@@ -50,6 +50,10 @@ func TestFLWORClauses(t *testing.T) {
 		{`for $x in (3, 1, 2) order by $x return $x`, "1 2 3"},
 		{`for $x in (3, 1, 2) order by $x descending return $x`, "3 2 1"},
 		{`for $x in (1, 2, 3) count $c return $c`, "1 2 3"},
+		// A constructor with enclosed content after a comma in the return
+		// expression: the scanner must read its "<" as markup.
+		{`let $b := 1 return (1, <w>{$b + 1}</w>, 3)`, "1 2 3"},
+		{`for $b in 1 return [0, <w>{$b}</w>]?2`, "1"},
 
 		// "at" numbers one clause's items; "count" numbers the stream, so
 		// after an "order by" it numbers the sorted order and the positional

@@ -371,3 +371,25 @@ func TestPragmaWithoutBodyIsAnError(t *testing.T) {
 		t.Errorf("want XQST0079, got %v", err)
 	}
 }
+
+// XQuery 3.1 §3.9.1.3: "If the content sequence contains an attribute node or
+// a namespace node following a node that is not an attribute node or a
+// namespace node, a type error is raised [err:XQTY0024]." The builder latches
+// the namespace case rather than returning it, so it must be read back.
+func TestNamespaceAfterContentIsXQTY0024(t *testing.T) {
+	for _, src := range []string{
+		`<a>{<b/>, namespace p {"urn:x"}}</a>`,
+		`element a {"t", namespace p {"urn:x"}}`,
+		`<a>{[<b/>, namespace p {"urn:x"}]}</a>`,
+		`let $n := namespace p {"urn:x"} return <a>{<b/>, $n}</a>`,
+	} {
+		got, err := run(t, src, xquery.Options{})
+		if err == nil || !strings.Contains(err.Error(), "XQTY0024") {
+			t.Errorf("%s = %s, %v; want XQTY0024", src, got, err)
+		}
+	}
+	// Before content it is a binding, as ever.
+	if _, err := run(t, `<a>{namespace p {"urn:x"}, <b/>}</a>`, xquery.Options{}); err != nil {
+		t.Errorf("namespace before content: %v", err)
+	}
+}

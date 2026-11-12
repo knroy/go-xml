@@ -1,0 +1,846 @@
+package xslt
+
+// Streamed xsl:merge (full streaming, component C10; DESIGN section 1.7,
+// "Merge"; XSLT 3.0 §15.4).
+//
+// A merge source with for-each-source and streamable="yes" (explicit or
+// defaulted) reads each document its URIs name on a cursor of its own, all
+// of them open at once: its select, a path of child steps (§15.4 makes it
+// striding), is split for the cursor and each match grounded, then made the
+// snapshot §15.4 says the select is wrapped in (snapshotItem, as the tree
+// makes it). The other sources are collected as the tree collects them.
+// Each input sequence (a source's, per anchor) gives up its items one at a
+// time, and the merge takes, again and again, the least head by the merge
+// keys -- ties to the earlier input, which is the tree's stable sort with its
+// (source, anchor, position) tie-break -- and with it every head equal to it,
+// input by input: the current merge group, the action run on it at once.
+// What is held is one head per input and one group.
+//
+// Keys, collations, the sort order, XTDE2220 (an input out of order),
+// XTTE2230 (keys that cannot be compared, within an input, between heads, or
+// an untyped key of one source against a typed one of another) and the
+// errors of loading and of the keys are the tree's code. The tree reports
+// all of them before any action runs, the stream as it meets them: so on
+// any error the merge runs again on the tree, whose answer it is -- the
+// tree's error, exactly (what the stream wrote goes with the failed
+// transformation), as a streamed xsl:source-document is re-run
+// (executeStream). A merge the tree completes where the stream failed after
+// writing is a streaming defect: an internal error, counted as a guard hit.
+//
+// Refused when the stylesheet compiles (mergeStreams), the merge then
+// running on the tree: a streamed source whose select the split cannot
+// read, or with sort-before-merge="yes" (which holds the input; a
+// validation is decided per document, streamvalidin.go; accumulators are
+// checked at link time, streammerge_accum.go); an action with xsl:evaluate
+// or fn:trace, or with xsl:message or xsl:assert while a key may tell
+// messages (streammerge_l4.go). An action that may ask for last() runs
+// once every group is formed (groupsFirst, streammerge_l4.go). At run time: a document the
+// transformation has read already, a resolver that cannot stream, and the
+// and the items are read by coroutines, which hand xpath's EvalLock back and
+// forth with the merge as a fork's prongs do (streamfork.go).
+
+import (
+	"errors"
+	"fmt"
+	"iter"
+	"math"
+	"strings"
+
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/internal/xdmstream"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+)
+
+// mergeSplit splits sel, the select of n, a streamed merge source, for a
+// cursor over each document: nil when it cannot be.
+func (c *compiler) mergeSplit(n *xdm.Node, sel *xpath.Compiled, ns xpath.NamespaceResolver) *streamSplit {
+	s, why := c.splitFor(sel, ns, true, false, false, false)
+	if why != "" || !s.bare() || s.mode != matchGround || s.minDepth() < 1 || s.nests {
+		return nil
+	}
+	return s
+}
+
+// mergeStreams reports whether i may read its streamable sources each on a
+// cursor of its own (see the file comment).
+func mergeStreams(i *mergeInstr, action *xdm.Node) (bool, []int) {
+	any := false
+	for _, src := range i.sources {
+		if !src.streamed || src.sourceURIs == nil {
+			// Collected before the streamed ones, as the tree collects it
+			// (executeTree), even after a streamed one.
+			continue
+		}
+		if src.split == nil || src.sortBeforeMerge { // validation: mergeDocOf; accumulators: streammerge_accum.go
+			return false, nil
+		}
+		any = true
+	}
+	text, ok := mergeKeysOneType(i)
+	if !any || !ok {
+		return false, nil
+	}
+	act := mergeActionCheck(action) // streammerge_l4.go
+	if !act.ok || act.effects && !mergeKeysSilent(i) {
+		return false, nil
+	}
+	i.groupsFirst = act.last
+	return true, text
+}
+
+// mergeKeysOneType reports whether every key position holds values of one
+// type across all sources, decided from how each key is written. The tree
+// orders all items by one stable sort, whose comparator is no consistent
+// order across types (an untyped value against a number, NaN against
+// anything) and which raises XTTE2230 only for the pairs it happens to
+// compare: a merge of heads cannot follow it there (found by the fuzzer).
+// The key positions whose data-type is an attribute value template are
+// returned: it must resolve to "text" (runStream checks, before anything is
+// read), which compares every value as a string.
+func mergeKeysOneType(i *mergeInstr) ([]int, bool) {
+	var text []int
+	i.nodeKeys = nil
+	for k := range i.sources[0].keyElems {
+		class := ""
+		for s, src := range i.sources {
+			// A validated document's nodes are typed: a path's values are
+			// not told by how it is written (streamvalidin.go).
+			c := mergeKeyClass(src.keyElems[k], src.streamed && src.sourceURIs != nil && src.validation.isDefault())
+			if c == "" {
+				c = i.collectedNodeKey(s, k) // streammerge_mm5.go
+			}
+			if c == "avt" && class == "text" || c == "text" && class == "avt" {
+				// The template must resolve to "text" (runStream checks it),
+				// as the other is written: one type.
+				c, class = "avt", "avt"
+			}
+			if c == "" || class != "" && c != class {
+				return nil, false
+			}
+			class = c
+		}
+		if class == "avt" {
+			text = append(text, k)
+		}
+	}
+	return text, true
+}
+
+// mergeStringFns are the fn functions whose value is one xs:string.
+var mergeStringFns = map[string]bool{"string": true, "translate": true, "concat": true, "substring": true,
+	"substring-before": true, "substring-after": true, "lower-case": true, "upper-case": true,
+	"normalize-space": true, "string-join": true, "name": true, "local-name": true}
+
+// mergeKeyClass is the type of the values the merge key el gives: a
+// constructor function's (fn:dateTime's), "string" for a function that
+// makes a string or a path into a streamed
+// document (never validated: untyped, ordered as strings), or "" when it
+// cannot be told.
+func mergeKeyClass(el *xdm.Node, streamed bool) string {
+	if el.Attr("", "select") == nil {
+		return ""
+	}
+	if a := el.Attr("", "data-type"); a != nil {
+		switch v := strings.TrimSpace(a.Value()); {
+		case v == "text":
+			return "text"
+		case strings.ContainsAny(v, "{}"):
+			return "avt"
+		}
+		return ""
+	}
+	e := parseAt(el, el.AttrValue("select"))
+	if c := mergeKeyClassL4(el, e); c != "" { // streammerge_l4.go
+		return c
+	}
+	switch x := e.(type) {
+	case *xpath.FuncCall:
+		switch {
+		case x.Name.URI == xdm.NSXS && (x.Name.Local == "integer" || x.Name.Local == "decimal" ||
+			x.Name.Local == "date" || x.Name.Local == "dateTime" || x.Name.Local == "time"):
+			return "xs:" + x.Name.Local
+		case x.Name.URI == xdm.NSXS && x.Name.Local == "string":
+			return "string"
+		case x.Name.URI == fnNS && x.Name.Local == "dateTime":
+			return "xs:dateTime"
+		case x.Name.URI == fnNS && mergeStringFns[x.Name.Local]:
+			return "string"
+		}
+	}
+	if streamed && nodesOnly(e) {
+		return "string"
+	}
+	return ""
+}
+
+// nodesOnly reports, conservatively, whether e returns only elements or
+// attributes (of a streamed document: untyped).
+func nodesOnly(e xpath.Expr) bool {
+	switch x := e.(type) {
+	case *xpath.Step, *xpath.PathExpr:
+		return noTextNodes(e)
+	case *xpath.FilterExpr:
+		return nodesOnly(x.Base)
+	case *xpath.SequenceExpr:
+		for _, it := range x.Items {
+			if !nodesOnly(it) {
+				return false
+			}
+		}
+		return len(x.Items) > 0
+	}
+	return false
+}
+
+// mergeActionOK checks the merge action: nothing in it has an effect a
+// re-run would repeat. The check is on the source text: a mention is
+// enough. What it finds is reported in a mergeActionFacts
+// (streammerge_l4.go): a mention of last() (the action then runs once every
+// group is formed) and xsl:message or xsl:assert (taken back on a re-run).
+
+// mergeActionWalk checks el into f; a named template it calls is
+// walked too, when this module declares it (seen: those walked already).
+// xsl:result-document is no effect a re-run repeats: the re-run takes back
+// the secondary results the failed run made (streamresult.go).
+//
+// The rules an xsl:apply-templates reaches are not walked: none can see
+// the action's focus. A rule runs with the apply-templates' own focus (its
+// last() is the size of that select, evaluated on the group the merge
+// holds); xsl:next-match and xsl:apply-imports, which keep the focus, are
+// XTDE0560 in the action: the merge clears the current template rule
+// (runStream, as executeTree), and the action's context item is a
+// snapshot, never the node a rule matched; xsl:evaluate has the rule's focus,
+// or none (§10.4.1). Their effects are taken back on a re-run: messages
+// and secondary results by effectsMark; fn:trace writes nothing here.
+func mergeActionWalk(el *xdm.Node, seen map[string]bool, f *mergeActionFacts) bool {
+	ok := true
+	look := func(v string) {
+		f.last = f.last || strings.Contains(v, "last(")
+		if strings.Contains(v, "trace(") {
+			ok = false
+		}
+	}
+	walkElements(el, func(el *xdm.Node) bool {
+		if isXSL(el, "evaluate") {
+			ok = false
+		}
+		if isXSL(el, "message") || isXSL(el, "assert") {
+			f.effects = true
+		}
+		if isXSL(el, "call-template") {
+			ok = mergeCalledOK(el, seen, f)
+		}
+		for a := range el.Attrs() {
+			look(a.Value())
+		}
+		for ch := range el.Children() {
+			if ch.Kind() == xdm.KindText {
+				look(ch.Value())
+			}
+		}
+		return ok
+	})
+	return ok
+}
+
+// mergeCalledOK walks the template call names, which must be declared, once,
+// in call's own module (an import or include could override or supply it).
+func mergeCalledOK(call *xdm.Node, seen map[string]bool, f *mergeActionFacts) bool {
+	name := strings.TrimSpace(call.AttrValue("name"))
+	if seen[name] {
+		return true
+	}
+	seen[name] = true
+	top := call.Root().ChildElements()
+	if len(top) == 0 || strings.Contains(name, ":") {
+		return false
+	}
+	var found []*xdm.Node
+	for _, d := range top[0].ChildElements() {
+		if isXSL(d, "import") || isXSL(d, "include") || isXSL(d, "use-package") {
+			return false
+		}
+		if isXSL(d, "template") && strings.TrimSpace(d.AttrValue("name")) == name {
+			found = append(found, d)
+		}
+	}
+	return len(found) == 1 && mergeActionWalk(found[0], seen, f)
+}
+
+// mergeInput is one input sequence of a streamed merge: a source's, for one
+// anchor.
+type mergeInput struct {
+	src, anchor int
+	// acc records the values of the accumulators of a streamed input's
+	// document (streammerge_accum.go), nil when it has none.
+	acc *mergeAccums
+	// next gives the next item of a streamed input; entries are a collected
+	// input's, with their keys.
+	next    func() (xdm.Item, bool)
+	err     error
+	entries []mergeEntry
+	pos     int
+	head    *mergeEntry
+	prev    mergeEntry
+	// disordered is set once a pair of the input is out of order: the error
+	// is its first pair's, the tree's (checkMergeInputSorted over the whole
+	// input), and the later pairs are not checked.
+	disordered bool
+	// first holds the input's first key value of each kind per key
+	// position, for XTTE2230 across sources (checkMergeKeysComparable).
+	typed, untyped []*xdm.Atomic
+}
+
+// errMergeTree sends a merge to the tree before anything was read.
+var errMergeTree = errors.New("streaming: the merge runs on the tree")
+
+// mergeStreamsMax is how many documents streamed merges read at once: each
+// holds its file, its cursor and a coroutine until its merge ends, so a
+// merge that would take the count past it (a for-each-source of many URIs,
+// repeats included, or a merge run from the action of others that are
+// still open: transformState.mergeOpen) runs on the tree, which reads each
+// document once into its cache. It is the default of
+// TransformOptions.MaxMergeStreams; see mergeStreamsLimit.
+const mergeStreamsMax = 64
+
+// mergeStreamsLimit is TransformOptions.MaxMergeStreams resolved: zero is
+// mergeStreamsMax, and a negative value is no limit.
+func (rt *runtime) mergeStreamsLimit() int {
+	switch n := rt.opts.MaxMergeStreams; {
+	case n == 0:
+		return mergeStreamsMax
+	case n < 0:
+		return math.MaxInt
+	default:
+		return n
+	}
+}
+
+// errMergeStop ends the walk of an input the merge no longer reads.
+var errMergeStop = errors.New("streaming: merge input stopped")
+
+// executeStream runs i on cursors, and reports whether it did.
+func (i *mergeInstr) executeStream(rt *runtime, out *outputBuilder) (bool, error) {
+	if noBursts || streamtrace.Off() {
+		return false, nil
+	}
+	sig, mark := signature(out), rt.localsMark()
+	undoEffects := rt.effectsMark() // streammessage.go: secondary results and messages
+	defer rt.holdSecondary()()      // secondaryout.go
+	n0, b0 := xpathleaf.Charged(rt.ctx)
+	var unread []func()
+	err := i.runStream(rt, out, &unread)
+	if pr, ok := err.(mergePreRead); ok { // streammerge_l4.go
+		streamtrace.Run(streamtrace.Merge)
+		return true, pr.err
+	}
+	if err == errMergeTree {
+		for _, u := range unread {
+			u()
+		}
+		return false, nil
+	}
+	if err == nil {
+		return true, nil
+	}
+	if cerr := rt.ctx.Err(); cerr != nil {
+		return true, cerr // cancelled: no rerun on the tree
+	}
+	if fe, ok := err.(*treesError); ok {
+		rt.localsPop(mark)
+		return true, fe.err // settleMerge: the tree's error, no rerun
+	}
+	streamtrace.Rerun()
+	if streamtrace.NoRerun() {
+		return true, err // tests/streamdiff's norerun leg: the streamed error
+	}
+	if traceRerun != nil {
+		traceRerun(err)
+	}
+	rt.localsPop(mark)
+	if n1, b1 := xpathleaf.Charged(rt.ctx); n1 > n0 || b1 > b0 {
+		xpathleaf.Refund(rt.ctx, max(n1-n0, 0), max(b1-b0, 0))
+	}
+	clean := signature(out) == sig
+	var pe *streamtrace.PostureError
+	if errors.As(err, &pe) && !clean {
+		return true, fmt.Errorf("streaming: internal error after output was written: %w", err)
+	}
+	for _, u := range unread {
+		u()
+	}
+	undoEffects()
+	terr := i.executeTree(rt, out)
+	if terr == nil && !clean {
+		streamtrace.Guard()
+		return true, fmt.Errorf("streaming: internal error: the streamed merge failed where the tree did not: %w", err)
+	}
+	return true, terr
+}
+
+// mergeDoc is a document a streamed input reads.
+type mergeDoc struct {
+	in    *mergeInput
+	split *streamSplit
+	br    burstResolver
+	href  string
+	base  string
+	strip func(*xdm.Node) bool
+	ctx   *xpath.Context // the select's focus: the anchor's position
+	vin   *streamValidation
+}
+
+// runStream is the streamed merge. A posture fault is returned as its error.
+func (i *mergeInstr) runStream(rt *runtime, out *outputBuilder, unread *[]func()) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			pe, ok := p.(*streamtrace.PostureError)
+			if !ok {
+				panic(p)
+			}
+			err = pe
+		}
+	}()
+	rt = rt.clearCurrentRule()
+	resolved, colls, err := i.resolveKeys(rt)
+	if err != nil {
+		return mergePreRead{err} // streammerge_l4.go
+	}
+	for _, k := range i.textKeys {
+		for s := range resolved {
+			if resolved[s][k].dataType != "text" {
+				return errMergeTree
+			}
+		}
+	}
+	// The collected sources first, then the streamed ones, as the tree
+	// collects them (executeTree); the inputs stay in source order, the
+	// order of the merge's ties.
+	bySrc := make([][]*mergeInput, len(i.sources))
+	var held int64 // the collected sources' entries: mergeSource.collect
+	var docs []*mergeDoc
+	defer func() {
+		for _, d := range docs {
+			releaseBursts(d.br) // a reader the merge did not reach
+		}
+	}()
+	for pass := range 2 {
+		for s, src := range i.sources {
+			if onCursor := src.streamed && src.sourceURIs != nil; onCursor != (pass == 1) {
+				continue
+			}
+			if pass == 0 {
+				got, err := src.collect(rt, s, resolved[s], colls[s], &held)
+				if err != nil {
+					return mergePreRead{err} // nothing read: the tree's first error
+				}
+				if !i.nodeKeysUntyped(s, got) { // streammerge_mm5.go
+					return errMergeTree
+				}
+				for len(got) > 0 {
+					n := 1
+					for n < len(got) && got[n].anchor == got[0].anchor {
+						n++
+					}
+					bySrc[s] = append(bySrc[s], &mergeInput{src: s, anchor: got[0].anchor, entries: got[:n]})
+					got = got[n:]
+				}
+				continue
+			}
+			uris, err := src.sourceURIStrings(rt)
+			if err != nil {
+				if len(docs) == 0 && !i.sawStreamed(s) {
+					return mergePreRead{err} // the first streamed source's, as the tree's collect
+				}
+				return err
+			}
+			if rt.mergeOpenCount()+len(docs)+len(uris) > rt.mergeStreamsLimit() {
+				return errMergeTree
+			}
+			base := src.baseURI
+			if base == "" {
+				base = rt.ctx.StaticBaseURI()
+			}
+			for a, u := range uris {
+				d, err := mergeDocOf(rt, u, base, unread, src.validation)
+				if err != nil {
+					return err
+				}
+				d.in = &mergeInput{src: s, anchor: a}
+				d.split = src.split
+				root := xdm.NewTree().Root
+				d.ctx = rt.withCurrent(root, a+1, len(uris)).ctx
+				bySrc[s] = append(bySrc[s], d.in)
+				docs = append(docs, d)
+			}
+		}
+	}
+	var inputs []*mergeInput
+	for _, l := range bySrc {
+		inputs = append(inputs, l...)
+	}
+	streamtrace.Run(streamtrace.Merge)
+	if rt.mergeOpen != nil {
+		*rt.mergeOpen += len(docs)
+		defer func() { *rt.mergeOpen -= len(docs) }()
+	}
+	var accs []*mergeAccums
+	var open func(j int) error
+	open = func(j int) error {
+		if j == len(docs) {
+			if err := i.merge(rt, out, inputs, resolved, colls); err != nil {
+				return i.settleMerge(rt, err, inputs, resolved, colls, accs)
+			}
+			return mergeAccumsPending(accs) // streammerge_accum.go
+		}
+		d := docs[j]
+		return d.stream(rt.ctx, func(c *xdmstream.Cursor) error {
+			if d.strip != nil {
+				c.StripWhitespace(d.strip)
+			}
+			valid := func() error { return nil }
+			if d.vin != nil {
+				valid = d.vin.attach(c, d.strip) // streamvalidin.go
+			}
+			c.Handoff(func() func() { return xpathleaf.LockYield(rt.evalLock) })
+			in := d.in
+			if m := observeMergeAccums(rt, &streamRun{c: c, root: xdm.NewTree().Root}, i.sources[in.src], d.split.minDepth()); m != nil {
+				in.acc = m
+				accs = append(accs, m)
+				defer m.sa.stop()
+			}
+			// The coroutine and the merge take turns evaluating: each lets
+			// the EvalLock go as its turn ends (see LockYield).
+			lock := func() func() { return xpathleaf.LockYield(rt.evalLock) }
+			next, stop := iter.Pull(func(yield func(xdm.Item) bool) {
+				defer lock()
+				err := d.split.loopAt(d.ctx, c, 0, nil, func(it xdm.Item) error {
+					back := lock()
+					ok := yield(it)
+					back()
+					if !ok {
+						return errMergeStop
+					}
+					return nil
+				}, nil)
+				if err == nil {
+					err = valid() // the document read to its end
+				}
+				if err != nil && err != errMergeStop {
+					in.err = err
+				}
+			})
+			in.next = func() (xdm.Item, bool) {
+				back := lock()
+				defer back()
+				return next()
+			}
+			defer func() {
+				back := lock()
+				stop()
+				back()
+			}()
+			return open(j + 1)
+		})
+	}
+	return open(0)
+}
+
+// settleMerge is the error of a streamed merge that failed with err: err as
+// the tree's (treesError) when it is of a final family (streamFinal,
+// mergeFinalCodes) and every input reads to its end, its keys computed and
+// its order checked, its document valid, its accumulators without error,
+// and the keys across sources comparable: what the tree's collect, its
+// XTTE2230 check and its XTDE2220 check do before its first action runs.
+// An input out of order reads on past its first bad pair, unchecked
+// (disordered): the tree computes the input's keys whole and then reports
+// its first pair out of order, which is the stream's. Otherwise err, for
+// the re-run.
+func (i *mergeInstr) settleMerge(rt *runtime, err error, inputs []*mergeInput, resolved [][]*sortKey,
+	colls [][]xpath.Collation, accs []*mergeAccums) error {
+
+	if !streamFinal(err, mergeFinalCodes) {
+		return err
+	}
+	for _, in := range inputs {
+		for {
+			if in.advance(rt, resolved[in.src], colls[in.src]) != nil {
+				return err
+			}
+			if in.head == nil {
+				break
+			}
+		}
+	}
+	if i.comparableAcross(inputs) != nil || mergeAccumsPending(accs) != nil {
+		return err
+	}
+	return &treesError{err}
+}
+
+// mergeOpenCount is how many documents enclosing streamed merges hold open.
+func (rt *runtime) mergeOpenCount() int {
+	if rt.mergeOpen == nil {
+		return 0
+	}
+	return *rt.mergeOpen
+}
+
+// mergeDocOf finds how to stream href: through the resolvers Transform
+// wraps around the caller's, as executeStream looks through them (the
+// document recorded as read, for XTDE1500, and its whitespace stripped);
+// errMergeTree when it cannot be streamed.
+func mergeDocOf(rt *runtime, href, base string, unread *[]func(), spec validationSpec) (md *mergeDoc, err error) {
+	if validSourceDocumentURI(href) != nil || strings.ContainsRune(href, '#') {
+		return nil, errMergeTree
+	}
+	pkg := packageOf(rt.ctx)
+	var (
+		rd    *readDocResolver
+		br    burstResolver
+		strip func(*xdm.Node) bool
+	)
+	for d := rt.ctx.Env().Docs; br == nil; {
+		switch v := d.(type) {
+		case *readDocResolver:
+			if _, seen := v.docs[docKey{href, base, pkg}]; seen {
+				return nil, errMergeTree
+			}
+			rd, d = v, v.inner
+		case *stripSpaceResolver:
+			strip, d = v.sheet.whitespaceStripper(pkg), v.inner
+		case burstResolver:
+			br = v
+		case StreamingDocumentResolver:
+			br = &openedResolver{r: v}
+			defer func() {
+				if md == nil {
+					releaseBursts(br)
+				}
+			}()
+		default:
+			return nil, errMergeTree
+		}
+	}
+	vin, ok := spec.streamedValidation(rt, br, href, base, false) // streamvalidin.go
+	if !ok {
+		return nil, errMergeTree
+	}
+	docURI, ok := br.wantsBursts(href, base)
+	if !ok && (vin == nil || !vin.marked) {
+		return nil, errMergeTree
+	}
+	if rd != nil && docURI != "" {
+		undo, err := rd.markRead(href, base, docURI)
+		if err != nil {
+			return nil, err
+		}
+		*unread = append(*unread, undo)
+	}
+	return &mergeDoc{br: br, href: href, base: base, strip: strip, vin: vin}, nil
+}
+
+// advance moves in to its next entry (head nil at its end), checking that
+// it follows the one before in merge key order (XTDE2220).
+func (in *mergeInput) advance(rt *runtime, keys []*sortKey, colls []xpath.Collation) error {
+	in.head = nil
+	var e mergeEntry
+	switch {
+	case in.next == nil:
+		if in.pos == len(in.entries) {
+			return nil
+		}
+		e = in.entries[in.pos]
+	default:
+		it, ok := in.next()
+		if !ok {
+			return in.err
+		}
+		// The snapshot is a copy, charged before it is made as collect and
+		// fn:snapshot charge theirs (copyfuncs.go).
+		if err := chargeCopies(rt.ctx, []xdm.Sequence{{it}}, true); err != nil {
+			return err
+		}
+		var err error
+		snap := snapshotItem(it)
+		if in.acc != nil {
+			if err := in.acc.attach(rt, it, snap); err != nil { // streammerge_accum.go
+				return err
+			}
+		}
+		if e, err = mergeEntryOf(rt, snap, keys, colls, in.src, in.anchor, in.pos); err != nil {
+			return err
+		}
+		if in.pos > 0 && !in.disordered {
+			if err := checkMergeInputSorted([]mergeEntry{in.prev, e}, keys); err != nil {
+				in.disordered = true
+				return err
+			}
+		}
+		in.prev = e
+	}
+	in.pos++
+	if in.typed == nil {
+		in.typed, in.untyped = make([]*xdm.Atomic, len(keys)), make([]*xdm.Atomic, len(keys))
+	}
+	for k, a := range e.atoms {
+		switch {
+		case a == nil:
+		case isUntyped(a) && in.untyped[k] == nil:
+			in.untyped[k] = a
+		case !isUntyped(a) && in.typed[k] == nil:
+			in.typed[k] = a
+		}
+	}
+	in.head = &e
+	return nil
+}
+
+// take returns the item of in's head for the current merge group. The
+// order of nodes in different trees is the order the trees were made in,
+// and the tree makes every snapshot of source 1 before any of source 2,
+// anchor by anchor: so a streamed input's item, read as a snapshot when it
+// became the head (its keys are computed on it), is made again here, as the
+// group is formed input by input in that order. (A collected input, made
+// before any streamed one, is the tree's as it is: mergeStreams.)
+func (in *mergeInput) take() xdm.Item {
+	if in.next == nil {
+		return in.head.item
+	}
+	snap := snapshotItem(in.head.item)
+	if in.acc != nil { // the snapshot answers as the one its keys were computed on
+		rt0 := in.acc.sa.rt
+		if a, ok := in.head.item.(*xdm.Node); ok {
+			if b, ok := snap.(*xdm.Node); ok {
+				rt0.noteCopiedAccumulators(a, b)
+			}
+		}
+	}
+	return snap
+}
+
+// merge runs the action on each group of inputs, taken least key first.
+func (i *mergeInstr) merge(rt *runtime, out *outputBuilder, inputs []*mergeInput,
+	resolved [][]*sortKey, colls [][]xpath.Collation) error {
+
+	for _, in := range inputs {
+		if err := in.advance(rt, resolved[in.src], colls[in.src]); err != nil {
+			return err
+		}
+	}
+	order := resolved[0]
+	// less compares two heads as the tree's sort does.
+	less := func(a, b *mergeEntry) (bool, error) {
+		for k := range a.keys {
+			if k >= len(b.keys) {
+				break
+			}
+			cmp := compareSortValues(a.keys[k], b.keys[k])
+			if cmp == sortIncomparable {
+				return false, fmt.Errorf(
+					"XTTE2230: merge key values %s and %s cannot be "+
+						"compared with the le operator",
+					a.keys[k].typeName(), b.keys[k].typeName())
+			}
+			if cmp == 0 {
+				continue
+			}
+			if order[k].order == "descending" {
+				cmp = -cmp
+			}
+			return cmp < 0, nil
+		}
+		return false, nil
+	}
+	names := make([]string, len(i.sources))
+	named := make([]bool, len(i.sources))
+	nameSeq := make(xdm.Sequence, 0, len(i.sources))
+	for s, src := range i.sources {
+		names[s], named[s] = src.name, src.named
+		if src.named {
+			nameSeq = append(nameSeq, xdm.NewString(src.name))
+		}
+	}
+	var held []heldMergeGroup
+	// heldItems counts the items held groups keep; with the group being
+	// formed, it is what the streamed merge holds at once, checked against
+	// the item bound as collect checks what the tree holds.
+	var heldItems int64
+	for g := 0; ; g++ {
+		var m *mergeInput
+		for _, in := range inputs {
+			if in.head == nil {
+				continue
+			}
+			if m == nil {
+				m = in
+				continue
+			}
+			l, err := less(in.head, m.head)
+			if err != nil {
+				return err
+			}
+			if l {
+				m = in
+			}
+		}
+		if m == nil {
+			break
+		}
+		first := *m.head
+		binding := &mergeGroupBinding{names: names, named: named, items: make([]xdm.Sequence, len(i.sources))}
+		var n int64
+		for _, in := range inputs {
+			for in.head != nil && mergeKeysEqual(first.keys, in.head.keys) {
+				// take copies a streamed head again: charged as advance's.
+				if in.next != nil {
+					if err := chargeCopies(rt.ctx, []xdm.Sequence{{in.head.item}}, true); err != nil {
+						return err
+					}
+				}
+				binding.items[in.src] = append(binding.items[in.src], in.take())
+				n++
+				if err := rt.ctx.ItemsRefused(heldItems + n); err != nil {
+					return err
+				}
+				if err := in.advance(rt, resolved[in.src], colls[in.src]); err != nil {
+					return err
+				}
+			}
+		}
+		if i.groupsFirst { // streammerge_l4.go: last() is the number of groups
+			heldItems += n
+			held = append(held, heldMergeGroup{binding, first.keys})
+			continue
+		}
+		if err := i.mergeAction(rt, out, binding, first.keys, nameSeq, g+1, 0); err != nil {
+			return err
+		}
+	}
+	for g, h := range held {
+		if err := i.mergeAction(rt, out, h.binding, h.keys, nameSeq, g+1, len(held)); err != nil {
+			return err
+		}
+	}
+	return i.comparableAcross(inputs)
+}
+
+// comparableAcross is XTTE2230 across sources, on the samples the tree
+// would take: per source, the first of each kind in anchor order.
+func (i *mergeInstr) comparableAcross(inputs []*mergeInput) error {
+	var samples []mergeEntry
+	for _, in := range inputs {
+		for k := range in.typed {
+			for _, a := range []*xdm.Atomic{in.typed[k], in.untyped[k]} {
+				if a != nil {
+					atoms := make([]*xdm.Atomic, len(in.typed))
+					atoms[k] = a
+					samples = append(samples, mergeEntry{atoms: atoms, src: in.src, anchor: in.anchor})
+				}
+			}
+		}
+	}
+	return checkMergeKeysComparable(samples, len(i.sources))
+}

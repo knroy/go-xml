@@ -350,6 +350,15 @@ func applyIntegerGrouping(s string, groups []groupSpec) string {
 		return s
 	}
 	regular := regularInterval(groups)
+	// Irregular separators are indexed by position once: scanning every
+	// group for every digit was quadratic in the picture's length.
+	var at map[int][]rune
+	if regular == 0 {
+		at = make(map[int][]rune, len(groups))
+		for _, g := range groups {
+			at[g.fromRight] = append(at[g.fromRight], g.sep)
+		}
+	}
 	runes := []rune(s)
 	var sb strings.Builder
 	for i, r := range runes {
@@ -360,10 +369,8 @@ func applyIntegerGrouping(s string, groups []groupSpec) string {
 					sb.WriteRune(groups[0].sep)
 				}
 			} else {
-				for _, g := range groups {
-					if g.fromRight == fromRight {
-						sb.WriteRune(g.sep)
-					}
+				for _, sep := range at[fromRight] {
+					sb.WriteRune(sep)
 				}
 			}
 		}

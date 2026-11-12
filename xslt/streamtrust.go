@@ -27,6 +27,7 @@ package xslt
 // point simply sets the bit, which nobody reads there, and costs nothing.
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -50,6 +51,22 @@ type declTrust struct {
 	depth          int
 	chain          []any
 	cyclic, failed bool
+
+	// plan, when set, records what the walk computes (streamplan.go).
+	plan *streamPlan
+	// xmods, when set, are every module of the stylesheet: a mode's rules
+	// are verified across them although the module is shared
+	// (streamtrust_xmod_l7.go).
+	xmods []*xdm.Node
+	// xmodeSt caches crossModeStates and xstreamable crossStreamableModes.
+	xmodeSt     map[string]crossModeSt
+	xstreamable map[string]bool
+
+	// tmpls and accums index each module's named templates and
+	// accumulators by name, built on first use: a walk of the module per
+	// reference made N references cost N times the module.
+	tmpls  templateIndex
+	accums map[*xdm.Node]map[xdm.QName]*xdm.Node
 }
 
 type trustState int8
@@ -62,19 +79,59 @@ const (
 )
 
 func newDeclTrust(root *xdm.Node, shared bool) *declTrust {
+	return newDeclTrustOf((*moduleTabs)(nil).of(root), shared)
+}
+
+// newDeclTrustOf is newDeclTrust over the module tables m (streamplan.go),
+// which it shares: nothing writes a declTrust's sets or funcs.
+func newDeclTrustOf(m *moduleTab, shared bool) *declTrust {
 	return &declTrust{
-		shared: shared || reachesOtherModules(root),
-		sets:   attributeSetDeclarations(root),
-		funcs:  collectStreamFuncs(root),
+		shared: shared || m.reachesOthers(),
+		sets:   m.attrSets(),
+		funcs:  m.trustFuncs(),
 		state:  map[any]trustState{},
 	}
+}
+
+// templates is t's template index (instrAnalyzer.templates).
+func (t *declTrust) templates() templateIndex {
+	if t.tmpls == nil {
+		t.tmpls = templateIndex{}
+	}
+	return t.tmpls
+}
+
+// accumulator is the first xsl:accumulator named want in the module of at,
+// or nil.
+func (t *declTrust) accumulator(at *xdm.Node, want xdm.QName) *xdm.Node {
+	root := documentElementOf(at)
+	byName, ok := t.accums[root]
+	if !ok {
+		byName = map[xdm.QName]*xdm.Node{}
+		walkElements(root, func(d *xdm.Node) bool {
+			if !isXSL(d, "accumulator") {
+				return true
+			}
+			if n, e := resolveQNameAttr(d, d.AttrValue("name")); e == nil {
+				if _, dup := byName[n]; !dup {
+					byName[n] = d
+				}
+			}
+			return false
+		})
+		if t.accums == nil {
+			t.accums = map[*xdm.Node]map[xdm.QName]*xdm.Node{}
+		}
+		t.accums[root] = byName
+	}
+	return byName[want]
 }
 
 // reachesOtherModules reports whether a module pulls in another.
 func reachesOtherModules(root *xdm.Node) bool {
 	found := false
 	walkElements(root, func(el *xdm.Node) bool {
-		if isXSL(el, "import") || isXSL(el, "include") || isXSL(el, "use-package") {
+		if isXSL(el, "import") || isXSL(el, "include") || isXSL(el, "use-package") && usePackageOverrides(el) { // streamtrust_pkg_l7.go
 			found = true
 		}
 		return !found
@@ -97,7 +154,7 @@ func (t *declTrust) local() bool { return t != nil && !t.shared }
 // demoted -- an over-approximation, in the safe direction, of the greatest
 // fixed point.
 func (t *declTrust) verified(key any, check func() bool) bool {
-	if t == nil || t.shared {
+	if t == nil || t.shared && !t.crossMode(key) { // streamtrust_xmod_l7.go
 		return false
 	}
 	switch t.state[key] {
@@ -107,6 +164,16 @@ func (t *declTrust) verified(key any, check func() bool) bool {
 	case trustVerified:
 		return true
 	case trustUnverified:
+		return false
+	}
+	if t.depth >= DefaultMaxDepth {
+		// A chain of declarations each resting on the next -- function on
+		// function, mode on mode -- is checked by recursion, a level of the
+		// whole analysis per link, and the stylesheet sets its length. Past
+		// the bound the declaration is left unverified, which only refuses
+		// trust: no verdict changes, and the construct runs as the tree runs
+		// it instead of overflowing the stack.
+		t.failed = true
 		return false
 	}
 	t.state[key] = trustInProgress
@@ -172,18 +239,12 @@ func (t *declTrust) accumulatorVerified(at *xdm.Node, nameArg xpath.Expr) bool {
 	if err != nil {
 		return false
 	}
-	var acc *xdm.Node
-	walkElements(documentElementOf(at), func(d *xdm.Node) bool {
-		if acc == nil && isXSL(d, "accumulator") {
-			if n, e := resolveQNameAttr(d, d.AttrValue("name")); e == nil && n == want {
-				acc = d
-			}
-			return false
-		}
-		return acc == nil
-	})
-	if acc == nil || !isYes(acc.AttrValue("streamable")) {
+	acc := t.accumulator(at, want)
+	if acc == nil {
 		return false
+	}
+	if !isYes(acc.AttrValue("streamable")) {
+		return t.nonStreamableAccumulator()
 	}
 	return t.verified(acc, func() bool { return t.accumulatorOK(acc) })
 }
@@ -192,20 +253,20 @@ func (t *declTrust) accumulatorOK(acc *xdm.Node) bool {
 	// Conditions 4 and 5 of §18.2.9 on an expression: grounded and
 	// motionless, the posture forgiven where the declared type atomizes
 	// (checkOneAccumulator's reading of §18.2.1).
-	exprOK := func(src string, at *xdm.Node, kids, atomic bool) bool {
+	exprOK := func(src string, at *xdm.Node, kids, atomic bool, phase string) bool {
 		ns := newNSResolver(at, xpathDefaultNamespace(at))
 		e, err := xpath.ParseVersion(src, ns, xpathVersionAt(at))
 		if err != nil {
 			return false
 		}
 		a := &analyzer{ctxPosture: postureStriding, ctxAllowsChildren: kids,
-			known: true, decl: at, funcs: t.funcs, trust: t}
+			known: true, decl: at, funcs: t.funcs, trust: t, accumAfter: accumAfterState{rulePhase: phase}}
 		p := a.expr(e)
 		return a.known && !a.unverified && p.sweep == sweepMotionless &&
 			(p.posture == postureGrounded || atomic)
 	}
 	atomic := atomicSequenceType(acc.AttrValue("as"))
-	if a := acc.Attr("", "initial-value"); a != nil && !exprOK(a.Value(), acc, true, false) {
+	if a := acc.Attr("", "initial-value"); a != nil && !exprOK(a.Value(), acc, true, false, "") {
 		return false
 	}
 	for _, rule := range acc.ChildElements() {
@@ -217,14 +278,22 @@ func (t *declTrust) accumulatorOK(acc *xdm.Node) bool {
 		}
 		kids := matchedNodeAllowsChildren(rule.AttrValue("match"), rule)
 		if a := rule.Attr("", "select"); a != nil {
-			if !exprOK(a.Value(), rule, kids, atomic) {
+			phase := strings.TrimSpace(rule.AttrValue("phase"))
+			if phase == "" {
+				phase = "start"
+			}
+			if !exprOK(a.Value(), rule, kids, atomic, phase) {
 				return false
 			}
 			continue
 		}
 		// The contained sequence constructor, which the refusal check
-		// leaves alone; here it is simply assessed.
-		p, known, unverified := sequenceConstructorVerdict(rule, postureStriding, t.sets, t.funcs, t)
+		// leaves alone; here it is simply assessed, its context the matched
+		// node as for a select (accumulator-036s: cost/text()).
+		ia := &instrAnalyzer{ctxPosture: postureStriding, ctxAllowsChildren: kids,
+			known: true, attrSets: t.sets, funcs: t.funcs, trust: t}
+		p := ia.body(rule)
+		known, unverified := ia.known, ia.unverified
 		if !known || unverified || p.sweep != sweepMotionless ||
 			(p.posture != postureGrounded && !atomic) {
 			return false
@@ -244,6 +313,33 @@ func patternVerified(src string, at *xdm.Node) bool {
 	return known && !free
 }
 
+// accumBeforeCall is a call on fn:accumulator-before with a literal name.
+var accumBeforeCall = regexp.MustCompile(`accumulator-before\(\s*(?:'([^']*)'|"([^"]*)")\s*\)`)
+
+// rulePatternVerified is patternVerified for a template rule's pattern, which
+// may also call fn:accumulator-before: §19.8.9.2 makes the call grounded and
+// motionless when the accumulator is streamable, so the pattern is verified
+// when every accumulator it names is (stream-201's
+// part[not(map:contains(accumulator-before('selected-part-ids'), @id))]).
+//
+// ponytail: the calls are found textually; a call the regexp does not
+// recognise (a computed name, accumulator-after) leaves the pattern
+// unverified, as before.
+func (t *declTrust) rulePatternVerified(src string, at *xdm.Node) bool {
+	calls := accumBeforeCall.FindAllStringSubmatch(src, -1)
+	if len(calls) == 0 || len(calls) != strings.Count(src, "accumulator-") {
+		return patternVerified(src, at)
+	}
+	for _, c := range calls {
+		lit := &xpath.Literal{Val: xdm.NewString(c[1] + c[2])}
+		if !t.accumulatorVerified(at, lit) {
+			return false
+		}
+	}
+	free, known := patternIsFreeRanging(src, at)
+	return known && !free
+}
+
 // modeKey keys a mode in declTrust.state.
 type modeKey struct{ clark string }
 
@@ -255,23 +351,25 @@ type modeKey struct{ clark string }
 func (t *declTrust) modeVerified(root *xdm.Node, clark string) bool {
 	return t.verified(modeKey{clark}, func() bool {
 		ok := true
-		walkElements(root, func(el *xdm.Node) bool {
-			if !ok || !isXSL(el, "template") || el.Attr("", "match") == nil {
+		for _, r := range t.modeRoots(root) { // streamtrust_xmod_l7.go
+			walkElements(r, func(el *xdm.Node) bool {
+				if !ok || !isXSL(el, "template") || el.Attr("", "match") == nil {
+					return ok
+				}
+				if !strings.Contains(" "+el.AttrValue("mode")+" ", " #all ") &&
+					!containsString(templateModeNames(el), clark) {
+					return true
+				}
+				ok = t.ruleOK(el)
 				return ok
-			}
-			if !strings.Contains(" "+el.AttrValue("mode")+" ", " #all ") &&
-				!containsString(templateModeNames(el), clark) {
-				return true
-			}
-			ok = t.ruleOK(el)
-			return ok
-		})
+			})
+		}
 		return ok
 	})
 }
 
 func (t *declTrust) ruleOK(rule *xdm.Node) bool {
-	if !patternVerified(rule.AttrValue("match"), rule) {
+	if !t.rulePatternVerified(rule.AttrValue("match"), rule) {
 		return false
 	}
 	for _, c := range rule.ChildElements() {
@@ -306,6 +404,9 @@ func (t *declTrust) enclosingRuleModesVerified(el *xdm.Node) bool {
 		}
 		root := documentElementOf(n)
 		streamable := streamableModeNames(root)
+		if t != nil && t.xmods != nil {
+			streamable = t.crossStreamableModes() // streamtrust_xmod_l7.go
+		}
 		modes := templateModeNames(n)
 		for _, m := range modes {
 			if !streamable[m] || !t.modeVerified(root, m) {

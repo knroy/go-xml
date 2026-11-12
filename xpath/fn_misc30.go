@@ -120,32 +120,6 @@ func registerMisc30Funcs(l *Library) {
 	// It is an XPath 2.0 function: erratum FO.E31 added it, and F&O 2.0
 	// Second Edition defines it in 15.5.7.
 	l.registerFnSince(XPath20, "element-with-id", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		seq, err := lookupByID(ctx, args, true)
-		if err != nil {
-			return nil, err
-		}
-		out := make(xdm.Sequence, 0, len(seq))
-		for _, it := range seq {
-			n, ok := it.(*xdm.Node)
-			if !ok || n.Kind() != xdm.KindElement {
-				continue
-			}
-			// The element was returned for its OWN is-id property rather than
-			// for an attribute's, so it is the identifier and its parent is
-			// what the identifier names. lookupByID appends the element
-			// itself in both cases, so the property is asked again here to
-			// tell them apart.
-			if n.IsID() || isIDAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation()) {
-				// A parentless ID element identifies nothing containing it.
-				// Returning it instead would be fn:id's answer, which is the
-				// one this function exists not to give.
-				if p := n.Parent(); p != nil && p.Kind() == xdm.KindElement {
-					out = append(out, p)
-				}
-				continue
-			}
-			out = append(out, n)
-		}
-		return out, nil
+		return lookupByID(ctx, args, lookupElementWithID)
 	})
 }

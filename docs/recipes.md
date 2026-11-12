@@ -122,6 +122,24 @@ for _, doc := range res.Secondary {
 Note the close-error handling: `defer f.Close()` would discard a flush failure,
 which is exactly when you most want to know.
 
+To write each result as it is produced instead of holding them all, give the
+transform `SecondaryOutput`. It is called with the result's absolute URI (the
+href resolved against the base output URI), still stylesheet-controlled, and
+the engine closes each writer at the result's end; with `TransformReader` and
+a streamable mode neither the input nor the outputs are held:
+
+```go
+res, err := splitter.TransformReader(ctx, f, xslt.TransformOptions{
+    SecondaryOutput: func(uri string) (io.WriteCloser, error) {
+        name := path.Base(uri)
+        if name == "." || name == "/" {
+            return nil, fmt.Errorf("unusable href %q", uri)
+        }
+        return os.Create(filepath.Join(outDir, name))
+    },
+})
+```
+
 ## Pass parameters into a stylesheet
 
 Top-level `xsl:param` values are supplied per transform, so one compiled

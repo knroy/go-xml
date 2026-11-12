@@ -202,3 +202,32 @@ func attrValue(n *xdm.Node, local string) string {
 	}
 	return ""
 }
+
+// TestHTML5DoctypeNeedsWhitespaceBefore pins the text condition on the bare
+// HTML5 doctype. Serialization 3.1 §7.4.6 (html) writes it only if "any text
+// node that precedes that element node in document contain only whitespace
+// characters", and §6.1.7 (xhtml) the same.
+func TestHTML5DoctypeNeedsWhitespaceBefore(t *testing.T) {
+	for _, tc := range []struct{ method, text, want string }{
+		{"html", "x", "x<html></html>"},
+		{"xhtml", "x", "x<html></html>"},
+		{"html", " ", " <!DOCTYPE HTML>\n<html></html>"},
+		{"xhtml", " ", " <!DOCTYPE html>\n<html></html>"},
+	} {
+		got, err := runSecondary(t, `<xsl:stylesheet version="3.0"
+    xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <xsl:template match="/">
+    <xsl:result-document href="o.html" method="`+tc.method+`" html-version="5"
+        indent="no" omit-xml-declaration="yes" include-content-type="no">
+      <xsl:value-of select="'`+tc.text+`'"/><html/>
+    </xsl:result-document>
+  </xsl:template>
+</xsl:stylesheet>`, `<doc/>`)
+		if err != nil {
+			t.Fatalf("%s %q: %v", tc.method, tc.text, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s %q: got %q, want %q", tc.method, tc.text, got, tc.want)
+		}
+	}
+}

@@ -118,3 +118,86 @@ func MetaContent(mediaType, encoding string) string {
 	}
 	return mediaType + "; charset=" + encoding
 }
+
+// MetaEnd is what closes the content-type meta the html and xhtml methods add
+// to head, after its content value. xhtml is XML, so the element is closed,
+// with the space the compatibility guidelines ask for (§6.1.14). Under html a
+// head in an XML island -- a namespace other than none, or XHTML's below
+// HTML5 -- is written as XML too (§7.1: the html method writes an element
+// differently from the xml method only "if the element is to be serialized
+// as an HTML element"), so its meta takes an end tag; result-document-1402
+// asks for that spelling. Anywhere else it is a bare HTML start tag.
+func MetaEnd(head *xdm.Node, xhtml, html5 bool) string {
+	switch {
+	case xhtml:
+		return `" />`
+	case Island(head, html5):
+		return `"></meta>`
+	}
+	return `">`
+}
+
+// Island reports whether the html method writes element n with XML syntax
+// rather than HTML's: n is in a namespace that is neither absent nor, under
+// HTML5, XHTML's. Serialization 3.1 §7.1 has the html method write an element
+// differently from the xml method only "if the element is to be serialized
+// as an HTML element", so such an "XML island" self-closes when empty:
+// Serialization-html-5 and -6 embed <magic xmlns="..."/> and ask for it back
+// self-closed, and -3 (HTML 4) wants the XHTML-namespace elements -4 (HTML5)
+// writes as HTML self-closed too, since HTML 4 did not know that namespace.
+func Island(n *xdm.Node, html5 bool) bool {
+	return n.Name().URI != "" && !(html5 && n.Name().URI == NSXHTML)
+}
+
+// XHTML5Doctype reports whether the xhtml method, under html-version 5 with
+// no doctype-system, writes a bare "<!DOCTYPE " + local name + ">" ahead of
+// document element n. Serialization 3.1 §6.1.7: the first element "is
+// recognized as an HTML element, the local part of the QName of which is
+// equal to the string HTML, without regard to case". Under HTML5 the xhtml
+// method recognises the XHTML namespace and no namespace (§6), so a foreign
+// namespace (output-0214) or another name (output-0213) gets none.
+func XHTML5Doctype(n *xdm.Node) bool {
+	return n.Kind() == xdm.KindElement &&
+		(n.Name().URI == NSXHTML || n.Name().URI == "") &&
+		strings.EqualFold(n.Name().Local, "html")
+}
+
+// Void reports whether an HTML element named local, matched without regard
+// to case, takes no end tag: the names void in every HTML version, plus
+// HTML5's own under html5 and HTML 4's otherwise. The version decides for
+// seven names (Serialization-html-1 writes the HTML 4 list, -2 the HTML5
+// one), so a single merged list answers both versions wrongly.
+func Void(local string, html5 bool) bool {
+	local = strings.ToLower(local)
+	if voidElements[local] {
+		return true
+	}
+	if html5 {
+		return html5VoidElements[local]
+	}
+	return html4VoidElements[local]
+}
+
+// voidElements are the HTML elements that take no end tag in every HTML
+// version the serialisers write. Writing one with a closing tag, or
+// self-closing a non-void element, both produce a tree that an HTML parser
+// reads differently from the one built.
+var voidElements = map[string]bool{
+	"area": true, "base": true, "br": true, "col": true, "embed": true,
+	"hr": true, "img": true, "input": true, "link": true, "meta": true,
+	"param": true,
+}
+
+// html4VoidElements are void in HTML 4 and gone from HTML 5, which has no
+// frameset and no isindex at all. Writing "<frame>" unclosed under HTML 5
+// leaves an element an HTML 5 parser reads as open, swallowing what follows.
+var html4VoidElements = map[string]bool{
+	"basefont": true, "frame": true, "isindex": true,
+}
+
+// html5VoidElements are void in HTML 5 and unknown to HTML 4, where an
+// unclosed one would be an unrecognised start tag rather than an empty
+// element.
+var html5VoidElements = map[string]bool{
+	"keygen": true, "source": true, "track": true, "wbr": true,
+}

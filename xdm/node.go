@@ -686,8 +686,7 @@ func RegisterUnionType(name string, members []string) {
 // UnionMembersOf returns the member types of a registered union type, or nil
 // when the name does not denote one.
 //
-// The result must not be modified: it is the stored slice, shared with every
-// other caller.
+// The result is built per call, so the caller owns it.
 func UnionMembersOf(name string) []string {
 	return globalTypeEnv.UnionMembersOf(name)
 }

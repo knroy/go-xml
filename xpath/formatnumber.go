@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -203,7 +204,7 @@ func FormatNumber(num *xdm.Atomic, pic string, df *DecimalFormat) (string, error
 // rewritten here, since the two differ only in that prefix.
 func FormatNumberVersion(num *xdm.Atomic, pic string, df *DecimalFormat, v Version) (string, error) {
 	out, err := formatNumberImpl(num, pic, df, v)
-	if err != nil && v.atLeast30() {
+	if err != nil && v.atLeast30() && !errors.Is(err, xdm.ErrResourceLimit) {
 		return "", errors.New(strings.Replace(err.Error(), "XTDE1310", "FODF1310", 1))
 	}
 	return out, err
@@ -392,8 +393,8 @@ func formatNumberImpl(num *xdm.Atomic, pic string, df *DecimalFormat, v Version)
 		}
 		digits := strconv.Itoa(exp)
 		digits = strings.TrimPrefix(digits, "-")
-		for len(digits) < p.minExp {
-			digits = "0" + digits
+		if len(digits) < p.minExp {
+			digits = strings.Repeat("0", p.minExp-len(digits)) + digits
 		}
 		sb.WriteString(translateDigits(digits, df.ZeroDigit))
 		sb.WriteString(p.expSuffix)
@@ -491,21 +492,17 @@ func splitExponent(runes []rune, df *DecimalFormat) (mantissa, exp []rune, has b
 			r == df.Digit || r == df.PatternSeparator ||
 			r == df.ExponentSeparator || isDigitOfFamily(r, df.ZeroDigit)
 	}
+	// seenActive records whether runes[:i] holds an active character. It is
+	// carried forward rather than rescanned per separator, which made a
+	// picture of many separators quadratic.
+	seenActive := false
 	for i, r := range runes {
-		if r != df.ExponentSeparator {
-			continue
-		}
 		// The separator is a sign only when an active character precedes it
 		// somewhere in the sub-picture. Without this the mantissa handed on
 		// can be empty or digit-free.
-		precededByActive := false
-		for _, q := range runes[:i] {
-			if isActive(q) {
-				precededByActive = true
-				break
-			}
-		}
-		if !precededByActive {
+		precededByActive := seenActive
+		seenActive = seenActive || isActive(r)
+		if r != df.ExponentSeparator || !precededByActive {
 			continue
 		}
 		rest := runes[i+1:]
@@ -717,6 +714,17 @@ func parsePicture(pic string, df *DecimalFormat, v Version) (picture, error) {
 	} else {
 		p.maxFrac = 0
 	}
+	// An exponent picture scales the value by about 10^minInt and rounds it
+	// at 10^maxFrac, bignum work superlinear in those counts, which only the
+	// picture's length bounds. They are bounded as a date picture's width is.
+	if p.exponent && max(p.minInt, p.maxFrac) > maxPictureWidth {
+		code := "XTDE1310"
+		if v.atLeast30() {
+			code = "FODF1310"
+		}
+		return p, fmt.Errorf("%s: exponent picture asks for more than %d digits: %w",
+			code, maxPictureWidth, xdm.ErrResourceLimit)
+	}
 	return p, nil
 }
 
@@ -738,7 +746,12 @@ func scaleForExponent(value *big.Rat, minInt int) int {
 	// the boundary often enough to matter, and the whole point of carrying a
 	// big.Rat this far is that the digits are exact.
 	abs := new(big.Rat).Abs(value)
-	exp := 0
+	// The digit counts of numerator and denominator put the exponent within
+	// one of its value, so one scaling and at most one correcting step do
+	// the work; stepping a power of ten at a time from zero was quadratic in
+	// the operand's digits.
+	exp := len(abs.Num().Text(10)) - len(abs.Denom().Text(10)) - minInt
+	abs = scaleByPowerOfTen(abs, -exp)
 	// upper is the first power of ten the mantissa must stay below, and lower
 	// the one it must reach: [10^(minInt-1), 10^minInt) for a positive minInt,
 	// and [0.1, 1) when it is zero.
@@ -772,9 +785,18 @@ func scaleByPowerOfTen(r *big.Rat, n int) *big.Rat {
 // F&O 3.1 §4.7.5 defines the rounding of fn:format-number by calling
 // fn:round-half-to-even with maximum-fractional-part-size as the precision, so
 // an exact tie goes to the even quotient rather than away from zero.
+//
+// A value that already has no more than n places is returned as it is. n is
+// the picture's count of fractional digit signs, which the picture's length
+// alone bounds, so working at 10^n for a value like 0.1 made the cost grow
+// with the picture rather than the number; the exact decimal length keeps it
+// to the digits the value has.
 func roundToPlaces(r *big.Rat, n int) *big.Rat {
 	if n < 0 {
 		n = 0
+	}
+	if e := decimalPlaces(r); e >= 0 && e <= n {
+		return r
 	}
 	scale := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil))
 	scaled := new(big.Rat).Mul(r, scale)
@@ -801,14 +823,47 @@ func roundToPlaces(r *big.Rat, n int) *big.Rat {
 
 // splitRat separates a non-negative rational into integer and fractional
 // digit strings, the fraction padded to n places.
+//
+// The digits come from the value's own decimal length and the padding is
+// appended as zeros, so a wide picture costs its width once rather than a
+// FloatString at 10^n.
 func splitRat(r *big.Rat, n int) (string, string) {
 	if n < 0 {
 		n = 0
 	}
-	s := r.FloatString(n)
+	places := n
+	if e := decimalPlaces(r); e >= 0 && e < n {
+		places = e
+	}
+	s := r.FloatString(places)
 	s = strings.TrimPrefix(s, "-")
 	intPart, fracPart, _ := strings.Cut(s, ".")
+	if pad := n - places; pad > 0 {
+		fracPart += strings.Repeat("0", pad)
+	}
 	return intPart, fracPart
+}
+
+// decimalPlaces returns how many decimal places r needs to be written
+// exactly, or -1 when its decimal expansion does not terminate: the larger of
+// the powers of 2 and of 5 in its reduced denominator, which must have no
+// other factor.
+func decimalPlaces(r *big.Rat) int {
+	d := new(big.Int).Set(r.Denom())
+	twos := int(d.TrailingZeroBits())
+	d.Rsh(d, uint(twos))
+	if d.BitLen() <= 1 {
+		return twos
+	}
+	// What is left must be 5^k, and 5^k has floor(k*log2(5))+1 bits, so k is
+	// fixed by the bit length to within one either way of this estimate.
+	k := int(float64(d.BitLen()-1) / math.Log2(5))
+	for c := max(k-1, 1); c <= k+1; c++ {
+		if new(big.Int).Exp(big.NewInt(5), big.NewInt(int64(c)), nil).Cmp(d) == 0 {
+			return max(twos, c)
+		}
+	}
+	return -1
 }
 
 // isDigitOfFamily reports whether r is one of the ten digits of the family
@@ -835,8 +890,10 @@ func padInt(s string, minInt int, df *DecimalFormat, keepZero bool) string {
 		// so ".5" formats as ".5" rather than "0.5".
 		s = ""
 	}
-	for len([]rune(s)) < minInt {
-		s = "0" + s
+	// One Repeat rather than a "0" per step: the width is the picture's count
+	// of zero-digit signs, and prepending one at a time is quadratic in it.
+	if n := utf8.RuneCountInString(s); n < minInt {
+		s = strings.Repeat("0", minInt-n) + s
 	}
 	return translateDigits(s, df.ZeroDigit)
 }
@@ -882,6 +939,15 @@ func applyFracGrouping(s string, positions []int, sep rune) string {
 	if regular := fracRegularInterval(positions); regular > 0 {
 		step = regular
 	}
+	// Irregular positions are counted once: scanning them all for every
+	// digit was quadratic in the picture's length.
+	var at map[int]int
+	if step == 0 {
+		at = make(map[int]int, len(positions))
+		for _, p := range positions {
+			at[p]++
+		}
+	}
 	runes := []rune(s)
 	var sb strings.Builder
 	for i, r := range runes {
@@ -891,10 +957,8 @@ func applyFracGrouping(s string, positions []int, sep rune) string {
 					sb.WriteRune(sep)
 				}
 			} else {
-				for _, p := range positions {
-					if p == i {
-						sb.WriteRune(sep)
-					}
+				for k := 0; k < at[i]; k++ {
+					sb.WriteRune(sep)
 				}
 			}
 		}

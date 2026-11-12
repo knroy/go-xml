@@ -8,11 +8,12 @@
 // observable behaviour — token boundaries, error text and line numbers,
 // InputOffset — so that the switch is invisible to xdm. Where that behaviour
 // departs from the Recommendations the departure is kept on purpose and is
-// marked "parity:" below. Six have since been corrected, each measured
+// marked "parity:" below. Seven have since been corrected, each measured
 // against the W3C XML Conformance Test Suite: white space between attributes,
 // white space after a PI target, [2] Char in comments and PI bodies, version
-// 1.x read as 1.0, and Literal, which lets xdm refuse a reference or CDATA
-// section outside the document element.
+// 1.x read as 1.0, Literal, which lets xdm refuse a reference or CDATA
+// section outside the document element, and the XML declaration, now read
+// only at the start of the stream and parsed by [23] rather than searched.
 //
 // What each part implements:
 //
@@ -27,9 +28,10 @@
 //     XML 1.0 §3 [7] QName, as written, with no binding.
 //   - comment: §2.5 Comments. procInst: §2.6 Processing Instructions.
 //   - cdata: §2.7 CDATA Sections.
-//   - xmlDecl: §2.8 [23] XMLDecl, [24] VersionInfo (1.1, or any other 1.x
-//     read as 1.0), and §4.3.3 [80] EncodingDecl, which hands a non-UTF-8
-//     stream to CharsetReader.
+//   - xmlDecl, ParseXMLDecl: §2.8 [23] XMLDecl, [24] VersionInfo (1.1, or any
+//     other 1.x read as 1.0), [32] SDDecl, and §4.3.3 [80] EncodingDecl, which
+//     hands a non-UTF-8 stream to CharsetReader; §2.6 [17] PITarget reserves
+//     every other spelling of xml.
 //   - directive: §2.8 [28] doctypedecl, returned unparsed for xdm to read.
 //   - startTag, endTag: §3.1 [40] STag, [41] Attribute, [42] ETag, [44]
 //     EmptyElemTag. Tags are not paired here; xdm does that.
@@ -150,12 +152,19 @@ type Decoder struct {
 	// in Entity.
 	AttrEntity map[string]string
 
+	// EscapedEntity names the entities in Entity whose replacement text is
+	// white space owed in part to a character reference. A reference to one
+	// makes the CharData Escaped, as the character reference itself would.
+	EscapedEntity map[string]bool
+
 	// Undeclared, when set, is asked about a reference to an entity that is
-	// neither predefined nor in Entity; if it reports true the reference is
-	// dropped instead of being an error. That is a non-validating
-	// processor's reading of a document whose declarations it may not have
-	// read (XML 1.0 §4.1, VC: Entity Declared); xdm decides when it applies.
-	Undeclared func(name string) bool
+	// neither predefined nor in Entity. If it reports skip the reference is
+	// accepted and stands for no text; otherwise the note it returns is added
+	// to the error the reference is. xdm uses it to say why: where XML 1.0
+	// §4.1's WFC does not govern, the declaration may be in a part of the DTD
+	// that was not read, or, all of it read, the reference is a validity
+	// error only.
+	Undeclared func(name string) (note string, skip bool)
 
 	// CharsetReader converts a stream whose XML declaration names an
 	// encoding other than UTF-8. It receives the bytes after the declaration
@@ -201,6 +210,7 @@ type Decoder struct {
 	declSeen bool // the first <?xml?> has been read; the version is fixed
 
 	literal bool // the last CharData had no reference and was not CDATA
+	escaped bool // the last CharData had a character reference or was CDATA
 
 	// The values RawToken returns pointers to, one per kind, reused.
 	tokStart   StartElement
@@ -245,6 +255,13 @@ func (d *Decoder) IsVersion11() bool { return d.v11 }
 // needs this as well as the text to tell "&#32;" or "<![CDATA[]]>" there from
 // a space.
 func (d *Decoder) Literal() bool { return d.literal }
+
+// Escaped reports whether the CharData last returned is a CDATA section or
+// holds a character reference. Where XML 1.0 §3 VC: Element Valid admits only
+// white space, between the children of element content, neither is white
+// space whatever its characters (erratum E15), while an entity reference
+// whose replacement text is white space is.
+func (d *Decoder) Escaped() bool { return d.escaped }
 
 // InputOffset returns the stream offset just past the last token returned,
 // counted in the bytes the tokeniser read — after CharsetReader conversion,
@@ -368,7 +385,7 @@ func (d *Decoder) RawToken() (Token, error) {
 	}
 	if b != '<' {
 		d.ungetc()
-		d.literal = true // until reference says otherwise
+		d.literal, d.escaped = true, false // until reference says otherwise
 		data, ok := d.text(0, false)
 		if !ok {
 			return nil, d.err
@@ -513,12 +530,23 @@ func (d *Decoder) growAttrs(attrs []Attr, start int64) []Attr {
 //
 // The body's line ends are folded to LF by the document's version (§2.11).
 //
-// parity: a target of "xml" is the declaration wherever it appears, not only
-// at the start of the document.
+// [17] PITarget excludes (('X' | 'x') ('M' | 'm') ('L' | 'l')), so a PI with
+// such a target is the XML declaration or is not well formed. [22] prolog
+// puts XMLDecl first: "xml" is the declaration only at the very start of the
+// stream, and any other spelling of it is reserved (§2.6) wherever it is.
 func (d *Decoder) procInst() (Token, error) {
+	at := d.InputOffset() - 2 // the "<?" is read
 	target, ok := d.name()
 	if !ok {
 		return nil, d.orSyntaxError("expected target name after <?")
+	}
+	if len(target) == 3 && strings.EqualFold(target, "xml") {
+		if target != "xml" {
+			return nil, d.syntaxError("processing instruction target " + target + " is reserved")
+		}
+		if at != 0 || d.declSeen {
+			return nil, d.syntaxError("XML declaration must appear at the start of the document")
+		}
 	}
 	spaced := d.space()
 	data, ok := d.until("?>", d.scratch[:0])
@@ -544,25 +572,20 @@ func (d *Decoder) procInst() (Token, error) {
 }
 
 // xmlDecl applies the version and encoding of an XML declaration whose
-// pseudo-attributes are decl.
+// pseudo-attributes are decl, which must match [23] XMLDecl (ParseXMLDecl).
 //
 // A version of 1.x other than 1.1 is read as 1.0, as §2.8 asks of a 1.0
 // processor since the Fifth Edition.
-//
-// parity: an unrecognised version or encoding is a plain error, not a
-// SyntaxError, and the pseudo-attributes are found by declValue's substring
-// search rather than parsed by [24] and [80]. The version is taken from the
-// first <?xml?> only; the encoding from every one.
 func (d *Decoder) xmlDecl(decl string) error {
-	ver := declValue(decl, "version")
-	if ver != "" && !isVersionNum(ver) {
-		return fmt.Errorf("xml: unsupported version %q; only versions 1.x are supported", ver)
+	ver, enc, _, ok := ParseXMLDecl(strings.TrimRight(decl, " \t\r\n"))
+	if !ok {
+		if _, v, ok := declField(decl, "version", false); ok && !isVersionNum(v) {
+			return fmt.Errorf("xml: unsupported version %q; only versions 1.x are supported", v)
+		}
+		return d.syntaxError("malformed XML declaration")
 	}
-	if !d.declSeen {
-		d.declSeen, d.v11 = true, ver == "1.1"
-	}
-	enc := declValue(decl, "encoding")
-	if enc == "" || strings.EqualFold(enc, "utf-8") {
+	d.declSeen, d.v11 = true, ver == "1.1"
+	if strings.EqualFold(enc, "utf-8") || enc == "" {
 		return nil
 	}
 	if d.CharsetReader == nil {
@@ -581,6 +604,72 @@ func (d *Decoder) xmlDecl(decl string) error {
 	d.buf, d.pos = d.buf[:0], 0
 	d.src, d.srcErr = r, nil
 	return nil
+}
+
+// ParseXMLDecl parses the body of an XML declaration, the text between
+// "<?xml" and its white space and "?>", by §2.8 [23]-[26], §2.9 [32] and
+// §4.3.3 [80]-[81]:
+//
+//	VersionInfo EncodingDecl? SDDecl?
+//
+// [23]'s trailing S? is the caller's to trim. Each pseudo-attribute name Eq quoted-value, [25] Eq being S? '=' S?,
+// in that order and each at most once. It returns the three values, ""
+// for one that is absent, and ok false when s does not match.
+func ParseXMLDecl(s string) (version, encoding, standalone string, ok bool) {
+	s, version, ok = declField(s, "version", false)
+	if !ok || !isVersionNum(version) {
+		return "", "", "", false
+	}
+	if rest, v, ok := declField(s, "encoding", true); ok {
+		if !isEncName(v) {
+			return "", "", "", false
+		}
+		s, encoding = rest, v
+	}
+	if rest, v, ok := declField(s, "standalone", true); ok {
+		if v != "yes" && v != "no" {
+			return "", "", "", false
+		}
+		s, standalone = rest, v
+	}
+	return version, encoding, standalone, s == ""
+}
+
+// declField reads name Eq quoted-value from the front of s, after S+ when
+// spaced, and returns the rest and the value. When s does not begin so it
+// reports false and s is not consumed.
+func declField(s, name string, spaced bool) (rest, value string, ok bool) {
+	t := s
+	if spaced {
+		t = strings.TrimLeft(s, " \t\r\n")
+		if len(t) == len(s) {
+			return s, "", false
+		}
+	}
+	if !strings.HasPrefix(t, name) {
+		return s, "", false
+	}
+	t = strings.TrimLeft(t[len(name):], " \t\r\n")
+	if t == "" || t[0] != '=' {
+		return s, "", false
+	}
+	t = strings.TrimLeft(t[1:], " \t\r\n")
+	if t == "" || t[0] != '"' && t[0] != '\'' {
+		return s, "", false
+	}
+	end := strings.IndexByte(t[1:], t[0])
+	if end < 0 {
+		return s, "", false
+	}
+	return t[end+2:], t[1 : 1+end], true
+}
+
+// isEncName is [81] EncName, [A-Za-z] ([A-Za-z0-9._] | '-')*.
+func isEncName(v string) bool {
+	if v == "" || 'a' > v[0]|0x20 || v[0]|0x20 > 'z' {
+		return false
+	}
+	return strings.TrimLeft(v, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") == ""
 }
 
 // isVersionNum reports whether v is [26] VersionNum, '1.' [0-9]+.
@@ -611,34 +700,6 @@ type errReader struct{ err error }
 
 func (r errReader) Read([]byte) (int, error) { return 0, r.err }
 
-// declValue returns the value of pseudo-attribute key in an XML declaration's
-// body: the text between the quotes after the first `key=` that is directly
-// followed by a quote. A `key=` followed by anything else is passed over,
-// along with the byte after it, and the search resumes. White space around
-// "=", which [25] Eq allows, is not recognised, so such a key reads as
-// absent.
-func declValue(decl, key string) string {
-	key += "="
-	for from := 0; ; {
-		i := strings.Index(decl[from:], key)
-		if i < 0 {
-			return ""
-		}
-		q := from + i + len(key)
-		if q >= len(decl) {
-			return ""
-		}
-		if c := decl[q]; c == '"' || c == '\'' {
-			n := strings.IndexByte(decl[q+1:], c)
-			if n < 0 {
-				return ""
-			}
-			return decl[q+1 : q+1+n]
-		}
-		from = q + 1
-	}
-}
-
 // bang reads whatever follows "<!": a comment, a CDATA section or a
 // directive.
 func (d *Decoder) bang() (Token, error) {
@@ -658,7 +719,7 @@ func (d *Decoder) bang() (Token, error) {
 				return nil, d.syntaxError("invalid <![ sequence")
 			}
 		}
-		d.literal = false
+		d.literal, d.escaped = false, true
 		data, ok := d.text(0, true)
 		if !ok {
 			return nil, d.err
@@ -789,9 +850,17 @@ func (d *Decoder) directive(b byte) (Token, error) {
 				if out, ok = d.commentBody(out); !ok {
 					return nil, d.err
 				}
+				if !d.checkChars(out[mark+1:], nil) {
+					return nil, d.err
+				}
 				out = append(out[:mark], ' ')
 			}
 		}
+	}
+	// [2] Char holds in a DOCTYPE as in content: a noncharacter in an entity
+	// value no one references is still not well formed.
+	if !d.checkChars(out, nil) {
+		return nil, d.err
 	}
 	out = foldLineEnds(out, d.v11)
 	d.scratch = out
@@ -1240,6 +1309,7 @@ func (d *Decoder) reference(out []byte, spans []refSpan, attr bool) ([]byte, []r
 					return out, spans, false
 				}
 				repl, found, charRef = string(r), true, true
+				d.escaped = true
 			}
 		}
 	} else {
@@ -1263,9 +1333,17 @@ func (d *Decoder) reference(out []byte, spans []refSpan, attr bool) ([]byte, []r
 				}
 				if !found && d.Entity != nil {
 					repl, found = d.Entity[string(name)]
+					if found && d.EscapedEntity[string(name)] {
+						d.escaped = true
+					}
 				}
-				if !found && d.Undeclared != nil && d.Undeclared(string(name)) {
-					return out[:start], spans, true
+				if !found && d.Undeclared != nil {
+					note, skip := d.Undeclared(string(name))
+					if note != "" && !skip {
+						d.syntaxError("invalid character entity &" + string(name) + "; (" + note + ")")
+						return out, spans, false
+					}
+					found = skip
 				}
 			}
 		}

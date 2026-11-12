@@ -2,6 +2,8 @@ package xslt
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -56,7 +58,7 @@ func (r *readDocResolver) record(t *xdm.Tree) {
 		return
 	}
 	if u := t.Root.DocumentURI(); u != "" {
-		r.read[u] = true
+		addDoc(r.read, u)
 	}
 }
 
@@ -78,6 +80,9 @@ func (r *readDocResolver) cached(k docKey, load func() (*xdm.Tree, error)) (*xdm
 	r.record(t)
 	if err == nil {
 		if werr := r.checkWrittenThenRead(t); werr != nil {
+			return nil, werr
+		}
+		if _, werr := r.markRead(k.uri, k.base, ""); werr != nil {
 			return nil, werr
 		}
 		if r.docs != nil {
@@ -102,12 +107,52 @@ func (r *readDocResolver) checkWrittenThenRead(t *xdm.Tree) error {
 		return nil
 	}
 	u := t.Root.DocumentURI()
-	if u == "" || !r.written[u] {
+	if u == "" || !hasDoc(r.written, u) {
 		return nil
 	}
 	return fmt.Errorf(
 		"XTDE1500: this transformation reads %q, which xsl:result-document "+
 			"has already written", u)
+}
+
+// markRead records a read of uri against base under doc, the document URI
+// the resolver names it by, and under the absolute URI it was asked for, and
+// is XTDE1500 if either was written. It returns what takes back the URIs it
+// added, for a streamed read that then fails.
+//
+// FileResolver names a document by the real path it admitted, while an href
+// resolves against its base as written: under a symbolically linked
+// directory (macOS's /var, t.TempDir) the two spell one file differently.
+// The URI as asked for is the spelling a write against the same base meets,
+// so recording both lets them meet without the write side touching the
+// filesystem (docIdentity).
+func (r *readDocResolver) markRead(uri, base, doc string) (func(), error) {
+	// Only a file: URI: the two spellings are a filesystem's, and a request
+	// left relative (no usable base) is not an absolute URI to compare.
+	asked := resolveAgainst(base, uri)
+	if !strings.HasPrefix(asked, "file:") {
+		asked = ""
+	}
+	var added []string
+	for _, u := range []string{doc, asked} {
+		if u == "" {
+			continue
+		}
+		if !hasDoc(r.read, u) {
+			added = append(added, u)
+		}
+		addDoc(r.read, u)
+		if hasDoc(r.written, u) {
+			return func() {}, fmt.Errorf(
+				"XTDE1500: this transformation reads %q, which xsl:result-document "+
+					"has already written", u)
+		}
+	}
+	return func() {
+		for _, u := range added {
+			delDoc(r.read, u)
+		}
+	}, nil
 }
 
 // ResolveDocumentIn implements xpath.ContextDocumentResolver, so that wrapping
@@ -132,17 +177,56 @@ func (r *readDocResolver) NativeResolver() {}
 //
 // Only a URI that was actually read counts. A resource the transformation
 // merely could have read is not an error to write, and the spec's "if the same
-// absolute URI is used to access the resource in both cases" makes the test an
-// exact string comparison of absolute URIs rather than anything about the
-// underlying file. The paragraph after the error allows a processor to go
-// further and detect two URIs naming one physical resource; this one does not,
-// because the filesystem question it would have to ask is not one this package
-// is in a position to answer portably.
+// absolute URI is used to access the resource in both cases" makes the test a
+// comparison of absolute URIs. One file: URI has two spellings, though, when
+// a directory on its path is a symbolic link: FileResolver records what it
+// reads under the real path, while an href resolves against a base URI as
+// written (t.TempDir on macOS is under /var, a link to /private/var). So a
+// read is recorded under the URI it was asked for as well (markRead).
 func checkReadThenWrite(rt *runtime, href string) error {
-	if href == "" || rt.readDocs == nil || !(*rt.readDocs)[href] {
+	if href == "" || rt.readDocs == nil || !hasDoc(*rt.readDocs, href) {
 		return nil
 	}
 	return fmt.Errorf(
 		"XTDE1500: xsl:result-document writes to %q, which this "+
 			"transformation has already read", href)
+}
+
+// docIdentity is u as the read and written sets compare it: a file: URI with
+// its path cleaned; any other URI is itself. It is lexical on purpose. An
+// href is the stylesheet's or the document's choice, and resolving its
+// symbolic links ran lstat and readlink on any host path with no file access
+// granted -- an oracle for whether two paths name one file, and on Windows a
+// UNC path reaches the network. The symbolic-link spelling a read can differ
+// by is recorded at read time instead (markRead).
+func docIdentity(u string) string {
+	if !strings.HasPrefix(u, "file:") {
+		return u
+	}
+	p := fileURIToPath(u)
+	if !filepath.IsAbs(p) {
+		return u
+	}
+	return fileURIOf(filepath.Clean(p))
+}
+
+// addDoc records u in set, as written and by its identity; hasDoc and delDoc
+// are its lookup and removal. The spelling as written keeps the exact
+// comparison XTDE1490 makes (checkResultURI).
+//
+// ponytail: delDoc drops the identity even when another spelling of the same
+// file was recorded too; only the re-run of a streamed container and an
+// unread parse failure remove, and each re-records what it then reads.
+func addDoc(set map[string]bool, u string) {
+	set[u] = true
+	set[docIdentity(u)] = true
+}
+
+func hasDoc(set map[string]bool, u string) bool {
+	return set[u] || set[docIdentity(u)]
+}
+
+func delDoc(set map[string]bool, u string) {
+	delete(set, u)
+	delete(set, docIdentity(u))
 }

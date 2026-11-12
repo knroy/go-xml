@@ -128,6 +128,32 @@ type SchemaListTypes interface {
 	SchemaTypeIsList(name xdm.QName) (itemType xdm.QName, ok bool)
 }
 
+// schemaTypeEnvs is implemented by a static context that can name the type
+// environment of its imported schemas. It is unexported and optional for the
+// reason SchemaUnionTypes is optional: a resolver without it leaves values to
+// the process-global table, which is the behaviour before it existed.
+type schemaTypeEnvs interface {
+	SchemaTypeEnv() *xdm.TypeEnvironment
+}
+
+// schemaTypeEnvOf returns the type environment ns's imported schemas own, or
+// nil.
+func schemaTypeEnvOf(ns NamespaceResolver) *xdm.TypeEnvironment {
+	if s, ok := ns.(schemaTypeEnvs); ok {
+		return s.SchemaTypeEnv()
+	}
+	return nil
+}
+
+// withSchemaEnv gives a value annotated with a schema type the environment of
+// the schema that defined it, leaving a nil env or an unannotated value alone.
+func withSchemaEnv(a *xdm.Atomic, env *xdm.TypeEnvironment) *xdm.Atomic {
+	if env == nil || a == nil || a.Derived() == "" {
+		return a
+	}
+	return a.WithTypeEnv(env)
+}
+
 // schemaTypeIsList resolves a lexical type name and asks whether it is a list
 // type, through the same prefix bindings as everything else, reporting the
 // item type's name and its built-in code.
@@ -172,7 +198,7 @@ func schemaTypeCastTarget(lex string, ns NamespaceResolver) (SequenceType, bool)
 	if !found {
 		return SequenceType{}, false
 	}
-	st := SequenceType{SchemaType: annotationKeyOf(lex, ns)}
+	st := SequenceType{SchemaType: annotationKeyOf(lex, ns), schemaEnv: schemaTypeEnvOf(ns)}
 	// The facets of an imported simple type are only in the schema, so the
 	// check is captured here rather than being reconstructed from the type
 	// code at cast time.

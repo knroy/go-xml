@@ -12,12 +12,41 @@ import (
 
 // compiler holds state while compiling a stylesheet and its included modules.
 type compiler struct {
-	// burst is the burst plan of the streamable xsl:source-document being
-	// compiled, which records the compiled form of its loop.
-	burst     *burstPlan
-	opts      CompileOptions
-	sheet     *Stylesheet
-	declOrder int
+	// exposedVis memoises, per xsl:package element, the visibility its
+	// xsl:expose declarations give each declaration; see exposedVisibility.
+	exposedVis map[*xdm.Node]map[*xdm.Node]visibility
+	// env is the state this compilation shares with code that has no
+	// compiler in scope; see compileEnv.
+	env *compileEnv
+	// inline is the substitution of a streamed call's first argument for
+	// its function's first parameter while the inlined body compiles
+	// (streamfn_inline.go).
+	inline *inlineSubst
+	// stream is the core plan of the streamable xsl:source-document being
+	// compiled (streamexec.go), which records the compiled form of its
+	// consuming instructions.
+	stream *streamExec
+	// streamFns are the stylesheet's functions, for the split (streamcall.go).
+	streamFns map[funcKey]*streamFunc
+	// streamTabs are the module tables every streamed container of the
+	// compile is analysed with (streamplan.go).
+	streamTabs moduleTabs
+	// ruleExecs are the plans of the template rule whose body is being
+	// compiled, rulePlans the walks they are made from, by module, and
+	// streamLinks the containers whose plans apply templates, linked once
+	// every rule has compiled (streamapply.go).
+	ruleExecs   []*streamExec
+	rulePlans   map[*xdm.Node]*rulesPlan
+	streamLinks []streamLink
+	// accumLinks are the streamed containers whose accumulators are checked
+	// once every one has compiled (streamaccum.go).
+	accumLinks []streamLink
+	// mergeLinks are the streamed merges whose sources' accumulators are
+	// checked then too (streammerge_accum.go).
+	mergeLinks []*mergeInstr
+	opts       CompileOptions
+	sheet      *Stylesheet
+	declOrder  int
 	// seen guards against include cycles, which would otherwise recurse until
 	// the stack runs out. schemaSeen does the same for the xsl:import-schema
 	// pre-pass, which walks the module graph separately and must not visit a
@@ -40,6 +69,21 @@ type compiler struct {
 	// module compiled, and a used package compiles last, so the number alone
 	// says the opposite of what section 3.5 requires.
 	usedPackageDepth int
+	// activePackages holds the packages being read or compiled on the
+	// current path, keyed by packageKey, for XTSE3005.
+	activePackages map[string]bool
+	// packageReads memoises readUsePackage's reading of a package, keyed by
+	// the name and version range it was requested with, so that a package
+	// used on several paths is resolved and read once. Only the part that
+	// depends on the package alone is kept; see readUsePackage.
+	packageReads map[string]*usePackageDecl
+	// packageReadsByKey holds the same reads keyed by packageKey, so that
+	// version ranges spelled differently that resolve to one package read
+	// it once rather than once per spelling.
+	packageReadsByKey map[string]*usePackageDecl
+	// globalTies indexes the globals declared so far for XTSE0630; see
+	// appendGlobal.
+	globalTies map[globalTie]bool
 	// schemaHoisted records that the xsl:import-schema pre-pass has run, so
 	// that the recursion for each included module does not repeat it from a
 	// root that sees less than the first one did.
@@ -163,12 +207,33 @@ type compiler struct {
 	// once every template is known.
 	calls []*callTemplateInstr
 	// staticVars holds the value of every static variable and parameter in
-	// the stylesheet, in tree order, as computed by the static phase; see
+	// the stylesheet, by Clark name, as computed by the static phase; see
 	// static.go. staticDone records the module trees that phase already
 	// walked, so that compileModule does not repeat conditional inclusion
 	// over one and evaluate its use-when expressions a second time.
-	staticVars []staticVar
+	staticVars map[string]*staticVar
 	staticDone map[*xdm.Node]*xdm.Node
+	// moduleIDs indexes, by ID, the elements of each host document an
+	// xsl:include or xsl:import fragment has been looked up in; see
+	// embeddedModule.
+	moduleIDs map[*xdm.Node]map[string]*xdm.Node
+	// l7Alias caches the scan streamMayAlias reads, made over l7AliasN modules (streamalias_l7.go).
+	l7Alias  *aliasScan
+	l7AliasN int
+	// l7Cross is the rules walk over every module, made once (streamtrust_xmod_l7.go).
+	l7Cross     *rulesPlan
+	l7CrossDone bool
+	// l7XMods caches crossModules, made with l7XModsKey (streamtrust_xmod_l7.go).
+	l7XMods    []*xdm.Node
+	l7XModsKey xmodsKey
+	l7XModsOK  bool
+	// l7PkgFrames are the frame packages' states, by package root, and
+	// l7PkgCur the one compiling now (streampkgframe_l7.go).
+	l7PkgFrames map[*xdm.Node]*pkgFrameState
+	l7PkgCur    *pkgFrameState
+	// ownPkg is the root of the used package compiling now when its own
+	// declarations are the ones in force (streamtrust_pkguse.go).
+	ownPkg *xdm.Node
 	// mergedText records, for each text node mergeAcrossComments built out
 	// of pieces separated by comments, the element the pieces were in.
 	mergedText map[*xdm.Node]*xdm.Node
@@ -602,7 +667,7 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 				return err
 			}
 			v.precedence = precedence
-			c.sheet.globals = append(c.sheet.globals, v)
+			c.appendGlobal(v)
 			return nil
 		}
 		v, err := c.compileVariable(el)
@@ -617,17 +682,13 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		// at the same import precedence. A higher precedence legitimately
 		// overrides a lower one, so only a tie is an error.
 		v.pkg = compilePackage
-		for _, prev := range c.sheet.globals {
-			if prev.Name.Clark() == v.Name.Clark() &&
-				prev.pkg == v.pkg &&
-				prev.precedence == precedence {
-				return fmt.Errorf(
-					"XTSE0630: two global variables are named %s at the same "+
-						"import precedence", v.Name.Lexical())
-			}
+		if c.globalTies[globalTie{v.Name.Clark(), v.pkg, precedence}] {
+			return fmt.Errorf(
+				"XTSE0630: two global variables are named %s at the same "+
+					"import precedence", v.Name.Lexical())
 		}
 		v.precedence = precedence
-		c.sheet.globals = append(c.sheet.globals, v)
+		c.appendGlobal(v)
 		return nil
 	case "output":
 		return c.compileOutput(el, precedence)
@@ -934,6 +995,7 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 					"sequence-constructor) (XTSE0010)")
 		}
 	}
+	seen := map[string]bool{}
 	for ; i < len(children); i++ {
 		if !isXSL(children[i], "param") {
 			break
@@ -943,17 +1005,26 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 			return err
 		}
 		// XTSE0580: two parameters of a template may not share a name.
-		for _, prev := range t.Params {
-			if prev.Name.Clark() == v.Name.Clark() {
-				return fmt.Errorf(
-					"XTSE0580: xsl:template has two parameters named %s",
-					v.Name.Lexical())
-			}
+		if seen[v.Name.Clark()] {
+			return fmt.Errorf(
+				"XTSE0580: xsl:template has two parameters named %s",
+				v.Name.Lexical())
 		}
+		seen[v.Name.Clark()] = true
 		t.Params = append(t.Params, v)
 	}
 
+	// A rule's body is planned for streamed dispatch before it compiles
+	// (streamapply.go): its instructions are noted into the plans.
+	var rp *rulePlan
+	if t.Match != nil {
+		rp = c.planRule(el, t.Match, i)
+	}
 	body, err := c.compileSequenceFrom(el, el, i)
+	if rp != nil {
+		c.readyRule(rp, el)
+		t.stream = rp
+	}
 	if err != nil {
 		return err
 	}
@@ -1588,6 +1659,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	var params []*Variable
 	children := el.ChildElements()
 	i := 0
+	seen := map[string]bool{}
 	for ; i < len(children); i++ {
 		if !isXSL(children[i], "param") {
 			break
@@ -1597,13 +1669,12 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 			return err
 		}
 		// XTSE0580: two parameters of a function may not share a name.
-		for _, prev := range params {
-			if prev.Name.Clark() == p.Name.Clark() {
-				return fmt.Errorf(
-					"XTSE0580: xsl:function %s has two parameters named %s",
-					qn.Lexical(), p.Name.Lexical())
-			}
+		if seen[p.Name.Clark()] {
+			return fmt.Errorf(
+				"XTSE0580: xsl:function %s has two parameters named %s",
+				qn.Lexical(), p.Name.Lexical())
 		}
+		seen[p.Name.Clark()] = true
 		params = append(params, p)
 	}
 	if refs := bodyVariableRefs(el); len(refs) > 0 {
@@ -1630,6 +1701,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	if stub != nil {
 		body = stub
 	}
+	det, cache := functionDeterminism(el), cacheMemoises(el.AttrValue("cache"))
 	fn := &userFunction{
 		name: qn, params: params, body: body, baseURI: el.BaseURI(),
 		// Two attributes reach the same machinery. @new-each-time="no" is a
@@ -1639,16 +1711,19 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 		// is what makes function-1031 terminate: it computes fib(92) by naive
 		// double recursion, which without memoisation is some 2^92 calls.
 		//
-		// Only the explicit "no" obliges anything on the first: 10.3's
-		// default is "maybe", under which reusing a result and recomputing it
-		// are both allowed.
+		// The hint is bounded by the function's category. 10.3.8: "In all
+		// cases the results must respect the semantics". An elidable
+		// function ("maybe") may share results outright; a proactive one,
+		// the default ("By default, stylesheet functions are proactive",
+		// 10.3.7), creates new nodes on each invocation, so only a result
+		// holding no nodes is reused -- see cacheAtomic.
 		//
 		// The hint is read through cacheMemoises, which names the boolean
 		// trues the Recommendation types the attribute with (cache? =
 		// boolean, 10.3); the Last Call draft's cache="full" is refused by
 		// the element table.
-		deterministic: functionDeterminism(el) == "no" ||
-			cacheMemoises(el.AttrValue("cache")),
+		deterministic: det == "no" || cache && det == "maybe",
+		cacheAtomic:   cache && det == "yes",
 	}
 	// The function's own "as" declaration converts the returned value, which
 	// matters for the same reason the parameter declarations do.
@@ -1695,7 +1770,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	entry := xpath.Function{
 		Name:      qn,
 		Arity:     len(params),
-		Call:      fn.call,
+		Call:      fn.charged(el), // functions_depth.go
 		Signature: declaredSignature(fn.returns, params),
 	}
 	c.sheet.funcs.Add(entry)
@@ -1760,14 +1835,14 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 		if overridingPackage(el, compilePackage) != compilePackage {
 			vis = "public"
 		}
-		if v, ok := composedVisibility[el]; ok && vis == "" {
+		if v, ok := c.env.composedVisibility[el]; ok && vis == "" {
 			vis = string(v)
 		}
 		if vis == "" {
 			vis = strings.TrimSpace(el.AttrValue("visibility"))
 		}
 		if vis == "" {
-			if v := exposedVisibility(el); v != "" {
+			if v := c.exposedVisibility(el); v != "" {
 				vis = string(v)
 			} else {
 				vis = "private"
@@ -1913,7 +1988,7 @@ func (c *compiler) hoistImportSchema(root *xdm.Node) error {
 				continue
 			}
 			c.schemaSeen[resolved] = true
-			sub := c.prunedModule(embeddedModule(doc, fragment))
+			sub := c.prunedModule(c.embeddedModule(doc, fragment))
 			if sub == nil {
 				continue
 			}
@@ -1936,6 +2011,11 @@ func (c *compiler) compileInclude(el *xdm.Node, precedence int) error {
 }
 
 func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecedence bool) error {
+	// Each occurrence is a unit of the compile walk, as it is of the static
+	// phase's, and both stop when the CompileContext caller gives up.
+	if err := c.goCtx().Err(); err != nil {
+		return err
+	}
 	href := el.AttrValue("href")
 	if href == "" {
 		return fmt.Errorf("%s requires an href attribute", el.Name().Lexical())
@@ -1959,6 +2039,9 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 	fragment := ""
 	if i := strings.IndexByte(href, '#'); i >= 0 {
 		fragment, href = href[i+1:], href[:i]
+	}
+	if err := c.visitModule(el, href); err != nil {
+		return err
 	}
 	doc, resolved, err := resolveModule(c.opts.Resolver, c.opts.moduleBudget, href, base)
 	if err != nil {
@@ -1986,7 +2069,7 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 	defer delete(c.seen, resolved)
 
 	if fragment != "" {
-		if sub := embeddedModule(doc, fragment); sub != nil {
+		if sub := c.embeddedModule(doc, fragment); sub != nil {
 			doc = sub
 		}
 	}
@@ -2007,6 +2090,9 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 				"stylesheet module; a package is referenced with "+
 				"xsl:use-package", el.Name().Lexical(), href)
 	}
+	if err := c.compileModuleNodes(el, href, doc); err != nil {
+		return err
+	}
 	if forcePrecedence {
 		// xsl:include: the module's declarations take the includer's
 		// precedence, so its own allocation is overridden afterwards. The
@@ -2018,6 +2104,129 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 	c.importDepth++
 	defer func() { c.importDepth-- }()
 	return c.compileDocument(doc, precedence)
+}
+
+// maxModuleVisits bounds the xsl:include and xsl:import occurrences one
+// compilation resolves, counted over every route rather than per chain. A
+// module reached on several paths is resolved and compiled once per path --
+// each import occurrence has its own precedence (3.11.3), so the compiled
+// result cannot be shared -- and a chain where each module imports the next
+// twice costs 2^N. Both walks charge it, the static phase and the compile, so
+// an occurrence counts twice; the largest real stylesheets measured (DocBook
+// XSL 1.79 fo, xslTNG, XSpec) need about 120. A package used on several paths
+// is likewise compiled once per path, since each use may override it
+// differently (3.5.2), so every package read and compile is charged too. A
+// nested compilation started by fn:transform spends the remainder of the
+// outer compilation or transform (see compileBudget), and is charged one visit
+// for its principal module, so a stylesheet that transforms itself B times
+// per level cannot multiply the bound by B^K.
+//
+// It is the default of CompileOptions.MaxModuleVisits.
+const maxModuleVisits = 10_000
+
+// maxModuleNodes bounds the tree nodes of the modules one compilation
+// compiles, counted once per compile of each module, so that the work is
+// bounded by size and not only by occurrences. maxModuleVisits alone let a
+// principal module import one large module 4,999 times and compile it in full
+// each time. The largest real stylesheets measured compile about 40,000
+// nodes in total (xslTNG docbook.xsl and epub.xsl; XSpec's compiler about
+// 7,000), and the bound leaves more than tenfold headroom above that. A
+// compilation's principal module is the host's own input and is not charged;
+// a nested one's is. It is the default of CompileOptions.MaxModuleNodes.
+const maxModuleNodes = 500_000
+
+// maxModuleVisitsCeiling is the most CompileOptions.MaxModuleVisits may raise
+// the visit bound to, since the visits are also all that bounds how deep an
+// xsl:use-package, xsl:import or xsl:include chain recurses in Go, and a Go
+// stack overflow is fatal rather than an error. A larger value, or a negative
+// one, is read as this ceiling. Measured on a chain of packages each using the
+// next, which costs one or two visits per level (an import or include chain
+// costs about the square of its depth, so it is far shallower): about 3.8 KB
+// of stack per level, 17,500 levels in a 64 MB stack. 50,000 levels is about
+// 190 MB, a fifth of Go's default 1 GB maximum stack.
+const maxModuleVisitsCeiling = 50_000
+
+// compileBudget is what one top-level compilation may spend on modules: the
+// visits maxModuleVisits bounds and the nodes maxModuleNodes bounds. It is
+// minted by compileLocked and shared with every compilation fn:transform
+// starts from the static phase, which runs inside it under the same
+// compileSlot: the house rule that a nested operation spends the parent's
+// remainder rather than restarting it. A running transform likewise mints one
+// for the compilations its fn:transform calls start, shared with the
+// transforms those start (transformState.compileBudget).
+//
+// The schema bytes are here for the same reason: a nested compilation spends
+// the outer one's MaxSchemaBytes remainder, under the outer one's bound,
+// rather than starting a fresh allowance per fn:transform call.
+type compileBudget struct {
+	visits, nodes int
+	// maxVisits and maxNodes are maxModuleVisits and maxModuleNodes as
+	// CompileOptions.MaxModuleVisits and MaxModuleNodes resolve them; a
+	// negative maxNodes is no limit. See newCompileBudget.
+	maxVisits, maxNodes int
+	// schemaBytes is the schema source text read so far, against
+	// maxSchemaBytes (CompileOptions.MaxSchemaBytes, defaulted).
+	schemaBytes, maxSchemaBytes int64
+}
+
+// newCompileBudget is a fresh budget under the bounds opts names, each
+// defaulted when zero.
+func newCompileBudget(opts *CompileOptions) *compileBudget {
+	b := &compileBudget{
+		maxSchemaBytes: opts.MaxSchemaBytes,
+		maxVisits:      opts.MaxModuleVisits,
+		maxNodes:       opts.MaxModuleNodes,
+	}
+	if b.maxSchemaBytes == 0 {
+		b.maxSchemaBytes = DefaultMaxSchemaBytes
+	}
+	switch {
+	case b.maxVisits == 0:
+		b.maxVisits = maxModuleVisits
+	case b.maxVisits < 0 || b.maxVisits > maxModuleVisitsCeiling:
+		b.maxVisits = maxModuleVisitsCeiling
+	}
+	if b.maxNodes == 0 {
+		b.maxNodes = maxModuleNodes
+	}
+	return b
+}
+
+// limits is a fresh budget under b's bounds, with nothing spent.
+func (b *compileBudget) limits() *compileBudget {
+	return &compileBudget{maxSchemaBytes: b.maxSchemaBytes, maxVisits: b.maxVisits, maxNodes: b.maxNodes}
+}
+
+// visitModule charges one module visit against maxModuleVisits.
+func (c *compiler) visitModule(el *xdm.Node, href string) error {
+	b := c.opts.budget
+	if b.visits >= b.maxVisits {
+		return fmt.Errorf(
+			"%s %q: resource limit exceeded: compiling this stylesheet "+
+				"needs more than %d xsl:include/xsl:import/xsl:use-package module visits: %w",
+			el.Name().Lexical(), href, b.maxVisits, xdm.ErrResourceLimit)
+	}
+	b.visits++
+	return nil
+}
+
+// compileModuleNodes charges the nodes of a module about to be compiled
+// against maxModuleNodes. el and href name it in the refusal.
+func (c *compiler) compileModuleNodes(el *xdm.Node, href string, doc *xdm.Node) error {
+	b := c.opts.budget
+	if doc == nil {
+		return nil
+	}
+	if n := doc.SubtreeEnd() - doc.Index(); n > 0 {
+		b.nodes += n
+	}
+	if b.maxNodes >= 0 && b.nodes > b.maxNodes {
+		return fmt.Errorf(
+			"%s %q: resource limit exceeded: compiling this stylesheet "+
+				"needs more than %d module nodes: %w",
+			el.Name().Lexical(), href, b.maxNodes, xdm.ErrResourceLimit)
+	}
+	return nil
 }
 
 // importHref is the resource half of an xsl:import href, without the fragment
@@ -2075,7 +2284,7 @@ func (c *compiler) numberIncludedImports(root *xdm.Node) error {
 		if c.seen[resolved] {
 			continue
 		}
-		sub := c.prunedModule(embeddedModule(doc, fragment))
+		sub := c.prunedModule(c.embeddedModule(doc, fragment))
 		if sub == nil {
 			continue
 		}
@@ -2126,31 +2335,40 @@ func (c *compiler) numberIncludedImports(root *xdm.Node) error {
 // is looser than the spec, but a stylesheet naming a fragment that is not an
 // ID is already malformed, and the host documents in the suite use one
 // spelling each.
-func embeddedModule(doc *xdm.Node, id string) *xdm.Node {
+//
+// A host document is indexed once per compilation, on its first fragment
+// lookup (c.moduleIDs): every walk reaches every occurrence of an
+// xsl:include or xsl:import, and searching the host on each of them made N
+// occurrences of a K-node host cost N*K, of which only the selected subtree
+// is charged to maxModuleNodes.
+func (c *compiler) embeddedModule(doc *xdm.Node, id string) *xdm.Node {
 	if id == "" {
 		return firstElement(doc)
 	}
-	var walk func(n *xdm.Node) *xdm.Node
-	walk = func(n *xdm.Node) *xdm.Node {
-		if n.Kind() == xdm.KindElement {
+	ids, ok := c.moduleIDs[doc]
+	if !ok {
+		ids = map[string]*xdm.Node{}
+		doc.Walk(func(n *xdm.Node) bool {
+			if n.Kind() != xdm.KindElement {
+				return true
+			}
 			for a := range n.Attrs() {
-				if a.Value() != id {
+				if a.Name().Local != "id" || (a.Name().URI != "" && a.Name().URI != xdm.NSXML) {
 					continue
 				}
-				if a.Name().Local == "id" &&
-					(a.Name().URI == "" || a.Name().URI == xdm.NSXML) {
-					return n
+				// The first in document order wins, as the search did.
+				if _, dup := ids[a.Value()]; !dup {
+					ids[a.Value()] = n
 				}
 			}
+			return true
+		})
+		if c.moduleIDs == nil {
+			c.moduleIDs = map[*xdm.Node]map[string]*xdm.Node{}
 		}
-		for k := range n.Children() {
-			if got := walk(k); got != nil {
-				return got
-			}
-		}
-		return nil
+		c.moduleIDs[doc] = ids
 	}
-	if got := walk(doc); got != nil {
+	if got := ids[id]; got != nil {
 		return got
 	}
 	// A fragment that names nothing falls back to the document element, so
@@ -2284,28 +2502,53 @@ func (c *compiler) deferDependentGlobals() {
 			byName[g.Name.Clark()] = g
 		}
 	}
-	// Repeated to a fixed point: a chain of proxies defers from the far end
-	// back, and one pass would only move the mark one link. The loop is
-	// bounded by the number of globals, since each pass that changes
-	// anything defers at least one more.
-	for range c.sheet.globals {
-		changed := false
-		for _, g := range c.sheet.globals {
-			if g.deferred {
-				continue
-			}
-			for _, dep := range globalRefs(g) {
-				if d, ok := byName[dep]; ok && d.deferred && d != g {
-					g.deferred = true
-					changed = true
-					break
-				}
-			}
+	// A chain of proxies defers from the far end back. Each global's
+	// references are read once into reverse edges -- dependency to the
+	// globals naming it -- and the mark is pushed along them from the
+	// globals already deferred, so each edge is followed at most once rather
+	// than every reference being rescanned on every pass of a fixed point.
+	dependents := make(map[*Variable][]*Variable)
+	var work []*Variable
+	for _, g := range c.sheet.globals {
+		if g.deferred {
+			work = append(work, g)
+			continue
 		}
-		if !changed {
-			break
+		for _, dep := range globalRefs(g) {
+			if d, ok := byName[dep]; ok && d != g {
+				dependents[d] = append(dependents[d], g)
+			}
 		}
 	}
+	for len(work) > 0 {
+		d := work[len(work)-1]
+		work = work[:len(work)-1]
+		for _, g := range dependents[d] {
+			if !g.deferred {
+				g.deferred = true
+				work = append(work, g)
+			}
+		}
+	}
+}
+
+// globalTie is what XTSE0630 compares two global bindings on: name, package
+// and import precedence.
+type globalTie struct {
+	name            string
+	pkg, precedence int
+}
+
+// appendGlobal adds v to the stylesheet's globals and indexes it for the
+// XTSE0630 check, so that check is a lookup rather than a scan of every global
+// declared so far. Nothing removes a global before pruneOverriddenGlobals,
+// which runs once every declaration has been compiled.
+func (c *compiler) appendGlobal(v *Variable) {
+	if c.globalTies == nil {
+		c.globalTies = map[globalTie]bool{}
+	}
+	c.globalTies[globalTie{v.Name.Clark(), v.pkg, v.precedence}] = true
+	c.sheet.globals = append(c.sheet.globals, v)
 }
 
 // pruneOverriddenGlobals drops every global variable a higher-precedence
@@ -2378,6 +2621,9 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 			c.sheet.modeNoMatch[name] = strings.TrimSpace(nm.Value())
 			c.sheet.modeNoMatchPrec[name] = rank
 		}
+	}
+	if a := el.Attr("", "streamable"); a != nil {
+		c.noteModeStreamable(name, isYes(a.Value()), precedence) // streamglobal_l7.go
 	}
 	if a := el.Attr("", "typed"); a != nil {
 		if c.sheet.modeTyped == nil {

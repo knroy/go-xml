@@ -25,6 +25,7 @@ package xsd
 // exceed the cap is declined rather than approximated.
 
 import (
+	"slices"
 	"sync/atomic"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -42,6 +43,9 @@ import (
 // forbids. A user asking "why was my legal XSD 1.1 restriction rejected?" had
 // no way to find out, and neither did a maintainer wondering whether a budget
 // is set anywhere near where real schemas need it.
+//
+// A budget decline is now also returned, as errBudgetDeclined, and a rejection
+// that follows one is reported as undecided (particleValidRestrictionVersion).
 //
 // So the counters exist to report the decline, not to change it. Nothing reads
 // them to make a decision; raising or lowering a budget is the only thing that
@@ -79,6 +83,11 @@ type budgetStats struct {
 	// TestGroupDAGLoadsInGraphTime asserts on.
 	GroupCycleSteps atomic.Uint64
 	NestedAllSteps  atomic.Uint64
+	// RangeSteps counts the groups effectiveTotalRange and
+	// particleIgnorable expanded, for the same assertion.
+	RangeSteps atomic.Uint64
+	// MatchSteps counts the follow-set members matchNames examined.
+	MatchSteps atomic.Uint64
 }
 
 // budgetStatsHook lets a caller observe the declines of the next schema loads.
@@ -125,6 +134,19 @@ func countNestedAllStep() {
 	declined(func(s *budgetStats) *atomic.Uint64 { return &s.NestedAllSteps })
 }
 
+func countMatchStep(n int) {
+	if budgetStatsHook == nil {
+		return
+	}
+	if st := budgetStatsHook(); st != nil {
+		st.MatchSteps.Add(uint64(n))
+	}
+}
+
+func countRangeStep() {
+	declined(func(s *budgetStats) *atomic.Uint64 { return &s.RangeSteps })
+}
+
 // subsumeMaxStates caps the unrolled NFA for either side.
 //
 // Unrolling is exponential in the schema text — the same blow-up automaton.go
@@ -139,13 +161,13 @@ func countNestedAllStep() {
 // structural table. Enforced by TestSubsumeDeclineIsNotAcceptance.
 //
 // A var only so tests may lower it; never assigned in production.
-var subsumeMaxStates = 4096
+var subsumeMaxStates = DefaultMaxSubsumptionStates
 
 // subsumeMaxProduct caps the product exploration, which is the determinised
 // base's subset space against the derived NFA's states.
 // Exceeding it likewise DECLINES rather than accepting. A var only so tests
 // may lower it; never assigned in production.
-var subsumeMaxProduct = 20000
+var subsumeMaxProduct = DefaultMaxSubsumptionProduct
 
 // nfa is a plain nondeterministic automaton over particle positions, with
 // every occurrence range unrolled. Transitions carry the term they match
@@ -157,6 +179,8 @@ type nfa struct {
 	// accept[s] reports whether s is final.
 	accept []bool
 	start  int
+	// maxStates is the subsumeMaxStates budget in force for this build.
+	maxStates int
 }
 
 type nfaEdge struct {
@@ -178,19 +202,29 @@ func (n *nfa) addState() int {
 //
 // It returns ok=false for a model that is recursive, unbounded in a way that
 // unrolling cannot represent, or larger than the cap. Every such answer sends
-// the caller back to the 1.0 table.
-func buildNFA(p *Particle) (*nfa, bool) {
-	n := &nfa{}
+// the caller back to the 1.0 table; the error is errBudgetDeclined when the cap
+// was the reason and nil when the shape was.
+//
+// The cap is maxStates, the subsumeMaxStates budget in force for this build
+// (Options.MaxSubsumptionStates via loadBudgets.states). It is told from the
+// shape by the state count alone: every addState is checked against it at once
+// and the build stops there, so a failed build that ended above the cap ended
+// because of it.
+func buildNFA(p *Particle, maxStates int) (*nfa, error, bool) {
+	n := &nfa{maxStates: maxStates}
 	n.start = n.addState()
 	active := map[*ModelGroup]bool{}
 	end, ok := nfaParticle(n, p, n.start, active)
 	if !ok {
-		return nil, false
+		if len(n.trans) > n.maxStates {
+			return nil, errBudgetDeclined, false
+		}
+		return nil, nil, false
 	}
 	for _, e := range end {
 		n.accept[e] = true
 	}
-	return n, true
+	return n, nil, true
 }
 
 // nfaParticle threads the particle's occurrence range, returning the states at
@@ -203,7 +237,7 @@ func nfaParticle(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]
 	if p == nil || p.Term == nil {
 		return []int{from}, true
 	}
-	if len(n.trans) > subsumeMaxStates {
+	if len(n.trans) > n.maxStates {
 		declineSubsumeBudget()
 		return nil, false
 	}
@@ -246,7 +280,7 @@ func nfaParticle(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]
 		// entry put the outer choice's epsilon-to-accept back in reach,
 		// and the base then accepted a lone d1 that it does not allow.
 		entry := n.addState()
-		if len(n.trans) > subsumeMaxStates {
+		if len(n.trans) > n.maxStates {
 			declineSubsumeBudget()
 			return nil, false
 		}
@@ -260,7 +294,7 @@ func nfaParticle(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]
 		// A copy that can finish in several places needs a join state,
 		// because the next copy must start from exactly one.
 		join := n.addState()
-		if len(n.trans) > subsumeMaxStates {
+		if len(n.trans) > n.maxStates {
 			declineSubsumeBudget()
 			return nil, false
 		}
@@ -285,7 +319,7 @@ func nfaOnce(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]int,
 	switch t := p.Term.(type) {
 	case *ElementDecl, *Wildcard:
 		to := n.addState()
-		if len(n.trans) > subsumeMaxStates {
+		if len(n.trans) > n.maxStates {
 			declineSubsumeBudget()
 			return nil, false
 		}
@@ -317,7 +351,7 @@ func nfaGroup(n *nfa, g *ModelGroup, from int, active map[*ModelGroup]bool) ([]i
 			entry := cur[0]
 			if len(cur) != 1 {
 				entry = n.addState()
-				if len(n.trans) > subsumeMaxStates {
+				if len(n.trans) > n.maxStates {
 					declineSubsumeBudget()
 					return nil, false
 				}
@@ -400,7 +434,8 @@ func (n *nfa) accepts(set map[int]bool) bool {
 }
 
 // particleSubsumes decides XSD 1.1 §3.4.6.4 for r against b by language
-// inclusion, returning ok=false when it declines.
+// inclusion, returning ok=false when it declines: with errBudgetDeclined when a
+// budget stopped it, with nil when the shape did.
 //
 // It declines rather than guesses whenever the construction cannot be exact.
 // Two of those are shape-driven and deterministic: an all group, which
@@ -421,13 +456,18 @@ func (n *nfa) accepts(set map[int]bool) bool {
 // and TestSubsumeDeclineIsNotAcceptance, which run the comparison with both
 // budgets forced to zero so only the table answers.
 func particleSubsumes(r, b *Particle) (error, bool) {
-	rn, ok := buildNFA(r)
+	return particleSubsumesIn(r, b, loadBudgets{})
+}
+
+// particleSubsumesIn is particleSubsumes under a schema's retained budgets.
+func particleSubsumesIn(r, b *Particle, lb loadBudgets) (error, bool) {
+	rn, err, ok := buildNFA(r, lb.states())
 	if !ok {
-		return nil, false
+		return err, false
 	}
-	bn, ok := buildNFA(b)
+	bn, err, ok := buildNFA(b, lb.states())
 	if !ok {
-		return nil, false
+		return err, false
 	}
 
 	// The alphabet is the set of name-equivalence classes the two models
@@ -462,9 +502,9 @@ func particleSubsumes(r, b *Particle) (error, bool) {
 	seen[key{setKey(rstart), setKey(bstart)}] = true
 
 	for len(queue) > 0 {
-		if len(seen) > subsumeMaxProduct {
+		if len(seen) > lb.product() {
 			declineSubsumeBudget()
-			return nil, false
+			return errBudgetDeclined, false
 		}
 		p := queue[0]
 		queue = queue[1:]
@@ -671,13 +711,9 @@ func setKey(set map[int]bool) string {
 	return string(b)
 }
 
-func sortInts(xs []int) {
-	for i := 1; i < len(xs); i++ {
-		for j := i; j > 0 && xs[j] < xs[j-1]; j-- {
-			xs[j], xs[j-1] = xs[j-1], xs[j]
-		}
-	}
-}
+// sortInts was an insertion sort, quadratic in a state set that may hold
+// subsumeMaxStates entries, and setKey runs it for every product state.
+func sortInts(xs []int) { slices.Sort(xs) }
 
 // errSubsumeCounterexample reports that the inclusion check found a sequence
 // the derived model accepts and the base does not.
@@ -689,6 +725,15 @@ func sortInts(xs []int) {
 // would be.
 var errSubsumeCounterexample = errorString(
 	"the restriction admits content the base does not allow")
+
+// errBudgetDeclined is what particleSubsumes and allBranchCounts return, with
+// ok=false, when a budget -- subsumeMaxStates, subsumeMaxProduct or
+// branchLimit -- stopped them, as distinct from a shape they cannot decide.
+// It is not a verdict: the caller still falls back to the 1.0 table, and only
+// records that the exact answer was not computed, so that a rejection the
+// table then gives can be reported as undecided rather than invalid.
+var errBudgetDeclined = errorString(
+	"the exact XSD 1.1 restriction check exceeded its budget")
 
 type errorString string
 

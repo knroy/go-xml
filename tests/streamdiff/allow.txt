@@ -1,0 +1,83 @@
+# Differences tests/streamdiff accepts between its three recordings of
+# TestXSLT30Suite (base tree, branch, branch with GOXSLT_STREAM_OFF=1), in
+# tests/recdiff's rule format. Each rule names one case and why it moves from
+# run to run whatever the streaming code does; every one was seen in the
+# recorded differentials of the stage-1b streaming work. Anything else that
+# differs is a streaming bug until shown otherwise.
+
+# generate-id() is N<tree>x<order> (xdm Node.generateID). The tree number is
+# a process-wide counter (xdm nextTreeID), so it moves with how many trees
+# the cases before this one built -- bursts build trees of their own, and it
+# has moved between two runs of the same base too. The string is
+# implementation-dependent (F&O 3.1 §14.5.4). docbook-002 writes it into
+# fo:block ids, si-fork-801 into link hrefs.
+xslt30 docbook/docbook-002 N\d+x\d+
+xslt30 si-fork/si-fork-801 N\d+x\d+
+# document-2011 writes generate-id(document('')) into @id; it moved when M2
+# streamed the attr/streamable cases that run before it (views are trees).
+xslt30 document/document-2011 N\d+x\d+
+# streamable-007 and -022 write generate-id() of their streamed principal
+# input: under TransformReader (M2b) the harness builds no tree of it, its
+# views being trees of their own, so the tree number differs from the off
+# leg's and the base's; the order part (x...) is the same.
+xslt30 streamable/streamable-007 N\d+x\d+
+xslt30 streamable/streamable-022 N\d+x\d+
+
+# fn:current-dateTime is not fixed by the XSLT harness, so these write the
+# instant each run happened.
+xslt30 evaluate/evaluate-052 \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z
+xslt30 expand-text/cvt-042 \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z
+
+# fn:current-date: these differ only when two legs run on either side of
+# midnight (UTC). format-date-037 writes the date; error-3160a evaluates
+# concat(current-date(), '/') and its XPST0003 message quotes the date and its
+# day ("01" must be separated from what follows in "2026-11-01Z/").
+xslt30 format-date/format-date-037 \d{4}-\d\d-\d\d
+xslt30 error/error-3160a \d{4}-\d\d-\d\d|"\d\d"
+
+# M8 (the §19.8 analysis completed, against base badba78b): cases whose
+# expected XTSE3430 the analysis now raises, so the base's output becomes the
+# refusal. Each names the rule; drop a line when the base is moved past it.
+# §19.8.8's table, StringConcatExpr "A || A": two consuming operands (§19.8.1).
+xslt30 si-fork/si-fork-902 (?s).+
+xslt30 si-fork/si-fork-952 (?s).+
+# §19.8.5's body rule over a sequence constructor: the streaming parameter
+# read in an xsl:copy's select and again in its content, a higher-order
+# operand (§19.8.4.12's note), is not singular (§19.8.5.2).
+xslt30 su-absorbing/su-absorbing-205 (?s).+
+
+# Round L and fix round F, against base 3fb9c066 (v2.1.1). Drop a line when
+# the base is moved past its commit.
+# The version string (5ea6e3a4, release v2.2.0 on this branch): these write
+# system-property('xsl:product-version') into a comment or @prod.
+xslt30 accumulator/accumulator-083 go-xml \d+\.\d+\.\d+
+xslt30 accumulator/accumulator-084 go-xml \d+\.\d+\.\d+
+xslt30 accumulator/accumulator-085 go-xml \d+\.\d+\.\d+
+xslt30 evaluate/evaluate-052 go-xml \d+\.\d+\.\d+
+xslt30 function-lookup/function-lookup-008 go-xml \d+\.\d+\.\d+
+xslt30 su-absorbing/su-absorbing-301 go-xml \d+\.\d+\.\d+
+xslt30 document/document-2011 prod="\d+\.\d+\.\d+"
+# supports-streaming is "yes" (the owner's decision for full streaming).
+xslt30 system-property/system-property-012 (?s).+
+# A whitespace-stripped source keeps its document URI (2e860a20, F&O §2.6,
+# XSLT §4.4): document-0103.xsl sorts documents by document-uri(.), so the
+# order of the copies moves; every assertion holds either way.
+xslt30 document/document-0113 (?s).+
+xslt30 document/document-0114 (?s).+
+xslt30 document/document-0115 (?s).+
+# TransformReader follows the spec where Transform of a parsed tree supplies a
+# global context item: absent in a streamable initial mode (§2.3.2, 6cc2247f),
+# so streamable-116 writes its output where the base and the off leg raise
+# XPDY0002; and an accumulator function item saving an absent focus on a
+# streamed input raises XTDE3350 (§10.3.6, be09e991): accumulator-061.
+xslt30 streamable/streamable-116 (?s).+
+xslt30 accumulator/accumulator-061 (?s).+
+
+# Round SI lane ST1, against base 70e049a5: [$extraItem, //ITEM/copy-of()]?*
+# / PRICE streams now (streamhold.go copiesAsked) where it fell back. The
+# "/" sorts PRICEs of two trees, $extraItem's and the copies', whose relative
+# order is "stable but implementation-dependent" (XPath 3.1 §2.4.1): the
+# streamed run puts $extraItem's first, the tree last. Both catalogs accept
+# either order (any-of).
+xslt30 sx-SquareArrayConstructor/sx-square-array-041 (?s).+
+xslt30 sx-SquareArrayConstructor/sx-square-array-043 (?s).+

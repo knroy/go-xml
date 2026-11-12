@@ -71,6 +71,9 @@ func (a *analyzer) unionExpr(left, right xpath.Expr) props {
 	// that "author | author/name" yields nodes with nested subtrees, so two
 	// striding operands do not in general compose to a striding result.
 	if streamedDescent(l.posture) && streamedDescent(r.posture) {
+		if l.posture == postureStriding && r.posture == postureStriding && a.disjointDepthPaths(left, right) { // streamexprs_l7.go
+			return props{postureStriding, wider(l.sweep, r.sweep)}
+		}
 		return props{postureCrawling, wider(l.sweep, r.sweep)}
 	}
 
@@ -106,7 +109,7 @@ func (a *analyzer) mapConstructor(x *xpath.MapConstructor) props {
 	// the widest sweep of the xsl:map-entry children."
 	widest := sweepMotionless
 	for i, key := range x.Keys {
-		entry := combine([]operand{
+		entry := a.combine([]operand{
 			a.operandOf(key, usageAbsorption),
 			a.operandOf(x.Values[i], usageNavigation),
 		}, false)
@@ -149,7 +152,7 @@ func (a *analyzer) mapConstructor(x *xpath.MapConstructor) props {
 func (a *analyzer) arrayConstructor(x *xpath.ArrayConstructor) props {
 	widest := sweepMotionless
 	for _, m := range x.Members {
-		p := combine([]operand{a.operandOf(m, usageNavigation)}, false)
+		p := a.combine([]operand{a.operandOf(m, usageNavigation)}, false)
 		if !p.streamable() {
 			return roamingFreeRanging
 		}
@@ -202,9 +205,9 @@ func (a *analyzer) lastFunction() props {
 // of the test, which is what sx-treat-902 and sx-treat-903 exist to catch.
 func (a *analyzer) treatExpr(x *xpath.TreatExpr) props {
 	if !isDocumentNodeWithContent(x.Type) {
-		return combine([]operand{a.operandOf(x.Operand, usageTransmission)}, false)
+		return a.combine([]operand{a.operandOf(x.Operand, usageTransmission)}, false)
 	}
-	return combine([]operand{
+	return a.combine([]operand{
 		a.operandOf(x.Operand, usageTransmission),
 		a.operandOf(x.Operand, usageAbsorption),
 	}, false)
@@ -280,65 +283,75 @@ func isDocumentNodeWithContent(st xpath.SequenceType) bool {
 // let. Only the first binding is in scope for the second, which is what the
 // nesting expresses.
 func (a *analyzer) letExpr(x *xpath.LetExpr) props {
-	if len(x.Bindings) == 0 {
+	n := len(x.Bindings)
+	if n == 0 {
 		return a.unknown()
 	}
-	seq := a.operandOf(x.Bindings[0].Seq, usageNavigation)
-	ret := x.Return
-	if len(x.Bindings) > 1 {
-		ret = &xpath.LetExpr{Bindings: x.Bindings[1:], Return: x.Return}
+	// The clauses are walked in a loop, not by recursing on the rest of the
+	// let: recursion made the Go stack depth the binding count, and a stack
+	// overflow is fatal to the process. The props are then folded from the
+	// innermost clause outward, which is the nesting described above.
+	seqs := make([]operand, n)
+	saved := make([]savedVar, n)
+	for i, b := range x.Bindings {
+		seqs[i] = a.operandOf(b.Seq, usageNavigation)
+		// The variable is recorded as grounded, which is what §19.8.8.12
+		// gives it anyway, so that a declared variable it shadows is not
+		// consulted.
+		saved[i] = a.bind(b.Var, groundedMotionless)
 	}
-	// The variable is recorded as grounded, which is what §19.8.8.12 gives
-	// it anyway, so that a declared variable it shadows is not consulted.
-	inner := a.withVar(x.Bindings[0].Var, groundedMotionless)
-	p := combine([]operand{
-		seq,
-		inner.operandOf(ret, usageTransmission),
-	}, false)
-	a.known = a.known && inner.known
-	a.unverified = a.unverified || inner.unverified
-	return p
+	ret := a.operandOf(x.Return, usageTransmission)
+	a.vars.unbind(saved)
+	for i := n - 1; i > 0; i-- {
+		ret = operand{
+			props:          combine([]operand{seqs[i], ret}, false),
+			usage:          usageTransmission,
+			allowsChildren: true,
+			src:            &xpath.LetExpr{Bindings: x.Bindings[i:], Return: x.Return},
+		}
+	}
+	return a.combine([]operand{seqs[0], ret}, false)
 }
 
+// forExpr applies §19.8.8.1. A multi-clause for is the nesting letExpr
+// describes, walked the same way: in a loop, so the Go stack does not grow
+// with the clause count. Every clause after the first, and the return, sits
+// in a higher-order operand, so they are assessed with the one analyzer
+// higherOrderAnalyzer gives.
 func (a *analyzer) forExpr(x *xpath.ForExpr) props {
-	if len(x.Bindings) == 0 {
+	n := len(x.Bindings)
+	if n == 0 {
 		return a.unknown()
 	}
-	seq := a.operandOf(x.Bindings[0].Seq, usageNavigation)
-	ret := x.Return
-	if len(x.Bindings) > 1 {
-		ret = &xpath.ForExpr{Bindings: x.Bindings[1:], Return: x.Return}
-	}
+	seqs := make([]operand, n)
+	saved := make([]savedVar, n)
+	seqs[0] = a.operandOf(x.Bindings[0].Seq, usageNavigation)
 	// Recorded as grounded for the reason letExpr gives.
-	inner := a.withVar(x.Bindings[0].Var, groundedMotionless)
-	p := combine([]operand{
-		seq,
-		inner.higherOrderOperand(ret, usageTransmission),
-	}, false)
-	a.known = a.known && inner.known
-	a.unverified = a.unverified || inner.unverified
-	return p
+	saved[0] = a.bind(x.Bindings[0].Var, groundedMotionless)
+	h := a.higherOrderAnalyzer()
+	for i := 1; i < n; i++ {
+		seqs[i] = h.operandOf(x.Bindings[i].Seq, usageNavigation)
+		saved[i] = h.bind(x.Bindings[i].Var, groundedMotionless)
+	}
+	ret := h.higherOrderOperand(x.Return, usageTransmission)
+	a.vars.unbind(saved)
+	for i := n - 1; i > 0; i-- {
+		ret = operand{
+			props:          combine([]operand{seqs[i], ret}, false),
+			usage:          usageTransmission,
+			allowsChildren: true,
+			higherOrder:    true,
+			src:            &xpath.ForExpr{Bindings: x.Bindings[i:], Return: x.Return},
+		}
+	}
+	a.known = a.known && h.known
+	a.unverified = a.unverified || h.unverified
+	return a.combine([]operand{seqs[0], ret}, false)
 }
 
-// quantifiedExpr applies §19.8.8.2 to "some|every $v in S satisfies C".
-//
-// Unlike the for rule, there is no separate "S must be grounded" test: the
-// general rules apply directly, with S carrying usage navigation -- and
-// navigation from any non-grounded posture is free-ranging (§19.8.1), which
-// reaches the same place by the route the spec chose. C is a higher-order
-// operand with usage inspection.
-//
-// "some $i in X, $j in Y satisfies C" is rewritten as nested quantified
-// expressions, which §19.8.8.2 asks for in as many words.
 func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
 	if len(x.Bindings) == 0 {
 		return a.unknown()
-	}
-	test := x.Test
-	if len(x.Bindings) > 1 {
-		test = &xpath.QuantifiedExpr{
-			Every: x.Every, Bindings: x.Bindings[1:], Test: x.Test,
-		}
 	}
 	// §19.8.8.2 makes S a navigation operand, and navigation from a
 	// non-grounded posture is free-ranging (§19.8.1). Transcribed literally
@@ -373,18 +386,59 @@ func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
 	// through §19.8.1's arithmetic, which is what keeps the limit of one
 	// potentially-consuming operand honest, and the RESULT is forced
 	// grounded below: no streamed node can leave a "some" or an "every".
-	seq := a.operandOf(x.Bindings[0].Seq, usageTransmission)
-	if !seq.props.streamable() {
+	//
+	// The clauses are walked in a loop, as letExpr explains, and folded from
+	// the innermost outward. A clause whose binding is not streamable makes
+	// its level roaming and free-ranging, and the clauses inside it are not
+	// assessed, exactly as the nested rewrite returned there.
+	n := len(x.Bindings)
+	seqs := make([]operand, 0, n)
+	saved := make([]savedVar, 0, n)
+	b, h := a, (*analyzer)(nil)
+	for _, bd := range x.Bindings {
+		seq := b.operandOf(bd.Seq, usageTransmission)
+		if !seq.props.streamable() {
+			break
+		}
+		seqs = append(seqs, seq)
+		// A grounded binding is recorded too: its entry gives §19.8.8.12's
+		// plain answer, and it is what tells staticallyNumeric and
+		// dynamicCallUsages that the name no longer refers to a declared
+		// xsl:variable or xsl:param.
+		saved = append(saved, b.bind(bd.Var, seq.props))
+		if h == nil {
+			h = a.higherOrderAnalyzer()
+			b = h
+		}
+	}
+	if len(seqs) == 0 {
 		return roamingFreeRanging
 	}
-	// A grounded binding is recorded too: its entry gives §19.8.8.12's plain
-	// answer, and it is what tells staticallyNumeric and dynamicCallUsages
-	// that the name no longer refers to a declared xsl:variable or xsl:param.
-	inner := a.withVar(x.Bindings[0].Var, seq.props)
-	op := inner.higherOrderOperand(test, usageInspection)
-	a.known = a.known && inner.known
-	a.unverified = a.unverified || inner.unverified
-	p := combine([]operand{seq, op}, false)
+	var op operand
+	if len(seqs) == n {
+		op = h.higherOrderOperand(x.Test, usageInspection)
+	} else {
+		op = operand{props: roamingFreeRanging, usage: usageInspection, allowsChildren: true, higherOrder: true,
+			src: &xpath.QuantifiedExpr{Every: x.Every, Bindings: x.Bindings[len(seqs):], Test: x.Test}}
+	}
+	a.vars.unbind(saved)
+	for i := len(seqs) - 1; i > 0; i-- {
+		op = operand{
+			props:          quantifiedProps(combine([]operand{seqs[i], op}, false)),
+			usage:          usageInspection,
+			allowsChildren: true,
+			higherOrder:    true,
+			src:            &xpath.QuantifiedExpr{Every: x.Every, Bindings: x.Bindings[i:], Test: x.Test},
+		}
+	}
+	a.known = a.known && h.known
+	a.unverified = a.unverified || h.unverified
+	return quantifiedProps(a.combine([]operand{seqs[0], op}, false))
+}
+
+// quantifiedProps is the result of one clause of a quantified expression whose
+// operands combine to p.
+func quantifiedProps(p props) props {
 	if !p.streamable() {
 		return roamingFreeRanging
 	}
@@ -393,21 +447,93 @@ func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
 	return props{postureGrounded, p.sweep}
 }
 
-// withVar returns a copy of the analyzer with one more binding in the
-// data-flow environment.
-//
-// The map is copied rather than mutated so that a binding cannot outlive the
+// varScope is the data-flow environment of one walk (analyzer.vars), shared
+// by every analyzer of it. A binding is added where its scope opens and
+// removed, in reverse, where it closes, so that it cannot outlive the
 // expression that introduced it: "some $t in a satisfies P" and a sibling
 // "some $t in b satisfies Q" must not see each other's $t, and neither must
-// anything after them.
-func (a *analyzer) withVar(name xdm.QName, p props) *analyzer {
-	b := *a
-	b.vars = make(map[xdm.QName]props, len(a.vars)+1)
-	for k, v := range a.vars {
-		b.vars[k] = v
+// anything after them. It replaces a copy of the whole map per binding, which
+// made k bindings quadratic in live memory.
+type varScope struct {
+	m map[xdm.QName]props
+	// streamed counts the entries whose posture is not grounded, the only
+	// ones inlineFunction has to look at; byName counts them by expanded
+	// name (prefix dropped), so that inlineFunction asks of each reference
+	// in the body whether it names one, in one walk of the body whatever the
+	// number of bindings in scope.
+	streamed int
+	byName   map[xdm.QName]int
+}
+
+// note adjusts the streamed counts for name bound to p, by d.
+func (s *varScope) note(name xdm.QName, p props, d int) {
+	if p.posture == postureGrounded {
+		return
 	}
-	b.vars[name] = p
-	return &b
+	s.streamed += d
+	k := xdm.QName{URI: name.URI, Local: name.Local}
+	if s.byName[k] += d; s.byName[k] == 0 {
+		delete(s.byName, k)
+	}
+}
+
+// streamedRef reports whether v refers, by expanded name, to a binding in
+// scope whose posture is not grounded.
+func (s *varScope) streamedRef(v *xpath.VarRef) bool {
+	return s.byName[xdm.QName{URI: v.Name.URI, Local: v.Name.Local}] > 0
+}
+
+// savedVar is what bind displaced, for unbind to put back.
+type savedVar struct {
+	name xdm.QName
+	old  props
+	had  bool
+}
+
+// bind records name with props p in the environment and returns what it
+// displaced.
+func (a *analyzer) bind(name xdm.QName, p props) savedVar {
+	if a.vars == nil {
+		a.vars = &varScope{m: map[xdm.QName]props{}, byName: map[xdm.QName]int{}}
+	}
+	s := a.vars
+	old, had := s.m[name]
+	if had {
+		s.note(name, old, -1)
+	}
+	s.note(name, p, 1)
+	s.m[name] = p
+	return savedVar{name, old, had}
+}
+
+// unbind undoes the binds that returned saved, most recent first.
+func (s *varScope) unbind(saved []savedVar) {
+	for i := len(saved) - 1; i >= 0; i-- {
+		v := saved[i]
+		s.note(v.name, s.m[v.name], -1)
+		if !v.had {
+			delete(s.m, v.name)
+			continue
+		}
+		s.m[v.name] = v.old
+		s.note(v.name, v.old, 1)
+	}
+}
+
+// lookup returns the props name is bound to within the expression being
+// analysed, and whether it is bound there.
+func (s *varScope) lookup(name xdm.QName) (props, bool) {
+	if s == nil {
+		return props{}, false
+	}
+	p, ok := s.m[name]
+	return p, ok
+}
+
+// bound reports whether name is bound within the expression being analysed.
+func (s *varScope) bound(name xdm.QName) bool {
+	_, ok := s.lookup(name)
+	return ok
 }
 
 // inlineFunction applies §19.8.8.16 to an inline function declaration:
@@ -440,15 +566,12 @@ func (a *analyzer) withVar(name xdm.QName, p props) *analyzer {
 // rather than refused, because the first rests on data flow the spec does
 // not have and the second on a gap in its rules.
 func (a *analyzer) inlineFunction(x *xpath.InlineFunctionExpr) props {
-	for name, p := range a.vars {
-		if p.posture == postureGrounded {
-			continue
-		}
-		b := *a
-		b.hasStreamParam, b.streamingParam = true, name
-		if b.bodyMentionsStreamingParam(x.Body) != mentionNo {
-			return a.unknown()
-		}
+	// Only a binding that is not grounded can be closed over; the count
+	// spares the scan when every binding in scope is grounded. One walk of
+	// the body asks of each reference whether it names such a binding, so
+	// the cost is the body's, not the body's times the bindings in scope.
+	if a.vars != nil && a.vars.streamed > 0 && refMention(x.Body, a.vars.streamedRef) != mentionNo {
+		return a.unknown()
 	}
 	if !a.hasStreamParam {
 		// With no streaming parameter in scope there is nothing the body
@@ -495,12 +618,18 @@ const (
 // the reference is present, not what is done with it, so posture and sweep
 // play no part and no context is threaded.
 func (a *analyzer) bodyMentionsStreamingParam(e xpath.Expr) mention {
+	return refMention(e, func(v *xpath.VarRef) bool { return a.isStreamingParamRef(v) })
+}
+
+// refMention is bodyMentionsStreamingParam with the question asked of each
+// variable reference given as ref.
+func refMention(e xpath.Expr, ref func(*xpath.VarRef) bool) mention {
 	switch x := e.(type) {
 	case nil:
 		return mentionNo
 
 	case *xpath.VarRef:
-		if a.isStreamingParamRef(x) {
+		if ref(x) {
 			return mentionYes
 		}
 		return mentionNo
@@ -510,6 +639,15 @@ func (a *analyzer) bodyMentionsStreamingParam(e xpath.Expr) mention {
 	// inherit the caller's focus, so "." here cannot be the streamed node.
 	case *xpath.Literal, *xpath.ContextItem:
 		return mentionNo
+
+	// A partial application's "?" is not a reference either.
+	case *xpath.ArgumentPlaceholder:
+		return mentionNo
+	case *xpath.StringConcat:
+		return mentionAny([]xpath.Expr{x.Left, x.Right}, ref)
+	// A unary lookup's operand is the context item, as for ".".
+	case *xpath.LookupExpr:
+		return mentionAny([]xpath.Expr{x.Base, x.Expr}, ref)
 
 	// A name, not a reference to a variable -- except fn:current#0, which
 	// reaches the creating context's current item as a call does.
@@ -523,14 +661,14 @@ func (a *analyzer) bodyMentionsStreamingParam(e xpath.Expr) mention {
 	// Stopping here would let through exactly the closure the section's note
 	// says the rule exists to prevent.
 	case *xpath.InlineFunctionExpr:
-		return a.bodyMentionsStreamingParam(x.Body)
+		return refMention(x.Body, ref)
 
 	case *xpath.LetExpr:
-		return a.mentionAny(append(bindingExprs(x.Bindings), x.Return))
+		return mentionAny(append(bindingExprs(x.Bindings), x.Return), ref)
 	case *xpath.ForExpr:
-		return a.mentionAny(append(bindingExprs(x.Bindings), x.Return))
+		return mentionAny(append(bindingExprs(x.Bindings), x.Return), ref)
 	case *xpath.QuantifiedExpr:
-		return a.mentionAny(append(bindingExprs(x.Bindings), x.Test))
+		return mentionAny(append(bindingExprs(x.Bindings), x.Test), ref)
 
 	case *xpath.FuncCall:
 		// See inlineFunction: no variable reference, and still a streamed
@@ -538,39 +676,39 @@ func (a *analyzer) bodyMentionsStreamingParam(e xpath.Expr) mention {
 		if x.Name.URI == fnNS && x.Name.Local == "current" {
 			return mentionUnknown
 		}
-		return a.mentionAny(x.Args)
+		return mentionAny(x.Args, ref)
 	case *xpath.DynamicCall:
-		return a.mentionAny(append([]xpath.Expr{x.Target}, x.Args...))
+		return mentionAny(append([]xpath.Expr{x.Target}, x.Args...), ref)
 
 	case *xpath.BinaryOp:
-		return a.mentionAny([]xpath.Expr{x.Left, x.Right})
+		return mentionAny([]xpath.Expr{x.Left, x.Right}, ref)
 	case *xpath.UnaryOp:
-		return a.mentionAny([]xpath.Expr{x.Operand})
+		return mentionAny([]xpath.Expr{x.Operand}, ref)
 	case *xpath.SimpleMap:
-		return a.mentionAny([]xpath.Expr{x.Left, x.Right})
+		return mentionAny([]xpath.Expr{x.Left, x.Right}, ref)
 	case *xpath.IfExpr:
-		return a.mentionAny([]xpath.Expr{x.Cond, x.Then, x.Else})
+		return mentionAny([]xpath.Expr{x.Cond, x.Then, x.Else}, ref)
 
 	case *xpath.InstanceOfExpr:
-		return a.bodyMentionsStreamingParam(x.Operand)
+		return refMention(x.Operand, ref)
 	case *xpath.CastExpr:
-		return a.bodyMentionsStreamingParam(x.Operand)
+		return refMention(x.Operand, ref)
 	case *xpath.TreatExpr:
-		return a.bodyMentionsStreamingParam(x.Operand)
+		return refMention(x.Operand, ref)
 
 	case *xpath.PathExpr:
-		return a.mentionAny(x.Steps)
+		return mentionAny(x.Steps, ref)
 	case *xpath.Step:
-		return a.mentionAny(x.Predicates)
+		return mentionAny(x.Predicates, ref)
 	case *xpath.FilterExpr:
-		return a.mentionAny(append([]xpath.Expr{x.Base}, x.Predicates...))
+		return mentionAny(append([]xpath.Expr{x.Base}, x.Predicates...), ref)
 	case *xpath.SequenceExpr:
-		return a.mentionAny(x.Items)
+		return mentionAny(x.Items, ref)
 
 	case *xpath.MapConstructor:
-		return a.mentionAny(append(append([]xpath.Expr{}, x.Keys...), x.Values...))
+		return mentionAny(append(append([]xpath.Expr{}, x.Keys...), x.Values...), ref)
 	case *xpath.ArrayConstructor:
-		return a.mentionAny(x.Members)
+		return mentionAny(x.Members, ref)
 	}
 	return mentionUnknown
 }
@@ -586,13 +724,13 @@ func bindingExprs(bs []xpath.Binding) []xpath.Expr {
 	return es
 }
 
-// mentionAny is bodyMentionsStreamingParam over a list, with unknown winning
+// mentionAny is refMention over a list, with unknown winning
 // over no: one unrecognised subexpression makes the whole answer unreliable,
 // but a definite reference anywhere settles it regardless.
-func (a *analyzer) mentionAny(es []xpath.Expr) mention {
+func mentionAny(es []xpath.Expr, ref func(*xpath.VarRef) bool) mention {
 	worst := mentionNo
 	for _, e := range es {
-		switch a.bodyMentionsStreamingParam(e) {
+		switch refMention(e, ref) {
 		case mentionYes:
 			return mentionYes
 		case mentionUnknown:
@@ -692,19 +830,85 @@ func (a *analyzer) dynamicCall(x *xpath.DynamicCall) props {
 		}
 		ops = append(ops, a.operandOf(arg, u))
 	}
-	return combine(ops, false)
+	return a.combine(ops, false)
 }
 
 // dynamicCallUsages reads the argument usages §19.8.8.11 derives from the
-// declared type of the function variable, or returns nil when no signature
-// is available. A nil result, or one shorter than the argument list, leaves
-// the remaining arguments with usage navigation.
+// signature of the base expression, or returns nil when no signature is
+// available. A nil result, or one shorter than the argument list, leaves the
+// remaining arguments with usage navigation.
+//
+// Where a signature is available is §19.1's to say, and it says it in full:
+//
+//	"This ancillary information is available for a NamedFunctionRef, for an
+//	InlineFunctionExpr, for a MapConstructor, for a FunctionCall whose
+//	static type is U{function(*)}, and for a VarRef if the variable is bound
+//	to any of the forgoing, or if it has a declared type corresponding to
+//	U{function(*)}."
+//
+// So a base that is none of those -- a lookup "$m?f", a conditional "if (C)
+// then f#1 else g#1", a dynamic call "$g()" -- has no signature, whatever
+// its own static type, and its arguments navigate. Of the VarRef forms only
+// the declared type is read; a variable without "as" that is bound to a
+// function reference is left to the fallback, which refuses more than the
+// rule does but never accepts what it refuses.
 func (a *analyzer) dynamicCallUsages(x *xpath.DynamicCall) []usage {
-	v, ok := x.Target.(*xpath.VarRef)
-	if !ok || a.decl == nil {
+	switch t := x.Target.(type) {
+	case *xpath.NamedFunctionRef:
+		// The signature is the function's declaration: a stylesheet
+		// function's xsl:param types (an override must keep them),
+		// or the F&O signature a built-in carries.
+		if f := a.funcs[keyOf(t.Name, t.Arity)]; f != nil && !builtinFunctionNS(t.Name.URI) {
+			return paramUsages(f.params)
+		}
+		if fn, ok := xpath.Builtins().Lookup(t.Name, t.Arity); ok && builtinFunctionNS(t.Name.URI) &&
+			len(fn.Signature) == t.Arity+1 {
+			return paramUsages(fn.Signature[1:])
+		}
+		return nil
+	case *xpath.InlineFunctionExpr:
+		// "function($a as A, $b) {...}": an omitted type is item()*.
+		ts := make([]string, len(t.Params))
+		for i, p := range t.Params {
+			if p.Type != nil {
+				ts[i] = p.Type.String()
+			}
+		}
+		return paramUsages(ts)
+	case *xpath.MapConstructor:
+		// The note: a map's argument type is xs:anyAtomicType.
+		return []usage{usageAbsorption}
+	case *xpath.FuncCall:
+		// A call whose declared result type is a function type: the
+		// signature is that type's. Only a stylesheet function's "as" is
+		// read here; a built-in result goes to the fallback.
+		f := a.funcs[keyOf(t.Name, len(t.Args))]
+		if f == nil || builtinFunctionNS(t.Name.URI) {
+			return nil
+		}
+		return signatureUsages(f.asType, newNSResolver(f.body, ""))
+	case *xpath.VarRef:
+		return a.varSignatureUsages(t)
+	}
+	return nil
+}
+
+// paramUsages is the type-determined usage of each parameter type.
+func paramUsages(types []string) []usage {
+	us := make([]usage, len(types))
+	for i, t := range types {
+		us[i] = instrTypeDeterminedUsage(t)
+	}
+	return us
+}
+
+// varSignatureUsages reads the signature of a function variable from the
+// "as" of the xsl:variable or xsl:param that binds it.
+func (a *analyzer) varSignatureUsages(v *xpath.VarRef) []usage {
+	if a.decl == nil {
 		return nil
 	}
-	if _, bound := a.vars[v.Name]; bound {
+	if a.vars.bound(v.Name) {
 		// Bound inside the expression, where the declaration walk cannot
 		// see it; whatever shares its name outside is not this variable.
 		return nil
@@ -713,6 +917,12 @@ func (a *analyzer) dynamicCallUsages(x *xpath.DynamicCall) []usage {
 	if !ok {
 		return nil
 	}
+	return signatureUsages(as, newNSResolver(a.decl, ""))
+}
+
+// signatureUsages reads the argument usages from a declared function, map or
+// array type, or returns nil for any other type and for function(*).
+func signatureUsages(as string, ns *nsResolver) []usage {
 	as = strings.TrimSpace(as)
 	if n := len(as); n > 0 {
 		switch as[n-1] {
@@ -724,52 +934,43 @@ func (a *analyzer) dynamicCallUsages(x *xpath.DynamicCall) []usage {
 	case strings.HasPrefix(as, "map(") || strings.HasPrefix(as, "array("):
 		// The note: the argument type is xs:anyAtomicType, so absorption.
 		return []usage{usageAbsorption}
-	case strings.HasPrefix(as, "function("):
-		params, ok := functionParamTypes(as)
+	case strings.HasPrefix(as, "function"):
+		params, ok := functionParamTypes(as, ns)
 		if !ok {
 			// function(*): no signature.
 			return nil
 		}
-		us := make([]usage, len(params))
-		for i, t := range params {
-			us[i] = instrTypeDeterminedUsage(t)
-		}
-		return us
+		return paramUsages(params)
 	}
 	return nil
 }
 
-// functionParamTypes splits the parameter list of a declared function type,
-// "function(A, B) as R", at its top-level commas. It reports false for
-// function(*), which declares no signature.
-func functionParamTypes(as string) ([]string, bool) {
-	depth, start := 0, -1
-	var params []string
-	for i, c := range as {
-		switch c {
-		case '(':
-			depth++
-			if depth == 1 {
-				start = i + 1
-			}
-		case ')':
-			depth--
-			if depth == 0 {
-				params = append(params, as[start:i])
-				if len(params) == 1 && strings.TrimSpace(params[0]) == "*" {
-					return nil, false
-				}
-				return params, true
-			}
-		case ',':
-			if depth == 1 {
-				params = append(params, as[start:i])
-				start = i + 1
-			}
-		}
+// functionParamTypes reads the parameter types of a declared function type,
+// "function(A, B) as R", with the XPath SequenceType parser, so a comma inside
+// a braced URI and a space before the parenthesis are read as XPath reads
+// them. It reports false for function(*), which declares no signature, and
+// for anything that does not parse as a typed function test.
+func functionParamTypes(as string, ns *nsResolver) ([]string, bool) {
+	st, err := xpath.ParseSequenceType(as, anySchemaType{ns})
+	if err != nil || !st.IsFunctionTest || !st.HasFunctionArity {
+		return nil, false
 	}
-	return nil, false
+	params := make([]string, len(st.FunctionParams))
+	for i, p := range st.FunctionParams {
+		params[i] = p.String()
+	}
+	return params, true
 }
+
+// anySchemaType reads every type and declaration name as known. The analyzer
+// has no imported schema to hand, and the compiler has already refused an
+// unknown name; all functionParamTypes needs is the type's shape. A schema
+// type it cannot see renders as its name, which instrTypeDeterminedUsage
+// reads as navigation.
+type anySchemaType struct{ *nsResolver }
+
+func (anySchemaType) LookupSchemaType(xdm.QName) (xdm.TypeCode, bool, bool) { return 0, false, true }
+func (anySchemaType) LookupSchemaDeclaration(xdm.QName, bool) bool          { return true }
 
 // declaredTypeOf finds the "as" attribute of the declaration that binds the
 // variable name at el, by the syntactic scoping rules of §9.7: a local
@@ -876,7 +1077,7 @@ func (a *analyzer) staticallyNumeric(e xpath.Expr) bool {
 	case *xpath.FilterExpr:
 		return a.staticallyNumeric(x.Base)
 	case *xpath.VarRef:
-		if _, bound := a.vars[x.Name]; bound || a.decl == nil {
+		if a.vars.bound(x.Name) || a.decl == nil {
 			return false
 		}
 		as, ok := declaredTypeOf(a.decl, x.Name)
@@ -951,9 +1152,14 @@ func allFocusFree(es []xpath.Expr) bool {
 
 // focusDependentCall reports whether a call is on a focus-dependent function,
 // for the arity written, by the focusDependent table (streamfocus.go). Only
-// the fn namespace is classified here; a call on anything else -- an
-// xsl:function, an extension, a constructor -- is treated as focus-dependent,
-// because nothing here records that it is not.
+// the fn namespace is classified here, besides map: and array:, none of whose
+// functions reads the focus (map:get is how mapCalls spells a variable's
+// $m('k')); a call on anything else -- an xsl:function, an extension, a
+// constructor -- is treated as focus-dependent, because nothing here records
+// that it is not.
 func focusDependentCall(x *xpath.FuncCall) bool {
+	if x.Name.URI == xdm.NSMap || x.Name.URI == xdm.NSArray {
+		return false
+	}
 	return x.Name.URI != fnNS || focusDependent[keyOf(x.Name, len(x.Args))]
 }

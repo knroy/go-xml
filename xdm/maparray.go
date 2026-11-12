@@ -1,13 +1,17 @@
 package xdm
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"math"
 	"math/big"
+	"slices"
 	"sort"
 	"strings"
+
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 )
 
 // MapItem is the fourth kind of XDM item, added in XPath 3.1.
@@ -441,9 +445,47 @@ func (a *ArrayItem) AppendMembers(dst []Sequence) []Sequence {
 	return append(dst, a.members...)
 }
 
+// maxFlattenSteps bounds the items and arrays one Flatten visits inside
+// arrays. An array
+// keeps its members by reference, so k doublings ("[$a, $a]" in a fold) cost
+// k charged items but describe 2^k leaves; without a bound the walk grows
+// memory and time as 2^k, past any MaxItems the caller set, with no context
+// to cancel it. 1<<24 is about three times xpath's default MaxItems and holds
+// the out slice under 256 MiB.
+const maxFlattenSteps = 1 << 24
+
 // Flatten replaces every array in a sequence with its members, recursively,
 // which is what array:flatten and the function conversion rules do.
+//
+// A walk past maxFlattenSteps is refused with ErrResourceLimit, raised as an
+// internal/xdmlimit panic that the entry points of xpath, xquery and xslt
+// recover and return. FlattenContext returns that refusal as an error, and
+// observes cancellation, instead.
 func Flatten(seq Sequence) Sequence {
+	out, err := FlattenContext(context.Background(), seq)
+	if err != nil {
+		xdmlimit.Refuse(err)
+	}
+	return out
+}
+
+// flattenCheckEvery is how many items inside arrays FlattenContext visits
+// between two checks of its context.
+const flattenCheckEvery = 1024
+
+// FlattenContext is Flatten for a caller that holds a context.Context: it
+// checks ctx every flattenCheckEvery items the walk visits inside arrays and
+// returns ctx.Err() once ctx is done, and it returns the ErrResourceLimit
+// refusal past maxFlattenSteps as its error rather than panicking.
+//
+// A nil ctx is never cancelled, as with xpath.CompileOptions.Context.
+//
+// A seq holding no array is already flat and is returned as it stands, not
+// copied, so the result may alias seq. No caller writes into either.
+func FlattenContext(ctx context.Context, seq Sequence) (Sequence, error) {
+	if !slices.ContainsFunc(seq, isArray) {
+		return seq, nil
+	}
 	out := make(Sequence, 0, len(seq))
 	// An explicit stack rather than recursion: an array nested a million deep
 	// is a value a query can build, and recursing on it overflows the Go stack.
@@ -452,6 +494,7 @@ func Flatten(seq Sequence) Sequence {
 		i    int        // next item within seqs[0]
 	}
 	stack := []frame{{seqs: []Sequence{seq}}}
+	steps := 0
 	for len(stack) > 0 {
 		f := &stack[len(stack)-1]
 		if len(f.seqs) == 0 {
@@ -464,13 +507,34 @@ func Flatten(seq Sequence) Sequence {
 		}
 		it := f.seqs[0][f.i]
 		f.i++
+		// Only what lies inside an array counts: the top-level sequence is
+		// already materialised, and the caller's budget charged it.
+		if len(stack) > 1 {
+			steps++
+			if ctx != nil && steps%flattenCheckEvery == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if steps > maxFlattenSteps {
+			// XPDY0130 is XPath 3.1 §2.3.1's code for an exceeded limit; with
+			// it a catch clause naming the code catches this refusal.
+			return nil, fmt.Errorf("XPDY0130: flattening an array visits more than %d items: %w",
+				maxFlattenSteps, ErrResourceLimit)
+		}
 		if arr, ok := it.(*ArrayItem); ok {
 			stack = append(stack, frame{seqs: arr.members})
 		} else {
 			out = append(out, it)
 		}
 	}
-	return out
+	return out, nil
+}
+
+func isArray(it Item) bool {
+	_, ok := it.(*ArrayItem)
+	return ok
 }
 
 // mapArrayString renders a map or array for an error message. It is

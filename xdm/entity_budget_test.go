@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
@@ -199,5 +200,25 @@ func TestEntityBudgetWithCommentInSubset(t *testing.T) {
 	}
 	if got := len(tr.Root.StringValue()); got != 10*10000 {
 		t.Fatalf("expanded to %d bytes, want %d", got, 10*10000)
+	}
+}
+
+// TestMarkupEntitySubstitutionChargesSharedBudget: the rewrite path, taken
+// when an entity holds markup, charged the shared budget once per entity, so
+// one EntityBudget across many fn:parse-xml calls never filled (run-4,
+// substituteMarkupEntities). The plain path was refused on its second parse.
+func TestMarkupEntitySubstitutionChargesSharedBudget(t *testing.T) {
+	doc := `<!DOCTYPE r [<!ENTITY e "<b/>` + strings.Repeat("A", 96) + `">]><r>` +
+		strings.Repeat("&e;", 10000) + `</r>`
+	opts := ParseOptions{AllowDOCTYPE: true}.WithEntityBudget(NewEntityBudget())
+	if _, err := ParseString(doc, opts); err != nil {
+		t.Fatalf("first parse: %v", err)
+	}
+	var err error
+	for i := 0; i < 3 && err == nil; i++ {
+		_, err = ParseString(doc, opts)
+	}
+	if !errors.Is(err, ErrResourceLimit) {
+		t.Errorf("1 MB of markup expansion per parse, shared budget: err = %v, want ErrResourceLimit", err)
 	}
 }

@@ -311,15 +311,23 @@ func stripOccurrence(as string) string {
 }
 
 // typeDeterminedUsage gives the operand usage that a declared parameter type
-// implies for the corresponding argument (§19.4).
+// implies for the corresponding argument (§19.4): "if the required type
+// (ignoring occurrence indicator) is function(*) or a subtype thereof, then
+// inspection; if the required type (ignoring occurrence indicator) is an
+// atomic or union type, then absorption; otherwise navigation."
 //
-// A parameter declared with an atomic type atomizes any node supplied to it,
-// which is absorption. A parameter that permits nodes places no constraint the
-// analysis can exploit, so the usage is navigation -- the answer §19.4 gives
-// when what is done with the node is not known.
+// A parameter that permits nodes places no constraint the analysis can
+// exploit, so the usage is navigation. A function, map or array type is
+// inspection: a function item is opaque, building one reads nothing of the
+// stream. A parameter declared with an atomic type atomizes any node
+// supplied to it, which is absorption.
 func typeDeterminedUsage(as string) usage {
 	if typePermitsNodes(as) {
 		return usageNavigation
+	}
+	t := strings.TrimLeft(stripOccurrence(as), "( \t\n\r")
+	if strings.HasPrefix(t, "function(") || strings.HasPrefix(t, "map(") || strings.HasPrefix(t, "array(") {
+		return usageInspection
 	}
 	return usageAbsorption
 }
@@ -548,26 +556,21 @@ func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, b
 // declTrust.funcVerified.
 func functionBodyVerdict(f *streamFunc, funcs map[funcKey]*streamFunc, trust *declTrust) (props, bool, bool) {
 	var instr *xdm.Node
+	several := false
 	for _, c := range f.body.ChildElements() {
 		if isXSL(c, "param") {
 			continue
 		}
-		if instr != nil {
-			// More than one instruction in the body.
-			return roamingFreeRanging, false, false
-		}
+		several = several || instr != nil
 		instr = c
 	}
 	if instr == nil {
 		// An empty body returns the empty sequence: grounded and motionless.
 		return groundedMotionless, true, false
 	}
-	if !isXSL(instr, "sequence") && !isXSL(instr, "value-of") {
-		return roamingFreeRanging, false, false
-	}
 	sel := instr.Attr("", "select")
-	if sel == nil {
-		return roamingFreeRanging, false, false
+	if several || !isXSL(instr, "sequence") && !isXSL(instr, "value-of") || sel == nil {
+		return functionConstructorVerdict(f, funcs, trust)
 	}
 	ns := newNSResolver(instr, xpathDefaultNamespace(instr))
 	expr, err := xpath.ParseVersion(sel.Value(), ns, xpathVersionAt(instr))
@@ -626,7 +629,7 @@ func functionBodyVerdict(f *streamFunc, funcs map[funcKey]*streamFunc, trust *de
 	// is grounded whatever the select expression's own posture; the sweep is
 	// what absorbing the select costs.
 	if isXSL(instr, "value-of") {
-		p = combine([]operand{{
+		p = a.combine([]operand{{
 			props:          p,
 			usage:          usageAbsorption,
 			allowsChildren: true,
@@ -647,6 +650,29 @@ func functionBodyVerdict(f *streamFunc, funcs map[funcKey]*streamFunc, trust *de
 	res := typeAdjust(p, f.asType, bodyAllowsChildren(instr, expr))
 
 	return res, true, a.unverified
+}
+
+// functionConstructorVerdict assesses a function body that is not one
+// xsl:sequence or xsl:value-of with a select: §19.8.5 takes "the
+// type-adjusted posture and sweep of the sequence constructor contained
+// within the xsl:function element", which the instruction rules (§19.8.3,
+// §19.8.4) give, with the streaming parameter in scope of every expression.
+// su-absorbing-205's xsl:copy is one.
+func functionConstructorVerdict(f *streamFunc, funcs map[funcKey]*streamFunc, trust *declTrust) (props, bool, bool) {
+	a := &instrAnalyzer{ctxPosture: postureRoaming, ctxAllowsChildren: true, known: true, funcs: funcs, trust: trust}
+	if trust != nil {
+		a.attrSets = trust.sets
+	}
+	if f.category.declaredStreamable() && f.arity() > 0 && typePermitsNodes(f.params[0]) {
+		if q, ok := firstParamName(f.body); ok {
+			a.param = &streamParam{name: q, category: f.category, several: typePermitsSeveralNodes(f.params[0])}
+		}
+	}
+	p := a.body(f.body)
+	if !a.known {
+		return roamingFreeRanging, false, false
+	}
+	return typeAdjust(p, f.asType, true), true, a.unverified
 }
 
 // satisfiesCategory reports whether a function result meets the body rule of
@@ -742,7 +768,7 @@ func firstParamName(fn *xdm.Node) (xdm.QName, bool) {
 // See analyzer.vars and quantifiedExpr. A variable not in that environment is
 // grounded, exactly as before.
 func (a *analyzer) varRef(x *xpath.VarRef) props {
-	if p, ok := a.vars[x.Name]; ok {
+	if p, ok := a.vars.lookup(x.Name); ok {
 		// The sweep stays motionless whatever the binding's own sweep was:
 		// naming a value already bound reads nothing further. What the
 		// posture carries is where the nodes SIT, which is what the steps
@@ -776,8 +802,7 @@ func (a *analyzer) varRef(x *xpath.VarRef) props {
 // This was quoted as "the posture AND SWEEP of the expression are the posture
 // and sweep of the right-hand operand", which states the sweep half backwards:
 // the sweep is the wider of the two, so a consuming left operand is not
-// discarded by a motionless right one. The code takes the wider sweep; only
-// the quotation was wrong. The left operand is assessed
+// discarded by a motionless right one. The left operand is assessed
 // first, in the current context; a left operand that is itself not streamable
 // makes the whole expression so.
 //
@@ -818,6 +843,10 @@ func (a *analyzer) simpleMap(x *xpath.SimpleMap) props {
 	p := inner.expr(x.Right)
 	a.known = a.known && inner.known
 	a.unverified = a.unverified || inner.unverified
+	// "The sweep of the expression is the wider of the sweeps of the two
+	// operands": (ITEM ! string(.)) ! number(.) consumes, though its right
+	// operand, in a grounded focus, is motionless.
+	p.sweep = wider(left.sweep, p.sweep)
 	return p
 }
 
@@ -900,7 +929,7 @@ func (a *analyzer) callByGeneralRules(
 		}
 		ops = append(ops, a.operandOf(arg, u))
 	}
-	return combine(ops, false), true
+	return a.combine(ops, false), true
 }
 
 // callAscent applies the call rules of §19.8.5.7.
@@ -979,7 +1008,7 @@ func (a *analyzer) callDescent(x *xpath.FuncCall, f *streamFunc) (props, bool) {
 		for i := 1; i < len(x.Args); i++ {
 			rest = append(rest, a.operandOf(x.Args[i], typeDeterminedUsage(f.params[i])))
 		}
-		c := combine(rest, false)
+		c := a.combine(rest, false)
 		p1, s1 = c.posture, c.sweep
 	}
 

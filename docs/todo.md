@@ -7,8 +7,8 @@ Current position:
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
+| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,974 / 25,000 (99.90%) |
+| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,218 / 26,244 (99.90%) |
 
 <!-- BEGIN GENERATED STATUS TABLE -->
 <!-- Generated from tests/conformance/results.json and the source tree by
@@ -18,12 +18,12 @@ Current position:
 | XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
 | XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
 | XPath 3.1 | 100.00% — 22,054 of 22,054 in scope (0 failing) |
-| XQuery 3.1 | 100.00% — 30,516 of 30,517 in scope (1 failing) |
-| XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
-| XSLT 3.0 | 99.80% — 11,495 of 11,518 in scope (23 failing); 3 of those need more of the §19.8 streamability analysis |
+| XQuery 3.1 | 100.00% — 30,529 of 30,530 in scope (1 failing) |
+| XSLT 2.0 | 99.87% — 6,194 of 6,202 in scope (8 failing) |
+| XSLT 3.0 | 99.85% — 11,505 of 11,522 in scope (17 failing) |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,999 `func Test` declarations, clean under `-race` |
+| Tests | 3,688 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -33,7 +33,7 @@ to build next and what it would cost.
 
 ## 1. Features
 
-### 1.1 XML 1.1 documents — **implemented; one layer outstanding**
+### 1.1 XML 1.1 documents — **implemented**
 
 XML 1.1 documents are read as XML 1.1. The declaration's version is kept in
 `internal/xmltok.Decoder`, [2] `Char` and [2a] `RestrictedChar` are enforced
@@ -77,13 +77,13 @@ this engine has 1.1's character model but not the rest of 1.1. Admitting the
 1.1 half was measured and rejected: it takes XQuery from 29,952 passed / 12
 failed to 29,936 / 26.
 
-**What is still missing beyond `dtd` is `fn:serialize`'s `undeclare-prefixes`.**
-`xslt/serialize.go` implements it (11.7); `xpath/fn_serialize.go` writes
-`xmlns:p=""` unconditionally, so the 1.1-only `serialize-xml-035/036/135/136`
-cases would fail if they were admitted. The `version` parameter itself now
-reaches the XML declaration there, which it did not before.
+**`fn:serialize`'s `undeclare-prefixes` is implemented** (an earlier revision
+listed it as missing). `xpath/fn_serialize.go` writes `xmlns:p=""` only when
+the parameter asks for it, raises SEPM0010 when it is asked for with version
+1.0, and otherwise leaves the binding out, as `xslt/serialize.go` does (11.7).
+The `version` parameter itself reaches the XML declaration there.
 
-`undeclare-prefixes` is not the only one, but **`indent` is now honoured**:
+**`indent` is honoured** too:
 Serialization 3.1 §4's rules, including the significant-whitespace rule and
 the html comment/PI exception, so a document indents the same way through
 `fn:serialize` as through `xsl:result-document`.
@@ -124,7 +124,14 @@ void-element table is version-dependent (`basefont`/`frame`/`isindex` are void
 in HTML 4 only; `keygen`/`source`/`track`/`wbr` in HTML 5 only), which is why
 nothing could be fixed until `html-version` was actually read. It is now read
 in both the map and element forms — previously the map form accepted it and
-the element form returned `SEPM0017` for the same parameter.
+the element form returned `SEPM0017` for the same parameter. When it is
+absent, the map form uses 5, the default in F&O 3.1's `fn:serialize` table.
+The element form and the one-argument call leave the default
+implementation-defined, and use `xsl:output`'s: 5 for html, below 5 for xhtml. In the map form an
+entry holding `()` takes that parameter's default, as if it were absent. Under
+html-version 5, the xhtml method of `fn:serialize` now writes the bare
+`<!DOCTYPE html>` (Serialization 3.1 §6.1.7). It uses the element test that
+`xsl:output` already used, now shared in `internal/htmlser`.
 
 The table is duplicated from `xslt/serialize.go` rather than shared, and both
 copies now name the other. No import cycle forbids sharing it (`xslt` imports
@@ -166,10 +173,10 @@ two serialisers, one of them ignoring it. `isHTMLContentTypeHead`
 Serialization 3.1, which is why the field is a `*bool` rather than a `bool`.
 
 **Nothing is now parsed and unread.** What is left is the deliberate list
-below, and the `xhtml` method's own empty-element rule — void elements
-self-closed *with a space*, recognition namespace-gated under version 4 —
-which this serialiser has never implemented. `TestSerializeXMLKeepsSelfClosing`
-pins the current behaviour so that changing it is a deliberate act.
+below. The `xhtml` method's own empty-element rule (Serialization 3.1 §6:
+`<br />` for a void element, `<p></p>` otherwise, recognition namespace-gated
+under version 4) is now implemented, as `xsl:output` already had it;
+`TestSerializeXHTMLEmptyElements` pins it.
 
 **`byte-order-mark` and `media-type` are deliberately not implemented** for
 `fn:serialize`, which is a different thing from unread. F&O 3.0
@@ -188,14 +195,12 @@ Accepting a key and ignoring what it asks for is indistinguishable from
 rejecting it, which is why `serialize-xml-120` and `-120b` only caught this
 once indentation started working.
 
-**`xsl:stream` is accepted beside `xsl:source-document`.** The vendored
-working draft (§18.1) names the instruction `xsl:stream` and never mentions
-`source-document`; the W3C suite writes `xsl:source-document` in 500
-stylesheets and `xsl:stream` in none. The table carried the suite's spelling
-alone, so a stylesheet written against the vendored specification was refused
-with `XTSE0010`. Both are now accepted, with §18.1's attribute list for
-`xsl:stream` — which has no `@streamable`, since it streams by definition.
-No suite case exercises it, so the change is invisible to the ratchet.
+**`xsl:stream` is refused again.** It is the last-call working draft's name
+(`xslt-lcwd30.xml` §18.1); the Recommendation renamed it `xsl:source-document`
+(`xslt-30.html`, change log, Bug29747). It was accepted beside
+`xsl:source-document` for a while, on the mistaken reading that the vendored
+draft was the specification. Under version 3.0 it is now `XTSE0010`; in
+forwards-compatible mode it takes its `xsl:fallback`. No suite case writes it.
 
 **`build-tree` now applies to the principal result.** §26.1 covers "the raw
 principal result or secondary result", and §24.1 says what the yes case means:
@@ -212,20 +217,20 @@ U+001F being unreachable in XML 1.0 character data.
 `TestIdentityKeySeparatorUnreachableInXML10` still pins the 1.0 premise; when it
 fails it is a signal to retire the test, not a key match to fix.
 
-**What is left is the `dtd` package, which has no version notion.** `dtd.Load`
-takes a DOCTYPE directive string rather than a document, so it never sees an XML
-declaration and has nothing to check §4.3.4 against — its own `stripTextDecl`
-discards the text declaration for the same reason `xdm`'s once did. Closing it
-means giving `dtd` a way to be told the including document's version, which is a
-new API surface rather than a gap closure, and it should not be invented before
-a caller needs it.
+**The `dtd` package enforces §4.3.4 too** (round SG, ee5018c), with no new
+API: `dtd.Load` records the first external resource whose text declaration
+says 1.1, and `dtd.Validate`, which is handed the document, refuses it when
+the document's `Tree.XMLVersion` is not 1.1 (a tree with none is 1.0, the
+stricter rule).
 
-The W3C `xmlconf` suite (xmlts20130923) was measured on 2026-10-02 with a
-scratch harness against `xmllint`; it is not yet vendored or run in CI, so the
-`XmlVersions` cases in the XSD suite (xv003, xv006, xv008, xv009 pass) remain
-the only 1.1 measurement the gate repeats.
+The W3C `xmlconf` suite (xmlts20130923) is a lane since round SG:
+`TestXMLConf` (`tests/xmlconf/xmlconf_test.go`, fetched by
+`tests/fetch-xmlconf.sh`) runs 1,965 cases, and all 1,965 pass since round
+SI, each guarded by ID (`tests/xmlconf/expected-pass.txt`). With the
+`XmlVersions` cases in the XSD suite (xv003, xv006, xv008, xv009 pass) it is
+what the gate repeats for 1.1.
 
-### 1.2 DTD validation — notations and entity-typed attributes outstanding
+### 1.2 DTD validation — the `xmlconf` lane at 1,965 of 1,965
 
 The `dtd` package validates against `<!ELEMENT>`, `<!ATTLIST>` and
 `<!ENTITY>`: content models, attribute defaults, enumerations, `ID`/`IDREF`.
@@ -237,8 +242,10 @@ precedence — the internal subset is read first and its declarations bind,
 later ones being ignored rather than an error — and a `%pe;` in the external
 subset may expand to whole declarations, which is what makes a modular DTD
 work. Conditional sections, `<![INCLUDE[` and `<![IGNORE[` (§3.4), are
-resolved after expansion, since the keyword is normally itself a parameter
-entity, and they nest.
+resolved where they stand as the subset is read once in document order, so a
+keyword that is itself a parameter entity works, a parameter entity declared
+inside an INCLUDE section is in scope after it, and an IGNORE section's
+declarations are never read; they nest.
 
 Nothing is fetched without a caller-supplied `LoadOptions.Resolver`, and with
 none a DOCTYPE naming an external subset is **refused** rather than validated
@@ -248,21 +255,30 @@ one shared budget, so a bomb split between them meets the same limit a wholly
 internal one does. See [security.md](security.md) and
 [options.md](options.md).
 
-**What is left**, and none of it is large:
+**What is left**:
 
-* **`NOTATION` is parsed but not enforced.** An `<!ATTLIST … NOTATION (a|b)>`
-  restricts the value to the listed names, which is checked, but nothing
-  verifies that each name was declared by a `<!NOTATION>`. XML 1.0 §3.3.1
-  makes the missing declaration a validity error.
-* **`ENTITY` and `ENTITIES` attribute types are not checked** against the
-  unparsed entities actually declared, for the same reason: the notion of a
-  declared-but-unparsed entity lives in `xdm`, and the check would have to
-  read it back out.
-* **The W3C `xmlconf` suite is not vendored.** It was measured once, on
-  2026-10-02, against `xmllint`: under default options the parser now refuses
-  every not-well-formed case that applies, and with DOCTYPEs enabled most of
-  what it still accepts is DTD declaration grammar it never checks. Vendoring
-  it with a CI test is what would keep that number from drifting.
+* **`NOTATION` and `ENTITY`/`ENTITIES` attributes are checked** (an earlier
+  revision listed them here as missing). `dtd.Validate` applies both halves of
+  XML 1.0 §3.3.1: a `NOTATION` enumeration may name only declared
+  `<!NOTATION>`s, reported once per declaration, and an `ENTITY` or `ENTITIES`
+  value must name entities declared with `NDATA` (`dtd/validate.go`; see
+  [validation.md](validation.md)).
+* **The `xmlconf` lane passes every case.** `TestXMLConf` runs not-wf cases
+  through `xdm.Parse` and valid/invalid ones through `dtd.Load` and
+  `dtd.Validate`. Round SG took it from 1,460 to 1,859 by checking the DTD
+  declaration grammar under `AllowDOCTYPE` (252b65b: not-wf 417 → 23), the
+  text declaration, the XML declaration (72599d9) and undeclared entities
+  (8650527). Round SI took it to 1,965: parameter entities in an internal-only
+  subset and in INCLUDE sections, the declaration-level and lexical validity
+  constraints, the EMPTY rule, UTF-16 external subsets, the WFCs on entity
+  replacement text, PE nesting and standalone documents, and the validity
+  facts a tree cannot show (standalone, element-content white space), which
+  xdm records as it parses. A listed case that stops passing fails by name.
+  What the suite does not reach is in [known-gaps.md](known-gaps.md).
+* **`xmlns` attributes are validated** (c516340). XML 1.0 sees `xmlns` and
+  `xmlns:p` as attributes, so VC Attribute Value Type applies to them; the
+  exemption is gone, and a declared `xmlns:p` now satisfies `#REQUIRED` and
+  `#FIXED`, as xmllint `--valid` has it.
 
 ### 1.3 RELAX NG — compact syntax implemented, unverified against a suite
 
@@ -331,14 +347,15 @@ parameters; `#` comments and the `\` identifier escape.
   does not arbitrate it either way: it passes at 965 of 965 both before and
   after, and contains only nine `zeroOrMore` occurrences in total.
 
-* **Section 7.3's *first* clause may be over-strict for two `<zeroOrMore>`s.**
-  `xspec.rnc` sequences `xml-ns-attributes` with `common-attributes`, which
-  itself begins with `xml-ns-attributes`, so `attribute xml:* { text }*`
-  appears twice in one group and is refused as "required twice". Two
-  `<zeroOrMore>`s can each match nothing, so whether "required" is the right
-  reading of that shape is a real question — but it is a different clause from
-  the one settled above, and settling it needs the spec text this repository
-  does not vendor.
+* **Done: `xspec.rnc`'s "required twice" was a false overlap, not §7.3.**
+  The refused shape is in `p:document`: `attribute xml:* { text }*` beside
+  `attribute * - (local:* | xml:* | p:*) { text }*`. The overlap test compared
+  `anyName` with `nsName` structurally and ignored the exception, so it saw
+  `xml:*` twice. It now uses the representative-name method jing uses. jing
+  (20241231) accepts `xspec.rnc` and refuses two genuine `attribute xml:*`
+  repetitions in one group, as this package still does: §7.3's first clause
+  is applied after §4.20 rewrites `<zeroOrMore>`, so "can match nothing" is no
+  excuse.
 
 ### 1.4 Schema Component Constraints — the remaining bulk
 
@@ -552,8 +569,8 @@ predictions about them were wrong**: the pattern rule is not a facet-
 application rule inside `xsd`, and the impure pair needed a result **shape**
 rather than an annotation.)*
 
-**What is still missing, and it is not one thing.** Each of these is a separate
-small feature rather than a bug in the import:
+**What is still missing.** Each of these is a separate small feature rather
+than a bug in the import:
 
 * **Automatic input validation.** A source document is not validated because
   the query imported a schema, so it stays untyped until `validate { }` or the
@@ -570,13 +587,18 @@ small feature rather than a bug in the import:
   positions, not cast targets, and the suite asserts `true` rather than an
   error. `xslt`'s identical refusal is correct where it stands and was never a
   claim about casts, so this was never a joint gap.
-* **Annotation propagation.** A validated element that is then copied into a
-  constructor loses the annotation the assessment stamped, so
-  `qischema007`-style cases that validate and then wrap fail.
-* **Substitution groups on validated content.** `schema-element(s:H1)`
-  matching a substituted child needs the *node* to have been validated against
-  the head's group, which needs the assessment to record which declaration
-  accepted each child.
+* ~~**Annotation propagation.**~~ **Closed; this entry had outlived its fix.**
+  Under construction mode `preserve`, the default (§4.6, C.1), a validated
+  element copied into an element, computed element or document constructor
+  already kept its annotation. What was missing was the other half:
+  `declare construction strip` did not strip, so the copy stayed typed. It
+  now receives `xs:untyped` (attributes `xs:untypedAtomic`), and the original
+  stays typed (`TestValidatedCopyKeepsAnnotationUnderPreserve`).
+* ~~**Substitution groups on validated content.**~~ **Closed; already
+  worked.** `schema-element(s:head)` matches a validated child accepted
+  through the head's substitution group, whether the member declares the
+  head's type, a derived one or none, and still does after the parent is
+  copied (`TestSchemaElementMatchesSubstitutedChild`).
 
 **What it buys, delivered.** `validate` against a real schema, with the result
 annotated; `cast as` and `castable as` with the schema author's **facets**
@@ -664,6 +686,11 @@ indirect: pass the map through `TransformOptions.Params` to a top-level
 `xsl:param`, or call `parse-json()` inside the stylesheet and bind it to an
 `xsl:variable`, passing only the JSON string in.
 
+`fn:transform` is no longer limited this way (round SG, 57a0c9d): its
+`global-context-item` option is typed `item()`, and an atomic or function item
+reaches the runtime through an unexported `TransformOptions` field beside a nil
+source. The public `Transform` signature is the part still open.
+
 ## 2. Bugs
 
 None open. Four were found on 2026-09-10 while verifying an external audit
@@ -698,6 +725,13 @@ The guarantee extends to `fn:transform` called from XQuery or `xpath.Eval`
 starts at the inherited depth, so a cycle through another host language
 accumulates too. `TestTransformRecursionThroughAnotherHostIsBounded`; removing
 the seed fails it.
+
+The static phase was a third path: its runtime was a struct literal with
+`maxDepth` 0, which disables the check, and each nested compilation
+restarted the count. Fixed in `a97ca6a`: the static runtime takes
+`DefaultMaxDepth` (or the caller's bound) and the charged depth travels
+into the nested compilation through unexported `CompileOptions.nestedDepth`.
+`TestStaticTransformNestingIsBounded`; removing either half fails it.
 
 ### 2.2 A function item does not inherit the byte budget
 
@@ -762,28 +796,27 @@ The sibling escape at the same seam *was* closed: a nested `fn:transform`
 minted its own item and byte allowances, and now adopts the caller's. See
 `xpath.Context.AdoptBudget` and `TestNestedTransformInheritsTheByteBudget`.
 
-### 2.4 Three spec divergences the ninth audit found and left open
+### 2.4 Three spec divergences the ninth audit found (all closed)
 
-**Open.** The 2026-09-11 line-by-line audit against the five Recommendations
-confirmed these and they are not fixed. None has a W3C suite case, which is
+**All three are closed.** The 2026-09-11 line-by-line audit against
+the five Recommendations confirmed all three. None has a W3C suite case, which is
 why every conformance lane stayed green across the four fixes committed beside
 them — see
 [audits/2026-09-11-spec-divergence-full.md](audits/2026-09-11-spec-divergence-full.md).
 
-* **`xsl:output/@normalization-form` and `@json-node-output-method` carry no
-  enumeration** in `xslt/elementtable.go`. Both have a closed set in the REC,
-  so a misspelling is accepted in silence. The sibling attributes on the same
-  element were enumerated in `1b7a25a`; these two were left because
-  `json-node-output-method` is also one of the nine "answered differently
-  depending on how it is spelled" splits — the map path is unvalidated where
-  the element path is checked — and narrowing the element alone would widen
-  that split rather than close it.
+* **`xsl:output/@json-node-output-method` is now enumerated** in
+  `xslt/elementtable.go` (`xml`, `html`, `xhtml`, `text` or an EQName), so this
+  bullet is closed. `@normalization-form` is held to an NMTOKEN by design: the
+  REC's summary gives it an `nmtoken` alternative, and a well-formed form this
+  engine does not support is SESU0011 at serialisation.
 
-* **XQST0104 is raised as XQDY0084** — a dynamic error where XQuery 3.1 wants
-  a static one, for `validate type T` with `T` out of scope. This did *not*
-  reproduce as the audit stated it; the real QT3 case (`validate-as-91011`)
-  imports a schema first, so the defect is a different one than the row
-  describes. It needs re-diagnosis before it needs a fix.
+* ~~**XQST0104 is raised as XQDY0084**~~ **Closed.** Re-diagnosed: the real
+  QT3 case (`validate-as-91011`) imports a schema and names a type it does not
+  define, and the check ran only when the expression was evaluated. The type
+  name is now resolved against the in-scope schema definitions while the
+  parser reads it (`xquery/misc_expr.go`, `typeNameInScope`), so `Compile`
+  reports XQST0104 whether or not a schema was imported and whether or not
+  the expression would run. A built-in `xs:` type is in scope with no import.
 
 * **"is not an XSLT 2.0 element" was hardcoded** in two diagnostics —
   `xslt/staticcheck.go` and `xslt/compile_instr.go` — that a 3.0 stylesheet

@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -20,16 +21,19 @@ func registerSeq30Funcs(l *Library) {
 	})
 
 	// fn:tail($arg as item()*) as item()*  ==  subsequence($arg, 2)
-	l.registerFnSince(XPath30, "tail", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFnSince(XPath30, "tail", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		if len(args) == 0 || len(args[0]) < 2 {
 			return xdm.Empty(), nil
 		}
 		// A fresh slice rather than a reslice of the argument: sequences are
 		// passed around by value here, and handing back an alias of the
 		// caller's backing array would let a later append write into it.
-		out := make(xdm.Sequence, len(args[0])-1)
-		copy(out, args[0][1:])
-		return out, nil
+		// The copy is charged to the item budget, as for fn:reverse.
+		out, err := makeSequence(ctx, len(args[0])-1)
+		if err != nil {
+			return nil, err
+		}
+		return append(out, args[0][1:]...), nil
 	})
 
 	// fn:has-children() / fn:has-children($node as node()?) as xs:boolean
@@ -62,6 +66,12 @@ func registerSeq30Funcs(l *Library) {
 			}
 			n = node
 		}
+		if xdmburst.ShallowKids != nil {
+			// A view whose start tag the stream peeked past (xdm/streamkids.go).
+			if has, ok := xdmburst.ShallowKids(n); ok {
+				return boolSeq(has), nil
+			}
+		}
 		return boolSeq(n.FirstChild() != nil), nil
 	})
 
@@ -80,20 +90,21 @@ func registerSeq30Funcs(l *Library) {
 		// The set of nodes that some member has as an ancestor. Walking each
 		// member's ancestor chain once is O(n·depth) and needs no ordering,
 		// where comparing every pair would be O(n²).
-		ancestors := map[*xdm.Node]bool{}
+		// Keyed on Identity, as outermost is.
+		ancestors := map[xdm.IdentityKey]bool{}
 		for _, n := range nodes {
 			for p := parentOf(n); p != nil; p = parentOf(p) {
-				if ancestors[p] {
+				if ancestors[p.Identity()] {
 					// This chain has already been walked to the root by an
 					// earlier member; the rest of it is known.
 					break
 				}
-				ancestors[p] = true
+				ancestors[p.Identity()] = true
 			}
 		}
 		out := make(xdm.Sequence, 0, len(nodes))
 		for _, n := range nodes {
-			if !ancestors[n] {
+			if !ancestors[n.Identity()] {
 				out = append(out, n)
 			}
 		}

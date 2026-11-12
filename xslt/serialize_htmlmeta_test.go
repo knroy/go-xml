@@ -99,3 +99,57 @@ func TestAddedMetaReplacesOnlyHeadChildren(t *testing.T) {
 		t.Errorf("want %s in:\n%s", want, out)
 	}
 }
+
+// TestHTML4XHTMLHeadMetaIsClosed: below HTML5 an XHTML-namespace element is
+// an XML island to the html method (Serialization 3.1 §7.1), so the meta it
+// adds to such a head is closed; it was written as a bare HTML start tag,
+// which no XML reader of the island accepts (result-document-1402).
+func TestHTML4XHTMLHeadMetaIsClosed(t *testing.T) {
+	for _, c := range []struct{ version, want string }{
+		{` version="4.0"`, `<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"></meta><title>`},
+		{` html-version="5"`, `<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><title>`},
+	} {
+		sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" ` +
+			`xmlns="http://www.w3.org/1999/xhtml">` +
+			`<xsl:output method="html" encoding="UTF-8" indent="no"` + c.version + `/>` +
+			`<xsl:template match="/"><html><head><title>t</title></head></html></xsl:template></xsl:stylesheet>`
+		if out := run(t, sheet, `<r/>`); !strings.Contains(out, c.want) {
+			t.Errorf("html-version%q: want %s in\n%s", c.version, c.want, out)
+		}
+	}
+}
+
+// TestHTMLDefaultVersionIsFive pins the html method's default HTML version:
+// with neither version nor html-version it is 5.0, for XSLT 2.0 and 3.0
+// stylesheets alike (XSLT 3.0 §26 leaves the default implementation-defined;
+// Saxon-HE 12.7 writes the same bytes for both). An explicit 4.0 keeps HTML 4.
+// The xhtml method's default stays below 5, as Saxon-HE 12.7's does. The bare
+// doctype needs an html document element (Serialization 3.1 §7.4.6).
+func TestHTMLDefaultVersionIsFive(t *testing.T) {
+	for _, c := range []struct{ name, version, output, body, want string }{
+		{"2.0", "2.0", `method="html"`, `<html><br/><frame/></html>`,
+			"<!DOCTYPE HTML>\n<html><br><frame></frame></html>"},
+		{"3.0", "3.0", `method="html"`, `<html><br/><frame/></html>`,
+			"<!DOCTYPE HTML>\n<html><br><frame></frame></html>"},
+		{"implicit", "3.0", ``, `<html><br/></html>`, "<!DOCTYPE HTML>\n<html><br></html>"},
+		{"version 4.0", "3.0", `method="html" version="4.0"`, `<html><br/><frame/></html>`,
+			"<html><br><frame></html>"},
+		{"html-version 4.01", "3.0", `method="html" html-version="4.01"`, `<html><br/></html>`,
+			"<html><br></html>"},
+		{"not html", "3.0", `method="html"`, `<p><br/></p>`, "<p><br></p>"},
+		// No HTML version under xml: no prefix normalisation (§7.1 is the
+		// html method's, §6 the xhtml one's).
+		{"xml", "3.0", `method="xml" omit-xml-declaration="yes"`,
+			`<h:p xmlns:h="http://www.w3.org/1999/xhtml"/>`, `<h:p xmlns:h="http://www.w3.org/1999/xhtml"/>`},
+		{"xhtml", "3.0", `method="xhtml" omit-xml-declaration="yes"`,
+			`<html xmlns="http://www.w3.org/1999/xhtml"><frame/><p/></html>`,
+			`<html xmlns="http://www.w3.org/1999/xhtml"><frame /><p></p></html>`},
+	} {
+		sheet := `<xsl:stylesheet version="` + c.version + `" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+			`<xsl:output ` + c.output + ` indent="no"/>` +
+			`<xsl:template match="/">` + c.body + `</xsl:template></xsl:stylesheet>`
+		if out := run(t, sheet, `<r/>`); out != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, out, c.want)
+		}
+	}
+}

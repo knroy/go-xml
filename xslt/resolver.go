@@ -2,8 +2,10 @@ package xslt
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"net/url"
 	"os"
@@ -35,7 +37,9 @@ type FileResolver struct {
 	// resolver parses. It is off by default, which is what keeps a
 	// stylesheet from reaching a document that expands entities or names an
 	// external one — the XXE entry point. A caller whose inputs are trusted,
-	// a conformance suite among them, can turn it on.
+	// a conformance suite among them, can turn it on. When this resolver is
+	// a transform's Documents, the stylesheet-text of a nested fn:transform
+	// is parsed with it too, as the same text read by stylesheet-location is.
 	AllowDOCTYPE bool
 
 	// ExternalEntities permits the documents this resolver parses to read
@@ -94,12 +98,36 @@ type FileResolver struct {
 	// what lets such a stylesheet read a document of any size.
 	MaxNodes int
 
+	// MaxEntityDepth, MaxEntityBytes, MaxTotalEntityBytes, MaxEntities,
+	// MaxExternalFetches, MaxExternalFetchBytes and MaxExternalDepth bound
+	// the entity expansion of one document this resolver parses, as the
+	// xdm.ParseOptions fields of the same names do and with the same zero
+	// values: zero is the xdm default, a negative budget is no limit, and a
+	// depth is clamped to its ceiling. They matter only with AllowDOCTYPE,
+	// and the external ones only with ExternalEntities.
+	//
+	// They also bound every other parse a transform makes on this resolver's
+	// behalf -- fn:parse-xml, fn:parse-xml-fragment and the stylesheet-text
+	// of a nested fn:transform -- when the transform's Documents is this
+	// resolver. A limit one path ignored would be no limit: the stylesheet
+	// would move its document to that path.
+	MaxEntityDepth        int
+	MaxEntityBytes        int64
+	MaxTotalEntityBytes   int64
+	MaxEntities           int
+	MaxExternalFetches    int
+	MaxExternalFetchBytes int64
+	MaxExternalDepth      int
+
 	// There is deliberately no network option. Adding one would mean this
 	// type could not be recommended without caveats, and a validator has no
 	// need to fetch rule sets at transform time.
 
 	mu    sync.Mutex
 	cache map[string]*xdm.Tree
+	// preValid, under mu, holds the schema of each cached document the
+	// conformance harness gave as validated (streamvalidin.go).
+	preValid map[string]any
 	// sizes is the source size charged for each cache entry, and cacheBytes
 	// their sum, both under mu. A Preload entry is charged nothing: the host
 	// parsed it and holds it already.
@@ -158,6 +186,10 @@ type loadCall struct {
 	done chan struct{}
 	tree *xdm.Tree
 	err  error
+	// budget is the entity budget the loader parsed under. A failure is
+	// shared only with waiters under the same one: it may be the loader's
+	// drained allowance, which says nothing about a waiter's own.
+	budget *xdm.EntityBudget
 }
 
 // resolverCacheMax bounds the parsed documents a resolver retains.
@@ -194,10 +226,38 @@ const resolverCacheMaxBytes int64 = 32 << 20
 // allocate.
 const DefaultMaxResourceBytes int64 = 64 << 20
 
+// StreamingDocumentResolver is a DocumentResolver that can hand over a
+// document unparsed. When the TransformOptions.Documents resolver implements
+// it, a streamable xsl:source-document or xsl:merge-source reads the document
+// from OpenDocument's reader as it parses, instead of building the tree
+// ResolveDocument returns; a resolver that does not implement it is read as a
+// tree, as before.
+//
+// uri and base are ResolveDocument's. docURI is the absolute URI of the
+// document read: its base URI and document URI, and the URI XTDE1500 records
+// as read. A document opened with an empty docURI is read as a tree instead.
+// The reader is closed once read, or on error or cancellation, and may be
+// asked for again when the instruction re-runs on the tree (see
+// docs/known-gaps.md). It is parsed with the zero xdm.ParseOptions' limits
+// (64 MB, 10M nodes, depth 1,000, no DOCTYPE), whatever ResolveDocument
+// allows: a document over them, or one the stream cannot take, is read again
+// through ResolveDocument.
+//
+// FileResolver implements it; it streams through its own options (MaxBytes,
+// MaxNodes, AllowDOCTYPE) and declines a document its cache already holds.
+type StreamingDocumentResolver interface {
+	OpenDocument(uri, base string) (rc io.ReadCloser, docURI string, err error)
+}
+
 // NewFileResolver returns a resolver confined to the given directories.
+// An empty or blank root is refused: it names no directory, and
+// filepath.Abs would have made it the working directory.
 func NewFileResolver(roots ...string) (*FileResolver, error) {
 	r := &FileResolver{cache: map[string]*xdm.Tree{}}
 	for _, root := range roots {
+		if blankRoot(root) {
+			return nil, fmt.Errorf("resolver root %q names no directory", root)
+		}
 		abs, err := filepath.Abs(root)
 		if err != nil {
 			return nil, fmt.Errorf("resolver root %q: %w", root, err)
@@ -215,6 +275,9 @@ func NewFileResolver(roots ...string) (*FileResolver, error) {
 	return r, nil
 }
 
+// blankRoot reports whether a root names no directory.
+func blankRoot(root string) bool { return strings.TrimSpace(root) == "" }
+
 // readConfined reads a file that resolvePath has already placed inside a root,
 // re-checking containment at open time rather than trusting the earlier check.
 //
@@ -231,13 +294,17 @@ func NewFileResolver(roots ...string) (*FileResolver, error) {
 // a string comparison beforehand. A symlink swapped in after resolvePath
 // returned is refused rather than followed.
 //
-// The earlier check is kept: it produces the error message that names the
-// permitted directories, and it is what decides *which* root a path belongs to.
+// The earlier check is kept: it produces the refusal, and it is what decides
+// *which* root a path belongs to.
 // This is the enforcement, not the diagnosis.
-func (r *FileResolver) readConfined(path string) ([]byte, error) {
+//
+// name is the href as the caller wrote it, and is all an error names: the
+// resolved path would tell an untrusted stylesheet where the roots lie
+// (A4-F3, R5).
+func (r *FileResolver) readConfined(path, name string) ([]byte, error) {
 	var data []byte
-	err := r.openConfined(path, func(f *os.File) (err error) {
-		data, err = r.readLimited(f, path)
+	err := r.openConfined(path, name, func(f *os.File) (err error) {
+		data, err = r.readLimited(f, name)
 		return err
 	})
 	return data, err
@@ -245,8 +312,23 @@ func (r *FileResolver) readConfined(path string) ([]byte, error) {
 
 // openConfined is readConfined up to the read: it opens path the same way and
 // hands the open file to use, closing it afterwards.
-func (r *FileResolver) openConfined(path string, use func(f *os.File) error) error {
+func (r *FileResolver) openConfined(path, name string, use func(f *os.File) error) error {
+	f, err := r.openConfinedFile(path, name)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return use(f)
+}
+
+// openConfinedFile is openConfined's open: the file, for the caller to close.
+// The os.Root it was opened through is closed before it returns, which leaves
+// the file open: the confinement is decided at the open.
+func (r *FileResolver) openConfinedFile(path, name string) (*os.File, error) {
 	for _, root := range r.Roots {
+		if blankRoot(root) {
+			continue
+		}
 		absRoot, err := filepath.Abs(root)
 		if err != nil {
 			continue
@@ -279,28 +361,42 @@ func (r *FileResolver) openConfined(path string, use func(f *os.File) error) err
 		f, err := rt.Open(filepath.ToSlash(rel))
 		if err != nil {
 			rt.Close()
-			return err
+			// A missing file is not found. Anything else os.Root refuses
+			// here -- on Linux a symlink whose target is outside the root,
+			// even a dangling one, fails with its unexported "path escapes
+			// from parent" -- is the same refusal as no root containing
+			// the path, and names only the href (A4-F3).
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, err
+			}
+			return nil, &outsideRootsError{href: name}
 		}
-		err = use(f)
-		f.Close()
 		rt.Close()
-		return err
+		return f, nil
 	}
 	// No root contains it. A resolver with no roots at all is the documented
 	// unconfined case, and reaching here means resolvePath admitted a path
 	// this loop did not, so fall back rather than refuse a file the caller
 	// was told was readable.
 	if len(r.Roots) == 0 {
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		return use(f)
+		return os.Open(path)
 	}
-	return fmt.Errorf("%q is outside the permitted directories %v",
-		path, r.Roots)
+	return nil, &outsideRootsError{href: name}
 }
+
+// outsideRootsError refuses a file no root of the resolver contains. It
+// names the href as the stylesheet wrote it and nothing more: the resolved
+// path and the roots would tell an untrusted stylesheet, through
+// $err:description or a host that returns the error, where the roots lie
+// and, by a symlinked component, whether a file outside them exists
+// (A4-F3). errors.Is(err, fs.ErrPermission) recognises it.
+type outsideRootsError struct{ href string }
+
+func (e *outsideRootsError) Error() string {
+	return fmt.Sprintf("%q is outside the permitted directories", e.href)
+}
+
+func (e *outsideRootsError) Unwrap() error { return fs.ErrPermission }
 
 // readLimited reads f whole, refusing a file larger than the resolver's byte
 // budget rather than truncating it.
@@ -310,7 +406,7 @@ func (r *FileResolver) openConfined(path string, use func(f *os.File) error) err
 // stylesheet computes with. Both are silently wrong output, which is the one
 // outcome this library declines to produce. The refusal names the limit so that
 // a caller who wants the file raises MaxBytes rather than guessing.
-func (r *FileResolver) readLimited(f io.Reader, path string) ([]byte, error) {
+func (r *FileResolver) readLimited(f io.Reader, name string) ([]byte, error) {
 	max, lim := r.byteLimit()
 	if max < 0 {
 		return io.ReadAll(f)
@@ -320,7 +416,7 @@ func (r *FileResolver) readLimited(f io.Reader, path string) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(data)) > max {
-		return nil, fmt.Errorf("%s exceeds the %d byte limit", path, max)
+		return nil, fmt.Errorf("%q exceeds the %d byte limit", name, max)
 	}
 	return data, nil
 }
@@ -371,6 +467,7 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 		}
 		href = base
 	}
+	given := href
 
 	// Reject anything that names a non-file scheme before touching the
 	// filesystem, so that an http:// URI produces a clear refusal rather than
@@ -409,17 +506,34 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 		baseDir := filepath.Dir(fileURIToPath(base))
 		p = filepath.Join(baseDir, p)
 	}
+	// A UNC path is refused before anything below touches it: on Windows a
+	// symlink walk on one already connects to the host it names.
+	if uripath.IsForeignNetworkPath(p, r.Roots...) {
+		return "", fmt.Errorf("%q names a network path; only local files are permitted", given)
+	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return "", err
 	}
 	// Resolve symlinks before the containment check: without this, a symlink
 	// inside a root pointing at /etc/passwd would pass.
+	// A path that does not exist resolves up to its deepest existing
+	// ancestor, so a missing in-root file is reported as not found rather
+	// than refused as outside the roots (uripath.EvalExisting).
 	if resolved, err := r.evalSymlinks(abs); err == nil {
 		abs = resolved
+	} else {
+		abs = uripath.EvalExisting(abs)
 	}
 
 	for _, root := range r.Roots {
+		// A blank root, in a Roots set by hand, contains nothing: it is not
+		// the working directory, and it still counts as a root, so a
+		// resolver whose roots are all blank refuses every path rather than
+		// becoming unconfined.
+		if blankRoot(root) {
+			continue
+		}
 		// The root is made absolute and symlink-resolved on the same terms
 		// as the path. Comparing an absolute path against a root the caller
 		// wrote relatively makes filepath.Rel fail, and every file is then
@@ -441,7 +555,7 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 			return abs, nil
 		}
 	}
-	return "", fmt.Errorf("%q is outside the permitted directories %v", abs, r.Roots)
+	return "", &outsideRootsError{href: given}
 }
 
 // ResolveModule implements ModuleResolver for xsl:include and xsl:import.
@@ -471,7 +585,7 @@ func (r *FileResolver) ResolveModuleWith(
 		return nil, "", err
 	}
 	// A stylesheet module keeps its source positions; see load.
-	tree, err := r.loadTracked(path, true, b)
+	tree, err := r.loadTracked(path, href, true, b)
 	if err != nil {
 		return nil, "", err
 	}
@@ -485,7 +599,23 @@ func (r *FileResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
 	if err != nil {
 		return nil, err
 	}
-	return r.load(path, nil)
+	return r.load(path, uri, nil)
+}
+
+// OpenDocument implements StreamingDocumentResolver: the file uri names,
+// confined to Roots as ResolveDocument's is, open for reading, and its file:
+// URI. It reads nothing and caches nothing, and the reader is not limited:
+// MaxBytes and MaxNodes bound the parse when this package streams it.
+func (r *FileResolver) OpenDocument(uri, base string) (io.ReadCloser, string, error) {
+	path, err := r.resolvePath(uri, base)
+	if err != nil {
+		return nil, "", err
+	}
+	f, err := r.openConfinedFile(path, uri)
+	if err != nil {
+		return nil, "", err
+	}
+	return f, fileURIOf(path), nil
 }
 
 // ResolveDocumentIn implements xpath.ContextDocumentResolver, charging the
@@ -510,7 +640,7 @@ func (r *FileResolver) ResolveDocumentIn(
 	if err != nil {
 		return nil, err
 	}
-	return r.load(path, ctx.EntityBudget())
+	return r.load(path, uri, ctx.EntityBudget())
 }
 
 // Preload records a tree that has already been parsed as the answer for uri,
@@ -550,8 +680,8 @@ func (r *FileResolver) Preload(uri string, tree *xdm.Tree) {
 // The cache matters for correctness as well as speed: fn:doc is defined to
 // return the *same* node for the same URI within one execution, so that
 // "doc('x') is doc('x')" is true. Re-parsing would break node identity.
-func (r *FileResolver) load(path string, b *xdm.EntityBudget) (*xdm.Tree, error) {
-	return r.loadTracked(path, false, b)
+func (r *FileResolver) load(path, name string, b *xdm.EntityBudget) (*xdm.Tree, error) {
+	return r.loadTracked(path, name, false, b)
 }
 
 // loadTracked is load, saying whether the parsed tree should remember where
@@ -565,8 +695,12 @@ func (r *FileResolver) load(path string, b *xdm.EntityBudget) (*xdm.Tree, error)
 // gx:line-number(), which almost nothing calls. catalog-007 is the case that
 // settles it -- it reads several thousand stylesheets through fn:document,
 // and tracking positions on all of them pushed the run past its deadline.
+//
+// name is the href as written, for errors only (see readConfined). A caller
+// waiting on another's in-flight parse of the same file gets that caller's
+// error, naming that caller's spelling of the href.
 func (r *FileResolver) loadTracked(
-	path string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, error) {
+	path, name string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, error) {
 	// The lock covers the cache and the in-flight table, not the read and the
 	// parse. Holding it across those made concurrent transforms sharing one
 	// resolver load modules one at a time on a cold cache -- the mutex was
@@ -604,32 +738,44 @@ func (r *FileResolver) loadTracked(
 			// result rather than duplicating the work and the tree.
 			r.mu.Unlock()
 			<-c.done
-			if c.err != nil {
+			if c.err != nil && c.budget == b {
 				return nil, c.err
 			}
+			// A failure under another evaluation's entity budget may be
+			// that budget's refusal, which the parser reports as a
+			// malformed reference, so the waiter loads the path again
+			// under its own: errors are not cached, and the key is gone.
 			// Re-check the cache rather than trusting c.tree directly: the
 			// loop re-applies the positions rule above, so a waiter that needs
 			// positions is not handed a tree parsed without them.
 			continue
 		}
-		call := &loadCall{done: make(chan struct{})}
+		call := &loadCall{done: make(chan struct{}), budget: b}
 		if r.inflight == nil {
 			r.inflight = map[string]*loadCall{}
 		}
 		r.inflight[key] = call
 		r.mu.Unlock()
 
-		tree, size, err := r.parseUncached(path, trackPos, b)
+		// The release is deferred so that a panic in the parse still clears
+		// the key and wakes the waiters, which would otherwise block forever.
+		// err starts non-nil and is only replaced if the parse returns, so a
+		// waiter woken by a panic is handed an error rather than a nil tree.
+		var tree *xdm.Tree
+		var size int64
+		err := fmt.Errorf("loading %q panicked", name)
+		defer func() {
+			r.mu.Lock()
+			if err == nil {
+				r.publish(path, tree, size)
+			}
+			delete(r.inflight, key)
+			r.mu.Unlock()
 
-		r.mu.Lock()
-		if err == nil {
-			r.publish(path, tree, size)
-		}
-		delete(r.inflight, key)
-		r.mu.Unlock()
-
-		call.tree, call.err = tree, err
-		close(call.done)
+			call.tree, call.err = tree, err
+			close(call.done)
+		}()
+		tree, size, err = r.parseUncached(path, name, trackPos, b)
 		return tree, err
 	}
 }
@@ -699,30 +845,41 @@ func (r *FileResolver) publish(path string, tree *xdm.Tree, size int64) {
 
 // parseOptions are the options a document at path is parsed with.
 func (r *FileResolver) parseOptions(path string, trackPos bool) xdm.ParseOptions {
-	opts := xdm.ParseOptions{
-		BaseURI: fileURIOf(path),
-		// This document *was* retrieved by URI, so it has a dm:document-uri
-		// as well as a base URI, and fn:document-uri must report it. The two
-		// carry the same string here only because the retrieval succeeded
-		// from that URI; a temporary tree gets a base URI from its
-		// stylesheet and no document URI at all, which is the distinction
-		// fn:document-uri exists to make.
-		DocumentURI:    fileURIOf(path),
-		AllowDOCTYPE:   r.AllowDOCTYPE,
-		TrackPositions: trackPos,
-		MaxBytes:       r.MaxBytes,
-		MaxNodes:       r.MaxNodes,
-	}
+	opts := r.entityOptions()
+	opts.BaseURI = fileURIOf(path)
+	// This document *was* retrieved by URI, so it has a dm:document-uri as
+	// well as a base URI, and fn:document-uri must report it. The two carry
+	// the same string here only because the retrieval succeeded from that
+	// URI; a temporary tree gets a base URI from its stylesheet and no
+	// document URI at all, which is the distinction fn:document-uri exists
+	// to make.
+	opts.DocumentURI = opts.BaseURI
+	opts.AllowDOCTYPE, opts.TrackPositions = r.AllowDOCTYPE, trackPos
+	opts.MaxBytes, opts.MaxNodes = r.MaxBytes, r.MaxNodes
 	if r.ExternalEntities {
 		opts.ExternalEntities = r
 	}
 	return opts
 }
 
+// entityOptions are r's entity limits as the xdm.ParseOptions fields they
+// mirror, every other field zero.
+func (r *FileResolver) entityOptions() xdm.ParseOptions {
+	return xdm.ParseOptions{
+		MaxEntityDepth:        r.MaxEntityDepth,
+		MaxEntityBytes:        r.MaxEntityBytes,
+		MaxTotalEntityBytes:   r.MaxTotalEntityBytes,
+		MaxEntities:           r.MaxEntities,
+		MaxExternalFetches:    r.MaxExternalFetches,
+		MaxExternalFetchBytes: r.MaxExternalFetchBytes,
+		MaxExternalDepth:      r.MaxExternalDepth,
+	}
+}
+
 // parseUncached reads and parses a file. It holds no lock: this is the work
 // that used to run under r.mu.
 func (r *FileResolver) parseUncached(
-	path string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, int64, error) {
+	path, name string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, int64, error) {
 	// A file: URI rather than the bare path. This base URI is stamped on
 	// every element of the module and is what fn:document, fn:resolve-uri
 	// and fn:static-base-uri resolve against, and those are defined over
@@ -746,9 +903,9 @@ func (r *FileResolver) parseUncached(
 		tree *xdm.Tree
 		size int64
 	)
-	err := r.openConfined(path, func(f *os.File) error {
+	err := r.openConfined(path, name, func(f *os.File) error {
 		max, lim := r.byteLimit()
-		tooBig := fmt.Errorf("%s exceeds the %d byte limit", path, max)
+		tooBig := fmt.Errorf("%q exceeds the %d byte limit", name, max)
 		var src io.Reader = f
 		if max >= 0 {
 			if fi, err := f.Stat(); err == nil && fi.Size() > max {
@@ -762,7 +919,7 @@ func (r *FileResolver) parseUncached(
 			return tooBig
 		}
 		if err != nil {
-			return fmt.Errorf("parsing %s: %w", path, err)
+			return fmt.Errorf("parsing %q: %w", name, err)
 		}
 		tree, size = t, cr.n
 		return nil
@@ -859,7 +1016,7 @@ func (r *FileResolver) ResolveEntity(systemID, publicID, base string) (io.ReadCl
 	// would leave a descriptor open for the length of a parse that may fail.
 	// The read is bounded by MaxBytes, so a document cannot name an entity
 	// whose file is larger than this resolver will hold.
-	data, err := r.readConfined(path)
+	data, err := r.readConfined(path, systemID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -889,11 +1046,11 @@ func (r *FileResolver) ResolveText(uri, base, encoding string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := r.readConfined(path)
+	data, err := r.readConfined(path, uri)
 	if err != nil {
 		return "", err
 	}
-	return decodeText(data, encoding, path)
+	return decodeText(data, encoding, uri)
 }
 
 // decodeText turns the bytes of a text resource into a Go string, honouring
@@ -904,9 +1061,10 @@ func (r *FileResolver) ResolveText(uri, base, encoding string) (string, error) {
 // determination F&O describes — and two copies of an encoding table is two
 // places for a decode to be wrong in different ways.
 //
-// The path argument appears only in error messages, so that a refusal names
-// the file that could not be read rather than leaving the caller to guess.
-func decodeText(data []byte, encoding, path string) (string, error) {
+// The name argument, the href as written, appears only in error messages, so
+// that a refusal names the file that could not be read rather than leaving
+// the caller to guess.
+func decodeText(data []byte, encoding, name string) (string, error) {
 	// F&O 3.0 section 14.8.2: "The encoding of the external resource is
 	// determined as follows: external encoding information is used if
 	// available, otherwise if the media type of the resource is text/xml or
@@ -963,7 +1121,7 @@ func decodeText(data []byte, encoding, path string) (string, error) {
 	// where it reads as a bug in this engine rather than as a property of
 	// the input.
 	if !utf8.ValidString(text) {
-		return "", fmt.Errorf("FOUT1190: %s is not valid UTF-8", path)
+		return "", fmt.Errorf("FOUT1190: %q is not valid UTF-8", name)
 	}
 	// Whether the text may hold a character XML does not permit is the
 	// calling function's rule rather than this resolver's, and fn:unparsed-text
@@ -1069,7 +1227,7 @@ func (r *FileResolver) ResolveInclude(href, base, encoding string) ([]byte, stri
 	if err != nil {
 		return nil, "", err
 	}
-	data, err := r.readConfined(path)
+	data, err := r.readConfined(path, href)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1088,7 +1246,7 @@ func (r *FileResolver) ResolveInclude(href, base, encoding string) ([]byte, stri
 	// matters more here than for unparsed-text: mis-decoded bytes become
 	// *nodes* of the document, and silently wrong output is precisely what
 	// this library declines to produce.
-	text, err := decodeText(data, encoding, path)
+	text, err := decodeText(data, encoding, href)
 	if err != nil {
 		return nil, "", err
 	}

@@ -1,9 +1,12 @@
 package xslt
 
 import (
+	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
+	"weak"
 
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -39,6 +42,9 @@ type accumulatorDef struct {
 	// to break priority ties between two rules of the same accumulator the
 	// same way the template conflict rules do.
 	declOrder int
+	// el is the declaration, which the streamed run's check reads
+	// (streamaccum.go).
+	el *xdm.Node
 }
 
 // accumulatorRule is one xsl:accumulator-rule.
@@ -57,6 +63,7 @@ type accumulatorRule struct {
 	priority  float64
 	hasPrio   bool
 	declOrder int
+	el        *xdm.Node // the xsl:accumulator-rule
 }
 
 // accumulatorValues holds one accumulator's value at every node of one tree.
@@ -75,6 +82,10 @@ type accumulatorValues struct {
 	base          int
 	before, after []xdm.Sequence
 	state         []uint8
+	// err is the error the walk stopped at (§18.2.5): the values set before
+	// it stand; a value not set is functionally dependent on the failed
+	// computation, and a read of it raises err.
+	err error
 }
 
 const (
@@ -85,7 +96,11 @@ const (
 // accumCacheKey identifies one accumulator over one tree.
 type accumCacheKey struct {
 	name string
-	tree *xdm.Tree
+	// root is the identity of the tree's root rather than the *xdm.Tree:
+	// Node.Tree is nil for every constructed fragment, so keying on it gave
+	// all of them one table, and a read over the second fragment answered
+	// from the first's at the same index.
+	root xdm.IdentityKey
 	// pkg is the package whose declaration produced these values, for the
 	// reason keyCacheKey carries one: two packages declaring an accumulator
 	// of the same name compute different values over the same tree, and a
@@ -110,7 +125,7 @@ func (c *compiler) compileAccumulator(el *xdm.Node, precedence int) error {
 			qn.Lexical())
 	}
 	ns := newNSResolver(el, "")
-	def := &accumulatorDef{name: xdm.QName{URI: qn.URI, Local: qn.Local}}
+	def := &accumulatorDef{name: xdm.QName{URI: qn.URI, Local: qn.Local}, el: el}
 	if def.initial, err = compileExpr(initial.Value(), ns); err != nil {
 		return err
 	}
@@ -259,6 +274,7 @@ func (c *compiler) compileAccumulatorRule(el *xdm.Node) (*accumulatorRule, error
 		post:      strings.TrimSpace(el.AttrValue("phase")) == "end",
 		priority:  pat.Priority(),
 		declOrder: c.declOrder,
+		el:        el,
 	}
 	if p := el.Attr("", "priority"); p != nil {
 		var f float64
@@ -342,7 +358,7 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	// The package comes from the declaration, which is already the one the
 	// calling package's lookup chose, so an index built from one package's
 	// declaration is never handed to another's call of the same name.
-	key := accumCacheKey{name: def.name.Clark(), tree: root.Tree(), pkg: def.pkg}
+	key := accumCacheKey{name: def.name.Clark(), root: root.Identity(), pkg: def.pkg}
 	if v, ok := rt.accumValues[key]; ok {
 		return v, nil
 	}
@@ -361,6 +377,13 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 		return v, nil
 	}
 	size := root.SubtreeEnd() - root.Index()
+	// The tables hold a value per node for the rest of the transform, so
+	// their slots are retained items, totalled across accumulators and trees
+	// as keyItems totals the key index, and refused before they are made.
+	rt.accumSlots += int64(size)
+	if err := ctx.ItemsRefused(rt.accumSlots); err != nil {
+		return nil, err
+	}
 	vals := &accumulatorValues{
 		base:   root.Index(),
 		before: make([]xdm.Sequence, size),
@@ -369,14 +392,19 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	}
 	rt.accumBuilding[key] = vals
 	defer delete(rt.accumBuilding, key)
-	cur, err := def.initial.Eval(withFocusCurrent(ctx, root, 1, 1))
+	cur, err := def.initial.Eval(withFocusCurrent(ctx, root, 1, 1, hostDepth(hostOf(ctx))))
 	if err != nil {
-		return nil, fmt.Errorf(
+		err = fmt.Errorf(
 			"evaluating xsl:accumulator %s initial-value: %w",
 			def.name.Lexical(), err)
+	} else {
+		cur, err = rt.convertAccum(def, cur)
 	}
-	if cur, err = rt.convertAccum(def, cur); err != nil {
-		return nil, err
+	if err != nil {
+		// §18.2.5: every value depends on the initial one.
+		vals.err = err
+		rt.accumValues[key] = vals
+		return vals, nil
 	}
 
 	// The walk is pre/post order over the whole tree: every node records the
@@ -389,31 +417,14 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	// counts what is really stored, one entry per item beyond the first, so
 	// that a document of single-item values is not refused by an item bound
 	// that was meant for sequences.
-	var tip xdm.Sequence
-	var held int64
-	extend := func(prev, next xdm.Sequence) (xdm.Sequence, error) {
-		if len(next) == len(prev) && (len(next) == 0 || &next[0] == &prev[0]) {
-			return next, nil
-		}
-		k := len(prev)
-		if k > 0 && len(next) > k && len(tip) == k && &tip[0] == &prev[0] &&
-			sameItems(prev, next[:k]) {
-			held += int64(len(next) - k)
-			next = append(prev, next[k:]...)
-			tip = next
-		} else {
-			if len(next) > 1 {
-				held += int64(len(next))
-			}
-			// Clamped so that a later append reallocates instead of
-			// writing into spare room the rule's value may share.
-			next = next[:len(next):len(next)]
-			tip = next
-		}
-		return next, ctx.ItemsRefused(held)
-	}
-	var walk func(*xdm.Node) error
-	walk = func(n *xdm.Node) error {
+	var ext accumExtend
+	extend := func(prev, next xdm.Sequence) (xdm.Sequence, error) { return ext.extend(ctx, prev, next) }
+	// The walk is a loop, not a recursion on the children: a rule reading
+	// another accumulator not walked yet walks that one inside its own step,
+	// so a recursive walk held a chain of k such reads at depth d of the
+	// document as k*d frames. Each link now holds a fixed few, and the
+	// chain is bounded by the XPath call depth each read is charged.
+	pre := func(n *xdm.Node) error {
 		next, err := rt.applyAccumRules(def, n, cur, ctx, false)
 		if err != nil {
 			return err
@@ -447,11 +458,9 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 		// The before and after maps are left without entries for attribute
 		// nodes for the same reason; accumulator-before on an attribute is
 		// XTTE3360 and never reaches the map.
-		for ch := range n.Children() {
-			if err := walk(ch); err != nil {
-				return err
-			}
-		}
+		return nil
+	}
+	post := func(n *xdm.Node) error {
 		end, err := rt.applyAccumRules(def, n, cur, ctx, true)
 		if err != nil {
 			return err
@@ -459,16 +468,84 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 		if cur, err = extend(cur, end); err != nil {
 			return err
 		}
+		i := n.Index() - vals.base
 		vals.after[i] = cur
 		vals.state[i] |= accumAfterSet
 		return nil
 	}
-	if err := walk(root); err != nil {
-		return nil, err
+	walk := func() error {
+		depth := 0
+		for n := root; n != nil; {
+			if err := pre(n); err != nil {
+				return err
+			}
+			if c := n.FirstChild(); c != nil {
+				n, depth = c, depth+1
+				continue
+			}
+			for {
+				if err := post(n); err != nil {
+					return err
+				}
+				if depth == 0 {
+					return nil
+				}
+				if s := n.NextSibling(); s != nil {
+					n = s
+					break
+				}
+				n, depth = n.Parent(), depth-1
+			}
+		}
+		return nil
+	}
+	if err := walk(); err != nil {
+		// §18.2.5 (Dynamic Errors in Accumulators): the error "is signaled
+		// as an error from any subsequent call on accumulator-before or
+		// accumulator-after that references the accumulator", "understood
+		// in terms of functional dependency": a call fails only when the
+		// value at its node depends on the failed computation -- the values
+		// the walk set before it failed stand. This used to fail every read
+		// of the accumulator, wherever the walk failed, which a streamed run
+		// cannot know until the failing node and the spec does not ask for
+		// (accumulator-057s).
+		vals.err = err
 	}
 
 	rt.accumValues[key] = vals
 	return vals, nil
+}
+
+// accumExtend is accumulatorValuesFor's step from one value to the next: a
+// value that grows by appending shares its predecessor's backing array, and
+// held counts what is really stored, one entry per item beyond the first,
+// against the item limit. A streamed run takes the same steps over the same
+// values (streamaccum.go), so it refuses where the tree does.
+type accumExtend struct {
+	tip  xdm.Sequence
+	held int64
+}
+
+func (x *accumExtend) extend(ctx *xpath.Context, prev, next xdm.Sequence) (xdm.Sequence, error) {
+	if len(next) == len(prev) && (len(next) == 0 || &next[0] == &prev[0]) {
+		return next, nil
+	}
+	k := len(prev)
+	if k > 0 && len(next) > k && len(x.tip) == k && &x.tip[0] == &prev[0] &&
+		sameItems(prev, next[:k]) {
+		x.held += int64(len(next) - k)
+		next = append(prev, next[k:]...)
+		x.tip = next
+	} else {
+		if len(next) > 1 {
+			x.held += int64(len(next))
+		}
+		// Clamped so that a later append reallocates instead of
+		// writing into spare room the rule's value may share.
+		next = next[:len(next):len(next)]
+		x.tip = next
+	}
+	return next, ctx.ItemsRefused(x.held)
 }
 
 // sameItems reports whether a and b hold the identical items. Only nodes and
@@ -526,7 +603,7 @@ func (rt *runtime) applyAccumRules(def *accumulatorDef, n *xdm.Node,
 	// $value is the accumulator's value as the rule found it. It is bound as
 	// an ordinary variable so that a rule body can read it from anywhere in a
 	// sequence constructor, not only from @select.
-	sub := withFocusCurrent(ctx, n, 1, 1).
+	sub := withFocusCurrent(ctx, n, 1, 1, hostDepth(hostOf(ctx))).
 		WithVar(xdm.QName{Local: "value"}, cur)
 
 	var out xdm.Sequence
@@ -636,6 +713,19 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	// value its original had, not with what the rules would compute over the
 	// copy's own tree.
 	node = rt.accumulatorOrigin(node)
+	if h, _ := rt.accumHeld.get(node); h != nil { // streammerge_accum.go
+		return h.value(def, lex, post)
+	}
+	// A node of a streamed document is answered by the run's observer
+	// (streamaccum.go), whose document stands for the tree's root below.
+	root := node.Root()
+	sa, err := rt.streamAccumsOf(node)
+	if err != nil {
+		return nil, err
+	}
+	if sa != nil {
+		root = sa.root
+	}
 	// 18.2.2 narrows the applicable set for a document read with an explicit
 	// use-accumulators list — an xsl:merge-source is where this engine can
 	// say so — and XTDE3362 is reading one the list leaves out. The check is
@@ -646,12 +736,12 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	// xsl:source-document asked to stream an error in its own right. This
 	// engine answers streamable="yes" by not streaming, which the spec
 	// permits, but the restriction the stylesheet asked for still stands.
-	if !def.streamable && rt.streamedTrees[node.Root()] {
+	if !def.streamable && rt.streamedTrees[root] {
 		return nil, fmt.Errorf(
 			"XTDE3362: accumulator %q is not declared streamable, so it "+
 				"cannot be read over a streamed document", lex)
 	}
-	if set, ok := rt.treeAccums[node.Root()]; ok && !set.all && !set.names[name] {
+	if set, ok := rt.treeAccums[root]; ok && !set.all && !set.names[name] {
 		return nil, fmt.Errorf(
 			"XTDE3362: accumulator %q is not applicable to this document, "+
 				"whose use-accumulators list does not name it", lex)
@@ -659,6 +749,15 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	// Section 18.2: an accumulator applies to the tree the node belongs to,
 	// so the walk starts at that tree's root even when the node is deep in
 	// it — the value at a node depends on everything that precedes it.
+	if sa != nil {
+		v, err := sa.value(def, node, post)
+		if errors.Is(err, errAccumCircular) { // streamaccum_l4.go: the message below
+			return nil, fmt.Errorf(
+				"XTDE3400: accumulator %s is defined circularly: a rule reads "+
+					"the value of %s(%q) it is computing", def.name.Lexical(), fname, lex)
+		}
+		return v, err
+	}
 	vals, err := rt.accumulatorValuesFor(def, node.Root(), ctx)
 	if err != nil {
 		return nil, err
@@ -671,15 +770,23 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	// the walk lies past the table; neither was visited.
 	i := node.Index() - vals.base
 	if node.Index() < 0 || i < 0 || i >= len(table) || vals.state[i]&set == 0 {
+		if vals.err != nil && node.Index() >= 0 {
+			return nil, vals.err // §18.2.5: the value depends on the failed step
+		}
 		// The walk visits every node the checks above let through, so a
 		// missing entry means the walk is still in progress and has not
 		// reached this value: the rule computing it is reading it. That
 		// is the circularity XTDE3400 names -- a start-phase rule reading
 		// accumulator-before of its own node, or an end-phase rule reading
 		// accumulator-after of it.
-		return nil, fmt.Errorf(
+		return nil, accumCircularError{fmt.Sprintf(
 			"XTDE3400: accumulator %s is defined circularly: a rule reads "+
-				"the value of %s(%q) it is computing", def.name.Lexical(), fname, lex)
+				"the value of %s(%q) it is computing", def.name.Lexical(), fname, lex)}
+	}
+	if vals.err != nil && errors.Is(vals.err, errAccumCircular) {
+		// XTDE3400 is the accumulator's, not a failed computation's
+		// (§18.2.5): every read raises it, as before lane L4 (error-3410a).
+		return nil, vals.err
 	}
 	return table[i], nil
 }
@@ -698,15 +805,16 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 // The correspondence is recorded for the whole subtree at once: a copy is deep
 // and the copies of the descendants have to answer as their originals did too.
 func (rt *runtime) noteCopiedAccumulators(orig, copy *xdm.Node) {
-	if rt.accumOrigin == nil {
+	if rt.accumOrigin == nil || copy == nil {
 		return
 	}
+	tbl := rt.accumOrigin.at(copy.Root())
 	var pair func(a, b *xdm.Node)
 	pair = func(a, b *xdm.Node) {
 		if a == nil || b == nil {
 			return
 		}
-		rt.accumOrigin[b] = a
+		tbl[b.Index()] = a
 		for ac, bc := a.FirstChild(), b.FirstChild(); ac != nil && bc != nil; ac, bc = ac.NextSibling(), bc.NextSibling() {
 			pair(ac, bc)
 		}
@@ -726,11 +834,51 @@ func (rt *runtime) noteCopiedAccumulators(orig, copy *xdm.Node) {
 // resolve, so the table would only hold every copied node, and its original,
 // alive until the transform ends. That was 830 MB of peak heap for a streamed
 // 10 MB input taking copy-of(.) of each record.
-func newAccumOrigin(s *Stylesheet) map[*xdm.Node]*xdm.Node {
+func newAccumOrigin(s *Stylesheet) *copyTable[*xdm.Node] {
 	if len(s.accumulators) == 0 {
 		return nil
 	}
-	return map[*xdm.Node]*xdm.Node{}
+	return &copyTable[*xdm.Node]{}
+}
+
+// copyTable maps the nodes of copies to what they answer accumulators with
+// (accumOrigin, accumHeld). A copy's entries are held weakly, under the root
+// of its tree: they live while some node of that tree does, so a copy the
+// stylesheet drops frees its entries and what they hold -- its original, or
+// the values recorded for it. Keyed by the node, the table kept every copy
+// and its original until the transform ended: 1.4-1.6x the tree's memory for
+// a stream taking a copy per record (audit A2-2). Entries are by Index,
+// which is stable while the tree is; dead roots are swept as the table grows.
+type copyTable[V any] struct {
+	m       map[weak.Pointer[xdm.Node]]map[int]V
+	sweepAt int
+}
+
+// at is the table of the tree whose root is root, made if need be.
+func (t *copyTable[V]) at(root *xdm.Node) map[int]V {
+	k := weak.Make(root)
+	if e := t.m[k]; e != nil {
+		return e
+	}
+	if len(t.m) >= t.sweepAt {
+		maps.DeleteFunc(t.m, func(k weak.Pointer[xdm.Node], _ map[int]V) bool { return k.Value() == nil })
+		t.sweepAt = 2*len(t.m) + 64
+	}
+	if t.m == nil {
+		t.m = map[weak.Pointer[xdm.Node]]map[int]V{}
+	}
+	e := map[int]V{}
+	t.m[k] = e
+	return e
+}
+
+// get is n's entry.
+func (t *copyTable[V]) get(n *xdm.Node) (v V, ok bool) {
+	if t == nil || len(t.m) == 0 || n.Index() < 0 {
+		return v, false
+	}
+	v, ok = t.m[weak.Make(n.Root())][n.Index()]
+	return v, ok
 }
 
 // accumulatorOrigin follows a node back to the node it was copied from, or
@@ -752,7 +900,7 @@ func (rt *runtime) accumulatorOrigin(n *xdm.Node) *xdm.Node {
 	seen := map[*xdm.Node]bool{}
 	for !seen[n] {
 		seen[n] = true
-		orig, ok := rt.accumOrigin[n]
+		orig, ok := rt.accumOrigin.get(n)
 		if !ok {
 			return n
 		}

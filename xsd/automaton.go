@@ -1,7 +1,10 @@
 package xsd
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
+	"sort"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -37,14 +40,33 @@ type contentModel struct {
 	// Options.MaxContentModelPositions compiles every model — at load and
 	// at validation alike — under the budget it was loaded with.
 	maxPositions int
+	// maxFollow, when positive, bounds every follow set while the model is
+	// being built. Zero means unbounded; see compileForChecks.
+	maxFollow int
+	// maxEdges, when positive, bounds the follow representation the build
+	// stores — pieces, plus the members each one holds that are not shared
+	// with another — and size is how much it has stored so far.
+	maxEdges, size int
+	// shared leaves follow unmaterialized: the matcher reads pieces only.
+	// It is the NewSequenceMatcher build, where a follow set may be as wide
+	// as the model and materializing it is what makes a repeated choice
+	// quadratic.
+	shared bool
 
 	// positions are the leaf terms, one per occurrence in the tree.
 	positions []*position
 
 	// first are the positions that may begin a match.
 	first []int
-	// follow[i] are the positions that may follow position i.
+	// follow[i] are the positions that may follow position i, in the order
+	// their edges were laid down. It is the union of pieces[i], and is nil
+	// for a shared model.
 	follow [][]int
+	// pieces[i] is follow[i] as disjoint runs, sorted by first member. A
+	// run is often a whole first set shared with every other position
+	// that loops back to it, which is what keeps (a1|...|an)* at O(n)
+	// rather than n follow sets of n.
+	pieces [][]piece
 	// last are the positions at which a match may end.
 	last []int
 
@@ -63,28 +85,46 @@ type contentModel struct {
 	scopeFirst []map[int]bool
 	scopeLast  []map[int]bool
 
-	// scopeInner[c] are the follow edges that lie *inside* one repetition
-	// of counter c: every edge the compiler added while building c's
-	// subtree, before it added c's own loop-back edges.
-	//
-	// scopeFirst and scopeLast alone cannot tell a restart from a
-	// continuation once every member of a repeated group is optional. A
-	// <sequence maxOccurs="3"> of three optional particles has all three
-	// positions in both sets, so the plain forward step a -> any inside
-	// one iteration reads as a restart and charges the outer counter.
-	// The edge that carries a step forward through the sequence is a
-	// different edge from the one that wraps around, even though the two
-	// can join the same pair of positions, so the edges are what has to be
-	// recorded.
-	scopeInner []map[[2]int]bool
-
-	// edges is the append-only log of follow edges, so that build can tell
-	// which ones a subtree contributed: the ones added since it started.
-	edges [][2]int
-
 	// active is the set of model groups on the path currently being built,
 	// used to detect a group that reaches itself.
 	active map[*ModelGroup]bool
+
+	// emptyGroup holds the fragment of each group whose expansion added no
+	// position. Group references share their definition's *ModelGroup, so
+	// a DAG of n groups each referencing the next twice is reached by
+	// 2^(n-1) paths; a group with positions pays maxPositions on every
+	// visit, but one without them would be expanded once per path for
+	// free. Its fragment has empty first and last sets and depends only on
+	// the group, so the first expansion answers every later visit.
+	emptyGroup map[*ModelGroup]frag
+}
+
+// A piece is one run of a position's follow set: positions that may follow it,
+// ascending, all laid down by one edge-laying step and so inside one
+// repetition of the same scope.
+//
+// The scope is the counter the edges lie *inside* one repetition of: the
+// innermost scope whose subtree was being built when they were laid down. A
+// loop-back laid as c's own wraparound belongs to c's parent, not to c, and an
+// edge outside every scope has -1.
+//
+// Only the innermost scope is stored. An edge joins two positions that both lie
+// in that scope, so the innermost scope the two positions share — the only one
+// the runtime ever asks about — is that scope exactly when the edge is inside
+// it. Storing the edge once per enclosing scope instead held d copies of the
+// same edges for a chain of d nested repeated group references: 6.5M entries
+// and 216 MB for a 14.6 KB schema.
+//
+// scopeFirst and scopeLast alone cannot tell a restart from a continuation once
+// every member of a repeated group is optional. A <sequence maxOccurs="3"> of
+// three optional particles has all three positions in both sets, so the plain
+// forward step a -> any inside one iteration reads as a restart and charges the
+// outer counter. The edge that carries a step forward through the sequence is a
+// different edge from the one that wraps around, even though the two can join
+// the same pair of positions, so the edges are what has to be recorded.
+type piece struct {
+	to    []int
+	scope int
 }
 
 // A position is one occurrence of an element declaration or wildcard in a
@@ -132,11 +172,53 @@ type counter struct {
 // DefaultMaxContentModelPositions. Callers holding a Schema pass its retained
 // budget, so a model validates under the same limit its constraints were
 // checked under — see Schema.maxPositions.
+//
+// Every follow set is bounded by maxUPAStateWidth, the width checkUPA already
+// refuses at load, so a schema that loaded never reaches it. Validation calls
+// compileForChecks with the schema's retained Options.MaxUPAStateWidth
+// instead, for the same reason it passes the retained position budget.
 func compileContentModel(p *Particle, limit int) (*contentModel, error) {
+	return compileForChecks(p, limit, maxUPAStateWidth, 0)
+}
+
+// maxSequenceMatcherEdges bounds the follow representation a
+// NewSequenceMatcher build stores: one per piece, plus each member a piece
+// holds, counted once for a first set the pieces share.
+//
+// The DTD validator compiles through NewSequenceMatcher, and a DTD has no UPA
+// gate, so the width bound XSD models live under would refuse legitimate DTDs:
+// (a1|a2|...|a300)* has a follow width of 300, and TEI and DocBook have choices
+// that wide. What has to be bounded is the total. <!ELEMENT r (a?,a?,...)> of
+// 8192 members otherwise built ~n²/2 edges — 36 s and 4 GB for a 24 KB
+// internal subset — before the position budget refused it, and again for
+// every <r/>. Its follow sets are distinct suffixes, one piece per edge, so at
+// 1<<20 it is still refused at about 1450 positions. A repeated choice is not:
+// every alternative shares one piece, so (a1|...|an)* stores about 2n and
+// compiles at any width the position budget admits.
+//
+// Every piece or copied member is one the old explicit build also stored as an
+// edge, so the bound refuses nothing that build admitted.
+const maxSequenceMatcherEdges = 1 << 20
+
+// compileForChecks is compileContentModel with every follow set bounded by
+// maxFollow and the follow representation by maxEdges (zero: unbounded; both
+// unbounded only in tests). A positive maxEdges also builds the model shared,
+// as NewSequenceMatcher wants it: follow is not materialized, and the matcher
+// walks pieces. maxFollow applies only to a materialized model.
+//
+// checkUPA refuses any state wider than maxUPAStateWidth, and a dense model —
+// a sequence of n optional elements — has follow sets that wide long before
+// its positions run out: building it in full costs quadratic edges and memory
+// (229 MB for n=2048) only for the width gate to refuse it in microseconds.
+// Bounding the build at the same width stops at the first follow set the gate
+// would refuse, so the refusal costs what the gate allows rather than what
+// the model would.
+func compileForChecks(p *Particle, limit, maxFollow, maxEdges int) (*contentModel, error) {
 	if limit <= 0 {
 		limit = maxPositions
 	}
-	m := &contentModel{active: map[*ModelGroup]bool{}, maxPositions: limit}
+	m := &contentModel{active: map[*ModelGroup]bool{}, maxPositions: limit, maxFollow: maxFollow,
+		maxEdges: maxEdges, shared: maxEdges > 0}
 	if p == nil {
 		m.nullable = true
 		return m, nil
@@ -148,10 +230,12 @@ func compileContentModel(p *Particle, limit int) (*contentModel, error) {
 	m.first = f.first
 	m.last = f.last
 	m.nullable = f.nullable
+	// Pieces are disjoint runs, so ordering them by first member is what
+	// lets innerEdge find the one run that can hold a target.
+	for _, ps := range m.pieces {
+		slices.SortFunc(ps, func(a, b piece) int { return cmp.Compare(a.to[0], b.to[0]) })
+	}
 	m.bindSiblings()
-	// The log has served its purpose; scopeInner holds what the runtime
-	// needs, and a model is kept for the lifetime of the schema.
-	m.edges = nil
 	return m, nil
 }
 
@@ -197,10 +281,16 @@ func (m *contentModel) bindSiblings() {
 
 // frag is the Glushkov data for one subtree: the positions that may start it,
 // the positions that may end it, and whether it matches nothing.
+//
+// first is ascending: positions are numbered in the order the walk creates
+// them, and each compositor lists its children's first sets in that order.
 type frag struct {
 	first    []int
 	last     []int
 	nullable bool
+	// looped records that every last -> first edge is already laid down,
+	// so a repetition wrapped directly around this subtree adds nothing.
+	looped bool
 }
 
 // maxPositions is the default bound on the automaton size, used when no
@@ -251,13 +341,10 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		})
 		m.scopeFirst = append(m.scopeFirst, map[int]bool{})
 		m.scopeLast = append(m.scopeLast, map[int]bool{})
-		m.scopeInner = append(m.scopeInner, map[[2]int]bool{})
 		scope = len(m.counters) - 1
 	}
-	// Every edge added from here until the loop-back edges below lies
-	// within one repetition of scope.
-	mark := len(m.edges)
 
+	posStart := len(m.positions)
 	var inner frag
 	var err error
 	switch t := p.Term.(type) {
@@ -272,7 +359,7 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 			particle: p,
 			counters: counterChain(m.counters, scope),
 		})
-		m.follow = append(m.follow, nil)
+		m.newPosition()
 		inner = frag{first: []int{idx}, last: []int{idx}}
 
 	case *ModelGroup:
@@ -293,11 +380,28 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 				"content model is recursive: a model group reaches itself, " +
 					"which no finite automaton can describe")
 		}
+		if f, ok := m.emptyGroup[t]; ok {
+			inner = f
+			break
+		}
+		posBefore, ctrBefore := len(m.positions), len(m.counters)
 		m.active[t] = true
 		inner, err = m.buildGroup(t, scope)
 		delete(m.active, t)
 		if err != nil {
 			return frag{}, err
+		}
+		if len(m.positions) == posBefore {
+			// No position refers to a counter created in this
+			// subtree and no edge was laid in it, so its counters
+			// are dropped rather than retained once per path.
+			m.counters = m.counters[:ctrBefore]
+			m.scopeFirst = m.scopeFirst[:ctrBefore]
+			m.scopeLast = m.scopeLast[:ctrBefore]
+			if m.emptyGroup == nil {
+				m.emptyGroup = map[*ModelGroup]frag{}
+			}
+			m.emptyGroup[t] = inner
 		}
 
 	case nil:
@@ -324,19 +428,67 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		for _, l := range inner.last {
 			m.scopeLast[scope][l] = true
 		}
-		for _, e := range m.edges[mark:] {
-			m.scopeInner[scope][e] = true
+		if scope == len(m.counters)-1 && m.decisionFree(scope) {
+			m.dropCounter(scope, enclosing, posStart)
+			scope = enclosing
 		}
 	}
-	if p.MaxOccurs == Unbounded || p.MaxOccurs > 1 {
-		for _, l := range inner.last {
-			m.addFollow(l, inner.first)
+	if (p.MaxOccurs == Unbounded || p.MaxOccurs > 1) && !inner.looped {
+		// The loop-back edges wrap around scope, so they lie inside
+		// one repetition of the enclosing scope, not of this one.
+		//
+		// They are skipped when the body already loops: a chain of d
+		// repeated group references each wrapping the last re-lays the
+		// same |last| x |first| edges at every level, a dedup scan per
+		// edge, for nothing.
+		inner.looped = true
+		if err := m.addFollow(inner.last, inner.first, enclosing, true); err != nil {
+			return frag{}, err
 		}
 	}
 	if p.MinOccurs == 0 {
 		inner.nullable = true
 	}
 	return inner, nil
+}
+
+// decisionFree reports whether counter c, the innermost one, can never change
+// what the runtime decides, so the positions and edges alone say everything.
+//
+// A count is set to 1 on entering a scope and only grows, so a minimum of 0
+// or 1 is met whenever it is checked. A maximum of 1 is never repeated past,
+// and an unbounded maximum caps the count at min+1, which every reading meets
+// alike. What the counter could still decide is when a repetition restarts
+// the scopes nested in it, so it is decision-free only with none inside it:
+// the caller asks only for the last counter created.
+//
+// This is what keeps a? and a* off the count vector. Every such particle had
+// a counter of its own, so no two positions of (a?|a?|...|a?)* or of a dense
+// (a?,a?,...,a?) shared one, positionClasses could merge none of them, and
+// each child cost live states x follow width x vector length.
+func (m *contentModel) decisionFree(c int) bool {
+	k := m.counters[c]
+	return k.min <= 1 && (k.max == 1 || k.max == Unbounded)
+}
+
+// dropCounter removes counter c, the last one, as though its particle had
+// never had one: positions created from posStart on leave it off their chains,
+// and the edges laid inside one of its repetitions lie inside enclosing's.
+func (m *contentModel) dropCounter(c, enclosing, posStart int) {
+	for p := posStart; p < len(m.positions); p++ {
+		chain := m.positions[p].counters
+		if len(chain) > 0 && chain[len(chain)-1] == c {
+			m.positions[p].counters = chain[:len(chain)-1]
+		}
+		for i := range m.pieces[p] {
+			if m.pieces[p][i].scope == c {
+				m.pieces[p][i].scope = enclosing
+			}
+		}
+	}
+	m.counters = m.counters[:c]
+	m.scopeFirst = m.scopeFirst[:c]
+	m.scopeLast = m.scopeLast[:c]
 }
 
 // counterChain returns the counter indices containing a scope, outermost first.
@@ -386,9 +538,11 @@ func (m *contentModel) buildSequence(g *ModelGroup, scope int) (frag, error) {
 			return frag{}, err
 		}
 		// Everything that could end the sequence so far may be followed
-		// by anything that starts this particle.
-		for _, l := range out.last {
-			m.addFollow(l, f.first)
+		// by anything that starts this particle. No dedup: f's
+		// positions were created by this particle, so no edge into them
+		// from an earlier one exists yet.
+		if err := m.addFollow(out.last, f.first, scope, false); err != nil {
+			return frag{}, err
 		}
 		if out.nullable {
 			out.first = append(out.first, f.first...)
@@ -399,6 +553,7 @@ func (m *contentModel) buildSequence(g *ModelGroup, scope int) (frag, error) {
 			out.last = append([]int(nil), f.last...)
 		}
 		out.nullable = out.nullable && f.nullable
+		out.looped = len(g.Particles) == 1 && f.looped
 	}
 	return out, nil
 }
@@ -419,6 +574,7 @@ func (m *contentModel) buildChoice(g *ModelGroup, scope int) (frag, error) {
 		out.first = append(out.first, f.first...)
 		out.last = append(out.last, f.last...)
 		out.nullable = out.nullable || f.nullable
+		out.looped = len(g.Particles) == 1 && f.looped
 	}
 	return out, nil
 }
@@ -444,7 +600,7 @@ func (m *contentModel) buildAll(g *ModelGroup, scope int) (frag, error) {
 			particle: p,
 			counters: counterChain(m.counters, scope),
 		})
-		m.follow = append(m.follow, nil)
+		m.newPosition()
 		out.first = append(out.first, idx)
 		out.last = append(out.last, idx)
 		if p.MinOccurs > 0 {
@@ -454,23 +610,115 @@ func (m *contentModel) buildAll(g *ModelGroup, scope int) (frag, error) {
 	return out, nil
 }
 
-// addFollow records that every position in to may follow from.
-func (m *contentModel) addFollow(from int, to []int) {
-	existing := m.follow[from]
-	for _, t := range to {
-		dup := false
-		for _, e := range existing {
-			if e == t {
-				dup = true
-				break
+// newPosition makes room for the follow data of the position just appended.
+func (m *contentModel) newPosition() {
+	m.pieces = append(m.pieces, nil)
+	if !m.shared {
+		m.follow = append(m.follow, nil)
+	}
+}
+
+// addFollow records that every position in to may follow each position in
+// from, inside one repetition of scope. It refuses a follow set wider than
+// m.maxFollow, or a representation past m.maxEdges, when those are set.
+//
+// A position whose follow set holds nothing of to yet gets to itself as a
+// piece, shared with every other such position and charged once.
+// That is the whole saving: every last position of a repeated choice of n
+// loops back to the same first set, and copying it into each of them is n².
+//
+// dedup is needed only for loop-back edges, the one place an edge can be laid
+// twice, and it costs no scan of the existing set. Glushkov first sets nest:
+// to, a loop-back's first set, meets the positions of any subtree inside it in
+// either that subtree's whole first set or nothing. Every piece a position
+// already holds is a run of the first set of a subtree inside to, and spans
+// only that subtree's positions, so the members of to that fall within an
+// existing piece's span are exactly the duplicates, and the rest are new. They
+// are split into runs at every existing span, not just the ones that remove a
+// member, so a run never straddles another piece and innerEdge can find a
+// target's run by its first member. A run short of the whole set is copied:
+// sharing it would keep the whole set alive for a few members, and copying
+// costs what the explicit build spent on the same edges.
+//
+// A duplicate keeps the scope it was first laid down in: a later copy can only
+// come from an enclosing scope's loop-back, which is further out.
+func (m *contentModel) addFollow(from []int, to []int, scope int, dedup bool) error {
+	set := to[:len(to):len(to)]
+	if len(set) == 0 {
+		return nil
+	}
+	charged := false
+	for _, l := range from {
+		var runs [][]int
+		if dedup {
+			runs = splitRuns(set, m.pieces[l])
+		} else {
+			runs = [][]int{set}
+		}
+		for _, r := range runs {
+			cost := 1
+			if len(r) < len(set) {
+				r = append([]int(nil), r...)
+				cost += len(r)
+			} else if !charged {
+				charged = true
+				cost += len(r)
+			}
+			if m.size += cost; m.maxEdges > 0 && m.size > m.maxEdges {
+				return fmt.Errorf(
+					"content model has more than %d follow entries", m.maxEdges)
+			}
+			m.pieces[l] = append(m.pieces[l], piece{to: r, scope: scope})
+			if m.shared {
+				continue
+			}
+			m.follow[l] = append(m.follow[l], r...)
+			if m.maxFollow > 0 && len(m.follow[l]) > m.maxFollow {
+				return fmt.Errorf(
+					"a state of the content model has more than %d competing positions",
+					m.maxFollow)
 			}
 		}
-		if !dup {
-			existing = append(existing, t)
-		}
-		m.edges = append(m.edges, [2]int{from, t})
 	}
-	m.follow[from] = existing
+	return nil
+}
+
+// splitRuns returns the runs of set, ascending, that lie outside the span of
+// every existing piece, split at each one.
+func splitRuns(set []int, existing []piece) [][]int {
+	if len(existing) == 0 {
+		return [][]int{set}
+	}
+	cuts := make([][2]int, len(existing))
+	for i, p := range existing {
+		cuts[i] = [2]int{sort.SearchInts(set, p.to[0]), sort.SearchInts(set, p.to[len(p.to)-1]+1)}
+	}
+	slices.SortFunc(cuts, func(a, b [2]int) int { return cmp.Compare(a[0], b[0]) })
+	var out [][]int
+	at := 0
+	for _, c := range cuts {
+		if c[0] > at {
+			out = append(out, set[at:c[0]])
+		}
+		at = max(at, c[1])
+	}
+	if at < len(set) {
+		out = append(out, set[at:])
+	}
+	return out
+}
+
+// innerEdge reports whether the edge from -> to was laid down inside one
+// repetition of counter c. c must be the innermost counter the two positions
+// share; see piece.
+func (m *contentModel) innerEdge(c, from, to int) bool {
+	ps := m.pieces[from]
+	i := sort.Search(len(ps), func(i int) bool { return ps[i].to[0] > to }) - 1
+	if i < 0 || ps[i].scope != c {
+		return false
+	}
+	_, ok := slices.BinarySearch(ps[i].to, to)
+	return ok
 }
 
 // matches reports whether a position's term accepts an element name.

@@ -1,6 +1,6 @@
 # XQuery
 
-XQuery 3.1, measured at **100.00%** of the W3C QT3 suite (30,516 of 30,517 in
+XQuery 3.1, measured at **100.00%** of the W3C QT3 suite (30,529 of 30,530 in
 scope). That percentage fell from 99.96% when `import schema` was implemented:
 416 previously-skipped cases entered the denominator and 315 of them pass, so
 the passing count rose by 315 while the rate fell. No case that passed before
@@ -84,6 +84,11 @@ test harness serialize. A parameter document named by
 `output:parameter-document` is held to the same schema through
 `xslt.ApplyParameterDocument`, with `SEPM0017` for a bad value and `SEPM0019`
 for a parameter given twice; `fn:serialize` uses the same check.
+
+`html-version`'s default, which XQuery 3.1 Appendix D leaves
+implementation-defined, is 5.0 for the html method, the same as `xsl:output`'s
+(see [options](options.md#xsloutput-the-default-html-version)); the xhtml
+method keeps XHTML 1.0 rules unless `html-version` is given.
 
 ## Querying a document
 
@@ -198,24 +203,29 @@ xquery version "3.0"; declare option myopt "v"; true()
 
 The engine still *implements* 3.1 almost everywhere. What the recorded version
 buys is that the places where the versions are known to disagree can ask, and
-three do:
+these do:
 
-| Rule | 1.0 | 3.0 and later |
-| --- | --- | --- |
-| Unprefixed `declare option` name (§4.16 / §4.19) | `XPST0081` | legal, ignored |
-| Cast target naming a type not in scope (§3.13.2) | `XPST0051` | `XQST0052` |
-| Variable circularity through a function body (§4.14 / §4.16) | `XQST0054` (static) | `XQDY0054` (dynamic) |
+| Rule | 1.0 | 3.0 | 3.1 |
+| --- | --- | --- | --- |
+| Unprefixed `declare option` name (§4.16 / §4.19) | `XPST0081` | legal, ignored | legal, ignored |
+| Cast target naming a type not in scope (§3.13.2) | `XPST0051` | `XQST0052` | `XQST0052` |
+| Variable circularity through a function body (§4.14 / §4.16) | `XQST0054` (static) | `XQDY0054` (dynamic) | `XQDY0054` (dynamic) |
+| Empty `ordered {}` / `unordered {}` (§3.15) | `XPST0003` | `XPST0003` | the empty sequence |
+| Unprefixed pragma name, `(#name#)` (§3.22) | `XPST0081` | `XPST0081` | a pragma in no namespace, ignored |
+| Bare `namespace-node()` step (§3.3.2.1) | `XPST0017` | `XQST0134` | `XQST0134` |
 
 The declared version also selects the expression language each expression is
 compiled at, since XQuery 1.0 is defined over XPath 2.0, 3.0 over XPath 3.0 and
 3.1 over XPath 3.1.
 
-Everything else remains judged by 3.1's rules whatever the module declares —
-including the empty operand of `ordered {}` and `unordered {}`, an unprefixed
-pragma name, and `XQST0134` for a bare `namespace-node()` step. Those are
-accepted at every version rather than refused at the earlier ones. This is a
-permissive divergence: a 1.0 module that a conforming 1.0 processor would
-reject is accepted here, but no module is given a wrong *answer*.
+The last three rows are the ones the QT3 suite pairs across versions over
+identical source (`K-OrderExpr-1`/`-1a`, `K-ExtensionExpression-4`/`-4a`,
+`Axes127`/`Axes128`). Everything else is judged by 3.1's rules whatever the
+module declares. That includes the other places 3.1 made an `EnclosedExpr`'s
+expression optional (a function body, `text {}`, `<a>{}</a>`), and a
+`Q{}name` pragma. A 1.0 or 3.0 module that writes one of those is accepted
+where a processor for that version would refuse it. This is a permissive
+divergence: such a module is accepted, but no module gets a wrong *answer*.
 
 ## Importing modules
 
@@ -259,7 +269,10 @@ Writing one that reads the filesystem or the network is a deliberate grant to
 whoever wrote the query. See [security.md](security.md).
 
 A module may import its own target namespace; §4.12 allows it in as many
-words, and the loader treats the revisit like any other cycle.
+words, and the loader treats the revisit like any other cycle. The import may
+reuse the module declaration's own prefix, since §4.12 makes a prefix clash
+`XQST0033` only against "a module declaration with a different target
+namespace".
 
 ### Loading a module at run time
 
@@ -340,6 +353,27 @@ functions and variables, and those are resolved late.)
 The facets the schema author wrote are applied, not merely the base type: a
 `hatsize` restricted to 4–12 makes `99 castable as h:hatsize` false.
 
+A schema document given as `Source` is read as **XSD 1.1**. XQuery 3.1
+Appendix D makes it implementation-defined "whether the type system is based
+on [XML Schema 1.0] or [XML Schema 1.1]", and this engine's is 1.1, so an
+imported schema may name `xs:dayTimeDuration`, `xs:dateTimeStamp` and the other
+1.1 built-ins, and its 1.1 constructs are applied. A schema registered as
+`Components` keeps the version it was assembled with.
+
+An imported schema that parses but is not a valid schema is a static
+`XQST0012` (XQuery 3.1 §4.11); `XQST0059` is kept for a schema that cannot be
+found or is not well-formed. Over several location hints, an invalid schema
+found by one hint is the error when no other hint answers.
+
+A validated node copied into a constructor follows the **construction mode**
+(§4.6). Under `preserve`, the default, the copy keeps its annotation, so
+`<w>{validate { <h:hat>8</h:hat> }}</w>/* instance of element(*, h:hatsize)`
+is true. Under `declare construction strip` (or `Construction: StripTypes`)
+the copied elements become `xs:untyped` and their attributes
+`xs:untypedAtomic`, and the node that was copied keeps its type.
+`schema-element(E)` matches a validated child accepted through `E`'s
+substitution group.
+
 ### Casting to a schema type
 
 An imported simple type is a **cast target** and a **constructor function**,
@@ -374,7 +408,9 @@ is **annotated**, so `validate strict { <hat>8</hat> } instance of element(*,
 hatsize)` is true. Strict assessment of an element the schema does not declare
 at top level is `XQDY0084`; an element that is declared and found invalid is
 `XQDY0027`. A query that imported no schema is unchanged: `validate strict` is
-`XQDY0084` and `validate lax` is a skipped assessment that yields its operand.
+`XQDY0084` and `validate lax` is a skipped assessment that yields a copy of its
+operand, annotated only from an `xsi:type` naming an XSD built-in; the input
+tree is not changed.
 
 A `Schema` may carry already-assembled `Components` (an `*xsd.Schema` from
 `xsd.Load`, or from a stylesheet's or another query's `Schema()`) instead of `Source`, which is
@@ -386,7 +422,8 @@ twice and risking the two disagreeing.
 imported schema's own `xs:include` and `xs:import`, so an imported schema can
 reach no further than the query's import was granted. `MaxSchemaBytes` bounds
 the total schema text one compilation reads, cumulatively across every import,
-and exceeding it **fails** the compilation with an error wrapping
+the include and import closure of each, and every library module, and
+exceeding it **fails** the compilation with an error wrapping
 `xdm.ErrResourceLimit` rather than compiling against a truncated schema.
 
 **Not implemented on this path.** Automatic validation of the input: a source

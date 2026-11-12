@@ -18,9 +18,9 @@ import (
 // processor to evaluate the body in a streamed manner, which is a statement
 // about memory rather than about the answer — a stylesheet that is
 // guaranteed-streamable produces the same result either way, and one that is
-// not is explicitly left to the processor. This engine does not stream, so it
-// reads the document and evaluates the body, which is what a conforming
-// non-streaming processor does with streamable="yes".
+// not is explicitly left to the processor. A body the streamed core does not
+// take (streamexec.go) reads the document and evaluates the body here, which
+// is what a conforming non-streaming processor does with streamable="yes".
 //
 // use-accumulators, by contrast, is enforced. It is not a statement about
 // memory: 18.2.2 makes it the set of accumulators *applicable* to the document
@@ -42,6 +42,9 @@ type sourceDocumentInstr struct {
 	// to the document this instruction reads. Nil means the attribute was
 	// absent, which leaves the tree unrestricted.
 	accums *modeAccumulators
+	// pkg is the package the instruction is in (compilePackage), whose
+	// accumulators a streamed run computes (streamtrust_pkguse.go).
+	pkg int
 	// baseURI is the base URI of the xsl:source-document element itself,
 	// which is the stylesheet module's own unless an xml:base on the element
 	// or an ancestor overrides it. 18.1 resolves @href "as for the doc
@@ -49,9 +52,12 @@ type sourceDocumentInstr struct {
 	// expression -- a per-element property, not a per-module one. Taking the
 	// module's base instead ignored xml:base, which non-stream-004 catches.
 	baseURI string
-	// bursts is the plan for running the body without building the
-	// document, when it qualifies; see streamburst.go.
-	bursts *burstPlan
+	// stream is the plan for running the body without building the
+	// document, when it qualifies; see streamexec.go.
+	stream *streamExec
+	// fragOK says the body may run on a copy of a fragment's element
+	// (streamfrag.go).
+	fragOK bool
 }
 
 func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
@@ -69,30 +75,59 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	if err != nil {
 		return nil, err
 	}
-	var plan *burstPlan
+	var core *streamExec
 	if isYes(n.AttrValue("streamable")) {
 		// A module other than the principal one, or a principal that pulls
-		// in others, is not the whole stylesheet.
-		plan = planBursts(n, n.Root() != c.sheet.source)
+		// in others, is not the whole stylesheet (streamtrust.go).
+		shared := n.Root() != c.sheet.source && !c.inOwnPkg(n) // streamtrust_pkguse.go
+		var why string
+		var xm []*xdm.Node
+		if !shared {
+			xm = c.crossModules() // streamtrust_xmod_l7.go
+		}
+		if core, why = planStream(&c.streamTabs, n, shared, xm...); core == nil && traceCore != nil && why != "verdict not trusted" {
+			traceCore(n, why)
+		}
+		if core != nil && c.streamMayAlias(false) { // streamalias_l7.go
+			core = nil
+			if traceCore != nil {
+				traceCore(n, "a node of the stream may meet the tree's own node for it")
+			}
+		}
 	}
-	outer := c.burst
-	c.burst = plan
+	outer := c.stream
+	c.stream = core
 	body, err := c.compileSequence(n, n)
-	c.burst = outer
+	c.stream = outer
 	if err != nil {
 		return nil, err
 	}
-	if plan != nil && plan.instr == nil {
-		plan = nil // the loop was not compiled (use-when)
+	link := false
+	if core != nil {
+		why := core.ready()
+		if link = why == "" && core.hasApply(); !link && traceCore != nil {
+			traceCore(n, why)
+		}
+		if why != "" {
+			core = nil
+		}
 	}
 	instr := &sourceDocumentInstr{href: href, validation: spec, body: body,
-		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI, bursts: plan}
+		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI, stream: core, pkg: compilePackage}
+	instr.fragOK = core != nil && fragmentBody(n, &c.streamTabs) // streamfrag.go
+	if link {
+		// Its apply ops reach rules that may not have compiled yet.
+		c.streamLinks = append(c.streamLinks, streamLink{n, instr})
+	}
 	if n.Attr("", "use-accumulators") != nil {
 		accums, err := parseUseAccumulators(n)
 		if err != nil {
 			return nil, err
 		}
 		instr.accums = accums
+	}
+	if core != nil {
+		c.accumLinks = append(c.accumLinks, streamLink{n, instr})
 	}
 	return instr, nil
 }
@@ -102,11 +137,16 @@ func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
-	if i.bursts != nil {
-		if done, err := i.executeBursts(rt, out, href); done {
+	if i.stream != nil {
+		if done, err := i.executeStream(rt, out, href); done {
 			return err
 		}
 	}
+	return i.executeTree(rt, out, href)
+}
+
+// executeTree runs i on the tree of the document href names.
+func (i *sourceDocumentInstr) executeTree(rt *runtime, out *outputBuilder, href string) error {
 	root, err := i.load(rt, href)
 	if err != nil {
 		return err
@@ -122,6 +162,7 @@ func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		rt.treeAccums[root] = i.accums
 	}
 	sub := rt.withCurrent(root, 1, 1).clearCurrentRule()
+	sub.bursts = nil // an outer container's stream is not this document
 	return execSequence(i.body, sub, out)
 }
 

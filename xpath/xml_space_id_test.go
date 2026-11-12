@@ -13,6 +13,12 @@ import "testing"
 func TestIDUsesXMLWhitespaceOnly(t *testing.T) {
 	const nbsp = "\u00a0"
 	doc := `<?xml version="1.0"?>
+<!DOCTYPE r [
+  <!ATTLIST u id ID #IMPLIED>
+  <!ATTLIST w id ID #IMPLIED>
+  <!ATTLIST s idrefs IDREFS #IMPLIED>
+  <!ATTLIST v idrefs IDREFS #IMPLIED>
+]>
 <r>
   <x xml:id="a"/>
   <y xml:id="b"/>
@@ -46,5 +52,56 @@ func TestIDUsesXMLWhitespaceOnly(t *testing.T) {
 				t.Errorf("%s = %q, want %q", tc.expr, got, tc.want)
 			}
 		})
+	}
+}
+
+// F&O §14.5.2 ignores a candidate IDREF that is not an NCName, so an ID
+// value that is not one is never found, whether xml:id or a DTD typed it
+// ID. The xml:id stays an ID (xml:id §4); it is the candidate that drops out.
+func TestIDIgnoresNonNCNameCandidates(t *testing.T) {
+	doc := `<?xml version="1.0"?>
+<!DOCTYPE r [<!ATTLIST u id ID #IMPLIED>]>
+<r><x xml:id="9z"/><u id="7q"/><y xml:id="ok"/></r>`
+	for _, tc := range []struct{ expr, want string }{
+		{"count(id('9z'))", "0"},
+		{"count(id('7q'))", "0"},
+		{"id('9z ok 7q')/name()", "y"},
+	} {
+		if got := evalStr(t, doc, tc.expr); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.expr, got, tc.want)
+		}
+	}
+}
+
+// F&O 3.1 §14.5.1 (fn:id) and §14.5.2 (fn:element-with-id): "If several
+// elements have the same ID value, then E is the one that is first in
+// document order." Only the first holder of a duplicated ID is returned;
+// fn:idref (§14.5.3) has no such rule and returns every referring node.
+func TestIDDuplicateValueReturnsFirst(t *testing.T) {
+	doc := `<?xml version="1.0"?>
+<!DOCTYPE r [
+  <!ATTLIST e id ID #IMPLIED>
+  <!ATTLIST s ref IDREF #IMPLIED>
+]>
+<r>
+  <e id="a" n="1"/>
+  <x xml:id="b" n="2"/>
+  <e id="a" n="3"/>
+  <x xml:id="a" n="4"/>
+  <e id="b" n="5"/>
+  <s ref="a"/>
+  <s ref="a"/>
+</r>`
+	for _, tc := range []struct{ expr, want string }{
+		{"id('a')/@n/string()", "1"},
+		{"id('a b')/@n/string()", "1,2"},
+		{"id(('b', 'a'))/@n/string()", "1,2"},
+		{"element-with-id('a')/@n/string()", "1"},
+		{"element-with-id('b a')/@n/string()", "1,2"},
+		{"count(idref('a'))", "2"},
+	} {
+		if got := evalStr(t, doc, tc.expr); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.expr, got, tc.want)
+		}
 	}
 }

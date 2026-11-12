@@ -151,6 +151,7 @@ func (c *compiler) compileText(value string, parent *xdm.Node) (Instruction, err
 		// resolved and there is nothing left to evaluate at run time.
 		return &textInstr{text: tmpl.literal}, nil
 	}
+	c.noteStreamAVT(parent, tmpl, newNSResolver(parent, ""))
 	return &textValueTemplateInstr{tmpl: tmpl}, nil
 }
 

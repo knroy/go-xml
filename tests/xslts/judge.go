@@ -586,6 +586,14 @@ func compareXMLText(serialised, want string, normalizeSpace bool) (bool, string)
 	// document, declaration included, so comparing the two directly reports
 	// every passing test as a mismatch against its own prologue.
 	got := stripDecl(serialised)
+	// So is the bare HTML5 doctype, which the html method writes before an
+	// html document element (Serialization 3.1 §7.4.6). assert-xml is about
+	// the result tree, and a document type declaration is not a node of it;
+	// left in, it is markup the wrapper below cannot parse, and the text
+	// fallback then reports a result-document-1301 whose tree matches.
+	if len(got) >= 15 && strings.EqualFold(got[:15], "<!DOCTYPE html>") {
+		got = strings.TrimSpace(got[15:])
+	}
 	// The expected value is stripped too. An expected result read from a
 	// file carries its own declaration, and comparing one prologue against
 	// the absence of another is not what the test asks.

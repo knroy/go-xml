@@ -16,7 +16,7 @@ import (
 // (a syntactic hole, closed by a spec rule), compile with its verdict marked
 // unverified (a declaration hole: the verdict rests on a declaration whose own
 // check gave up, or that another module can override), or compile with an
-// unknown verdict -- and none may reach the burst path. The "verified" rows
+// unknown verdict -- and none may reach the streamed path. The "verified" rows
 // are controls: the same declarations written so that their checks pass,
 // which must not be marked.
 func TestStreamTrustReproducers(t *testing.T) {
@@ -40,28 +40,33 @@ func TestStreamTrustReproducers(t *testing.T) {
 		main  string
 		in    string // the module holding the xsl:source-document, if not main
 	}{
-		// Declared-streamable functions whose bodies the check skipped.
-		{"F1 absorbing fn, where-populated body", "unverified", nil,
+		// Declared-streamable functions whose bodies the check skipped
+		// until M8 assessed bodies other than one xsl:sequence (§19.8.5):
+		// the three read a sibling or the last record, so are refused.
+		{"F1 absorbing fn, where-populated body", "XTSE3430", nil,
 			hdr + `<xsl:function name="f:g" streamability="absorbing"><xsl:param name="n" as="node()"/><xsl:where-populated><w><xsl:value-of select="$n/` + sib + `"/></w></xsl:where-populated></xsl:function>` +
 				sd(fe(`<v><xsl:copy-of select="f:g(.)"/></v>`)) + end, ""},
-		{"F1b absorbing fn, two-instruction body", "unverified", nil,
+		{"F1b absorbing fn, two-instruction body", "XTSE3430", nil,
 			hdr + `<xsl:function name="f:g" streamability="absorbing" as="xs:string"><xsl:param name="n" as="node()"/><xsl:variable name="v" select="1"/><xsl:sequence select="string($n/` + sib + `)"/></xsl:function>` +
 				sd(fe(`<v><xsl:value-of select="f:g(.)"/></v>`)) + end, ""},
-		{"F1c inspection fn, choose body", "unverified", nil,
+		{"F1c inspection fn, choose body", "XTSE3430", nil,
 			hdr + `<xsl:function name="f:g" streamability="inspection" as="xs:string"><xsl:param name="n" as="node()"/><xsl:choose><xsl:when test="true()"><xsl:sequence select="string($n/../rec[last()]/@k)"/></xsl:when></xsl:choose></xsl:function>` +
+				sd(fe(`<v><xsl:value-of select="f:g(.)"/></v>`)) + end, ""},
+		{"F1e absorbing fn, unmodelled two-instruction body", "unverified", nil,
+			hdr + `<xsl:function name="f:g" streamability="absorbing" as="xs:string"><xsl:param name="n" as="node()"/><xsl:variable name="v" select="1"/><xsl:sequence select="(root($n), string($n/` + sib + `))[2]"/></xsl:function>` +
 				sd(fe(`<v><xsl:value-of select="f:g(.)"/></v>`)) + end, ""},
 		{"F1 control: absorbing fn, modelled body", "verified", nil,
 			hdr + `<xsl:function name="f:g" streamability="absorbing" as="xs:string"><xsl:param name="n" as="node()"/><xsl:sequence select="string($n/@k)"/></xsl:function>` +
 				sd(fe(`<v><xsl:value-of select="f:g(.)"/></v>`)) + end, ""},
 		// A streamable attribute set and accumulators whose checks gave up.
-		{"F1d streamable attribute set via concat/2", "unverified", nil,
-			hdr + `<xsl:attribute-set name="as" streamable="yes"><xsl:attribute name="a" select="concat(string(` + sib + `), '')"/></xsl:attribute-set>` +
+		{"F1d streamable attribute set via root(.)", "unverified", nil,
+			hdr + `<xsl:attribute-set name="as" streamable="yes"><xsl:attribute name="a" select="(root(.), string(` + sib + `))[2]"/></xsl:attribute-set>` +
 				sd(fe(`<v xsl:use-attribute-sets="as"/>`)) + end, ""},
 		{"F1d control: motionless attribute set", "verified", nil,
 			hdr + `<xsl:attribute-set name="as" streamable="yes"><xsl:attribute name="a" select="string(@k)"/></xsl:attribute-set>` +
 				sd(fe(`<v xsl:use-attribute-sets="as"/>`)) + end, ""},
 		{"F1e accumulator rule select via concat/2", "unverified", nil,
-			hdr + `<xsl:accumulator name="a" initial-value="''" streamable="yes"><xsl:accumulator-rule match="rec" select="concat(string(` + sib + `), '')"/></xsl:accumulator>` +
+			hdr + `<xsl:accumulator name="a" initial-value="''" streamable="yes"><xsl:accumulator-rule match="rec" select="(root(.), string(` + sib + `))[2]"/></xsl:accumulator>` +
 				sdAcc(fe(`<v><xsl:value-of select="accumulator-before('a')"/></v>`)) + end, ""},
 		{"A1 accumulator rule with a sequence constructor", "unverified", nil,
 			hdr + `<xsl:accumulator name="a" initial-value="''" streamable="yes"><xsl:accumulator-rule match="rec"><xsl:sequence select="string(` + sib + `)"/></xsl:accumulator-rule></xsl:accumulator>` +
@@ -88,9 +93,22 @@ func TestStreamTrustReproducers(t *testing.T) {
 		{"M3 control: comparison with a numeric literal, motionless", "verified", nil,
 			hdr + mode + `<xsl:template match="rec[@k = 3]" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
 		{"M4 rule pattern unknown", "unverified", nil,
-			hdr + mode + `<xsl:template match="rec[concat(` + sib + `, '') = '3']" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
+			hdr + mode + `<xsl:template match="rec[(root(.), ` + sib + `)[2] = '3']" mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
+		// root(.) itself is modelled since round SJ (the rule's context item
+		// type is U{element()}, §19.2), and is then climbing; root(head(.))
+		// stays unmodelled, a function call's static type not being inferred.
 		{"M5 rule body unknown", "unverified", nil,
-			hdr + mode + `<xsl:template match="rec" mode="s"><xsl:where-populated><v><xsl:value-of select="` + sib + `"/></v></xsl:where-populated></xsl:template>` + apply + end, ""},
+			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="(root(head(.)), string(` + sib + `))[2]"/></v></xsl:template>` + apply + end, ""},
+		// M8: a rule pattern may read a streamable accumulator
+		// (§19.8.9.2), and "." is a motionless pattern (§19.8.10).
+		{"M8 rule pattern reads a verified accumulator", "verified", nil,
+			hdr + `<xsl:accumulator name="a" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>` + mode +
+				`<xsl:template match="rec[accumulator-before('a') = 2]" mode="s"><hit k="{@k}"/></xsl:template>` + sdAcc(`<xsl:apply-templates select="doc/rec" mode="s"/>`) + end, ""},
+		{"M8 rule pattern reads an unverified accumulator", "unverified", nil,
+			hdr + `<xsl:accumulator name="a" initial-value="''" streamable="yes"><xsl:accumulator-rule match="rec" select="(root(.), string(` + sib + `))[2]"/></xsl:accumulator>` + mode +
+				`<xsl:template match="rec[accumulator-before('a') = '2']" mode="s"><hit k="{@k}"/></xsl:template>` + sdAcc(`<xsl:apply-templates select="doc/rec" mode="s"/>`) + end, ""},
+		{"M8 rule pattern . (verified; the planner does not take it)", "verified", nil,
+			hdr + mode + `<xsl:template match="." mode="s"><hit k="{@k}"/></xsl:template>` + apply + end, ""},
 		{"M5 control: grounded rule", "verified", nil,
 			hdr + mode + `<xsl:template match="rec" mode="s"><v><xsl:value-of select="@k"/></v></xsl:template>` + apply + end, ""},
 		// Another module can add rules or override declarations.
@@ -165,8 +183,18 @@ func TestStreamTrustReproducers(t *testing.T) {
 			if err != nil {
 				t.Fatalf("compile or run: %v", err)
 			}
-			if burstRuns != (tc.name == "control: record loop") {
-				t.Fatalf("burst path taken: %v", burstRuns)
+			// The record loop streams, and since M2 so do the controls that
+			// apply templates in a verified streamable mode; since M4 the
+			// motionless accumulator's control, since M5 the xsl:map control.
+			mustStream := tc.name == "control: record loop" || tc.name == "A1 control: motionless accumulator" ||
+				tc.name == "S1 control: xsl:map-entry with a grounded value" ||
+				strings.HasPrefix(tc.name, "M") && strings.Contains(tc.name, "control") ||
+				tc.name == "F1d control: motionless attribute set" || // since M6
+				tc.name == "F1 control: absorbing fn, modelled body" || // since G4: $n/@k is ./@k on the view
+				tc.name == "S3 control: literal serialization attributes" || // since G6: xsl:result-document
+				tc.name == "M8 rule pattern reads a verified accumulator" // since K2 2f6bca51: accumulator-before in a pattern's predicate
+			if burstRuns != mustStream {
+				t.Fatalf("streamed path taken: %v", burstRuns)
 			}
 			// The verdict, read as the burst gate reads it.
 			src := tc.main

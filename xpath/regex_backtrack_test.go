@@ -1,9 +1,14 @@
 package xpath
 
 import (
+	"errors"
+	"math"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // withBacktracking runs f with the switch on and restores it afterwards.
@@ -236,8 +241,8 @@ func TestBacktrackBudgetTerminates(t *testing.T) {
 		if bt.Err() == nil {
 			t.Fatalf("exhausting the budget returned %v with no error", got)
 		}
-		if !strings.Contains(bt.Err().Error(), "FORX0002") {
-			t.Errorf("got %v, want FORX0002", bt.Err())
+		if !strings.Contains(bt.Err().Error(), "XPDY0130") {
+			t.Errorf("got %v, want XPDY0130", bt.Err())
 		}
 	})
 }
@@ -250,8 +255,8 @@ func TestBacktrackBudgetSurfacesThroughFnMatches(t *testing.T) {
 		if err == nil {
 			t.Fatal("fn:matches answered an exponential pattern instead of failing")
 		}
-		if !strings.Contains(err.Error(), "FORX0002") {
-			t.Errorf("got %v, want FORX0002", err)
+		if !strings.Contains(err.Error(), "XPDY0130") {
+			t.Errorf("got %v, want XPDY0130", err)
 		}
 	})
 }
@@ -432,4 +437,90 @@ func TestBacktrackCaseInsensitive(t *testing.T) {
 			t.Error(`(a.*?)\1 with "i" should match "xAbaB"`)
 		}
 	})
+}
+
+// withBacktrackLimits runs f with the two process-wide limits set and restores
+// them afterwards. Like withBacktracking it cannot run in parallel.
+func withBacktrackLimits(t *testing.T, steps, depth int, f func()) {
+	t.Helper()
+	ps, pd := backtrackStepLimit.Load(), backtrackDepthLimit.Load()
+	SetBacktrackBudget(steps)
+	SetBacktrackMaxDepth(depth)
+	defer func() { backtrackStepLimit.Store(ps); backtrackDepthLimit.Store(pd) }()
+	f()
+}
+
+// TestBacktrackLimitsResolve pins what each setting of SetBacktrackBudget and
+// SetBacktrackMaxDepth resolves to: zero is today's default exactly, a
+// negative budget is unbounded, a negative depth is the default (a stack
+// overflow is fatal, so there is no unlimited depth), and a depth over the
+// ceiling is clamped to it.
+func TestBacktrackLimitsResolve(t *testing.T) {
+	for _, c := range []struct{ steps, depth, wantSteps, wantDepth int }{
+		{0, 0, backtrackBudget, backtrackMaxDepth},
+		{-1, -1, math.MaxInt, backtrackMaxDepth},
+		{1, 1, 1, 1},
+		{80_000_000, 100_000, 80_000_000, 100_000},
+		{math.MaxInt, math.MaxInt, math.MaxInt, backtrackDepthCeiling},
+		{0, backtrackDepthCeiling + 1, backtrackBudget, backtrackDepthCeiling},
+	} {
+		withBacktrackLimits(t, c.steps, c.depth, func() {
+			if s, d := backtrackLimits(); s != c.wantSteps || d != c.wantDepth {
+				t.Errorf("SetBacktrackBudget(%d), SetBacktrackMaxDepth(%d): got (%d, %d), want (%d, %d)",
+					c.steps, c.depth, s, d, c.wantSteps, c.wantDepth)
+			}
+		})
+	}
+}
+
+// TestBacktrackLimitsTakeEffect checks that both settings reach a match
+// through fn:matches, lowered and raised: a 30,000-character subject under
+// ".*" is past the default depth (about 25,000 characters), so it is refused
+// by default and decided once the depth is raised, and a match the default
+// budget finishes is refused under a budget of ten steps.
+func TestBacktrackLimitsTakeEffect(t *testing.T) {
+	long := `matches('ab` + strings.Repeat("c", 30_000) + `a', '(a*)b.*\1')`
+	short := `matches('aabaa', '(a*)b\1')`
+	withBacktracking(t, func() {
+		withBacktrackLimits(t, 0, 0, func() {
+			if _, err := evalString(t, long); err == nil || !strings.Contains(err.Error(), "XPDY0130") {
+				t.Errorf("default depth: got %v, want XPDY0130", err)
+			}
+			if got, err := evalString(t, short); err != nil || got != "true" {
+				t.Errorf("default budget: got %q, %v, want true", got, err)
+			}
+		})
+		withBacktrackLimits(t, 0, 100_000, func() {
+			if got, err := evalString(t, long); err != nil || got != "true" {
+				t.Errorf("raised depth: got %q, %v, want true", got, err)
+			}
+		})
+		withBacktrackLimits(t, 10, 0, func() {
+			if _, err := evalString(t, short); err == nil || !strings.Contains(err.Error(), "XPDY0130") {
+				t.Errorf("lowered budget: got %v, want XPDY0130", err)
+			}
+		})
+	})
+}
+
+// btParser recursed once per group and counted only capturing ones, so "(?:"
+// nested deep enough overflowed the goroutine stack while parsing: fatal, not
+// an error. RE2, which never parses a pattern routed here, stops at 1000
+// levels; the backtracker now refuses past the same depth. The stack is
+// lowered so a small pattern reaches what Go's default stack needs MBs for.
+func TestBacktrackDeepNonCapturingNestingIsRefused(t *testing.T) {
+	old := debug.SetMaxStack(4 << 20)
+	defer debug.SetMaxStack(old)
+	nest := func(n int) string {
+		return `(['"])` + strings.Repeat("(?:", n) + "a" + strings.Repeat(")", n) + `\1`
+	}
+	if _, err := compileBacktrack(nest(100), "", XPath31); err != nil {
+		t.Fatalf("100 levels: %v", err)
+	}
+	for _, n := range []int{maxSchemaRegexpDepth + 1, 100000} {
+		_, err := compileBacktrack(nest(n), "", XPath31)
+		if !errors.Is(err, xdm.ErrResourceLimit) || xdm.ErrorCode(err) != "FORX0002" {
+			t.Fatalf("%d levels: want FORX0002 + ErrResourceLimit, got %.200v", n, err)
+		}
+	}
 }

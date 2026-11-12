@@ -56,6 +56,11 @@ type valueOfInstr struct {
 func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	var seq xdm.Sequence
 	if i.sel != nil {
+		if f := rt.burstsFor(i); f != nil && f.jsonOut != nil {
+			if done, err := f.jsonOut(rt, out); done { // streamfn_json.go
+				return err
+			}
+		}
 		v, err := rt.evalSelect(i, i.sel)
 		if err != nil {
 			return err
@@ -105,6 +110,12 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// A map, an array of non-atomizable items or a function item has no typed
 	// value, so building simple content out of one is FOTY0013 rather than
 	// the empty string the joiner would otherwise produce.
+	// Flattened once here, under the transform's context, so that a host
+	// deadline stops a large flatten; the calls below find no array left.
+	seq, err := xdm.FlattenContext(rt.goCtx, seq)
+	if err != nil {
+		return err
+	}
 	if err := checkAtomizable(seq); err != nil {
 		return err
 	}
@@ -139,41 +150,88 @@ func (i *sequenceInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if i.sel == nil {
 		return execSequence(i.body, rt, out)
 	}
+	if f := rt.burstsFor(i); f != nil && f.read != nil {
+		// Streamed (streamexec.go): in an element's content, each node is
+		// copied as it is read, in order, and let go.
+		each := func(it xdm.Item) error { return i.appendItem(rt, out, it) }
+		if f.readOut != nil {
+			return f.readOut(out, each) // streamcopy_l3.go
+		}
+		return f.read(each)
+	}
 	seq, err := rt.evalSelect(i, i.sel)
 	if err != nil {
 		return err
 	}
 	for _, it := range seq {
-		switch v := it.(type) {
-		case *xdm.Node:
-			if dest := out.Open(); dest != nil && v.Kind() == xdm.KindElement &&
-				v.Parent() != nil {
-				// The builder would copy v itself and give the copy every
-				// binding v inherited. Copying here instead lets the copy
-				// leave out those its new parent already supplies, which a
-				// constructed tree mostly shares with the element it is
-				// sequenced into. Charged first, as the builder charges.
-				// The copy is made once, straight into dest, and given the
-				// bindings there: a detached copy appended afterwards was
-				// copied a second time by the builder.
-				if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
-					return err
-				}
-				inheritNamespacesAt(rt, out.AppendCopyOf(v), v, dest)
-				continue
-			}
-			out.AppendNode(v)
-		case *xdm.Atomic:
-			out.AppendValue(v)
-		default:
-			// A function item, a map or an array. xsl:sequence returns
-			// whatever its select produced, so all three reach here.
-			if err := appendOpaqueItem(out, it); err != nil {
-				return err
-			}
+		if err := i.appendItem(rt, out, it); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// appendItem appends it, one item of the select's value, to out.
+func (i *sequenceInstr) appendItem(rt *runtime, out *outputBuilder, it xdm.Item) error {
+	switch v := it.(type) {
+	case *xdm.Node:
+		if dest := out.Open(); dest != nil && v.Kind() == xdm.KindElement &&
+			v.Parent() != nil {
+			// The builder would copy v itself and give the copy every
+			// binding v inherited. Copying here instead lets the copy
+			// leave out those its new parent already supplies, which a
+			// constructed tree mostly shares with the element it is
+			// sequenced into. Charged first, as the builder charges.
+			// The copy is made once, straight into dest, and given the
+			// bindings there: a detached copy appended afterwards was
+			// copied a second time by the builder.
+			// Each copy is O(K) for K bindings in scope, and one select
+			// can copy any number of them, so the deadline is checked per
+			// copy rather than only between instructions.
+			if err := rt.ctx.Err(); err != nil {
+				return err
+			}
+			if err := chargeCopy(rt.ctx, v); err != nil {
+				return err
+			}
+			return chargeInherited(rt.ctx, inheritNamespacesAt(rt, out.AppendCopyOf(v), v, dest))
+		}
+		// An attribute or namespace node under an open element is added by the
+		// builder call AppendNode would make, so that one after content raises
+		// XTDE0410 (§5.7.1); AppendNode has no error to return.
+		if out.Open() != nil {
+			switch v.Kind() {
+			case xdm.KindAttribute:
+				return out.AddAttribute(v.Name(), v.Value())
+			case xdm.KindNamespace:
+				return out.AddNamespace(v.Name().Local, v.Value())
+			}
+		}
+		out.AppendNode(v)
+	case *xdm.Atomic:
+		out.AppendValue(v)
+	default:
+		// A function item, a map or an array. xsl:sequence returns
+		// whatever its select produced, so all three reach here.
+		if err := appendOpaqueItem(out, it); err != nil {
+			return err
+		}
+	}
+	return topItemsRefused(rt, out)
+}
+
+// topItemsRefused refuses out once the sequence it holds at the top level --
+// the value of an as-typed variable or parameter, a function's result --
+// passes the item bound. Each select that feeds it had an allowance of its
+// own (Compiled.Eval), and a variable reference hands its whole value over
+// uncharged, so two xsl:sequence of the variable before doubled a chain of
+// sibling variables per line with nothing counting. Under an open element
+// the items become children, which the node budget charges instead.
+func topItemsRefused(rt *runtime, out *outputBuilder) error {
+	if out.Open() != nil {
+		return nil
+	}
+	return rt.ctx.ItemsRefused(int64(len(out.Items())))
 }
 
 // copyOfInstr implements xsl:copy-of, which deep-copies nodes.
@@ -194,6 +252,15 @@ type copyOfInstr struct {
 }
 
 func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if f := rt.burstsFor(i); f != nil && f.read != nil {
+		// Streamed (streamexec.go): each node of the select's value is
+		// copied as it is read, in order, and let go.
+		each := func(it xdm.Item) error { return i.copyItem(rt, out, it) }
+		if f.readOut != nil {
+			return f.readOut(out, each) // streamcopy_l3.go
+		}
+		return f.read(each)
+	}
 	seq, err := rt.evalSelect(i, i.sel)
 	if err != nil {
 		return err
@@ -206,231 +273,250 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// The switch below matches *xdm.Node and *xdm.Atomic; an *ArrayItem
 	// matched neither and fell off the end, so copy-of over an array produced
 	// nothing at all.
-	seq = xdm.Flatten(seq)
+	if seq, err = xdm.FlattenContext(rt.goCtx, seq); err != nil {
+		return err
+	}
 	for _, it := range seq {
-		switch v := it.(type) {
-		case *xdm.Node:
-			// A deep copy is required: the result tree must not alias the
-			// source, or a later instruction mutating one would change the
-			// other.
-			if v.Kind() == xdm.KindDocument {
-				// The copy of a document node is a document node (11.9.1).
-				// Flattening happens only where the copy is attached as the
-				// content of an element (5.7.1), which appendNode decides;
-				// destinations that keep a bare sequence — a variable
-				// declared as="document-node()*", a function body — must see
-				// the wrapper itself.
-				// Charged before the copy is made, as the node branch below
-				// does; copy-of of a 100 MB document copied 5.7M nodes
-				// uncharged while shallow-copy of it was refused.
-				if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
-					return err
-				}
-				c := copyDocumentNode(v)
-				if i.noNamespaces {
-					// §11.9.2's namespace rules are about the elements being
-					// copied; a document node is only the wrapper they arrive
-					// in, and it carries no declarations of its own. Leaving
-					// this branch out let copy-of of a temporary tree keep the
-					// declarations copy-namespaces="no" had asked to be
-					// dropped -- copy-0614 and -0615 graft a whole $inner and
-					// expect the inner element's own xmlns:s to go with them.
-					for ch := range c.Children() {
-						if ch.Kind() == xdm.KindElement {
-							stripNamespaces(ch)
-						}
-					}
-				}
-				// The document node itself is assessed, not its children one
-				// at a time. Section 11.9.2 validates the copy, and the copy
-				// of a document node is a document node -- which is what
-				// brings the DOCUMENT-LEVEL constraints into play. Assessing
-				// each child instead reported the ID/IDREF failures with the
-				// element codes XTTE1510/XTTE1515, where XTTE1555 is the code
-				// for "document-level constraints are not satisfied".
-				c, err := i.validation.assess(rt, c)
-				if err != nil {
-					return err
-				}
-				out.AppendNode(c)
-				continue
-			}
-			if v.Kind() == xdm.KindAttribute {
-				// XTTE0950, second sentence: copying an attribute with
-				// namespace-sensitive content under validation="preserve" is
-				// a type error "unless the parent element is also copied".
-				// An attribute selected by xsl:copy-of arrives on its own --
-				// its parent, if it has one, is not what this instruction is
-				// copying -- so the exemption never applies on this path.
-				// The prefix in the copied QName would keep pointing at a
-				// binding the new parent element need not declare.
-				if i.validation.mode == validatePreserve &&
-					isNamespaceSensitiveType(xdm.TypeEnvOf(v), v.TypeAnnotation()) {
-					return fmt.Errorf(
-						"XTTE0950: xsl:copy-of with validation=\"preserve\" "+
-							"cannot copy attribute %s on its own, because its "+
-							"content is namespace-sensitive",
-						v.Name().Lexical())
-				}
-				// Assessed on a copy, never on v. Validation strips type
-				// annotations in place, and the default mode is "strip", so
-				// assessing the source attribute erased the annotation from
-				// the *input document* — which then answered differently for
-				// every later expression that read it.
-				//
-				// Every other branch of this switch already assesses a copy;
-				// this one did not, which is why copying attributes made
-				// fn:idref appear one-directional: the first copy stripped
-				// the annotations the later lookups needed.
-				// The node assessed below is an exact copy of the source's
-				// typing, which is what validation="preserve" then keeps and
-				// what every other mode overwrites or clears. Assessment and
-				// stripping both read more than the annotation name, so the
-				// node they are handed must carry more than the name.
-				//
-				// All of it reaches the RESULT: the attribute goes into the
-				// output through AddAttributeWithTyping, which takes the
-				// resolved xdm.Typing rather than an annotation name. The
-				// older AddAttributeTyped took a name only, so a copied
-				// attribute arrived in the output tree with its union member
-				// and its resolved primitive gone, to be guessed at later
-				// from the process-global registries.
-				a := xdm.NewNode(xdm.KindAttribute, v.Name(), v.Value())
-				a.CopyTypingFrom(v)
-				a, err := i.validation.assess(rt, a)
-				if err != nil {
-					return err
-				}
-				if err := out.AddAttributeWithTyping(a.Name(), a.Value(),
-					xdm.TypingOf(a)); err != nil {
-					return err
-				}
-				continue
-			}
-			if v.Kind() == xdm.KindNamespace {
-				// A namespace node joins the element's bindings rather than
-				// its children. Appending it as a child put it nowhere the
-				// namespace axis or the serialiser would ever look.
-				if err := out.AddNamespace(v.Name().Local, v.Value()); err != nil {
-					return err
-				}
-				continue
-			}
-			// XTTE0950: copying a node with namespace-sensitive content
-			// under copy-namespaces="no" and validation="preserve". The two
-			// together ask for the QName's prefix to be kept and its
-			// declaration to be thrown away, which leaves a value whose
-			// validity depended on a binding that is no longer there.
-			if i.noNamespaces && i.validation.mode == validatePreserve &&
-				hasNamespaceSensitiveContent(v) {
-				return fmt.Errorf(
-					"XTTE0950: xsl:copy-of with copy-namespaces=\"no\" and "+
-						"validation=\"preserve\" cannot copy %s, whose "+
-						"content is namespace-sensitive", describeNode(v))
-			}
-			// Charged before the copy is made, so a refusal allocates
-			// none of it. xsl:copy-of copies here rather than letting the
-			// builder do it -- it has to rebase and strip namespaces on its
-			// own copy first -- so the builder's charge never sees this
-			// node, and copying a large subtree once per node of a large
-			// document would otherwise build the cross product uncharged.
-			if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
-				return err
-			}
-			// Under an open element the copy is made once, straight into the
-			// tree being built, whenever the pre-copy below would leave it as
-			// it is: a text, comment or processing instruction always (only
-			// elements are rebased, stripped or assessed), and an element
-			// when copy-namespaces is "yes" and the validation neither
-			// replaces nor retypes it -- preserve, or strip of a tree that
-			// was never typed. What is done to the detached copy below is
-			// then done to this one, in the same order.
-			if out.Open() != nil && (v.Kind() != xdm.KindElement ||
-				!i.noNamespaces && i.validation.typeName == nil &&
-					(i.validation.mode == validatePreserve && !i.validation.constructsElement ||
-						i.validation.mode == validateStrip && !v.TreeHasTyping())) {
-				if c := out.AppendCopyOf(v); c != nil && c.Kind() == xdm.KindElement {
-					inheritNamespaces(c, v)
-					if i.copyAccumulators {
-						rt.noteCopiedAccumulators(v, c)
-					}
-					fixupNamespaces(c)
-				}
-				continue
-			}
-			c := deepCopy(v)
-			if i.copyAccumulators {
-				rt.noteCopiedAccumulators(v, c)
-			}
-			if out.Open() == nil {
-				// A parentless copy keeps its own xml:base, resolved against
-				// the instruction's base URI rather than against the document
-				// it came from. appendNode only rebases when there is a
-				// parent to inherit from, so a copy that lands directly in a
-				// variable would otherwise keep the source's resolved base.
-				rebaseDetached(c, i.baseURI)
-			}
-			if v.Kind() == xdm.KindElement {
-				if i.noNamespaces {
-					stripNamespaces(c)
-				} else {
-					// The copy carries only the declarations written on the
-					// source element, so the ones it inherits from ancestors
-					// it is being lifted away from are added here. Without
-					// them a copied subtree loses the binding its own prefix
-					// depends on.
-					inheritNamespaces(c, v)
-				}
-			}
-
-			// The copy is assessed rather than the original: validation may
-			// annotate, and annotating the source document would leak a
-			// property of this instruction into the tree everything else
-			// still reads.
-			typed, err := i.validation.assess(rt, c)
-			if err != nil {
-				return err
-			}
-			if typed != c && i.copyAccumulators {
-				// The typed copy is the copy now, and answers as v does.
-				rt.noteCopiedAccumulators(v, typed)
-			}
-			c = typed
-			out.AppendNode(c)
-			// Under an open element the node in the result is a copy of c,
-			// made as it was appended; that is the node the repair below and
-			// the accumulators are about.
-			if open := out.Open(); open != nil && c.Kind() == xdm.KindElement {
-				c = open.LastChild()
-				if i.copyAccumulators {
-					rt.noteCopiedAccumulators(v, c)
-				}
-			}
-			// After the copy has a parent, because the repair §5.8.3 needs
-			// depends on what the destination declares: an element in no
-			// namespace landing under one that declares a default has to
-			// undeclare it, or the copy silently changes namespace.
-			// copy-1220 grafts elements in no namespace into a
-			// <doc xmlns="http://www.out.com/">.
-			if c.Kind() == xdm.KindElement {
-				fixupNamespaces(c)
-			}
-		case *xdm.Atomic:
-			out.AppendValue(v)
-		default:
-			// What survives Flatten and is neither a node nor an atomic value
-			// is a map or a function item. Neither has a representation
-			// inside element content, and dropping one silently is what hid
-			// this whole defect: appendOpaqueItem accepts it at the top level
-			// of a sequence and raises XTDE0450 under an open element, which
-			// is what §5.8.1 requires ("it is a dynamic error if the result
-			// sequence contains a function item").
-			if err := appendOpaqueItem(out, it); err != nil {
-				return err
-			}
+		if err := i.copyItem(rt, out, it); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// copyItem copies it, one item of the select's value, to out.
+func (i *copyOfInstr) copyItem(rt *runtime, out *outputBuilder, it xdm.Item) error {
+	switch v := it.(type) {
+	case *xdm.Node:
+		// A deep copy is required: the result tree must not alias the
+		// source, or a later instruction mutating one would change the
+		// other.
+		if v.Kind() == xdm.KindDocument {
+			// The copy of a document node is a document node (11.9.1).
+			// Flattening happens only where the copy is attached as the
+			// content of an element (5.7.1), which appendNode decides;
+			// destinations that keep a bare sequence — a variable
+			// declared as="document-node()*", a function body — must see
+			// the wrapper itself.
+			// Charged before the copy is made, as the node branch below
+			// does; copy-of of a 100 MB document copied 5.7M nodes
+			// uncharged while shallow-copy of it was refused.
+			if err := chargeCopy(rt.ctx, v); err != nil {
+				return err
+			}
+			c := copyDocumentNode(v)
+			if i.noNamespaces {
+				// §11.9.2's namespace rules are about the elements being
+				// copied; a document node is only the wrapper they arrive
+				// in, and it carries no declarations of its own. Leaving
+				// this branch out let copy-of of a temporary tree keep the
+				// declarations copy-namespaces="no" had asked to be
+				// dropped -- copy-0614 and -0615 graft a whole $inner and
+				// expect the inner element's own xmlns:s to go with them.
+				for ch := range c.Children() {
+					if ch.Kind() == xdm.KindElement {
+						stripNamespaces(ch)
+					}
+				}
+			}
+			// The document node itself is assessed, not its children one
+			// at a time. Section 11.9.2 validates the copy, and the copy
+			// of a document node is a document node -- which is what
+			// brings the DOCUMENT-LEVEL constraints into play. Assessing
+			// each child instead reported the ID/IDREF failures with the
+			// element codes XTTE1510/XTTE1515, where XTTE1555 is the code
+			// for "document-level constraints are not satisfied".
+			c, err := i.validation.assess(rt, c)
+			if err != nil {
+				return err
+			}
+			out.AppendNode(c)
+			return nil
+		}
+		if v.Kind() == xdm.KindAttribute {
+			// XTTE0950, second sentence: copying an attribute with
+			// namespace-sensitive content under validation="preserve" is
+			// a type error "unless the parent element is also copied".
+			// An attribute selected by xsl:copy-of arrives on its own --
+			// its parent, if it has one, is not what this instruction is
+			// copying -- so the exemption never applies on this path.
+			// The prefix in the copied QName would keep pointing at a
+			// binding the new parent element need not declare.
+			if i.validation.mode == validatePreserve &&
+				isNamespaceSensitiveType(xdm.TypeEnvOf(v), v.TypeAnnotation()) {
+				return fmt.Errorf(
+					"XTTE0950: xsl:copy-of with validation=\"preserve\" "+
+						"cannot copy attribute %s on its own, because its "+
+						"content is namespace-sensitive",
+					v.Name().Lexical())
+			}
+			// Assessed on a copy, never on v. Validation strips type
+			// annotations in place, and the default mode is "strip", so
+			// assessing the source attribute erased the annotation from
+			// the *input document* — which then answered differently for
+			// every later expression that read it.
+			//
+			// Every other branch of this switch already assesses a copy;
+			// this one did not, which is why copying attributes made
+			// fn:idref appear one-directional: the first copy stripped
+			// the annotations the later lookups needed.
+			// The node assessed below is an exact copy of the source's
+			// typing, which is what validation="preserve" then keeps and
+			// what every other mode overwrites or clears. Assessment and
+			// stripping both read more than the annotation name, so the
+			// node they are handed must carry more than the name.
+			//
+			// All of it reaches the RESULT: the attribute goes into the
+			// output through AddAttributeWithTyping, which takes the
+			// resolved xdm.Typing rather than an annotation name. The
+			// older AddAttributeTyped took a name only, so a copied
+			// attribute arrived in the output tree with its union member
+			// and its resolved primitive gone, to be guessed at later
+			// from the process-global registries.
+			a := xdm.NewNode(xdm.KindAttribute, v.Name(), v.Value())
+			a.CopyTypingFrom(v)
+			a, err := i.validation.assess(rt, a)
+			if err != nil {
+				return err
+			}
+			if err := out.AddAttributeWithTyping(a.Name(), a.Value(),
+				xdm.TypingOf(a)); err != nil {
+				return err
+			}
+			return nil
+		}
+		if v.Kind() == xdm.KindNamespace {
+			// A namespace node joins the element's bindings rather than
+			// its children. Appending it as a child put it nowhere the
+			// namespace axis or the serialiser would ever look.
+			if err := out.AddNamespace(v.Name().Local, v.Value()); err != nil {
+				return err
+			}
+			return nil
+		}
+		// XTTE0950: copying a node with namespace-sensitive content
+		// under copy-namespaces="no" and validation="preserve". The two
+		// together ask for the QName's prefix to be kept and its
+		// declaration to be thrown away, which leaves a value whose
+		// validity depended on a binding that is no longer there.
+		if i.noNamespaces && i.validation.mode == validatePreserve &&
+			hasNamespaceSensitiveContent(v) {
+			return fmt.Errorf(
+				"XTTE0950: xsl:copy-of with copy-namespaces=\"no\" and "+
+					"validation=\"preserve\" cannot copy %s, whose "+
+					"content is namespace-sensitive", describeNode(v))
+		}
+		// Charged before the copy is made, so a refusal allocates
+		// none of it. xsl:copy-of copies here rather than letting the
+		// builder do it -- it has to rebase and strip namespaces on its
+		// own copy first -- so the builder's charge never sees this
+		// node, and copying a large subtree once per node of a large
+		// document would otherwise build the cross product uncharged.
+		// The deadline is checked per copy, as xsl:sequence does: each one
+		// is O(K) for K bindings in scope.
+		if err := rt.ctx.Err(); err != nil {
+			return err
+		}
+		if err := chargeCopy(rt.ctx, v); err != nil {
+			return err
+		}
+		// Under an open element the copy is made once, straight into the
+		// tree being built, whenever the pre-copy below would leave it as
+		// it is: a text, comment or processing instruction always (only
+		// elements are rebased, stripped or assessed), and an element
+		// when copy-namespaces is "yes" and the validation neither
+		// replaces nor retypes it -- preserve, or strip of a tree that
+		// was never typed. What is done to the detached copy below is
+		// then done to this one, in the same order.
+		if out.Open() != nil && (v.Kind() != xdm.KindElement ||
+			!i.noNamespaces && i.validation.typeName == nil &&
+				(i.validation.mode == validatePreserve && !i.validation.constructsElement ||
+					i.validation.mode == validateStrip && !v.TreeHasTyping())) {
+			if c := out.AppendCopyOf(v); c != nil && c.Kind() == xdm.KindElement {
+				if err := chargeInherited(rt.ctx, inheritNamespaces(c, v)); err != nil {
+					return err
+				}
+				if i.copyAccumulators {
+					rt.noteCopiedAccumulators(v, c)
+				}
+				fixupNamespaces(c)
+			}
+			return nil
+		}
+		c := deepCopy(v)
+		if i.copyAccumulators {
+			rt.noteCopiedAccumulators(v, c)
+		}
+		if out.Open() == nil {
+			// A parentless copy keeps its own xml:base, resolved against
+			// the instruction's base URI rather than against the document
+			// it came from. appendNode only rebases when there is a
+			// parent to inherit from, so a copy that lands directly in a
+			// variable would otherwise keep the source's resolved base.
+			rebaseDetached(c, i.baseURI)
+		}
+		if v.Kind() == xdm.KindElement {
+			if i.noNamespaces {
+				stripNamespaces(c)
+			} else {
+				// The copy carries only the declarations written on the
+				// source element, so the ones it inherits from ancestors
+				// it is being lifted away from are added here. Without
+				// them a copied subtree loses the binding its own prefix
+				// depends on.
+				if err := chargeInherited(rt.ctx, inheritNamespaces(c, v)); err != nil {
+					return err
+				}
+			}
+		}
+
+		// The copy is assessed rather than the original: validation may
+		// annotate, and annotating the source document would leak a
+		// property of this instruction into the tree everything else
+		// still reads.
+		typed, err := i.validation.assess(rt, c)
+		if err != nil {
+			return err
+		}
+		if typed != c && i.copyAccumulators {
+			// The typed copy is the copy now, and answers as v does.
+			rt.noteCopiedAccumulators(v, typed)
+		}
+		c = typed
+		out.AppendNode(c)
+		// Under an open element the node in the result is a copy of c,
+		// made as it was appended; that is the node the repair below and
+		// the accumulators are about.
+		if open := out.Open(); open != nil && c.Kind() == xdm.KindElement {
+			c = open.LastChild()
+			if i.copyAccumulators {
+				rt.noteCopiedAccumulators(v, c)
+			}
+		}
+		// After the copy has a parent, because the repair §5.8.3 needs
+		// depends on what the destination declares: an element in no
+		// namespace landing under one that declares a default has to
+		// undeclare it, or the copy silently changes namespace.
+		// copy-1220 grafts elements in no namespace into a
+		// <doc xmlns="http://www.out.com/">.
+		if c.Kind() == xdm.KindElement {
+			fixupNamespaces(c)
+		}
+	case *xdm.Atomic:
+		out.AppendValue(v)
+	default:
+		// What survives Flatten and is neither a node nor an atomic value
+		// is a map or a function item. Neither has a representation
+		// inside element content, and dropping one silently is what hid
+		// this whole defect: appendOpaqueItem accepts it at the top level
+		// of a sequence and raises XTDE0450 under an open element, which
+		// is what §5.8.1 requires ("it is a dynamic error if the result
+		// sequence contains a function item").
+		if err := appendOpaqueItem(out, it); err != nil {
+			return err
+		}
+	}
+	return topItemsRefused(rt, out)
 }
 
 // isNamespaceSensitiveType reports whether a type annotation names a type
@@ -526,29 +612,55 @@ func copyDocumentNode(n *xdm.Node) *xdm.Node {
 	return tree.Root
 }
 
-// inheritNamespaces gives a detached copy the bindings it used to inherit.
+// inheritNamespaces gives a detached copy the bindings it used to inherit,
+// and reports how many it added.
 //
 // Declarations the element already carries are left alone: they are the
 // nearest ones, and an inherited binding for the same prefix is masked.
-func inheritNamespaces(dst, src *xdm.Node) {
-	var arr [32]nsBinding
-	for _, b := range scopeBindings(src, arr[:0]) {
-		if !declares(dst, b.prefix) {
-			dst.AddNamespace(b.prefix, b.uri)
-		}
-	}
+// The bindings are added in one call, so the copy's frame is built and
+// interned once: added one at a time, every copy after the first re-copied
+// its frame per binding, K^2 per copied element.
+func inheritNamespaces(dst, src *xdm.Node) int {
+	return inheritNamespacesWhere(dst, src, nil)
 }
 
 // inheritNamespacesAt is inheritNamespaces for a copy about to be attached to
 // dest: of the bindings src inherited, only those dest does not already
 // supply are written on the copy.
-func inheritNamespacesAt(rt *runtime, dst, src, dest *xdm.Node) {
+func inheritNamespacesAt(rt *runtime, dst, src, dest *xdm.Node) int {
+	return inheritNamespacesWhere(dst, src, func(b nsBinding) bool {
+		return !suppliedAt(rt, dest, b.prefix, b.uri)
+	})
+}
+
+// inheritNamespacesWhere adds to dst the bindings src has in scope that dst
+// does not declare and keep, when given, accepts.
+func inheritNamespacesWhere(dst, src *xdm.Node, keep func(nsBinding) bool) int {
 	var arr [32]nsBinding
+	var own [32]string
+	declared := declaredPrefixes(dst, own[:0])
+	var pairs []string
 	for _, b := range scopeBindings(src, arr[:0]) {
-		if !declares(dst, b.prefix) && !suppliedAt(rt, dest, b.prefix, b.uri) {
-			dst.AddNamespace(b.prefix, b.uri)
+		if _, found := slices.BinarySearch(declared, b.prefix); found {
+			continue
+		}
+		if keep == nil || keep(b) {
+			pairs = append(pairs, b.prefix, b.uri)
 		}
 	}
+	dst.AddNamespaces(pairs...)
+	return len(pairs) / 2
+}
+
+// declaredPrefixes appends to buf the prefixes el declares, sorted, for
+// slices.BinarySearch: a declares per binding in scope was K^2 for an
+// element declaring K of them.
+func declaredPrefixes(el *xdm.Node, buf []string) []string {
+	for prefix := range el.DeclaredNamespaces() {
+		buf = append(buf, prefix)
+	}
+	slices.Sort(buf)
+	return buf
 }
 
 // declares reports whether el carries a namespace node for prefix.
@@ -561,47 +673,61 @@ func declares(el *xdm.Node, prefix string) bool {
 	return false
 }
 
+// inheritedBindingBytes is what the byte budget is charged for each binding
+// a copy inherits: one nsBinding, two string headers, held in the copy's
+// namespace frame. Every copy of an element carries the K bindings its
+// source inherited, so copying M children of a root declaring K prefixes
+// writes K x M of them -- quadratic in a document of a few tens of KB -- and
+// the node budget charges each copy as one node.
+const inheritedBindingBytes = 32
+
+// chargeInherited charges n inherited bindings to the byte budget.
+func chargeInherited(ctx *xpath.Context, n int) error {
+	if n == 0 {
+		return nil
+	}
+	return ctx.ChargeBytes(n * inheritedBindingBytes)
+}
+
 // scopeBindings appends to buf the bindings n.InScopeNamespaces() holds,
 // less xml, sorted by prefix. It reads the ancestors directly rather than
 // building the map: the copies that call it run once per copied element, and
 // the map was most of what they allocated.
+//
+// Each element's declarations are appended in reverse, innermost element
+// first, and stably sorted by prefix, so the first binding for each prefix is
+// the one the map's overwrites would have kept: an inner element shadows an
+// outer one, and within one element the last declaration wins. A scan of the
+// bindings so far per declaration, and an insertion sort, made this K^2 for
+// K prefixes in scope.
 func scopeBindings(n *xdm.Node, buf []nsBinding) []nsBinding {
 	start := len(buf)
 	for cur := n; cur != nil; cur = cur.Parent() {
 		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		// Within one element the last declaration wins, as the map's
-		// overwrites resolve it; an inner element shadows an outer one.
-		// Bindings from buf[start:own] came from inner elements.
 		own := len(buf)
-	next:
 		for prefix, uri := range cur.DeclaredNamespaces() {
-			if prefix == "xml" {
-				continue
+			if prefix != "xml" {
+				buf = append(buf, nsBinding{prefix, uri})
 			}
-			for k := start; k < len(buf); k++ {
-				if buf[k].prefix == prefix {
-					if k >= own {
-						buf[k].uri = uri
-					}
-					continue next
-				}
-			}
-			buf = append(buf, nsBinding{prefix, uri})
 		}
+		slices.Reverse(buf[own:])
 	}
-	// Drop undeclarations, which only served to shadow, and sort.
+	slices.SortStableFunc(buf[start:], func(a, b nsBinding) int {
+		return strings.Compare(a.prefix, b.prefix)
+	})
+	// Keep the first of each prefix, then drop undeclarations, which only
+	// served to shadow.
 	out := buf[:start]
-	for _, b := range buf[start:] {
+	prev := ""
+	for k, b := range buf[start:] {
+		if k > 0 && b.prefix == prev {
+			continue
+		}
+		prev = b.prefix
 		if b.uri != "" {
 			out = append(out, b)
-		}
-	}
-	s := out[start:]
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j].prefix < s[j-1].prefix; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
 		}
 	}
 	return out
@@ -703,14 +829,18 @@ func undeclareInherited(el *xdm.Node) {
 // scope built per element: a literal result element usually needs nothing, and
 // the map cost an allocation per element for it. Read live, a binding added
 // here is seen by the next test without being recorded twice.
-func fixupNamespaces(el *xdm.Node) {
+func fixupNamespaces(el *xdm.Node) { fixupNamespacesIn(nil, el) }
+
+// fixupNamespacesIn is fixupNamespaces, its lookups reading the frames from
+// f (nsscope.go): el's parent's body is running, el's own is done.
+func fixupNamespacesIn(f *nsFrame, el *xdm.Node) {
 	need := func(prefix, uri string) {
-		if uri == "" || uri == xdm.NSXML || scopeURI(el, prefix) == uri {
+		if uri == "" || uri == xdm.NSXML || scopeIn(f, el, prefix) == uri {
 			return
 		}
 		el.AddNamespace(prefix, uri)
 	}
-	if el.Name().URI == "" && el.Name().Prefix == "" && scopeURI(el, "") != "" {
+	if undeclaresDefault(f, el) {
 		// An unprefixed name in no namespace UNDECLARES the default
 		// namespace when one is in scope: without the undeclaration the name
 		// would read as being in whatever the parent declares. This is the
@@ -765,7 +895,13 @@ func copyNamespacesTo(rt *runtime, sub *outputBuilder, src *xdm.Node) {
 	// is left out: it is bound implicitly everywhere, so declaring it would
 	// be redundant and is in fact forbidden in the output.
 	var arr [32]nsBinding
-	for _, b := range scopeBindings(src, arr[:0]) {
+	addBindings(rt, sub, scopeBindings(src, arr[:0]))
+}
+
+// addBindings declares bs on the element sub is building, as
+// copyNamespacesTo does.
+func addBindings(rt *runtime, sub *outputBuilder, bs []nsBinding) {
+	for _, b := range bs {
 		p, uri := b.prefix, b.uri
 		// Inherited rather than copied, as for a literal result element. The
 		// two cases AddNamespace does more than add -- XTDE0440, and the
@@ -805,10 +941,30 @@ func parentSupplies(rt *runtime, el *xdm.Node, prefix, uri string) bool {
 }
 
 // suppliedAt is parentSupplies for a child about to be attached to parent.
+//
+// The walk up reads the frames of the elements whose bodies are running
+// (nsscope.go), so a child finds its parent's answer.
 func suppliedAt(rt *runtime, parent *xdm.Node, prefix, uri string) bool {
-	for cur := parent; cur != nil && cur.Kind() == xdm.KindElement; cur = cur.Parent() {
-		if fixupMayBind(cur, prefix) {
-			return false
+	if rt.ns == nil {
+		for cur := parent; cur != nil && cur.Kind() == xdm.KindElement; cur = cur.Parent() {
+			if fixupMayBindIn(nil, cur, prefix) {
+				return false
+			}
+			found, last := false, ""
+			for p, u := range cur.DeclaredNamespaces() {
+				if p == prefix {
+					found, last = true, u
+				}
+			}
+			if found {
+				return last == uri && !rt.blocking[cur]
+			}
+		}
+		return false
+	}
+	r := lookUp(rt.ns, parent, lookSupply, prefix, true, func(cur *xdm.Node, f *nsFrame) (nsLook, bool) {
+		if fixupMayBindIn(f, cur, prefix) {
+			return nsLook{fix: true}, true
 		}
 		found, last := false, ""
 		for p, u := range cur.DeclaredNamespaces() {
@@ -817,28 +973,35 @@ func suppliedAt(rt *runtime, parent *xdm.Node, prefix, uri string) bool {
 			}
 		}
 		if found {
-			return last == uri && !rt.blocking[cur]
+			return nsLook{found: true, uri: last, blocked: rt.blocking[cur]}, true
 		}
-	}
-	return false
+		return nsLook{}, false
+	})
+	return r.found && r.uri == uri && !r.blocked
 }
 
-// fixupMayBind reports whether fixupNamespaces, run on el now, would add a
-// namespace node for prefix.
-func fixupMayBind(el *xdm.Node, prefix string) bool {
+// fixupMayBindIn reports whether fixupNamespaces, run on el now, would add a
+// namespace node for prefix; scope lookups read the frames from f.
+func fixupMayBindIn(f *nsFrame, el *xdm.Node, prefix string) bool {
 	if el.Name().Prefix != prefix {
 		return false
 	}
 	if el.Name().URI == "" {
-		return prefix == "" && scopeURI(el, "") != ""
+		return prefix == "" && undeclaresDefault(f, el)
 	}
-	return el.Name().URI != xdm.NSXML && scopeURI(el, prefix) != el.Name().URI
+	return el.Name().URI != xdm.NSXML && scopeIn(f, el, prefix) != el.Name().URI
 }
 
 // execBlocking runs the body of a new element, applying
 // inherit-namespaces="no" to it afterwards when noInherit is set. The element
 // is recorded in rt.blocking while its body runs; see parentSupplies.
-func execBlocking(rt *runtime, noInherit bool, body []Instruction, sub *outputBuilder) error {
+//
+// While it runs, a deep result has a frame for the element (nsscope.go):
+// src, for a shallow copy, is its source element, with its bindings shared
+// or local (srcBindings).
+func execBlocking(rt *runtime, noInherit bool, body []Instruction, sub *outputBuilder,
+	src *xdm.Node, shared, local []nsBinding) error {
+	defer leaveNS(rt, enterNS(rt, sub.Open(), src, shared, local))
 	if !noInherit {
 		return execSequence(body, rt, sub)
 	}
@@ -852,8 +1015,7 @@ func execBlocking(rt *runtime, noInherit bool, body []Instruction, sub *outputBu
 	if err != nil {
 		return err
 	}
-	blockNamespaceInheritance(el)
-	return nil
+	return blockNamespaceInheritance(rt.ctx, el)
 }
 
 // copyInstr implements xsl:copy, a shallow copy of the context node.
@@ -873,6 +1035,9 @@ type copyInstr struct {
 }
 
 func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if f := rt.burstsFor(i); f != nil && i.sel != nil {
+		return i.executeFed(rt, out, f) // streamcopy.go
+	}
 	item := rt.ctx.Item
 	if i.sel != nil {
 		seq, err := i.sel.Eval(rt.ctx)
@@ -928,7 +1093,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 					"result tree")
 		}
 		out.AppendValue(v)
-		return nil
+		return topItemsRefused(rt, out)
 	}
 
 	switch node.Kind() {
@@ -945,20 +1110,22 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// same path any other attribute takes.
 			sub.Open().SetBaseURI(node.BaseURI())
 		}
-		if !i.noNamespaces {
-			// Section 11.9.1 copies "the namespace nodes of the element",
-			// which is every binding in scope on it rather than only those it
-			// declares itself. A copied element whose prefix was declared on
-			// an ancestor otherwise lost the declaration it needs.
-			copyNamespacesTo(rt, sub, node)
-		}
+		// Section 11.9.1 copies "the namespace nodes of the element",
+		// which is every binding in scope on it rather than only those it
+		// declares itself. A copied element whose prefix was declared on
+		// an ancestor otherwise lost the declaration it needs. They are
+		// worked out from the parent's when the copy running is the
+		// parent's (nsscope.go).
+		var buf [32]nsBinding
+		shared, local := copyShallowScope(rt, sub, node, !i.noNamespaces, buf[:0])
 		if err := applyAttributeSets(rt, i.attrSets, sub); err != nil {
 			return err
 		}
-		if err := execBlocking(rt, i.noInherit, i.body, sub); err != nil {
+		holdOpen(sub, i.noInherit, i.validation)
+		if err := execBlocking(rt, i.noInherit, i.body, sub, node, shared, local); err != nil {
 			return err
 		}
-		if i.noNamespaces {
+		if i.noNamespaces || node.Name().URI == "" && node.Name().Prefix == "" {
 			// §5.8.3 namespace fixup still applies: dropping the source's
 			// namespace nodes does not license a tree where the copy's own
 			// name, or an attribute name the body wrote, has no namespace
@@ -968,10 +1135,13 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// namespace axis reads the tree, and in-scope-prefixes() on the
 			// copy answered with only the bindings it inherited from wherever
 			// it landed. si-copy-020 and si-copy-026 ask exactly that.
-			// xsl:element already repairs its result this way; xsl:copy did
-			// not, because with copy-namespaces="yes" the copied nodes cover
-			// every name and there was nothing left to repair.
-			fixupNamespaces(sub.Open())
+			// xsl:element already repairs its result this way. With
+			// copy-namespaces="yes" the copied nodes cover every name but an
+			// unprefixed one in no namespace: the source's xmlns="" is no
+			// namespace node to copy, so the copy must undeclare the default
+			// it would inherit (XDM 3.1 §6.2, element nodes: no default namespace node on
+			// an element whose name is in no namespace).
+			fixupNamespacesIn(rt.ns, sub.Open())
 		}
 		// The copy is assessed once it is complete, since validity is a
 		// property of the whole element and its content.
@@ -986,7 +1156,13 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// the parent either way — but it is exactly what a variable declared
 		// as="document-node()*" is asking about.
 		sub := newOutputBuilder(rt)
+		if i.validation.isDefault() {
+			sub = documentBuilder(rt, out)
+		}
 		if err := execSequence(i.body, rt, sub); err != nil {
+			return err
+		}
+		if err := rt.streamDocRead(node); err != nil { // streamcopy_l3.go
 			return err
 		}
 		doc, err := sub.ToDocument()
@@ -1043,7 +1219,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return nil
 
 	case xdm.KindAttribute:
-		typed, err := i.validation.assess(rt, node)
+		typed, err := i.validation.assess(rt, streamAssessedAttr(node, i.validation.typeName != nil)) // streamvalid_l7.go
 		if err != nil {
 			return err
 		}
@@ -1244,7 +1420,8 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 			return err
 		}
 	}
-	if err := execBlocking(rt, i.noInherit, i.body, sub); err != nil {
+	holdOpen(sub, i.noInherit, i.validation)
+	if err := execBlocking(rt, i.noInherit, i.body, sub, nil, nil, nil); err != nil {
 		return err
 	}
 	// §5.8.3: an element in a namespace must carry a namespace node for it.
@@ -1253,7 +1430,7 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// then cannot resolve the prefix in an xsi:type value against the tree.
 	// The serialiser wrote the declaration anyway, so nothing about the
 	// output changed; only the namespace axis was short.
-	fixupNamespaces(sub.Open())
+	fixupNamespacesIn(rt.ns, sub.Open())
 	// Assessed once the element is complete, since validity is a property of
 	// its content as well as its name.
 	return i.validation.assessOpen(rt, sub)
@@ -1311,7 +1488,8 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err := applyAttributeSets(rt, i.attrSets, sub); err != nil {
 		return err
 	}
-	if err := execBlocking(rt, i.noInherit, i.body, sub); err != nil {
+	holdOpen(sub, i.noInherit, i.validation)
+	if err := execBlocking(rt, i.noInherit, i.body, sub, nil, nil, nil); err != nil {
 		return err
 	}
 	// The element is complete only now, so validity is assessed here rather
@@ -1428,11 +1606,11 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	var value string
 	if i.sel != nil {
-		seq, err := i.sel.Eval(rt.ctx)
+		seq, err := rt.evalSelect(i, i.sel)
 		if err != nil {
 			return err
 		}
-		if value, err = constructedTextChecked(seq, sep); err != nil {
+		if value, err = constructedTextChecked(rt.goCtx, seq, sep); err != nil {
 			return err
 		}
 	} else {
@@ -1440,7 +1618,7 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
-		if value, err = constructedTextChecked(sub.Sequence(), sep); err != nil {
+		if value, err = constructedTextChecked(rt.goCtx, sub.Sequence(), sep); err != nil {
 			return err
 		}
 	}
@@ -1527,7 +1705,7 @@ type commentInstr struct {
 func (i *commentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	var text string
 	if i.sel != nil {
-		seq, err := i.sel.Eval(rt.ctx)
+		seq, err := rt.evalSelect(i, i.sel) // streamexec.go: a consuming select
 		if err != nil {
 			return err
 		}
@@ -1589,7 +1767,7 @@ func (i *piInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	var text string
 	if i.sel != nil {
-		seq, err := i.sel.Eval(rt.ctx)
+		seq, err := rt.evalSelect(i, i.sel) // streamexec.go: a consuming select
 		if err != nil {
 			return err
 		}
@@ -1619,7 +1797,7 @@ type ifInstr struct {
 }
 
 func (i *ifInstr) Execute(rt *runtime, out *outputBuilder) error {
-	ok, err := i.test.EvalBool(rt.ctx)
+	ok, err := rt.evalStreamBool(i.test)
 	if err != nil {
 		return err
 	}
@@ -1642,7 +1820,7 @@ type chooseBranch struct {
 
 func (i *chooseInstr) Execute(rt *runtime, out *outputBuilder) error {
 	for _, w := range i.whens {
-		ok, err := w.test.EvalBool(rt.ctx)
+		ok, err := rt.evalStreamBool(w.test)
 		if err != nil {
 			return err
 		}
@@ -1673,7 +1851,7 @@ func (i *forEachInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 			pos++
 			live.begin(rt, out)
-			if err := execSequence(i.body, rt.withCurrent(it, pos, 0).clearCurrentRule(), out); err != nil {
+			if err := execSequence(i.body, rt.withCurrent(it, pos, f.size).clearCurrentRule(), out); err != nil {
 				return err
 			}
 			live.end(rt, out, nil)
@@ -1739,10 +1917,14 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	var text string
 	var value xdm.Sequence
+	st := rt.streamTry() // streammessage.go
 	if i.sel != nil {
-		seq, err := i.sel.Eval(rt.ctx)
+		seq, err := rt.evalSelect(i, i.sel)
 		if err != nil {
 			if !i.xslt30 {
+				return err
+			}
+			if err := st.messageFailed(err); err != nil {
 				return err
 			}
 			// 3.0: "if a dynamic error occurs while evaluating the content,
@@ -1767,6 +1949,9 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 			if !i.xslt30 {
 				return err
 			}
+			if err := st.messageFailed(err); err != nil {
+				return err
+			}
 			if !i.assert {
 				return nil
 			}
@@ -1776,7 +1961,12 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	// Messages are collected rather than printed: a library writing to stderr
 	// is a nuisance, and the caller may want them alongside the result.
+	// The text is held until the transform returns, so it is charged to the
+	// byte budget as xsl:value-of charges the same joined text.
 	if !rt.opts.disableMessages {
+		if err := rt.ctx.ChargeBytes(len(text)); err != nil {
+			return err
+		}
 		*rt.messages = append(*rt.messages, text)
 	}
 

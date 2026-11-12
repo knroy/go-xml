@@ -286,6 +286,20 @@ func TestAdoptBudgetCarriesTheHeldFlags(t *testing.T) {
 	}
 }
 
+// An adopted byte counter is held even when the caller's is not, so that the
+// nested evaluation arming its own construction (newRuntime's HoldByteBudget)
+// cannot reset the caller's charges through the shared pointer.
+func TestAdoptBudgetHoldsAnUnheldCallersBytes(t *testing.T) {
+	caller := NewContext(nil, Builtins())
+	if err := caller.ChargeBytes(9); err != nil {
+		t.Fatal(err)
+	}
+	NewContext(nil, Builtins()).AdoptBudget(caller).HoldByteBudget()
+	if got := atomic.LoadInt64(caller.ev().bytes); got != 9 {
+		t.Errorf("caller bytes = %d after the nested hold, want 9", got)
+	}
+}
+
 // Adopting must share the counters, so the nested evaluation spends the
 // caller's remaining allowance rather than a fresh one.
 func TestAdoptBudgetSharesTheCounters(t *testing.T) {

@@ -2,6 +2,7 @@ package xsd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"strings"
@@ -27,13 +28,11 @@ type ValidationError struct {
 	// Err is a sentinel this failure also is, for callers that need to
 	// branch on the KIND of failure rather than on its code.
 	//
-	// It exists for xdm.ErrResourceLimit. A depth refusal is reported with
-	// a cvc- code because that is the only vocabulary a validation result
-	// has, and cvc-elt.1 then says "this document is invalid" about a
-	// document that was never assessed. The code is kept -- callers and
-	// the conformance suites read it -- and the sentinel carried here
-	// alongside, so errors.Is can tell a refusal from a verdict. Nil on
-	// every ordinary failure, which is all of them but this one.
+	// It exists for xdm.ErrResourceLimit: a run the processor refused --
+	// MaxDepth, or an assertion it declined to evaluate -- assessed nothing,
+	// so it carries no cvc- code (a cvc- code says "invalid") and this
+	// sentinel instead, and errors.Is tells a refusal from a verdict. Nil on
+	// every ordinary failure.
 	Err error
 }
 
@@ -122,6 +121,19 @@ type ValidateOptions struct {
 	// recurse that far — see validateElement for why exceeding it is fatal
 	// rather than recoverable.
 	MaxDepth int
+
+	// MaxMatchStates bounds the simultaneous content-model readings the
+	// validator carries while matching one element's children against a
+	// model with nested occurrence bounds. Past it the element fails with an
+	// error saying the model is too tangled to decide: the content is
+	// undecided, not known to be invalid. Real schemas stay at one or two.
+	//
+	// Zero means DefaultMaxMatchStates; a negative value means no limit, as
+	// for MaxErrors. The set is finite, so an unlimited walk ends, but its
+	// size is the product of the model's counter ranges: a hostile schema
+	// can make one element cost memory exponential in its nesting, and only
+	// ValidateContext's cancellation, checked per element, stops it.
+	MaxMatchStates int
 }
 
 // DefaultMaxErrors bounds a run that does not set MaxErrors.
@@ -312,6 +324,11 @@ type validator struct {
 	// has no source text. nil when the run reads the caller's tree.
 	twins map[*xdm.Node]*xdm.Node
 
+	// idToken, set by a run on a stream (streamvalid.go), maps the element
+	// an ID binding is owned by to the one node standing for it: the
+	// stream reuses an element's record once it is dropped.
+	idToken func(*xdm.Node) *xdm.Node
+
 	// typed is set when the run makes a typed copy (ValidateCopy and its
 	// siblings): it writes typing onto the copy it reads as it goes, or,
 	// with layer set, reads the caller's tree and writes typing to layer,
@@ -385,6 +402,16 @@ type validator struct {
 	// constraint tell it apart from a node validation never reached, which
 	// is laxly assessed and must not be failed on this ground.
 	complexTyped map[*xdm.Node]bool
+
+	// untypedAttrs holds every attribute an attribute wildcard matched
+	// without assessing it: processContents="skip", or "lax" with no global
+	// declaration. It has no type, so a field selecting it fails §3.11.4
+	// clause 3, "must have a simple type" (W3C bug 4063, idZ015). The value
+	// is true for an attribute XSD 1.1 calls ·skipped·, which its clause 3
+	// admits in a field's result and its clause 4 leaves out of the key, so
+	// selectAttrs drops it instead. Filled, as complexTyped is, only inside
+	// a scope.
+	untypedAttrs map[*xdm.Node]bool
 
 	// defaultedAttrs holds the value of each attribute a type supplied by
 	// default rather than the document writing it, so an identity
@@ -532,11 +559,19 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 	}
 	// Arguments are clipped before formatting so the full string is never
 	// copied, and the message after, for arguments that are neither.
+	//
+	// A cause that is a resource refusal makes the failure one too, so a
+	// value the processor declined to decide (see maxYearDigits) is not
+	// reported as a document found invalid.
+	var sentinel error
 	for i, a := range args {
 		switch x := a.(type) {
 		case string:
 			args[i] = clip(x, maxMessage)
 		case error:
+			if errors.Is(x, xdm.ErrResourceLimit) {
+				sentinel = xdm.ErrResourceLimit
+			}
 			args[i] = clip(x.Error(), maxMessage)
 		}
 	}
@@ -544,6 +579,7 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 		Code:    code,
 		Message: clip(fmt.Sprintf(format, args...), maxMessage),
 		Path:    v.pathString(),
+		Err:     sentinel,
 	}
 	if t := v.twins[n]; t != nil {
 		n = t
@@ -559,12 +595,18 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 // failLimit records a failure that is the processor refusing to do the work
 // rather than a fault in the document, marking it with xdm.ErrResourceLimit.
 //
+// It records no code. Every cvc- code is a validity verdict (XSD 1.1 Part 1
+// §3.3.4.3 and §3.13.4.1, from memory), and a refusal assessed nothing: the
+// element's [validity] is notKnown, which no cvc- code expresses. An empty
+// Code is the package's form for a processor-side failure, as in the
+// streaming validator's own refusals.
+//
 // It records through fail so the MaxErrors accounting, the path and the
 // position are identical; the only difference is the sentinel, and a refusal
 // that MaxErrors dropped is not observable because it was not recorded at all.
-func (v *validator) failLimit(n *xdm.Node, code, format string, args ...any) {
+func (v *validator) failLimit(n *xdm.Node, format string, args ...any) {
 	before := len(v.errs)
-	v.fail(n, code, format, args...)
+	v.fail(n, "", format, args...)
 	if len(v.errs) > before {
 		v.errs[len(v.errs)-1].Err = xdm.ErrResourceLimit
 	}
@@ -603,13 +645,11 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 	// a separate knob on a separate call, and a caller who raises it to
 	// accept a legitimately deep document should not thereby arm a crash.
 	if maxDepth := v.opts.MaxDepth; maxDepth > 0 && len(v.path) >= maxDepth {
-		// cvc-elt.1 is kept because callers and the conformance suites read
-		// the code, but it means "the element is not valid against its
-		// declaration" and nothing here was assessed against anything: the
-		// document may well be perfectly valid, and this processor declined
-		// to find out. The sentinel says which of the two it is.
-		v.failLimit(el, "cvc-elt.1",
-			"element nesting exceeds %d levels", maxDepth)
+		// No cvc-elt.1: that code means "the element is not valid against
+		// its declaration", and nothing here was assessed against anything.
+		// The document may well be perfectly valid; this processor declined
+		// to find out, and failLimit's sentinel says so.
+		v.failLimit(el, "element nesting exceeds %d levels", maxDepth)
 		v.stopped = true
 		return nil
 	}
@@ -657,13 +697,16 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			v.fail(el, "cvc-elt.4.2", "%v", err)
 			return nil
 		}
-		if !v.derivedFrom(t, decl.Type) {
+		// typ, not decl.Type: under XSD 1.1 it is the selected type,
+		// and checking the declared one let xsi:type escape an
+		// xs:error alternative by naming the declared type.
+		if !v.derivedFrom(t, typ) {
 			v.fail(el, "cvc-elt.4.3",
 				"xsi:type %q is not derived from the declared type",
 				xsiType.Value())
 			return nil
 		}
-		if m, blocked := v.substitutionBlocked(t, decl); blocked {
+		if m, blocked := v.substitutionBlocked(t, decl, typ); blocked {
 			v.fail(el, "cvc-elt.4.3",
 				"xsi:type %q substitutes by %v, which is blocked",
 				xsiType.Value(), m)
@@ -724,8 +767,18 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			// typeDef01202m1 are the pair: xsi:nil="true" with
 			// xsi:type="xsd:string" and an ordinary attribute
 			// alongside, expected invalid.
-			if st, ok := typ.(*SimpleType); ok && st != nil {
+			//
+			// The same holds for a complex type: Element Locally Valid
+			// (Complex Type) conditions only its clause 2, the content, on
+			// nilling. The type must not be abstract (1), the attributes
+			// must be valid and the required ones present (3, 4, which is
+			// also where xs:ID attributes are recorded), and its
+			// assertions hold (6).
+			switch t := typ.(type) {
+			case *SimpleType:
 				v.checkNoForeignAttributes(el, nil, nil)
+			case *ComplexType:
+				v.nilledComplex(el, t)
 			}
 			v.annotate(el, typ)
 			// dm:nilled is recorded on the node rather than left to be
@@ -738,7 +791,12 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			t := v.typingOf(el)
 			t.IsNilled = true
 			v.setTyping(el, t)
-			return nil
+			// Nilling empties the content, not the declaration: the
+			// identity constraints it carries still hold, and one whose
+			// selector reaches the element itself has a field to find
+			// or a reference to resolve. Returning without them let
+			// <E xsi:nil="true"/> pass a key on @id that <E/> fails.
+			return v.checkIdentityConstraints(el, decl, nil)
 		}
 	}
 
@@ -898,33 +956,53 @@ func (v *validator) derivedFrom(t, want Type) bool {
 	// would let the instance escape the facets — which is what saxonData
 	// simple016.n01.xml does with xsi:type="xs:date" against a union whose
 	// member is a union restricted by a pattern.
-	if u, ok := want.(*SimpleType); ok && u.Variety == VarietyUnion &&
-		unionIsPure(u) {
-		for _, m := range u.MemberTypes {
-			if m != nil && v.derivedFrom(t, m) {
-				return true
-			}
-		}
-	}
+	return derivesThroughUnions(t, want, unionIsPure)
+}
 
-	// A malformed schema can build a cycle that is not a self-loop, so the
-	// walk terminates on a repeated component rather than on a count.
-	seen := map[Type]bool{}
-	for cur := t; cur != nil && !seen[cur]; {
-		seen[cur] = true
-		if cur == want {
-			return true
-		}
+// derivesThroughUnions reports whether t's base chain reaches want or, for
+// every union u that follow admits, one of u's members, transitively.
+//
+// The base chain of t is walked once into a set, then the union-member DAG
+// under want is walked breadth-first with a visited set. Each type is
+// examined once, so unions sharing members cost the size of the graph rather
+// than the number of paths through it, and a malformed schema's cycle (in
+// either the base chain or the member graph) terminates.
+func derivesThroughUnions(t, want Type, follow func(*SimpleType) bool) bool {
+	if t == want {
+		return t != nil
+	}
+	chain := map[Type]bool{}
+	names := map[xdm.QName]bool{}
+	for cur := t; cur != nil && !chain[cur]; {
+		chain[cur] = true
 		// Comparing by name as well catches the case where a built-in
 		// was reached through two different schema loads.
-		if n := cur.TypeName(); n.Local != "" && n == want.TypeName() {
-			return true
+		if n := cur.TypeName(); n.Local != "" {
+			names[n] = true
 		}
 		base := cur.BaseType()
-		if base == cur || base == nil {
-			return false
+		if base == cur {
+			break
 		}
 		cur = base
+	}
+	visited := map[Type]bool{want: true}
+	queue := []Type{want}
+	for i := 0; i < len(queue); i++ {
+		w := queue[i]
+		if chain[w] || names[w.TypeName()] {
+			return true
+		}
+		u, ok := w.(*SimpleType)
+		if !ok || u.Variety != VarietyUnion || !follow(u) {
+			continue
+		}
+		for _, m := range u.MemberTypes {
+			if m != nil && !visited[m] {
+				visited[m] = true
+				queue = append(queue, m)
+			}
+		}
 	}
 	return false
 }
@@ -949,6 +1027,25 @@ func (v *validator) validateAgainstType(el *xdm.Node, typ Type, decl *ElementDec
 
 	v.annotate(el, typ)
 	return tables
+}
+
+// nilledComplex is validateComplexType for a nilled element: everything but
+// the content.
+func (v *validator) nilledComplex(el *xdm.Node, t *ComplexType) {
+	if t.Abstract {
+		v.fail(el, "cvc-type.2",
+			"type {%s}%s is abstract and cannot validate an element directly",
+			t.Name.URI, t.Name.Local)
+		return
+	}
+	if v.schema.Version == Version11 && len(t.Assertions) > 0 {
+		v.assertScopes++
+		defer func() {
+			v.checkAssertions(el, t)
+			v.assertScopes--
+		}()
+	}
+	v.validateAttributes(el, t)
 }
 
 // validateComplexType checks an element against a complex type.
@@ -1350,7 +1447,7 @@ func (v *validator) modelFor(t *ComplexType) (*contentModel, error) {
 		}
 		return m.(*contentModel), nil
 	}
-	m, err := compileContentModel(t.Particle, v.schema.maxPositions)
+	m, err := compileForChecks(t.Particle, v.schema.maxPositions, v.schema.budgets.width(), 0)
 	if err != nil {
 		v.schema.models.Store(t, err)
 		return nil, err
@@ -1479,7 +1576,7 @@ func (v *validator) matchSequence(el *xdm.Node, nkids int, m *contentModel, t *C
 	// executions which have converged are not carried twice.
 	keep := func() bool {
 		vectors, stepped = stepped, vectors[:0]
-		return len(vectors) <= DefaultMaxMatchStates
+		return v.withinMatchStates(len(vectors))
 	}
 
 	for kid := range el.Children() {
@@ -1891,21 +1988,26 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 					v.fail(kid, "cvc-elt.4.2", "%v", err)
 					return nil
 				}
-				v.validateAgainstType(kid, t, nil)
-				return nil
+				return mergeTables(v.validateAgainstType(kid, t, nil))
 			}
 			// The annotation is saved and restored around this
 			// assessment, and the resolved fields travel WITH it:
 			// they are halves of one fact, so restoring the name
 			// while leaving the meaning from the anyType pass would
 			// describe the old type with the new type's erasure.
+			//
+			// The tables of the subtree go up, as they do from a
+			// declared child: a nested scope of a key below this
+			// element is pruned from the outer scope's walk
+			// (frontier), so its targets reach the outer table only
+			// through them.
 			prev := v.typingOf(kid)
-			v.validateAgainstType(kid, v.schema.anyType(), nil)
+			tables := v.validateAgainstType(kid, v.schema.anyType(), nil)
 			if v.typed {
 				v.setTypeAnnotationResolved(kid, prev.TypeAnnotation,
 					prev.DerivedPrimitive, prev.ListItem)
 			}
-			return nil
+			return mergeTables(tables)
 		case ProcessStrict:
 			d, ok := v.schema.Elements[name]
 			if !ok {
@@ -1924,8 +2026,7 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 						v.fail(kid, "cvc-elt.4.2", "%v", err)
 						return nil
 					}
-					v.validateAgainstType(kid, t, nil)
-					return nil
+					return mergeTables(v.validateAgainstType(kid, t, nil))
 				}
 				v.fail(kid, "cvc-complex-type.2.4.c",
 					"no declaration for {%s}%s, matched by a strict wildcard",
@@ -1998,9 +2099,8 @@ func (v *validator) openContentWithSiblings(t *ComplexType) *OpenContent {
 		}
 	}
 
-	w := *t.OpenContent.Wildcard
-	w.siblingNames = names
-	oc := &OpenContent{Mode: t.OpenContent.Mode, Wildcard: &w}
+	oc := &OpenContent{Mode: t.OpenContent.Mode,
+		Wildcard: t.OpenContent.Wildcard.withSiblingNames(names)}
 	v.openContents[t] = oc
 	return oc
 }
@@ -2069,21 +2169,31 @@ func effectiveValue(el *xdm.Node, decl *ElementDecl) string {
 // apply to the group as a unit, which is a different thing from applying them
 // to each member, and the members' own bounds could not express it.
 func flattenAll(g *ModelGroup) []*Particle {
-	return flattenAllSeen(g, map[*ModelGroup]bool{})
+	return flattenAllSeen(g, map[*ModelGroup]bool{}, map[*ModelGroup]int{})
 }
 
-// flattenAllSeen carries the set of groups already entered.
+// flattenAllSeen carries the set of groups currently entered and the number
+// of times each group has been inlined.
 //
 // A group definition whose content references itself is a cycle, and following
 // it would recurse until the stack is gone. Stopping at a repeat drops the
 // self-reference rather than looping; the schema is ill-formed either way, and
 // the content-model compiler reports it.
-func flattenAllSeen(g *ModelGroup, seen map[*ModelGroup]bool) []*Particle {
-	if seen[g] {
+//
+// A group shared through two references is inlined twice: that duplicate is
+// what the Unique Particle Attribution check reports (two particles that match
+// the same element). A third copy adds nothing that check does not already
+// see, and copying a shared group once per path is what made a DAG of shared
+// all groups expand exponentially before any position bound was consulted.
+// Inlining each group at most twice keeps the output linear in the size of
+// the group graph.
+func flattenAllSeen(g *ModelGroup, active map[*ModelGroup]bool, inlined map[*ModelGroup]int) []*Particle {
+	if active[g] || inlined[g] >= 2 {
 		return nil
 	}
-	seen[g] = true
-	defer delete(seen, g)
+	active[g] = true
+	inlined[g]++
+	defer delete(active, g)
 
 	nested := false
 	for _, p := range g.Particles {
@@ -2098,7 +2208,7 @@ func flattenAllSeen(g *ModelGroup, seen map[*ModelGroup]bool) []*Particle {
 	var out []*Particle
 	for _, p := range g.Particles {
 		if inner := allGroupOf(p); inner != nil {
-			out = append(out, flattenAllSeen(inner, seen)...)
+			out = append(out, flattenAllSeen(inner, active, inlined)...)
 			continue
 		}
 		out = append(out, p)
@@ -2142,17 +2252,26 @@ func (v *validator) baseDeclaredType(t *ComplexType, name xdm.QName) Type {
 // as soon as any of them appears.
 func optionalAllMembers(g *ModelGroup, particles []*Particle) []int {
 	var out []int
+	// index maps a particle to its first position in particles, built only
+	// once an optional nested group is found: a scan per member was
+	// members × particles per call.
+	var index map[*Particle]int
 	for _, p := range g.Particles {
 		inner := allGroupOf(p)
 		if inner == nil || p.MinOccurs != 0 {
 			continue
 		}
-		for _, member := range flattenAll(inner) {
+		if index == nil {
+			index = make(map[*Particle]int, len(particles))
 			for i, flat := range particles {
-				if flat == member {
-					out = append(out, i)
-					break
+				if _, dup := index[flat]; !dup {
+					index[flat] = i
 				}
+			}
+		}
+		for _, member := range flattenAll(inner) {
+			if i, ok := index[member]; ok {
+				out = append(out, i)
 			}
 		}
 	}
@@ -2170,9 +2289,12 @@ func optionalAllMembers(g *ModelGroup, particles []*Particle) []int {
 // The whole chain from the named type up to the declared one is examined, not
 // just the first step: substituting Dee for B goes through De, and it is the
 // *set* of methods used along the way that the block applies to.
-func (v *validator) substitutionBlocked(t Type, decl *ElementDecl) (Derivation, bool) {
+//
+// base is the type xsi:type replaces: the declared type, or under XSD 1.1 the
+// one the type alternatives selected.
+func (v *validator) substitutionBlocked(t Type, decl *ElementDecl, base Type) (Derivation, bool) {
 	blocked := decl.DisallowedSubstitutions
-	if ct, ok := decl.Type.(*ComplexType); ok {
+	if ct, ok := base.(*ComplexType); ok {
 		blocked = DerivationSet(uint8(blocked) | uint8(ct.Prohibits))
 	}
 	if blocked == 0 {
@@ -2180,7 +2302,7 @@ func (v *validator) substitutionBlocked(t Type, decl *ElementDecl) (Derivation, 
 	}
 
 	seen := map[Type]bool{}
-	for cur := t; cur != nil && cur != decl.Type && !seen[cur]; {
+	for cur := t; cur != nil && cur != base && !seen[cur]; {
 		seen[cur] = true
 		ct, ok := cur.(*ComplexType)
 		if !ok {

@@ -38,7 +38,10 @@ func (e *dynamicQName) Eval(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	atoms := xdm.Atomize(v)
+	atoms, err := ctx.atomize(v)
+	if err != nil {
+		return nil, err
+	}
 	if len(atoms) == 0 {
 		return xdm.Empty(), nil
 	}
@@ -100,7 +103,7 @@ func (e *dynamicQName) annotate(a *xdm.Atomic) *xdm.Atomic {
 	if e.derived == "" {
 		return a
 	}
-	return a.WithDerived(e.derived)
+	return withSchemaEnv(a.WithDerived(e.derived), schemaTypeEnvOf(e.ns))
 }
 
 // resolveLexicalQName turns "prefix:local" into a QName using ns.

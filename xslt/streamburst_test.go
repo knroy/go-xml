@@ -10,11 +10,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"weak"
 
-	"github.com/knroy/go-xml/v2/internal/xdmburst"
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/xdm"
-	"github.com/knroy/go-xml/v2/xpath"
 )
 
 const burstDoc = `<?xml version="1.0"?>
@@ -45,11 +43,11 @@ func TestBurstsMatchTree(t *testing.T) {
 		{"strip-space", `<xsl:for-each select="account/transaction"><xsl:copy-of select="."/></xsl:for-each>`, true, `<xsl:strip-space elements="*"/>`},
 		{"last()", `<xsl:for-each select="account/transaction"><xsl:value-of select="last()"/></xsl:for-each>`, false, ""},
 		{"sibling axis", `<xsl:for-each select="account/transaction"><xsl:value-of select="count(preceding-sibling::*)"/></xsl:for-each>`, false, ""},
-		{"positional predicate", `<xsl:for-each select="account/transaction[2]"><xsl:copy-of select="."/></xsl:for-each>`, false, ""},
+		{"positional predicate", `<xsl:for-each select="account/transaction[2]"><xsl:copy-of select="."/></xsl:for-each>`, true, ""},
 		{"ancestor content", `<xsl:for-each select="account/transaction"><xsl:value-of select="string-length(string(..))"/></xsl:for-each>`, false, ""},
-		{"identity", `<xsl:for-each select="account/transaction"><xsl:value-of select=". is ."/></xsl:for-each>`, false, ""},
+		{"identity", `<xsl:for-each select="account/transaction"><xsl:value-of select=". is ."/></xsl:for-each>`, true, ""},
 		{"sort", `<xsl:for-each select="account/transaction"><xsl:sort select="@value"/><xsl:copy-of select="."/></xsl:for-each>`, false, ""},
-		{"node carried", `<xsl:iterate select="account/transaction"><xsl:param name="prev" select="()"/><xsl:on-completion><xsl:copy-of select="$prev"/></xsl:on-completion><xsl:next-iteration><xsl:with-param name="prev" select="copy-of(.)"/></xsl:next-iteration></xsl:iterate>`, false, ""},
+		{"node carried", `<xsl:iterate select="account/transaction"><xsl:param name="prev" select="()"/><xsl:on-completion><xsl:copy-of select="$prev"/></xsl:on-completion><xsl:next-iteration><xsl:with-param name="prev" select="copy-of(.)"/></xsl:next-iteration></xsl:iterate>`, true, ""}, // a copy, carried (M3)
 		{"single instruction", `<xsl:value-of select="count(account/transaction)"/>`, true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -159,8 +157,10 @@ func TestBurstsMatchTreeOn(t *testing.T) {
 			`<doc><rec x="hello" a="  "/><rec x="abcdefg" a="  "/><rec x="zz" a="  "/></doc>`, true},
 		{"space attributes on the spine", `<xsl:for-each select="doc/g/rec"><v a="[{../@a}]" b="[{@b}]"/></xsl:for-each>`,
 			`<doc><g a=" "><rec b=" "/><rec x="qqqq" b=" "/></g><g a=" "><rec b=" "/></g></doc>`, true},
+		// The predicate is positional: the path is doc, the rest a tail run
+		// on the document element's grounded copy (streamfn_instrburst_mm7.go).
 		{"numeric path predicate", `<xsl:for-each select="doc/rec[@k/xs:integer(.)]"><xsl:copy-of select="."/></xsl:for-each>`,
-			`<doc><rec k="1"/><rec k="2"/><rec k="3"/></doc>`, false},
+			`<doc><rec k="2"/><rec k="1"/><rec k="3"/></doc>`, true},
 		{"axis path predicate", `<xsl:for-each select="doc/rec[@k]"><xsl:copy-of select="."/></xsl:for-each>`,
 			`<doc><rec k="1"/><rec/></doc>`, true},
 	} {
@@ -225,9 +225,10 @@ func TestBurstsFailedReadIsNotRead(t *testing.T) {
 
 // A value-of, copy-of or sequence over one record path runs in bursts when
 // its consumer is bounded or pipelined, and is left to the tree otherwise.
-// Each row runs with bursts, with bursts but no folding, and on the tree; all
-// three must agree, error text included, and an error must have come from
-// the tree path (fallback).
+// Each row runs streamed and on the tree; the two must agree, error text
+// included, and an error must have come from the tree path (fallback: the
+// select gave up and was evaluated on the tree, or the container was run on
+// it again) unless its family is final (finalCodes).
 func TestBurstSelectsMatchTree(t *testing.T) {
 	const recs = `<doc><rec k="a" v="3"/><rec k="B" v="1.5"><x>p</x><x>q</x></rec><other v="99"/><rec k="a" v="10"><x>r</x></rec></doc>`
 	const nan = `<doc><rec v="2"/><rec v="NaN"/><rec v="1"/></doc>`
@@ -247,57 +248,58 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"sum, empty", `<xsl:value-of select="sum(doc/none/@v)"/>`, recs, true, false},
 		{"sum, zero", `<xsl:sequence select="sum(doc/none/@v, 'zero')"/>`, recs, true, false},
 		{"sum, mixed numerics", `<xsl:value-of select="sum(doc/rec/(if (@k = 'a') then xs:decimal(@v) else xs:double(@v)))"/>`, recs, true, false},
-		{"sum, untyped error", `<xsl:value-of select="sum(doc/rec/@v)"/>`, bad, true, true},
+		{"sum, untyped error", `<xsl:value-of select="sum(doc/rec/@v)"/>`, bad, true, false},
 		{"sum, error before a malformed tail", `<xsl:value-of select="sum(doc/rec/xs:integer(@v))"/>`, tail, true, true},
 		{"max", `<xsl:value-of select="max(doc/rec/@v) + 1"/>`, recs, true, false},
 		{"min, NaN", `<xsl:value-of select="min(doc/rec/@v)"/>`, nan, true, false},
 		{"max, strings by collation", `<xsl:value-of select="max(doc/rec/@k/string(), ` + ci + `)"/>`, recs, true, false},
 		{"min, strings", `<xsl:value-of select="min(doc/rec/@k/string())"/>`, recs, true, false},
 		{"max, mixed numerics", `<xsl:value-of select="max(doc/rec/(if (@k = 'a') then xs:decimal(@v) else xs:float(@v)))"/>`, recs, true, true},
-		{"max, untyped error", `<xsl:value-of select="max(doc/rec/@k)"/>`, recs, true, true},
+		{"max, untyped error", `<xsl:value-of select="max(doc/rec/@k)"/>`, recs, true, false},
 		{"max, empty", `<xsl:sequence select="empty(max(doc/none/@v))"/>`, recs, true, false},
 		// bounded reducers, not folded
 		{"avg", `<xsl:value-of select="avg(doc/rec/@v)"/>`, recs, true, false},
 		{"exists", `<xsl:value-of select="exists(doc/rec[@k = 'z'])"/>`, recs, true, false},
-		{"boolean, not", `<xsl:value-of select="not(boolean(doc/rec/x))"/>`, recs, false, false},
+		{"boolean, not", `<xsl:value-of select="not(boolean(doc/rec/x))"/>`, recs, true, false},
 		{"general comparison", `<xsl:value-of select="doc/rec/@v = 10"/>`, recs, true, false},
-		{"value comparison error", `<xsl:value-of select="doc/rec/@v eq 10"/>`, recs, true, true},
-		{"some", `<xsl:value-of select="some $r in doc/rec satisfies $r/@v > 5"/>`, recs, false, false},
-		{"some, type error", `<xsl:value-of select="some $r in doc/rec satisfies $r/@v gt 5"/>`, recs, false, false},
-		{"literal position", `<xsl:value-of select="(doc/rec/@v)[2] + 1"/>`, recs, false, false},
+		{"value comparison error", `<xsl:value-of select="doc/rec/@v eq 10"/>`, recs, true, false},                  // XPTY0004: finalCodes
+		{"some", `<xsl:value-of select="some $r in doc/rec satisfies $r/@v > 5"/>`, recs, true, false},              // held at the document node (streamhold.go)
+		{"some, type error", `<xsl:value-of select="some $r in doc/rec satisfies $r/@v gt 5"/>`, recs, true, false}, // held at the document node (streamhold.go); XPTY0004: finalCodes
+		{"literal position", `<xsl:value-of select="(doc/rec/@v)[2] + 1"/>`, recs, true, false},
 		{"head", `<xsl:copy-of select="head(doc/rec/@k/string())"/>`, recs, true, false},
-		{"exactly-one error", `<xsl:copy-of select="exactly-one(doc/rec)"/>`, recs, false, false},
+		{"exactly-one error", `<xsl:copy-of select="exactly-one(doc/rec)"/>`, recs, true, false}, // held at the document node (streamhold.go)
 		{"deep-equal", `<xsl:value-of select="deep-equal(doc/rec/@k/string(), ('a', 'B', 'a'))"/>`, recs, true, false},
 		{"cast", `<xsl:value-of select="xs:string(doc/rec[@k = 'B']/@v)"/>`, recs, true, false},
 		{"positional within the record", `<xsl:value-of select="count(doc/rec/x[1])"/>`, recs, true, false},
-		{"positional record", `<xsl:copy-of select="doc/rec[2]"/>`, recs, false, false},
+		{"positional record", `<xsl:copy-of select="doc/rec[2]"/>`, recs, true, false},
 		// pipelined
-		{"simple map", `<xsl:value-of select="doc/rec/@k ! string()"/>`, recs, false, false},
+		{"simple map", `<xsl:value-of select="doc/rec/@k ! string()"/>`, recs, true, false}, // the path doc/rec/@k/string() (M6)
 		{"string-join", `<xsl:value-of select="string-join(doc/rec/@k, '-')"/>`, recs, true, false},
-		{"copy-of path", `<out><xsl:copy-of select="doc/rec[@v > 2]"/></out>`, recs, false, false},
-		{"copy-of filtered", `<xsl:copy-of select="copy-of(doc/rec)[x = 'r']"/>`, recs, false, false},
+		{"copy-of path", `<out><xsl:copy-of select="doc/rec[@v > 2]"/></out>`, recs, true, false},
+		{"copy-of filtered", `<xsl:copy-of select="copy-of(doc/rec)[x = 'r']"/>`, recs, true, false}, // held at the document node (streamhold.go)
 		{"sequence data", `<xsl:sequence select="doc/rec/x/data()"/>`, recs, true, false},
 		{"for", `<xsl:value-of select="for $v in doc/rec/@v/data() return $v * 2"/>`, recs, true, false},
-		{"path from the items", `<xsl:value-of select="tail(doc/rec)/@v"/>`, recs, false, false},
+		{"path from the items", `<xsl:value-of select="tail(doc/rec)/@v"/>`, recs, true, false}, // tail() skips a match (streamshapes.go)
 		{"path from copies", `<xsl:value-of select="count(copy-of(doc/rec)/x)"/>`, recs, false, false},
-		{"unordered", `<xsl:value-of select="sum(unordered(doc/rec/@v))"/>`, recs, false, false},
+		{"unordered", `<xsl:value-of select="sum(unordered(doc/rec/@v))"/>`, recs, true, false}, // held at the document node (streamhold.go)
 		{"malformed tail", `<xsl:value-of select="doc/rec/@v"/>`, tail, true, true},
 		// the same consumers over values: admitted
-		{"boolean over values", `<xsl:value-of select="not(boolean(doc/rec/x/data()))"/>`, recs, true, true},
+		{"boolean over values", `<xsl:value-of select="not(boolean(doc/rec/x/data()))"/>`, recs, true, false},
 		{"some over values", `<xsl:value-of select="some $v in doc/rec/@v/data() satisfies $v > 5"/>`, recs, true, false},
 		{"literal position over values", `<xsl:value-of select="(doc/rec/@v/data())[2] + 1"/>`, recs, true, false},
-		{"exactly-one over values", `<xsl:copy-of select="exactly-one(doc/rec/@k/string())"/>`, recs, true, true},
+		{"exactly-one over values", `<xsl:copy-of select="exactly-one(doc/rec/@k/string())"/>`, recs, true, false},
 		{"simple map over values", `<xsl:value-of select="doc/rec/@k/string() ! upper-case(.)"/>`, recs, true, false},
-		{"copies the path made", `<out><xsl:copy-of select="doc/rec[@v > 2]/copy-of()"/></out>`, recs, false, false},
+		{"copies the path made", `<out><xsl:copy-of select="doc/rec[@v > 2]/copy-of()"/></out>`, recs, true, false},
 		{"copies the path made, counted", `<xsl:value-of select="count(doc/rec[@v > 2]/copy-of())"/>`, recs, true, false},
 		{"unordered over values", `<xsl:value-of select="sum(unordered(doc/rec/@v/data()))"/>`, recs, true, false},
 		{"value-of of the path", `<xsl:value-of select="doc/rec/@k" separator="|"/>`, recs, true, false},
-		{"value-of of text nodes", `<xsl:value-of select="doc/rec/x/text()"/>`, recs, false, false},
+		{"value-of of text nodes", `<xsl:value-of select="doc/rec/x/text()"/>`, recs, true, false}, // kept leaves (G4)
 		// refused (the rows above that expect no bursts keep the path's nodes)
-		{"distinct-values", `<xsl:value-of select="count(distinct-values(doc/rec/@k))"/>`, recs, false, false},
+		{"distinct-values", `<xsl:value-of select="count(distinct-values(doc/rec/@k))"/>`, recs, true, false}, // g5: a whole-argument call
+		{"sort", `<xsl:value-of select="count(sort(doc/rec/@k/string()))"/>`, recs, false, false},
 		{"reverse", `<xsl:value-of select="reverse(doc/rec/@k/string())"/>`, recs, false, false},
 		{"last()", `<xsl:value-of select="(doc/rec/@k)[last()]"/>`, recs, false, false},
-		{"union", `<xsl:value-of select="count(doc/rec union ())"/>`, recs, false, false},
+		{"union", `<xsl:value-of select="count(doc/rec union ())"/>`, recs, true, false}, // foreignSets: count(P) + count(())
 		{"two paths", `<xsl:value-of select="sum(doc/rec/@v) div count(doc/rec)"/>`, recs, false, false},
 		{"path from copies the path made", `<xsl:value-of select="(doc/rec/copy-of())/x"/>`, recs, false, false},
 		{"let", `<xsl:value-of select="let $r := doc/rec return count($r)"/>`, recs, false, false},
@@ -307,21 +309,17 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 			src := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema" exclude-result-prefixes="xs">` +
 				`<xsl:template name="main"><xsl:source-document streamable="yes" href="doc.xml">` +
 				tc.body + `</xsl:source-document></xsl:template></xsl:stylesheet>`
-			fell := false
-			traceBurstFallback = func(error) { fell = true }
-			defer func() { traceBurstFallback, noBurstFold = nil, false }()
 			dir := t.TempDir()
 			if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(tc.doc), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			before := streamtrace.Snapshot()
 			got, err := burstRunIn(t, src, dir, true)
-			ran := burstRuns
-			noBurstFold = true
-			kept, err1 := burstRunIn(t, src, dir, true)
-			noBurstFold = false
+			tr := streamtrace.Snapshot().Sub(before)
+			ran, fell := burstRuns, tr.Fallbacks+tr.Reruns > 0
 			want, err2 := burstRunIn(t, src, dir, false)
-			if got != want || kept != want || fmt.Sprint(err) != fmt.Sprint(err2) || fmt.Sprint(err1) != fmt.Sprint(err2) {
-				t.Fatalf("bursts differ from the tree\nbursts: %q %v\nkept:   %q %v\ntree:   %q %v", got, err, kept, err1, want, err2)
+			if got != want || fmt.Sprint(err) != fmt.Sprint(err2) {
+				t.Fatalf("bursts differ from the tree\nbursts: %q %v\ntree:   %q %v", got, err, want, err2)
 			}
 			if ran != tc.bursts || fell != tc.fallback {
 				t.Fatalf("ran in bursts: %v, fell back %v; want %v, %v (output %q, %v)", ran, fell, tc.bursts, tc.fallback, got, err)
@@ -409,10 +407,11 @@ func TestBurstPatternsMatchTree(t *testing.T) {
 		{`<xsl:value-of select="//rec/@k"/>`, burstNSDoc, `xpath-default-namespace="urn:d"`, true, "1 2 3"},
 		{`<xsl:for-each select="outermost(//rec)"><r k="{@k}"/></xsl:for-each>`, burstNSDoc, `xpath-default-namespace="urn:d"`, true, `<r k="1"/><r k="3"/>`},
 		{`<xsl:value-of select="count(//rec)"/>`, burstNSDoc, "", true, "0"},
-		// refused: no element to cut at, or a position among siblings
-		{`<xsl:value-of select="count(//text())"/>`, burstNestDoc, "", false, "2"},
-		{`<xsl:value-of select="sum(//@v)"/>`, burstNestDoc, "", false, "28"},
-		{`<xsl:for-each select="//rec[1]"><r k="{@k}"/></xsl:for-each>`, burstNestDoc, "", false, ""},
+		// refused by the burst plans (no element to cut at, or a position
+		// among siblings); the streamed core takes them
+		{`<xsl:value-of select="count(//text())"/>`, burstNestDoc, "", true, "2"},
+		{`<xsl:value-of select="sum(//@v)"/>`, burstNestDoc, "", true, "28"},
+		{`<xsl:for-each select="//rec[1]"><r k="{@k}"/></xsl:for-each>`, burstNestDoc, "", true, ""},
 	} {
 		src := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:q="urn:q" exclude-result-prefixes="q" ` +
 			tc.attrs + `><xsl:template name="main"><xsl:source-document streamable="yes" href="doc.xml">` +
@@ -429,68 +428,6 @@ func TestBurstPatternsMatchTree(t *testing.T) {
 		}
 		if tc.want != "" && !strings.HasSuffix(got, ">"+tc.want) {
 			t.Errorf("%s: output %q, want %q", tc.body, got, tc.want)
-		}
-	}
-}
-
-// keepCounter is a FileResolver that remembers, weakly, each burst's
-// document node and counts how many are still reachable once the parse is
-// over, while the transform that read them is still running.
-type keepCounter struct {
-	*FileResolver
-	live int
-}
-
-func (k *keepCounter) parseBursts(ctx *xpath.Context, uri, base string, path []xdmburst.Step, fn func(*xdm.Node) error) error {
-	var seen []weak.Pointer[xdm.Node]
-	err := k.FileResolver.parseBursts(ctx, uri, base, path, func(n *xdm.Node) error {
-		seen = append(seen, weak.Make(n.Tree().Root))
-		return fn(n)
-	})
-	goruntime.GC()
-	goruntime.GC()
-	for _, w := range seen {
-		if w.Value() != nil {
-			k.live++
-		}
-	}
-	return err
-}
-
-// Each burst's tree is let go once it has been read: //rec from a burst's
-// document node is not left in package xpath's per-transform step memo,
-// which would keep every burst's tree to the end of the transform.
-func TestBurstsDropTheirTrees(t *testing.T) {
-	dir := t.TempDir()
-	doc := "<doc>" + strings.Repeat(`<rec v="1"><a>x</a><rec v="2"/></rec>`, 2000) + "</doc>"
-	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, body := range []string{
-		`<xsl:value-of select="count(//rec)"/>`,
-		`<xsl:value-of select="sum(outermost(//rec)/@v)"/>`,
-		`<xsl:for-each select="//rec[@v = 2]"><xsl:value-of select="@v"/></xsl:for-each>`,
-	} {
-		src := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:template name="main"><xsl:source-document streamable="yes" href="doc.xml">` +
-			body + `</xsl:source-document></xsl:template></xsl:stylesheet>`
-		tree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
-		if err != nil {
-			t.Fatal(err)
-		}
-		sheet, err := Compile(tree.Root, CompileOptions{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		fr, err := NewFileResolver(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		k := &keepCounter{FileResolver: fr}
-		if _, err := sheet.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: k}); err != nil {
-			t.Fatal(err)
-		}
-		if k.live > 10 {
-			t.Errorf("%s: %d of 2000 burst trees still held after the parse", body, k.live)
 		}
 	}
 }

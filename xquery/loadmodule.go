@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/big"
 	"strings"
+	"sync"
 
 	"github.com/knroy/go-xml/v2/internal/xdmfunc"
 	"github.com/knroy/go-xml/v2/xdm"
@@ -38,7 +39,40 @@ func init() { xpath.RegisterXQueryModuleLoader(loadXQueryModule) }
 // queryModules is what an XQuery query installs as Env.Modules: its own
 // module options, so that a module loaded from it sees the module store and
 // the schemas "import module" and "import schema" would see.
-type queryModules struct{ opts Options }
+//
+// cache is the evaluation's: prepare installs a fresh one per evaluation, so
+// the calls of one evaluation share it and nothing outlives the evaluation.
+type queryModules struct {
+	opts  Options
+	cache *moduleCache
+}
+
+// moduleCache holds the modules one evaluation's fn:load-xquery-module calls
+// have compiled, and what compiling them spent.
+//
+// Every call compiled its module afresh, and each Compile builds a new module
+// loader, so each call got the whole MaxModules and MaxModuleBytes allowance
+// and its own resolver round trip, and every result kept its own compiled
+// copy alive: N calls of one 8 KB module retained 50x its size N times over
+// while the item budget saw N items. A repeated call is now a lookup, and the
+// modules a distinct call loads are spent against the same allowance as
+// "import module", cumulatively across the evaluation.
+type moduleCache struct {
+	mu      sync.Mutex
+	queries map[string]loadedModule
+	modules int
+	bytes   int64
+	// schemaBytes is the schema text every load of the evaluation has read,
+	// held to one MaxSchemaBytes across them.
+	schemaBytes int64
+}
+
+// loadedModule is one cached compile: the query, or the error it raised,
+// which a repeated call gets back without reading the module again.
+type loadedModule struct {
+	q   *Query
+	err error
+}
 
 // Resolve implements xpath.ModuleResolver: the store first, then the
 // resolver, the order the module loader uses.
@@ -71,8 +105,10 @@ func loadXQueryModule(ctx *xpath.Context, uri string, options *xdm.MapItem) (xdm
 	}
 
 	var opts Options
+	var cache *moduleCache
 	switch m := ctx.Env().Modules.(type) {
 	case queryModules:
+		cache = m.cache
 		opts = Options{Modules: m.opts.Modules, ModuleResolver: m.opts.ModuleResolver,
 			MaxModules: m.opts.MaxModules, MaxModuleBytes: m.opts.MaxModuleBytes,
 			Schemas: m.opts.Schemas, SchemaResolver: m.opts.SchemaResolver,
@@ -92,7 +128,7 @@ func loadXQueryModule(ctx *xpath.Context, uri string, options *xdm.MapItem) (xdm
 		}
 		src += quoteLiteral(h)
 	}
-	q, err := Compile(src+"; ()", opts)
+	q, err := compileLoadedModule(ctx, cache, src+"; ()", opts)
 	if err != nil {
 		return nil, moduleCompileError(uri, err)
 	}
@@ -168,6 +204,97 @@ func loadXQueryModule(ctx *xpath.Context, uri string, options *xdm.MapItem) (xdm
 	}
 	out, err = out.Put(xdm.NewString("functions"), xdm.One(funcs))
 	return xdm.One(out), err
+}
+
+// compileLoadedModule compiles the import-only main module of one call, once
+// per evaluation for each distinct source and base URI when cache is set.
+//
+// The module text a new compile read is charged to the caller's byte budget,
+// for every host: the compiled modules live as long as the function items
+// the result hands out, so they are the evaluation's memory. With a cache the
+// modules are also spent against MaxModules and MaxModuleBytes across calls;
+// an XPath or XSLT host's resolver has no per-evaluation slot to keep them
+// in, so there the byte budget is the bound.
+func compileLoadedModule(ctx *xpath.Context, cache *moduleCache, src string,
+	opts Options) (*Query, error) {
+	if cache == nil {
+		return compileAndCharge(ctx, nil, src, opts)
+	}
+	key := opts.BaseURI + "\x00" + src
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if r, ok := cache.queries[key]; ok {
+		return r.q, r.err
+	}
+	q, err := compileAndCharge(ctx, cache, src, opts)
+	if cache.queries == nil {
+		cache.queries = map[string]loadedModule{}
+	}
+	cache.queries[key] = loadedModule{q: q, err: err}
+	return q, err
+}
+
+// compileAndCharge is compileLoadedModule's compile and spend, with
+// cache.mu held when cache is set.
+//
+// With a cache, the refusal comes before the work: a load once MaxModules is
+// spent is refused without compiling, a failed compile still counts as one
+// module, and the schema text every compile reads is one MaxSchemaBytes
+// across the evaluation. Each call's distinct location hints are a distinct
+// source, so counting only successes, after compiling, let every call
+// compile in full against a fresh schema allowance.
+//
+// The schema text a compile read is charged to the byte budget with the
+// module text: the compiled schema is held as long as the module is.
+func compileAndCharge(ctx *xpath.Context, cache *moduleCache, src string,
+	opts Options) (*Query, error) {
+	maxMods, maxBytes := opts.MaxModules, opts.MaxModuleBytes
+	if maxMods == 0 {
+		maxMods = DefaultMaxModules
+	}
+	if maxBytes == 0 {
+		maxBytes = DefaultMaxModuleBytes
+	}
+	modulesRefused := func() error {
+		return fmt.Errorf("the modules loaded by fn:load-xquery-module "+
+			"exceed %d (Options.MaxModules): %w", maxMods, xdm.ErrResourceLimit)
+	}
+	schema := new(int64)
+	if cache != nil {
+		if cache.modules >= maxMods {
+			return nil, modulesRefused()
+		}
+		schema = &cache.schemaBytes
+	}
+	before := *schema
+	q, err := compile(src, opts, schema)
+	if err != nil {
+		if cache != nil {
+			cache.modules++
+		}
+		return nil, err
+	}
+	var n int64
+	for _, m := range q.modules {
+		n += int64(len(m.src))
+	}
+	if err := ctx.ChargeBytes(int(n + *schema - before)); err != nil {
+		return nil, err
+	}
+	if cache == nil {
+		return q, nil
+	}
+	cache.modules += len(q.modules)
+	cache.bytes += n
+	if cache.modules > maxMods {
+		return nil, modulesRefused()
+	}
+	if cache.bytes > maxBytes {
+		return nil, fmt.Errorf("the modules loaded by fn:load-xquery-module "+
+			"exceed %d bytes (Options.MaxModuleBytes): %w", maxBytes,
+			xdm.ErrResourceLimit)
+	}
+	return q, nil
 }
 
 // moduleFunction is a library module's function as a function item that

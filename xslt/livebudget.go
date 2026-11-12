@@ -20,8 +20,6 @@ package xslt
 //     namespace, and no text merged into the last text node (outSig). Output
 //     is held for good, and anything written may refer to what it built;
 //   - it forced no global variable, whose value outlives it;
-//   - the runtime records no copies (accumOrigin, made only for a stylesheet
-//     with accumulators), since that map keeps every copy alive;
 //   - what xsl:next-iteration carries on is nodes and atomic values only,
 //     which are measured: each distinct tree in full (treeSize) and each
 //     value's string. A map, an array or a function item could hold
@@ -47,6 +45,7 @@ package xslt
 // at quadratic work could take hours.
 
 import (
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -62,7 +61,6 @@ const (
 
 // liveLoop is one streamed loop's accounting across its items.
 type liveLoop struct {
-	on bool
 	// nodes and bytes are the part of the counters that stands for the
 	// iteration parameters being carried.
 	nodes, bytes int64
@@ -70,16 +68,34 @@ type liveLoop struct {
 	n0, b0 int64
 	forced int
 	sig    outSig
+	// What measure measured at the last item: the carried values (last),
+	// their size (lastN, lastB) and each carried tree's, by root (sizes).
+	// A tree does not change once built, so an item carrying the same
+	// values, or nodes of the same trees, is not walked again; only the
+	// last item's trees are kept, so none outlives what is carried.
+	last         []xdm.Sequence
+	lastN, lastB int64
+	sizes        map[*xdm.Node][2]int64
+	// walked counts the nodes treeSize visited, for the tests.
+	walked int64
 }
 
-// outSig is what an item could change by writing to its output.
-type outSig struct{ items, kids, attrs, ns, text int }
+// outSig is what an item could change by writing to its output. end is
+// the open element's subtree end, which moves with every child or
+// descendant appended to it: O(1), where counting its children made a loop
+// writing under one element quadratic.
+type outSig struct {
+	items, end, attrs, ns, text int
+	// stamp moves whenever a streamed result (streamout.go) is appended
+	// to, which takes written nodes back and so can bring end back too.
+	stamp int64
+}
 
 func signature(out *outputBuilder) outSig {
-	s := outSig{items: len(out.Items())}
+	s := outSig{items: len(out.Items()), stamp: xdmsink.Stamp(out)}
 	var last *xdm.Node
 	if e := out.Open(); e != nil {
-		s.kids, s.attrs, s.ns = e.NumChildren(), e.NumAttrs(), e.NumNamespaceDecls()
+		s.end, s.attrs, s.ns = e.SubtreeEnd(), e.NumAttrs(), e.NumNamespaceDecls()
 		last = e.LastChild()
 	} else if s.items > 0 {
 		last, _ = out.Items()[s.items-1].(*xdm.Node)
@@ -92,14 +108,11 @@ func signature(out *outputBuilder) outSig {
 
 // liveLoop starts the accounting of a streamed loop writing to out.
 func (rt *runtime) liveLoop() *liveLoop {
-	return &liveLoop{on: rt.accumOrigin == nil}
+	return &liveLoop{}
 }
 
 // begin marks the start of an item.
 func (l *liveLoop) begin(rt *runtime, out *outputBuilder) {
-	if !l.on {
-		return
-	}
 	l.n0, l.b0 = xpathleaf.Charged(rt.ctx)
 	l.forced, l.sig = rt.globalsForced, signature(out)
 }
@@ -107,15 +120,17 @@ func (l *liveLoop) begin(rt *runtime, out *outputBuilder) {
 // end hands back what the item that began at the last begin built and does
 // not hold, carried being the iteration parameters it leaves for the next.
 func (l *liveLoop) end(rt *runtime, out *outputBuilder, carried []xdm.Sequence) {
-	if !l.on {
-		return
-	}
 	n1, b1 := xpathleaf.Charged(rt.ctx)
-	cn, cb, ok := carriedSize(carried)
-	if !ok || n1 < l.n0 || b1 < l.b0 || rt.globalsForced != l.forced || signature(out) != l.sig {
+	ok := n1 >= l.n0 && b1 >= l.b0 && rt.globalsForced == l.forced && signature(out) == l.sig
+	var cn, cb int64
+	if ok {
+		cn, cb, ok = l.measure(carried)
+	}
+	if !ok {
 		// Everything it built stays charged, and so does what the previous
 		// items left carried: none of it is known to be dropped.
 		l.nodes, l.bytes = 0, 0
+		l.last, l.sizes = nil, nil
 		return
 	}
 	an, ab := int64(liveNodeAllowance), int64(liveByteAllowance)
@@ -142,11 +157,16 @@ func settle(built int64, held *int64, need, allow int64) int64 {
 	return r
 }
 
-// carriedSize measures the iteration parameters an item carries on: nodes and
+// measure measures the iteration parameters an item carries on: nodes and
 // string bytes, each tree counted once in full. ok is false for an item it
-// cannot see into.
-func carriedSize(carried []xdm.Sequence) (nodes, bytes int64, ok bool) {
-	var seen map[*xdm.Node]bool
+// cannot see into. Walking every carried tree at every item made a loop
+// carrying a large tree quadratic, so a tree the last item carried is not
+// walked again, nor anything when the values are the last item's own.
+func (l *liveLoop) measure(carried []xdm.Sequence) (nodes, bytes int64, ok bool) {
+	if sameSequences(carried, l.last) {
+		return l.lastN, l.lastB, true
+	}
+	var seen map[*xdm.Node][2]int64
 	for _, seq := range carried {
 		for _, it := range seq {
 			switch v := it.(type) {
@@ -157,21 +177,42 @@ func carriedSize(carried []xdm.Sequence) (nodes, bytes int64, ok bool) {
 				for p := r.Parent(); p != nil; p = p.Parent() {
 					r = p
 				}
-				if seen[r] {
+				if _, dup := seen[r]; dup {
 					continue
 				}
 				if seen == nil {
-					seen = map[*xdm.Node]bool{}
+					seen = map[*xdm.Node][2]int64{}
 				}
-				seen[r] = true
-				n, b := treeSize(r)
-				nodes, bytes = nodes+n, bytes+b
+				sz, known := l.sizes[r]
+				if !known {
+					sz[0], sz[1] = treeSize(r)
+					l.walked += sz[0]
+				}
+				seen[r] = sz
+				nodes, bytes = nodes+sz[0], bytes+sz[1]
 			default:
+				l.last, l.sizes = nil, nil
 				return 0, 0, false
 			}
 		}
 	}
+	l.last, l.sizes = append(l.last[:0], carried...), seen
+	l.lastN, l.lastB = nodes, bytes
 	return nodes, bytes, true
+}
+
+// sameSequences reports whether a and b hold the same sequences: the same
+// slices, which hold the same items, as values are not changed in place.
+func sameSequences(a, b []xdm.Sequence) bool {
+	if len(a) != len(b) || a == nil || b == nil {
+		return false
+	}
+	for k := range a {
+		if len(a[k]) != len(b[k]) || len(a[k]) > 0 && &a[k][0] != &b[k][0] {
+			return false
+		}
+	}
+	return true
 }
 
 // treeSize is the nodes of n's subtree, counted as the builder charges them

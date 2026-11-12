@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/knroy/go-xml/v2/internal/fileuri"
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/internal/xsdstream"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 	"github.com/knroy/go-xml/v2/xsd"
@@ -43,6 +45,12 @@ func (t Target) String() string {
 }
 
 type Runner struct {
+	// output, while checkOutput runs a case again, is where the principal
+	// result is streamed (TransformOptions.Output).
+	output io.Writer
+	// secondary, then, is where its secondary results are written
+	// (TransformOptions.SecondaryOutput).
+	secondary func(href string) (io.WriteCloser, error)
 	// Root is the suite checkout.
 	Root string
 	// Target is the version measured. The zero value is XSLT 2.0, so an
@@ -215,7 +223,9 @@ func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
 		return out
 	}
 
+	markStreams()
 	res, terr := r.transformSafely(set, tc)
+	rawErr := terr
 
 	// A failure that is really an engine limitation the suite does not
 	// declare as a feature is reported as out of scope rather than as a
@@ -255,12 +265,14 @@ func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
 	}
 
 	r.recordCase(set, tc, res, terr)
+	r.checkOutput(set, tc, res, rawErr)
 
 	// The schema the environment declares is part of the static context the
 	// assertions are evaluated in, exactly as it is for the stylesheet.
 	ok, why := r.judge(assert, res, terr, set,
 		envSchema(set, r.environment(set, tc)), tc.Test.Output.rawResultVar())
 	out.Pass, out.Why = ok, why
+	r.recordVerdict(set, tc, terr, ok)
 	return out
 }
 
@@ -503,17 +515,34 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	// streamable-021 has the import commented out -- so without this the
 	// components were loaded and discarded and every one reported XTSE1660,
 	// validation requires a schema and none was imported.
+	envOnly := false // the stylesheet's schema is the environment's, and only it
 	if es := envSchema(set, r.environment(set, tc)); es != nil {
 		if sch := ss.Schema(); sch != nil {
 			mergeInto(sch, es)
 		} else {
-			ss.SetSchemaIfAbsent(es)
+			envOnly = ss.SetSchemaIfAbsent(es)
 		}
 	}
 
-	src, srcPath, err := r.principalSource(set, tc)
-	if err != nil {
-		return nil, err
+	// A principal input the catalog declares streaming="true" is handed to
+	// TransformReader unparsed (streamedSource), which streams it when the
+	// stylesheet allows; under GOXSLT_STREAM_OFF=1 it is parsed here and
+	// given to Transform, as every other source is.
+	streamPath, streamContent, streamOpts := r.streamedSource(set, tc)
+	// A validated principal input streams with TransformOptions.SourceValidation,
+	// which validates against the stylesheet's schema: the one annotate uses
+	// when the stylesheet imports none, or one typing the document as it
+	// does (streamvalidate.go).
+	validation := r.principalValidation(set, tc)
+	if validation != 0 && (!envOnly && !r.sameValidation(set, tc, ss.Schema()) || streamPath == "") {
+		streamPath, streamContent, validation = "", "", 0
+	}
+	var src *xdm.Node
+	var srcPath string
+	if streamPath == "" && streamContent == "" {
+		if src, srcPath, err = r.principalSource(set, tc); err != nil {
+			return nil, err
+		}
 	}
 
 	docs := &xslt.FileResolver{
@@ -715,7 +744,68 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	if streamContent != "" {
+		opts.SourceParseOptions = streamOpts
+		opts.Output = r.output
+		opts.SecondaryOutput = r.secondary
+		return ss.TransformReader(ctx, strings.NewReader(streamContent), opts)
+	}
+	if streamPath != "" {
+		data, err := os.ReadFile(streamPath)
+		if err != nil {
+			return nil, err
+		}
+		opts.SourceParseOptions = streamOpts
+		opts.Output = r.output
+		opts.SecondaryOutput = r.secondary
+		opts.SourceValidation = validation // the annotate the tree has, on the stream
+		return ss.TransformReader(ctx, strings.NewReader(string(stripBOM(data))), opts)
+	}
+	opts.Output = r.output
+	opts.SecondaryOutput = r.secondary
 	return ss.Transform(ctx, src, opts)
+}
+
+// streamedSource returns the file of the principal input, or its inline
+// content, when the catalog declares it streaming="true" and nothing must
+// be done to it between its parse and the transform -- no @select,
+// XInclude or validation, no initial-mode selection evaluated over it --
+// with the options principalSource would parse it with; "" otherwise, and
+// always under GOXSLT_STREAM_OFF=1.
+func (r *Runner) streamedSource(set *TestSet, tc *TestCase) (path, content string, _ xdm.ParseOptions) {
+	env := r.environment(set, tc)
+	if env == nil || streamtrace.Off() || tc.Test.InitialMode != nil && tc.Test.InitialMode.Select != "" {
+		return "", "", xdm.ParseOptions{}
+	}
+	for _, s := range env.Sources {
+		if s.Role != "." {
+			continue
+		}
+		if s.Streaming != "true" || s.Select != "" || s.Content == "" && s.File == "" ||
+			s.XInclude == "true" || (s.Validation == "strict" || s.Validation == "lax") && r.streamValidated(set, env, s) == nil {
+			return "", "", xdm.ParseOptions{}
+		}
+		if s.Content != "" {
+			// As principalSource parses it: part of the test-set file.
+			return "", s.Content, xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(set.Path),
+				ExternalEntities: r.entityResolver()}
+		}
+		p := filepath.Join(set.Dir, filepath.FromSlash(s.File))
+		return p, "", r.sourceParseOptions(p)
+	}
+	return "", "", xdm.ParseOptions{}
+}
+
+// sourceParseOptions are the options a principal input read from the file
+// p is parsed with.
+func (r *Runner) sourceParseOptions(p string) xdm.ParseOptions {
+	return xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p),
+		// Retrieved by URI, so it has a dm:document-uri as well
+		// as a base URI and fn:document-uri must report it. A
+		// tree a stylesheet builds gets neither, which is the
+		// distinction that function exists to make.
+		DocumentURI:      fileURI(p),
+		ExternalEntities: r.entityResolver()}
 }
 
 // noNS resolves no prefixes, which is what a parameter expression written in
@@ -803,7 +893,16 @@ func (r *Runner) preloadSources(set *TestSet, tc *TestCase, docs *xslt.FileResol
 		// Under the path the declared URI resolves to. The suite writes the
 		// uri relative to the test-set directory and the stylesheet names it
 		// the same way, so both arrive at the same file.
-		docs.Preload(fileURI(filepath.Join(set.Dir, filepath.FromSlash(s.URI))), root.Tree())
+		uri := fileURI(filepath.Join(set.Dir, filepath.FromSlash(s.URI)))
+		docs.Preload(uri, root.Tree())
+		// A source declared streaming="true" may still be streamed by a
+		// validating xsl:source-document, which repeats this validation on
+		// the stream (streamvalidate.go).
+		if s.Streaming == "true" && !streamtrace.Off() {
+			if sch := envSchema(set, env); sch != nil {
+				xsdstream.MarkSource(docs, uri, sch)
+			}
+		}
 	}
 }
 
@@ -880,13 +979,7 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, string,
 			if err != nil {
 				return nil, "", err
 			}
-			popts := xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p),
-				// Retrieved by URI, so it has a dm:document-uri as well
-				// as a base URI and fn:document-uri must report it. A
-				// tree a stylesheet builds gets neither, which is the
-				// distinction that function exists to make.
-				DocumentURI:      fileURI(p),
-				ExternalEntities: r.entityResolver()}
+			popts := r.sourceParseOptions(p)
 			tree, err := xdm.ParseString(string(stripBOM(data)), popts)
 			if err != nil {
 				return nil, "", err
@@ -1091,6 +1184,8 @@ func envSchema(set *TestSet, env *Environment) *xsd.Schema {
 			ParseOptions: xdm.ParseOptions{AllowDOCTYPE: true}}
 		if v, ok := xsd.DocumentRequiresVersion(tree.Root); ok {
 			opts.Version = v
+		} else if sc.XSDVersion == "1.1" {
+			opts.Version = xsd.Version11
 		}
 		loaded, err := xsd.Load(tree.Root, p, opts)
 		if err != nil || loaded == nil {

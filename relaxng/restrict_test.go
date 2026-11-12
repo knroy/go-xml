@@ -1,6 +1,7 @@
 package relaxng
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -183,6 +184,18 @@ func TestCompetitionRules(t *testing.T) {
 			`<element` + rngNS + ` name="foo"><attribute name="bar"/>
 				<oneOrMore><attribute><anyName/></attribute></oneOrMore></element>`},
 
+		// The class excepts xml:* but not xml:lang. jing: duplicate attribute.
+		{"anyName except leaves a named attribute", "7.3",
+			`<element` + rngNS + ` name="foo"><optional><attribute name="xml:lang"/></optional>
+				<zeroOrMore><attribute><anyName><except><nsName ns="` + xdm.NSXML + `">
+				<except><name>xml:lang</name></except></nsName></except></anyName></attribute></zeroOrMore></element>`},
+
+		// Each excepts one namespace, and every other namespace is in both.
+		{"two anyName excepts", "7.3",
+			`<element` + rngNS + ` name="foo">
+				<zeroOrMore><attribute><anyName><except><nsName ns="urn:a"/></except></anyName></attribute></zeroOrMore>
+				<zeroOrMore><attribute><anyName><except><nsName ns="urn:b"/></except></anyName></attribute></zeroOrMore></element>`},
+
 		{"interleave branches share an element", "7.4",
 			`<element` + rngNS + ` name="foo"><interleave>
 				<element name="bar"><empty/></element>
@@ -200,6 +213,18 @@ func TestCompetitionRules(t *testing.T) {
 	mustAccept(t, "the same attribute in two choice branches",
 		`<element`+rngNS+` name="foo"><choice>
 			<attribute name="bar"/><attribute name="bar"/></choice></element>`)
+
+	// An anyName's exception is honoured: xspec.rnc's xml:* beside
+	// * - (local:* | xml:*) names no attribute twice, and jing accepts both.
+	mustAccept(t, "nsName beside an anyName that excepts it",
+		`<element`+rngNS+` name="foo">
+			<zeroOrMore><attribute><nsName ns="`+xdm.NSXML+`"/></attribute></zeroOrMore>
+			<zeroOrMore><attribute><anyName><except><nsName ns=""/><nsName ns="`+xdm.NSXML+`"/></except></anyName></attribute></zeroOrMore>
+		</element>`)
+	mustAccept(t, "named attribute the anyName excepts",
+		`<element`+rngNS+` name="foo"><optional><attribute name="xml:space"/></optional>
+			<zeroOrMore><attribute><anyName><except><nsName ns="`+xdm.NSXML+`">
+			<except><name>xml:lang</name></except></nsName></except></anyName></attribute></zeroOrMore></element>`)
 
 	// Two repetitions over disjoint namespaces do not overlap.
 	mustAccept(t, "disjoint nsName repetitions",
@@ -960,5 +985,41 @@ func TestDataQNameResolvesItsPrefix(t *testing.T) {
 		<param name="maxLength">2</param></data></element>`)
 	if err == nil || !strings.Contains(err.Error(), "no units of length") {
 		t.Errorf("a length facet on QName: got %v, want a refusal", err)
+	}
+}
+
+// Section 7 follows a <ref> into its definition from every restricted
+// context, and once did so with no memo: a chain d0..dN where each di offers
+// two refs to di+1 cost 2^N walks of the last definition, and 1.9 KB of
+// schema took 8.7 s. The second variant reaches each definition through one
+// <choice> and through two, so a memo keyed on the whole stack would still
+// see 2^N distinct contexts. The bound is asserted on bytes allocated:
+// measured at N=16, 262 MB unmemoised against about 64 KB memoised.
+func TestRestrictionWalkIsMemoised(t *testing.T) {
+	const n = 16
+	for _, body := range []string{
+		`<choice><ref name="d%[1]d"/><ref name="d%[1]d"/></choice>`,
+		`<choice><ref name="d%[1]d"/><choice><ref name="d%[1]d"/><notAllowed/></choice></choice>`,
+	} {
+		var sb strings.Builder
+		sb.WriteString(`<grammar xmlns="http://relaxng.org/ns/structure/1.0">` +
+			`<start><ref name="d0"/></start>`)
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(&sb, `<define name="d%d">`, i)
+			fmt.Fprintf(&sb, body, i+1)
+			sb.WriteString(`</define>`)
+		}
+		fmt.Fprintf(&sb, `<define name="d%d"><element name="a"><empty/></element></define></grammar>`, n)
+		tree, err := xdm.ParseString(sb.String(), xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b := allocated(func() { err = checkRestrictions(rootElement(tree.Root)) }); b > 1<<20 {
+			t.Errorf("checkRestrictions allocated %d bytes for %d definitions; "+
+				"the walk is not memoised", b, n)
+		}
+		if err != nil {
+			t.Errorf("legal schema refused: %v", err)
+		}
 	}
 }

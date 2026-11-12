@@ -1,12 +1,15 @@
-// Package uripath holds the one decision every local-file resolver has to
-// make before it parses a reference as a URI: whether the reference is a
-// Windows drive-letter path rather than something naming a scheme.
+// Package uripath holds the decisions every local-file resolver has to make
+// before the filesystem sees a reference: whether the reference is a Windows
+// drive-letter path rather than something naming a scheme, and whether the
+// path it becomes names a network share (IsForeignNetworkPath).
 //
 // It is a leaf package because xslt, relaxng and dtd each own a resolver that
 // needs the same answer and none of the three may import another. Copying the
 // rule into three files would mean three places to get a security decision
 // wrong, and the copies would drift.
 package uripath
+
+import "strings"
 
 // IsDriveLetterPath reports whether s is a Windows absolute path naming a
 // drive — "C:\dir\f.rng", "C:/dir/f.rng", "C:" — rather than a URI reference
@@ -81,3 +84,71 @@ func IsDriveLetterPath(s string) bool {
 	rest := s[2:]
 	return len(rest) < 2 || rest[0] != '/' || rest[1] != '/'
 }
+
+// IsForeignNetworkPath reports whether p, a filesystem path a resolver is
+// about to hand to the filesystem, names a Windows network or device path --
+// `\\host\share\x`, `//host/share/x`, `\\?\UNC\host\share\x`, `\\.\pipe\x`,
+// `\??\UNC\host\share\x` -- on a volume that none of roots is on.
+//
+// On Windows any filesystem call on a UNC path, a stat or a readlink as much
+// as an open, connects to the named host over SMB and offers it the process's
+// NTLM credentials. A resolver that resolves symlinks before its containment
+// check therefore reaches an attacker-named host before refusing the path, so
+// this check has to come first. It is decided on the string, with either
+// separator, on every OS, for the reason IsDriveLetterPath gives: a branch
+// that only Windows runs is one most of CI never tests. On Unix a leading "//"
+// is an ordinary rooted path, so refusing it there gives up nothing a caller
+// would rely on.
+//
+// A root may itself be a share. A path on the same `\\host\share` volume as a
+// root names a host the caller already granted, so it is admitted here and
+// left to the containment check. Device paths (`\\?\`, `\\.\`) and NT
+// object-namespace paths (`\??\`) name no host that a root could grant and are
+// always refused. Windows passes a `\??\` path to the object manager as
+// written, so `\??\UNC\host\share` reaches the host exactly as a UNC path does,
+// and `\??\C:\x` names a local file by a spelling no root is written in.
+func IsForeignNetworkPath(p string, roots ...string) bool {
+	v, ok := networkVolume(p)
+	if !ok {
+		return false
+	}
+	if v == "" {
+		return true
+	}
+	for _, root := range roots {
+		if rv, ok := networkVolume(root); ok && strings.EqualFold(rv, v) {
+			return false
+		}
+	}
+	return true
+}
+
+// networkVolume reports whether p begins with two separators, which Windows
+// reads as a UNC or device path, or with `\??\`, the NT object namespace, and
+// returns its `host\share` volume. The
+// volume is "" when no root could grant it: a device path, or a missing host
+// or share.
+func networkVolume(p string) (string, bool) {
+	// `\??\` begins with one separator, not two, so it is matched on its
+	// own: an NT object-namespace path, which is a device path to a root.
+	if len(p) >= 4 && isSep(p[0]) && p[1] == '?' && p[2] == '?' && isSep(p[3]) {
+		return "", true
+	}
+	if len(p) < 2 || strings.Trim(p[:2], `/\`) != "" {
+		return "", false
+	}
+	part := func(s string) (string, string) {
+		if i := strings.IndexAny(s, `/\`); i >= 0 {
+			return s[:i], s[i+1:]
+		}
+		return s, ""
+	}
+	host, rest := part(p[2:])
+	share, _ := part(rest)
+	if host == "" || host == "?" || host == "." || share == "" {
+		return "", true
+	}
+	return host + `\` + share, true
+}
+
+func isSep(c byte) bool { return c == '/' || c == '\\' }

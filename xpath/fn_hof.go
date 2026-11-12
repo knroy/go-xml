@@ -279,7 +279,10 @@ func argFunction(args []xdm.Sequence, i int, fn string) (*xdm.FunctionItem, erro
 // That omission is why fn:function-lookup reported XPTY0004 for an untyped
 // attribute. See errNotQName.
 func argQName(ctx *Context, args []xdm.Sequence, i int, fn string) (xdm.QName, error) {
-	atoms := xdm.Atomize(seqArg(args, i))
+	atoms, err := ctx.atomize(seqArg(args, i))
+	if err != nil {
+		return xdm.QName{}, err
+	}
 	if len(atoms) != 1 {
 		return xdm.QName{}, xdm.ErrType("%s: expected a single xs:QName", fn)
 	}

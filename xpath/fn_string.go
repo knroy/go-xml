@@ -100,7 +100,10 @@ func registerStringFuncs(l *Library) {
 		// where the spec wants XPTY0004. stringArgValue applies the same
 		// conversion rule as every other xs:string parameter — the
 		// string-like types and untypedAtomic, nothing else.
-		atoms := xdm.Atomize(args[0])
+		atoms, err := ctx.atomize(args[0])
+		if err != nil {
+			return nil, err
+		}
 		parts := make([]string, 0, len(atoms))
 		for _, it := range atoms {
 			a := it.(*xdm.Atomic)
@@ -194,7 +197,11 @@ func registerStringFuncs(l *Library) {
 			return nil, err
 		}
 		// Every string contains the empty string, including the empty string.
-		return boolSeq(coll.Contains(a, b)), nil
+		ok, err := collationContains(ctx, coll, a, b)
+		if err != nil {
+			return nil, err
+		}
+		return boolSeq(ok), nil
 	})
 
 	l.registerFn("starts-with", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -210,7 +217,11 @@ func registerStringFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return boolSeq(coll.StartsWith(a, b)), nil
+		ok, err := collationStartsWith(ctx, coll, a, b)
+		if err != nil {
+			return nil, err
+		}
+		return boolSeq(ok), nil
 	})
 
 	l.registerFn("ends-with", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -226,7 +237,11 @@ func registerStringFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return boolSeq(coll.EndsWith(a, b)), nil
+		ok, err := collationEndsWith(ctx, coll, a, b)
+		if err != nil {
+			return nil, err
+		}
+		return boolSeq(ok), nil
 	})
 
 	l.registerFn("substring-before", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -242,7 +257,10 @@ func registerStringFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		start, _, ok := collationMatchRange(coll, a, b)
+		start, _, ok, err := collationMatchRange(ctx, coll, a, b)
+		if err != nil {
+			return nil, err
+		}
 		if !ok {
 			return strSeq(""), nil
 		}
@@ -264,7 +282,10 @@ func registerStringFuncs(l *Library) {
 		}
 		// The end of the match, not start+len(b): under a collation the
 		// matched span can be longer or shorter than the needle.
-		_, end, ok := collationMatchRange(coll, a, b)
+		_, end, ok, err := collationMatchRange(ctx, coll, a, b)
+		if err != nil {
+			return nil, err
+		}
 		if !ok {
 			return strSeq(""), nil
 		}
@@ -298,7 +319,11 @@ func registerStringFuncs(l *Library) {
 
 	l.registerFn("codepoints-to-string", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		var sb strings.Builder
-		for _, it := range xdm.Atomize(args[0]) {
+		atoms, err := ctx.atomize(args[0])
+		if err != nil {
+			return nil, err
+		}
+		for _, it := range atoms {
 			// The parameter is xs:integer*, so a string is a type error
 			// rather than a lexical form to parse: casting first reported
 			// FORG0001 for codepoints-to-string('hello'), which says the

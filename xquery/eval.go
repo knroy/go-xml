@@ -144,6 +144,41 @@ func (policy) DropEmptyText() bool { return true }
 // unbounded, which is what a policy built without one gets.
 func (p policy) CountNodes(n int) error { return p.xp.ChargeNodes(n) }
 
+// ChargeBytes charges the value bytes a copy the builder makes duplicates
+// against the evaluation's byte budget, as the node count is charged above.
+func (p policy) ChargeBytes(n int) error { return p.xp.ChargeBytes(n) }
+
+// copiedValueBelow is the length below which a copy duplicates a value's
+// bytes into its own tree; a value at least that long is kept by reference
+// (xdm's textOwnFrom). xdmbuild and xslt count copies the same way.
+const copiedValueBelow = 8 << 10
+
+// copiedBytes is the value bytes a deep copy of n duplicates: attribute
+// values and leaf values below copiedValueBelow.
+func copiedBytes(n *xdm.Node) int {
+	own := func(n *xdm.Node) int {
+		b := 0
+		switch n.Kind() {
+		case xdm.KindElement:
+			for a := range n.Attrs() {
+				if l := len(a.Value()); l < copiedValueBelow {
+					b += l
+				}
+			}
+		case xdm.KindText, xdm.KindComment, xdm.KindPI, xdm.KindAttribute:
+			if l := len(n.Value()); l < copiedValueBelow {
+				b += l
+			}
+		}
+		return b
+	}
+	b := own(n)
+	for d := range n.Descendants() { // iterative: the depth is the input's
+		b += own(d)
+	}
+	return b
+}
+
 func (n *literalText) eval(out *builderRef, ctx *evalContext) error {
 	out.b.AppendText(n.text)
 	return nil
@@ -185,7 +220,7 @@ func (n *enclosed) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 // sequence evaluates an enclosed expression to a flat sequence, for the
@@ -214,6 +249,9 @@ func (n *enclosed) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		if err := it.eval(ref, ctx); err != nil {
 			return nil, err
 		}
+		if err := inner.Refused(); err != nil {
+			return nil, err // latched by a builder call with no error return
+		}
 	}
 	return inner.Sequence(), nil
 }
@@ -231,7 +269,62 @@ type valueNode interface {
 	sequence(ctx *evalContext) (xdm.Sequence, error)
 }
 
-func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error {
+// stripTypes reports whether "declare construction strip" is in force. §4.6:
+// "If construction mode is strip, ... all element nodes copied during node
+// construction receive the type xs:untyped, and all attribute nodes copied
+// during node construction receive the type xs:untypedAtomic." Preserve, the
+// default, keeps the copies' annotations, which the copy already does.
+func stripTypes(sc *staticContext) bool {
+	return sc != nil && sc.construction == StripTypes
+}
+
+// stripAnnotations removes every type annotation from a copied subtree, as
+// xslt's validation="strip" does, keeping is-id and is-idrefs.
+func stripAnnotations(n *xdm.Node) {
+	if n == nil || !n.TreeHasTyping() {
+		return
+	}
+	n.StripTyping()
+	for a := range n.Attrs() {
+		a.StripTyping()
+	}
+	for c := range n.Children() {
+		stripAnnotations(c)
+	}
+}
+
+func appendSequence(out *builderRef, seq xdm.Sequence, ctx *evalContext) error {
+	sc := ctx.sc
+	if out.b.Open() != nil {
+		// §3.9.1.3 step 1 applies fn:data to the content sequence, and an
+		// array does have a typed value: it is the concatenation of the
+		// typed values of its members. So an array in element content
+		// contributes its members, not XQTY0105 — "<a>{['a',['b','c'],
+		// 'd']}</a>" is "<a>a b c d</a>", with the members flattened
+		// through the nesting and separated as adjacent atomic values
+		// always are. A map has no typed value and stays refused, which
+		// is why this is not simply an atomization of the whole sequence.
+		//
+		// This is the complex-content rule and applies only where complex
+		// content is being constructed. At the top of a sequence there is
+		// none, and the array is an ordinary item there: a query whose
+		// whole body is "[1, 2]" returns one array, not two integers.
+		//
+		// The whole sequence is flattened once, under the evaluation's
+		// context, and what flattening adds is charged to the item budget:
+		// an array keeps its members by reference, so "[$a, $a]" doubled k
+		// times describes 2^k leaves for k charged items, and a walk per
+		// array item restarted xdm's step bound once per item, with no
+		// deadline to stop it.
+		flat, err := xdm.FlattenContext(ctx.xp.Env().Ctx, seq)
+		if err != nil {
+			return err
+		}
+		if err := ctx.xp.ChargeItems(len(flat) - len(seq)); err != nil {
+			return err
+		}
+		seq = flat
+	}
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
@@ -263,8 +356,13 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 					// of an assessed node, and the name alone would leave its
 					// union member and resolved primitive to be guessed at
 					// from the process-global registries.
+					typing := xdm.TypingOf(v)
+					if stripTypes(sc) {
+						typing = xdm.Typing{IsID: typing.IsID,
+							IsIDREFS: typing.IsIDREFS}
+					}
 					if err := out.b.AddAttributeWithTyping(
-						v.Name(), v.Value(), xdm.TypingOf(v)); err != nil {
+						v.Name(), v.Value(), typing); err != nil {
 						return err
 					}
 					continue
@@ -295,47 +393,41 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 				// Constr-cont-nodeid-1 binds <a/> to $x, puts $x in
 				// <elem>{$x}</elem>, and requires the child not to be $x.
 				// The copy goes straight into the tree being built.
+				//
+				// The builder does not charge a copy it is handed this way,
+				// so it is charged here, before it is made: one constructed
+				// element placed a thousand times is a thousand subtrees.
+				// One enclosed expression can copy any number of nodes, so
+				// the deadline is checked per copy too.
+				if err := ctx.xp.Err(); err != nil {
+					return err
+				}
+				if err := ctx.xp.ChargeNodes(xdmbuild.CountSubtree(v)); err != nil {
+					return err
+				}
+				if err := ctx.xp.ChargeBytes(copiedBytes(v)); err != nil {
+					return err
+				}
 				out.b.AppendCopyOf(v)
 			} else {
 				out.b.AppendNode(v)
 			}
+			// AppendNode has no error to return, so a namespace node it adds
+			// after content -- XQTY0024 by the policy, §3.9.1.3 -- or one
+			// that conflicts (XQDY0102) is latched where Refused finds it.
+			if err := out.b.Refused(); err != nil {
+				return err
+			}
 			if el := out.b.Open(); el != nil && el.LastChild() != before {
-				applyCopyNamespaces(el.LastChild(), srcScope, sc)
+				if err := applyCopyNamespaces(el.LastChild(), srcScope, ctx); err != nil {
+					return err
+				}
+				if stripTypes(sc) {
+					stripAnnotations(el.LastChild())
+				}
 			}
 		case *xdm.Atomic:
 			out.b.AppendValue(v)
-		case *xdm.ArrayItem:
-			// §3.9.1.3 step 1 applies fn:data to the content sequence, and an
-			// array does have a typed value: it is the concatenation of the
-			// typed values of its members. So an array in element content
-			// contributes its members, not XQTY0105 — "<a>{['a',['b','c'],
-			// 'd']}</a>" is "<a>a b c d</a>", with the members flattened
-			// through the nesting and separated as adjacent atomic values
-			// always are. A map has no typed value and stays refused, which
-			// is why this is not simply an atomization of the whole sequence.
-			//
-			// This is the complex-content rule and applies only where complex
-			// content is being constructed. At the top of a sequence there is
-			// none, and the array is an ordinary item there: a query whose
-			// whole body is "[1, 2]" returns one array, not two integers.
-			if out.b.Open() == nil {
-				if err := out.b.AppendOpaque(it); err != nil {
-					return err
-				}
-				continue
-			}
-			flat := xdm.Flatten(xdm.One(v))
-			if len(flat) == 1 && flat[0] == it {
-				// Flatten leaves an array it cannot reduce alone. Refusing it
-				// here keeps the guarantee that this branch terminates.
-				if err := out.b.AppendOpaque(it); err != nil {
-					return err
-				}
-				continue
-			}
-			if err := appendSequence(out, flat, sc); err != nil {
-				return err
-			}
 		default:
 			if err := out.b.AppendOpaque(it); err != nil {
 				return err
@@ -372,36 +464,59 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 // copy's root instead, which is what the namespace axis then reports.
 // copynamespace-17 asks for both and expects the copy to be left with the xml
 // binding alone.
-func applyCopyNamespaces(n *xdm.Node, srcScope map[string]string, sc *staticContext) {
+//
+// The bindings written are charged to the byte budget, as XSLT charges the
+// ones its copies inherit: every copy of an element can carry the K bindings
+// in scope where it came from or where it lands, so M copies write K x M of
+// them while the node budget sees M nodes.
+func applyCopyNamespaces(n *xdm.Node, srcScope map[string]string, ctx *evalContext) error {
 	if n == nil || n.Kind() != xdm.KindElement {
-		return
+		return nil
 	}
+	sc := ctx.sc
 	preserve := sc == nil || sc.preserveNS
 	inherit := sc == nil || sc.inheritNS
+	written := 0
 	if preserve {
-		preserveScope(n, srcScope)
+		written = preserveScope(n, srcScope)
 	} else {
 		stripNamespaces(n)
 	}
-	if inherit {
-		return
-	}
-	// The bindings to undeclare are the ones the *parent* supplies; the
-	// copy's own, whether original or just rebuilt above, are not inherited
-	// and must survive. An undeclaration is written as an empty URI, which
-	// InScopeNamespaces and LookupPrefix both read as "not in scope here".
-	own := map[string]bool{}
-	for prefix := range n.DeclaredNamespaces() {
-		own[prefix] = true
-	}
-	if n.Parent() != nil {
-		for prefix := range n.Parent().InScopeNamespaces() {
+	if !inherit && n.Parent() != nil {
+		// The bindings to undeclare are the ones the *parent* supplies; the
+		// copy's own, whether original or just rebuilt above, are not
+		// inherited and must survive. An undeclaration is written as an
+		// empty URI, which InScopeNamespaces and LookupPrefix both read as
+		// "not in scope here".
+		own := map[string]bool{}
+		for prefix := range n.DeclaredNamespaces() {
+			own[prefix] = true
+		}
+		var pairs []string
+		for _, prefix := range sortedPrefixes(n.Parent().InScopeNamespaces()) {
 			if prefix == "xml" || own[prefix] {
 				continue
 			}
-			n.AddNamespace(prefix, "")
+			pairs = append(pairs, prefix, "")
 		}
+		n.AddNamespaces(pairs...)
+		written += len(pairs) / 2
 	}
+	return chargeBindings(ctx, written)
+}
+
+// nsBindingBytes is what the byte budget is charged for each namespace
+// binding a constructed or copied element is given: one binding, two string
+// headers, held in the element's namespace frame. It is the figure XSLT
+// charges for an inherited binding.
+const nsBindingBytes = 32
+
+// chargeBindings charges n written namespace bindings to the byte budget.
+func chargeBindings(ctx *evalContext, n int) error {
+	if n == 0 {
+		return nil
+	}
+	return ctx.xp.ChargeBytes(n * nsBindingBytes)
 }
 
 // preserveScope gives a copied element the namespace nodes it had at the
@@ -418,23 +533,40 @@ func applyCopyNamespaces(n *xdm.Node, srcScope map[string]string, sc *staticCont
 // so a copy landing where the same prefix means the same thing stays clean.
 // A binding the copy declares itself wins over the source scope, which is
 // what an undeclaration on the copied element means.
-func preserveScope(n *xdm.Node, srcScope map[string]string) {
+//
+// The prefixes are decided against the destination's scope, read once, and
+// written in one sorted batch: asking the copy itself, one binding at a time,
+// scanned a frame that grew with every answer, K^2 per copy, and left each
+// copy with a frame of its own where identical copies can share one.
+//
+// It reports how many bindings it wrote.
+func preserveScope(n *xdm.Node, srcScope map[string]string) int {
 	if len(srcScope) == 0 {
-		return
+		return 0
 	}
 	own := map[string]bool{}
 	for prefix := range n.DeclaredNamespaces() {
 		own[prefix] = true
 	}
-	for prefix, uri := range srcScope {
+	// A prefix the copy does not declare resolves at its parent, so the
+	// parent's scope answers what LookupPrefix on the copy would.
+	var dest map[string]string
+	if p := n.Parent(); p != nil {
+		dest = p.InScopeNamespaces()
+	}
+	var pairs []string
+	for _, prefix := range sortedPrefixes(srcScope) {
+		uri := srcScope[prefix]
 		if prefix == "xml" || own[prefix] {
 			continue
 		}
-		if cur, ok := n.LookupPrefix(prefix); ok && cur == uri {
+		if cur, ok := dest[prefix]; ok && cur == uri {
 			continue
 		}
-		n.AddNamespace(prefix, uri)
+		pairs = append(pairs, prefix, uri)
 	}
+	n.AddNamespaces(pairs...)
+	written := len(pairs) / 2
 	// A default namespace the source did not have, but the destination
 	// supplies, would silently move the copy into it. Constr-inscope-10 is
 	// the case: <child2> in no namespace copied under a <new> that declares
@@ -453,9 +585,11 @@ func preserveScope(n *xdm.Node, srcScope map[string]string) {
 		if _, hadDefault := srcScope[""]; !hadDefault && !own[""] {
 			if uri, ok := n.LookupPrefix(""); ok && uri != "" {
 				n.AddNamespace("", "")
+				written++
 			}
 		}
 	}
+	return written
 }
 
 // stripNamespaces rebuilds a subtree's namespace nodes as the smallest set its
@@ -556,9 +690,10 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	//
 	// Bindings an ancestor already carries are left alone, so an element that
 	// *is* nested in the tree does not repeat its parent's declarations.
+	inherited := n.inherited.flatten()
 	if el := sub.b.Open(); el != nil {
-		for _, prefix := range sortedPrefixes(n.inherited) {
-			uri := n.inherited[prefix]
+		for _, prefix := range sortedPrefixes(inherited) {
+			uri := inherited[prefix]
 			if cur, ok := el.LookupPrefix(prefix); ok && cur == uri {
 				continue
 			}
@@ -579,7 +714,9 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	// what this element genuinely needs is finally known. Anything its parent
 	// supplies beyond that and beyond the declaration attributes has to be
 	// undeclared here -- see limitInherited.
-	limitInherited(sub.b.Open(), n.inherited)
+	if err := chargeBindings(ctx, limitInherited(sub.b.Open(), inherited)); err != nil {
+		return err
+	}
 	// §3.9.1.3: the base URI of a constructed element is the static base URI
 	// of the constructor *unless* the element carries an xml:base attribute,
 	// in which case it is that attribute resolved against the base URI in
@@ -656,12 +793,17 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 // (inherited, which the caller has already written), the bindings its own
 // name and attribute names need (already on the node from fixup), and xml,
 // which XML Names binds everywhere and which can never be undeclared.
-func limitInherited(el *xdm.Node, inherited map[string]string) {
+//
+// The undeclarations are written in one sorted batch, so the element's frame
+// is built and interned once and siblings with the same set share it; one at
+// a time, each sibling extended a frame of its own. It reports how many it
+// wrote, for the caller to charge.
+func limitInherited(el *xdm.Node, inherited map[string]string) int {
 	if el == nil || el.Parent() == nil || el.Parent().Kind() != xdm.KindElement {
-		return
+		return 0
 	}
 	if !declaresAny(el.Parent()) {
-		return // only xml is in scope at the parent: nothing to undeclare
+		return 0 // only xml is in scope at the parent: nothing to undeclare
 	}
 	// Bindings this element already carries -- fixup for its own name and its
 	// attributes' names, plus the declaration attributes written above --
@@ -683,7 +825,10 @@ func limitInherited(el *xdm.Node, inherited map[string]string) {
 			need[a.Name().Prefix] = a.Name().URI
 		}
 	}
-	for prefix, uri := range el.Parent().InScopeNamespaces() {
+	scope := el.Parent().InScopeNamespaces()
+	var pairs []string
+	for _, prefix := range sortedPrefixes(scope) {
+		uri := scope[prefix]
 		switch {
 		case prefix == "xml", own[prefix]:
 			continue
@@ -694,8 +839,10 @@ func limitInherited(el *xdm.Node, inherited map[string]string) {
 		case need[prefix] == uri:
 			continue
 		}
-		el.AddNamespace(prefix, "")
+		pairs = append(pairs, prefix, "")
 	}
+	el.AddNamespaces(pairs...)
+	return len(pairs) / 2
 }
 
 // declaresAny reports whether n or an ancestor declares a namespace, that is,
@@ -832,6 +979,9 @@ func (a *attribute) eval(out *builderRef, ctx *evalContext) error {
 				inner := xdmbuild.New(policy{sc: ctx.sc, xp: ctx.xp})
 				if err := v.eval(&builderRef{b: inner}, ctx); err != nil {
 					return err
+				}
+				if err := inner.Refused(); err != nil {
+					return err // latched by a builder call with no error return
 				}
 				seq = append(seq, inner.Sequence()...)
 			}
@@ -1032,6 +1182,13 @@ func (n *document) eval(out *builderRef, ctx *evalContext) error {
 	// xml:base of the content rather than the constructor's own.
 	if doc != nil && doc.BaseURI() == "" && n.baseURI != "" {
 		doc.SetBaseURI(n.baseURI)
+	}
+	// The content was copied with no element open, so appendSequence's strip
+	// did not reach it; construction mode governs document constructors too.
+	if doc != nil && stripTypes(ctx.sc) {
+		for c := range doc.Children() {
+			stripAnnotations(c)
+		}
 	}
 	out.b.AppendNode(doc)
 	return nil

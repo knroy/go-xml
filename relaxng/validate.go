@@ -105,7 +105,8 @@ func (s *Schema) ValidateWithOptions(doc *xdm.Node, opts ValidateOptions) error 
 	if maxPattern == 0 {
 		maxPattern = DefaultMaxPatternSize
 	}
-	v := &validator{maxDepth: maxDepth, maxPattern: maxPattern}
+	v := &validator{maxDepth: maxDepth, maxPattern: maxPattern,
+		pb: &patBuilder{maxPattern: maxPattern}}
 	p := v.childDeriv(s.start, root)
 	if v.tooBig {
 		return &Error{
@@ -164,7 +165,7 @@ type validator struct {
 	// limit.
 	tooBig bool
 	// pb interns and remembers this run's derivatives, from the
-	// memoAfter'th element on.
+	// memoAfter'th element on, and carries the pattern bound into them.
 	pb    *patBuilder
 	elems int
 	// kids is a stack of the content children of the elements being
@@ -276,10 +277,17 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 		v.depth++
 		v.elems++
 		if v.elems == memoAfter {
-			v.pb = newPatBuilder()
+			v.pb.startMemo()
 		}
 		v.path = append(v.path, n.Name().Local)
 		defer func() {
+			// The list-token bound fires inside the derivative, where no
+			// path is known (patBuilder.listDeriv); the innermost element
+			// it fired in is named here.
+			if v.pb.tooBig && !v.tooBig {
+				v.tooBig = true
+				v.deepPath = tailPath(v.path[:len(v.path)-1], n.Name().Local)
+			}
 			v.depth--
 			v.path = v.path[:len(v.path)-1]
 		}()
@@ -305,14 +313,20 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 			v.note(fmt.Sprintf("the attributes of %s do not match", n.Name().Local))
 			return notAllowedPat{}
 		}
+		if v.tooLarge(p1) {
+			return notAllowedPat{}
+		}
 		p1 = v.pb.closeTag(p1)
 		if isNotAllowed(p1) {
 			v.note(fmt.Sprintf("element %s is missing a required attribute",
 				n.Name().Local))
 			return notAllowedPat{}
 		}
+		if v.tooLarge(p1) {
+			return notAllowedPat{}
+		}
 		p1 = v.childrenDeriv(p1, n)
-		if isNotAllowed(p1) {
+		if isNotAllowed(p1) || v.tooLarge(p1) {
 			return notAllowedPat{}
 		}
 		p2 := v.pb.end(p1)
@@ -325,6 +339,22 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 	// validates the element and attribute structure, and a comment cannot
 	// make a document invalid.
 	return p
+}
+
+// tooLarge reports, and records, a carried pattern past MaxPatternSize, for
+// the element the walk is in. A derivative shares the subpatterns it can, so
+// a pattern whose size is past the bound may be small in memory yet cost its
+// whole size to walk; the bound is checked before every derivative, not
+// only before an open.
+func (v *validator) tooLarge(p pattern) bool {
+	if v.maxPattern < 0 || patternSize(p) <= v.maxPattern {
+		return false
+	}
+	if !v.tooBig {
+		v.tooBig = true
+		v.deepPath = tailPath(v.path[:len(v.path)-1], v.path[len(v.path)-1])
+	}
+	return true
 }
 
 // childrenDeriv takes the derivative over an element's children.
@@ -354,7 +384,11 @@ func (v *validator) childrenDeriv(p pattern, el *xdm.Node) pattern {
 		// nullability: at this point the pattern is inside an afterPat, whose
 		// continuation is the rest of the enclosing content, and an afterPat is
 		// never nullable however well its left half matched.
-		if d := v.pb.textDeriv(p, "", nsContextOf(el)); !isNotAllowed(v.pb.endTagDeriv(d)) {
+		d := v.pb.textDeriv(p, "", nsContextOf(el))
+		if v.tooLarge(d) {
+			return notAllowedPat{}
+		}
+		if !isNotAllowed(v.pb.endTagDeriv(d)) {
 			return d
 		}
 		return p

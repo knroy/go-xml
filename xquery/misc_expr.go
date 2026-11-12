@@ -48,12 +48,14 @@ func (p *parser) parseOrderedUnordered() (node, bool, error) {
 	// K-OrderExpr-1a and -2a assert exactly that, under an XQ31+ dependency
 	// and citing the bug that made the change.
 	//
-	// Left at 3.1's reading whatever the module declares, even though the
-	// version is now recorded on the static context. A 1.0 module writing
-	// "ordered{}" is accepted here where a conforming 1.0 processor would
-	// raise XPST0003, which is a permissive divergence: nothing is given a
-	// wrong answer, only a query is accepted that need not have been. Routing
-	// it would mean sc.xqVersion.atLeast31() around the empty case here.
+	// A 1.0 or 3.0 module is held to its own grammar, where the Expr is
+	// required: K-OrderExpr-1 asserts XPST0003 for "ordered{}" under
+	// "XQ10 XQ30".
+	if body.expr == nil && body.items == nil && !p.sc.xqVersion.atLeast31() {
+		return nil, true, p.errorAt(save,
+			"XPST0003: XQuery %s requires an expression inside %q",
+			p.sc.xqVersion, "{}")
+	}
 	return body, true, nil
 }
 
@@ -114,16 +116,17 @@ func (p *parser) parsePragma() error {
 	// QName because parseQName would take the "Q" for a local name and stop
 	// at the brace.
 	var prefix, local string
-	if _, ok, err := p.parseBracedURI(); err != nil {
+	_, braced, err := p.parseBracedURI()
+	if err != nil {
 		return err
-	} else if ok {
+	}
+	if braced {
 		// A braced URI may be empty — "Q{}name" is a name in no namespace,
 		// which 3.1 admits; see below.
 		if local = p.scanNCName(); local == "" {
 			return p.errorAt(start, "XPST0003: expected a local name after %q", "Q{...}")
 		}
 	} else {
-		var err error
 		if prefix, local, err = p.parseQName(); err != nil {
 			return err
 		}
@@ -141,10 +144,15 @@ func (p *parser) parsePragma() error {
 	// well-formed, and whether the extension expression is an error is
 	// decided by parseExtension, on whether an enclosed expression follows.
 	//
-	// Left at 3.1's reading whatever the module declares, on the same
-	// permissive-divergence reasoning as parseOrderedUnordered above: a 1.0 or
-	// 3.0 module writing an unprefixed pragma name is accepted rather than
-	// refused. Routing it would mean sc.xqVersion.atLeast31() here.
+	// A 1.0 or 3.0 module keeps the earlier rule, under which a pragma name
+	// had to be prefixed: K-ExtensionExpression-4 asserts XPST0081 for
+	// "(#name content #)" under "XQ10 XQ30". "Q{}name" is left as 3.1 reads
+	// it at every version; the suite pairs no pre-3.1 case with it.
+	if prefix == "" && !braced && !p.sc.xqVersion.atLeast31() {
+		return p.errorAt(start,
+			"XPST0081: XQuery %s requires a prefix on the pragma name %q",
+			p.sc.xqVersion, local)
+	}
 	//
 	// The content runs to the first "#)". It is not parsed: a pragma's
 	// contents are whatever the implementation that recognises it says they
@@ -216,6 +224,7 @@ func (p *parser) parseStringConstructor() (node, error) {
 				return nil, err
 			}
 			body := p.src[p.pos+1 : end]
+			bodyMemo, bodyBase := p.memoAt(p.pos + 1)
 			p.pos = end + 1
 			// [180] StringConstructorInterpolation closes with "}`", so the
 			// backtick after the brace is part of the delimiter.
@@ -227,8 +236,12 @@ func (p *parser) parseStringConstructor() (node, error) {
 				sc.parts = append(sc.parts, &enclosed{})
 				continue
 			}
-			inner := &parser{src: body, sc: p.sc, version: p.version}
-			items, err := inner.parseQueryBody()
+			inner, err := p.nestedParser(body)
+			if err != nil {
+				return nil, err
+			}
+			inner.memo, inner.base = bodyMemo, bodyBase
+			items, err := inner.parseMemoBody(false)
 			if err != nil {
 				return nil, err
 			}
@@ -246,7 +259,7 @@ func (n *stringConstructor) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 func (n *stringConstructor) sequence(ctx *evalContext) (xdm.Sequence, error) {
@@ -289,9 +302,9 @@ func (n *stringConstructor) sequence(ctx *evalContext) (xdm.Sequence, error) {
 // validate against succeeds and yields its operand.
 //
 // "validate type T" is parsed and its type name is kept, so that assessment
-// against a named type can be asked for; with no schema it is the same
-// XQDY0084 that strict is, since the name cannot be a type in an empty set of
-// definitions.
+// against a named type can be asked for. A name that is not in the in-scope
+// schema definitions is the static XQST0104, raised here rather than when the
+// expression runs.
 func (p *parser) parseValidate() (node, bool, error) {
 	save := p.pos
 	lax := false
@@ -317,6 +330,16 @@ func (p *parser) parseValidate() (node, bool, error) {
 		name, err := p.sc.resolveElementName(prefix, local)
 		if err != nil {
 			return nil, true, err
+		}
+		// §3.21: "This type name must be found in the in-scope schema
+		// definitions; if it is not, a static error is raised
+		// [err:XQST0104]." The prolog's imports are installed before the
+		// body is read, so the set is complete here. A built-in xs: type is
+		// in scope with or without an import.
+		if !typeNameInScope(p.sc.schema, name) {
+			return nil, true, p.errorAt(save,
+				"XQST0104: validate type %s: no such type in the in-scope "+
+					"schema definitions", name.Lexical())
 		}
 		typeName = &name
 		p.skipSpaceAndComments()
@@ -369,7 +392,7 @@ func (n *validateExpr) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
@@ -408,21 +431,17 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		}
 	}
 	schema := ctx.sc.schema
-	if schema == nil {
-		// No "import schema": the in-scope schema definitions are empty.
-		if !n.lax {
-			// Including "validate type T", whose named type cannot be in an
-			// empty set of definitions either.
-			return nil, xdm.Errorf("XQDY0084",
-				"validate has no in-scope schema definitions to validate "+
-					"against: the query imported no schema")
-		}
-		// Lax assessment with empty in-scope schema definitions finds no
-		// declaration for any element, and XSD 1.0 §3.3.4 clause 1.2 makes
-		// that a skipped assessment rather than a failure. The tree therefore
-		// comes through as it was built, with one exception below.
-		annotateBuiltinXSIType(root)
-		return seq, nil
+	if schema == nil && n.typeName != nil {
+		// No "import schema", but the name passed XQST0104, so it is a
+		// built-in type: those are in scope with no import at all.
+		schema = xsd.NewSchema()
+	}
+	if schema == nil && !n.lax {
+		// No "import schema": the in-scope schema definitions hold no
+		// element declarations.
+		return nil, xdm.Errorf("XQDY0084",
+			"validate has no in-scope schema definitions to validate "+
+				"against: the query imported no schema")
 	}
 
 	// §3.21 validates a COPY: "the validate expression returns a new copy of
@@ -434,6 +453,17 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		root = m(root).(*xdm.Node)
 	} else {
 		root = xdmbuild.DeepCopy(root)
+	}
+
+	if schema == nil {
+		// Lax assessment with empty in-scope schema definitions finds no
+		// declaration for any element, and XSD 1.0 §3.3.4 clause 1.2 makes
+		// that a skipped assessment rather than a failure. The copy therefore
+		// comes through as it was built, with one exception below. It is the
+		// copy that is annotated: stamping the operand wrote into the
+		// caller's tree, which a concurrently used Query only reads.
+		annotateBuiltinXSIType(root)
+		return xdm.One(root), nil
 	}
 
 	// A document node's validation root is its element child, and the
@@ -463,14 +493,8 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	switch {
 	case n.typeName != nil:
 		// "validate type T" assesses against the named type rather than
-		// against a declaration. §3.21: the type must be in the in-scope
-		// schema definitions, and XQDY0084 is what says it is not.
-		if _, ok := schema.Types[xdm.QName{URI: n.typeName.URI,
-			Local: n.typeName.Local}]; !ok {
-			return nil, xdm.Errorf("XQDY0084",
-				"validate type %s: no such type in the in-scope schema "+
-					"definitions", n.typeName.Lexical())
-		}
+		// against a declaration. parseValidate has already raised XQST0104
+		// for a name not in the in-scope schema definitions.
 		typed, verr = schema.ValidateAgainstTypeCopy(target, *n.typeName, vopts)
 	case n.lax:
 		typed, verr = schema.ValidateElementLaxCopy(target, vopts)
@@ -578,4 +602,16 @@ func annotateBuiltinXSIType(n *xdm.Node) {
 	for c := range n.Children() {
 		annotateBuiltinXSIType(c)
 	}
+}
+
+// typeNameInScope reports whether name is a type in the in-scope schema
+// definitions: one the imported schema defines, or a built-in xs: type, which
+// every xsd.Schema holds from NewSchema on. With no import the built-ins are
+// still in scope, so they are looked up in an empty schema.
+func typeNameInScope(schema *xsd.Schema, name xdm.QName) bool {
+	if schema == nil {
+		schema = xsd.NewSchema()
+	}
+	_, ok := schema.Types[xdm.QName{URI: name.URI, Local: name.Local}]
+	return ok
 }

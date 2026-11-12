@@ -2,6 +2,7 @@ package xdm
 
 import (
 	"bytes"
+	"fmt"
 	"iter"
 	"maps"
 	"math"
@@ -13,6 +14,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 	"weak"
+
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 )
 
 // The node record.
@@ -67,6 +70,10 @@ const (
 	fBase                  // has a base URI of its own in tree.bases
 	fTyped                 // has an entry in tree.typing
 	fManyAttrs             // attribute count is in tree.source.attrCounts
+	fShallow               // a streamed element or document node without its content (streamview.go)
+	fOrigin                // copied out of a stream: order and identity are its original's (streamview.go)
+	fKidsKnown             // a shallow node whose has-children the stream answered (streamkids.go)
+	fKids                  // with fKidsKnown: it has children
 )
 
 // Tree owns the records of one document, or of a fragment: the parentless
@@ -115,8 +122,10 @@ type Tree struct {
 
 	chunks [][]Node
 	// open is the path of nodes still being built, outermost first: the
-	// nodes something may be appended to.
-	open []uint32
+	// nodes something may be appended to. Held as runs (ordStack): nested
+	// elements' records step evenly, so a deep tree being built does not
+	// cost a word per level besides its records.
+	open ordStack
 
 	names  []QName
 	nameIx map[QName]uint32
@@ -166,12 +175,26 @@ type treeSource struct {
 	//
 	// Empty unless ParseOptions.ExternalEntities permitted the read.
 	externalSubset string
+	// maxEntities is ParseOptions.MaxEntities as the parse resolved it, or
+	// zero for the default, so that UnparsedEntity reads the declarations
+	// back under the same cap the parse read them under.
+	maxEntities int
 	// lines is where the document's lines start, kept only when the caller
 	// asks for positions. It is what makes Position able to count lines; the
 	// text itself was kept for that once, at a byte per input byte.
 	lines      *lineIndex
 	offsets    [][]int32           // by chunk: source offset + 1, made on first use
 	foreignPos map[uint32][2]int32 // positions copied from another document
+	// orig is where the records of a tree copied out of a stream come from
+	// (streamview.go), or nil.
+	orig *treeOrigin
+	// nsAdded counts, per open element's record, the namespace
+	// declarations a validator on the stream added to its start tag
+	// (xdmburst.AddNamespace), which the parse did not bind.
+	nsAdded map[uint32]int
+	// dtdNotes are the validity errors the parse saw that the tree cannot
+	// show, for dtd.Validate (see dtdnote.go).
+	dtdNotes []dtdNote
 }
 
 // ownSource returns t's source part, made on first use.
@@ -224,6 +247,16 @@ func (t *Tree) extSubset() string {
 		return ""
 	}
 	return t.source.externalSubset
+}
+
+// entityLimits is the entity limits a re-read of the declarations applies:
+// the defaults, with the declaration count the parse used.
+func (t *Tree) entityLimits() entityLimits {
+	lim := defaultEntityLimits
+	if t.source != nil && t.source.maxEntities != 0 {
+		lim.count = t.source.maxEntities
+	}
+	return lim
 }
 
 // foreign is the position a copy was given from another document, if any.
@@ -567,7 +600,7 @@ func (t *Tree) newRoot(kind NodeKind) *Node {
 	r.kind = uint8(kind)
 	if kind == KindElement || kind == KindDocument {
 		r.end = openEnd
-		t.open = append(t.open, r.self)
+		t.open.push(uint64(r.self))
 	} else {
 		r.v1 = 0
 	}
@@ -583,17 +616,17 @@ func NewNode(kind NodeKind, name QName, value string) *Node {
 
 // closeAll closes every node still being built.
 func (t *Tree) closeAll() {
-	for _, i := range t.open {
-		t.rec(i).end = t.n
+	for k := range t.open.len() {
+		t.rec(uint32(t.open.at(k))).end = t.n
 	}
-	t.open = t.open[:0]
+	t.open.truncate(0)
 }
 
 // closeLast closes the innermost node being built.
 func (t *Tree) closeLast() {
-	k := len(t.open) - 1
-	t.rec(t.open[k]).end = t.n
-	t.open = t.open[:k]
+	k := t.open.len() - 1
+	t.rec(uint32(t.open.at(k))).end = t.n
+	t.open.truncate(k)
 }
 
 // openTo closes the nodes being built inside p, which must itself be open.
@@ -601,15 +634,15 @@ func (t *Tree) openTo(p *Node) {
 	if t.frozen {
 		panic("xdm: appending to a parsed document")
 	}
-	for k := len(t.open) - 1; k >= 0; k-- {
-		i := t.open[k]
+	for k := t.open.len() - 1; k >= 0; k-- {
+		i := uint32(t.open.at(k))
 		if i == p.self && p.flags&fSide == 0 {
-			t.open = t.open[:k+1]
+			t.open.truncate(k + 1)
 			return
 		}
 		t.rec(i).end = t.n
 	}
-	t.open = t.open[:0]
+	t.open.truncate(0)
 	panic("xdm: appending to a node that is no longer being built")
 }
 
@@ -624,7 +657,7 @@ func (p *Node) appendChild(kind NodeKind) *Node {
 	p.v1 = c.self
 	if kind == KindElement || kind == KindDocument {
 		c.end = openEnd
-		t.open = append(t.open, c.self)
+		t.open.push(uint64(c.self))
 	} else {
 		c.v1 = 0
 	}
@@ -719,7 +752,10 @@ func (n *Node) firstChildIdx() uint32 { return n.self + 1 + n.attrCount() }
 // namespace nodes are not children.
 func (n *Node) Children() iter.Seq[*Node] {
 	return func(yield func(*Node) bool) {
-		if n.v1 == noIdx || n.flags&fSide != 0 || n.isLeaf() {
+		if n.flags&(fSide|fShallow) != 0 || n.v1 == noIdx || n.isLeaf() {
+			if n.flags&fShallow != 0 {
+				shallowFault(n, "children")
+			}
 			return
 		}
 		t := n.tree
@@ -778,7 +814,10 @@ func (n *Node) ChildAt(i int) *Node {
 
 // FirstChild returns the first child of n, or nil if it has none.
 func (n *Node) FirstChild() *Node {
-	if n.v1 == noIdx || n.flags&fSide != 0 || n.isLeaf() {
+	if n.flags&(fSide|fShallow) != 0 || n.v1 == noIdx || n.isLeaf() {
+		if n.flags&fShallow != 0 {
+			shallowFault(n, "children")
+		}
 		return nil
 	}
 	return n.tree.rec(n.firstChildIdx())
@@ -786,7 +825,10 @@ func (n *Node) FirstChild() *Node {
 
 // LastChild returns the last child of n, or nil if it has none.
 func (n *Node) LastChild() *Node {
-	if n.v1 == noIdx || n.flags&fSide != 0 || n.isLeaf() {
+	if n.flags&(fSide|fShallow) != 0 || n.v1 == noIdx || n.isLeaf() {
+		if n.flags&fShallow != 0 {
+			shallowFault(n, "children")
+		}
 		return nil
 	}
 	return n.tree.rec(n.v1)
@@ -795,7 +837,10 @@ func (n *Node) LastChild() *Node {
 // NextSibling returns the child of n's parent that follows n, or nil when n
 // is the last child, has no parent, or is an attribute or namespace node.
 func (n *Node) NextSibling() *Node {
-	if n.parent == noIdx || n.kind == uint8(KindAttribute) || n.flags&fSide != 0 || n.end == openEnd {
+	if n.parent == noIdx || n.kind == uint8(KindAttribute) || n.flags&(fSide|fShallow) != 0 || n.end == openEnd {
+		if n.flags&fShallow != 0 && n.parent != noIdx {
+			shallowFault(n, "following siblings")
+		}
 		return nil
 	}
 	t := n.tree
@@ -808,7 +853,10 @@ func (n *Node) NextSibling() *Node {
 // PrevSibling returns the child of n's parent that precedes n, or nil when n
 // is the first child, has no parent, or is an attribute or namespace node.
 func (n *Node) PrevSibling() *Node {
-	if n.prev == noIdx || n.flags&fSide != 0 || n.kind == uint8(KindAttribute) {
+	if n.flags&(fSide|fShallow) != 0 || n.prev == noIdx || n.kind == uint8(KindAttribute) {
+		if n.flags&fShallow != 0 && n.parent != noIdx {
+			shallowFault(n, "preceding siblings")
+		}
 		return nil
 	}
 	return n.tree.rec(n.prev)
@@ -819,7 +867,10 @@ func (n *Node) PrevSibling() *Node {
 // descendants.
 func (n *Node) Descendants() iter.Seq[*Node] {
 	return func(yield func(*Node) bool) {
-		if n.v1 == noIdx || n.flags&fSide != 0 || n.isLeaf() {
+		if n.flags&(fSide|fShallow) != 0 || n.v1 == noIdx || n.isLeaf() {
+			if n.flags&fShallow != 0 {
+				shallowFault(n, "descendants")
+			}
 			return
 		}
 		t := n.tree
@@ -913,6 +964,17 @@ func (n *Node) BaseURI() string {
 	}
 }
 
+// baseUnder is n's BaseURI given its parent's, parentBase.
+func (n *Node) baseUnder(parentBase string) string {
+	if n.flags&fBase != 0 {
+		return n.tree.bases[n.self]
+	}
+	if n.kind != uint8(KindElement) || n.flags&fSide != 0 {
+		return ""
+	}
+	return parentBase
+}
+
 // inheritedBase is the base URI n has when it has none of its own.
 func (n *Node) inheritedBase() string {
 	if n.kind != uint8(KindElement) || n.parent == noIdx || n.flags&fSide != 0 {
@@ -952,7 +1014,10 @@ func (n *Node) SetBaseURI(base string) {
 // URI: none has one of its own, and no element there or on n carries an
 // xml:base attribute. Setting n's base URI then settles the whole subtree.
 func (n *Node) DescendantsInheritBase() bool {
-	if n.isLeaf() || n.flags&fSide != 0 {
+	if n.isLeaf() || n.flags&(fSide|fShallow) != 0 {
+		if n.flags&fShallow != 0 {
+			shallowFault(n, "descendants")
+		}
 		return true
 	}
 	t := n.tree
@@ -1064,6 +1129,9 @@ func (n *Node) ownTyping() *nodeTyping {
 	}
 	if t.typing[k] == nil {
 		t.typing[k] = make([]nodeTyping, chunkLen(k))
+	}
+	if n.flags&fTyped == 0 {
+		t.typing[k][off] = nodeTyping{} // a stream reuses record slots (bursts.go): not a former node's
 	}
 	n.flags |= fTyped
 	return &t.typing[k][off]
@@ -1230,8 +1298,13 @@ func sameBindings(a, b []nsBinding) bool {
 	return true
 }
 
-// indexFrame records frame i in the frame indexes.
+// indexFrame records frame i in the frame indexes. A frame AddNamespace
+// extended is left out: the frame after it is the same range one binding
+// longer, and indexing every step of such a chain is quadratic in its length.
 func (t *Tree) indexFrame(i uint32) {
+	if t.extended(i) {
+		return
+	}
 	f := t.frameAt(i)
 	if len(f) == 1 {
 		if t.frameOne == nil {
@@ -1249,6 +1322,16 @@ func (t *Tree) indexFrame(i uint32) {
 	if _, dup := t.frameMany[k]; !dup {
 		t.frameMany[k] = i
 	}
+}
+
+// extended reports that AddNamespace extended frame i: the next frame is the
+// same range one binding longer. Such a frame is never indexed.
+func (t *Tree) extended(i uint32) bool {
+	if int(i)+1 >= len(t.frames) {
+		return false
+	}
+	r, nx := t.frames[i], t.frames[i+1]
+	return nx.start == r.start && nx.n == r.n+1
 }
 
 func frameKey(ns []nsBinding) string {
@@ -1278,10 +1361,30 @@ func (n *Node) AddNamespace(prefix, uri string) {
 		panic("xdm: declaring a namespace in a parsed document")
 	}
 	old := n.frame()
+	if t := n.tree; len(old) >= frameExtendFrom && int(n.v0) == len(t.frames)-1 &&
+		int(t.frames[n.v0].start)+len(old) == len(t.frameData) {
+		// n's frame is the last one stored, so the extended frame is it plus
+		// one binding: a new range over the same bindings, appended without
+		// a copy or an index entry. Copying and interning every intermediate
+		// frame kept K(K+1)/2 bindings, and K^2/2 bytes of keys, for an
+		// element whose K declarations are added one at a time, as every
+		// copy path does. The old frame is left as it was, for any other
+		// element that holds it.
+		r := t.frames[n.v0]
+		t.frameData = append(t.frameData, nsBinding{prefix, uri})
+		n.v0 = uint32(len(t.frames))
+		t.frames = append(t.frames, frameRange{r.start, r.n + 1})
+		return
+	}
 	ns := make([]nsBinding, len(old), len(old)+1)
 	copy(ns, old)
 	n.setFrame(append(ns, nsBinding{prefix, uri}))
 }
+
+// frameExtendFrom is the frame size from which AddNamespace extends the last
+// frame in place of copying and interning it. Smaller frames are cheap to
+// copy, and interning them is what lets many copied elements share one.
+const frameExtendFrom = 8
 
 // AddNamespaces is AddNamespace for each prefix and URI pair in turn, given
 // as prefix, uri, prefix, uri, ...: n's frame is built and interned once
@@ -1503,7 +1606,7 @@ func (n *Node) sideNode(frame, index, owner uint32, slot int) *Node {
 			}
 		}
 	}
-	return t.sideAdd(key, Node{tree: t, kind: uint8(KindNamespace), flags: fSide,
+	return t.sideAdd(key, Node{tree: t, kind: uint8(KindNamespace), flags: fSide | n.flags&fOrigin,
 		self: t.sideSeq(), parent: n.self, end: uint32(slot), prev: owner,
 		v0: frame, v1: index})
 }
@@ -1537,12 +1640,21 @@ func (n *Node) Compare(o *Node) int {
 		return 0
 	}
 	if n.tree != o.tree {
+		// Two copies out of one stream order as their originals. (The
+		// stream's trees share its id, so they order as one tree among
+		// the others.)
+		if n.flags&o.flags&fOrigin != 0 && n.origin().s == o.origin().s {
+			return cmpKeys(n.originKey(), o.originKey())
+		}
 		if n.tree.ident() < o.tree.ident() {
 			return -1
 		}
 		return 1
 	}
-	a, b := n.orderKey(), o.orderKey()
+	return cmpKeys(n.orderKey(), o.orderKey())
+}
+
+func cmpKeys(a, b uint64) int {
 	switch {
 	case a < b:
 		return -1
@@ -1554,15 +1666,24 @@ func (n *Node) Compare(o *Node) int {
 
 // Is reports whether n and o are the same node, which is what the "is"
 // operator asks and what XDM means by node identity. Every node, namespace
-// nodes included, exists once, so this is pointer equality.
-func (n *Node) Is(o *Node) bool { return n == o }
+// nodes included, exists once, so this is pointer equality -- except that
+// the copies a streamed run makes of one node of its document (views and
+// grounded copies, streamview.go) are all that node.
+func (n *Node) Is(o *Node) bool {
+	return n == o || n.flags&o.flags&fOrigin != 0 && n.sameOrigin(o)
+}
 
 // IdentityKey is a comparable value equal for two node references exactly when
 // Is reports them the same node.
 type IdentityKey struct{ ptr *Node }
 
 // Identity returns the key that stands for this node's identity.
-func (n *Node) Identity() IdentityKey { return IdentityKey{n} }
+func (n *Node) Identity() IdentityKey {
+	if n.flags&fOrigin != 0 {
+		return IdentityKey{n.canonical()}
+	}
+	return IdentityKey{n}
+}
 
 // Order returns a number that orders n within its tree. Callers wanting
 // relative position must use Compare: this value says nothing across trees.
@@ -1596,7 +1717,10 @@ func (n *Node) Index() int {
 // or attribute gives Index()+1. For a node still being built it is the end so
 // far and grows as children are appended. A namespace node gives -1.
 func (n *Node) SubtreeEnd() int {
-	if n.flags&fSide != 0 {
+	if n.flags&(fSide|fShallow) != 0 {
+		if n.flags&fShallow != 0 {
+			shallowFault(n, "subtree")
+		}
 		return -1
 	}
 	return int(n.tree.endOf(n))
@@ -1626,7 +1750,16 @@ func (n *Node) generateID() string {
 	b = strconv.AppendInt(b, n.tree.ident(), 10)
 	b = append(b, 'x')
 	k := uint64(n.self)
-	if n.flags&fSide != 0 {
+	switch {
+	case n.flags&fOrigin != 0:
+		// The original's: a copy out of a stream is in a tree with the
+		// stream's id, and numbered as a tree-mode parse numbers it.
+		if k = n.originKey(); n.flags&fSide != 0 {
+			k |= 1 << 48
+		} else {
+			k >>= 16
+		}
+	case n.flags&fSide != 0:
 		k = 1<<48 | n.orderKey()
 	}
 	b = strconv.AppendUint(b, k, 10)
@@ -1701,6 +1834,10 @@ type textAux struct {
 	// shared maps a string registered by share to where it is stored, so that
 	// add hands the same range to every value that is that string.
 	shared map[sharedKey][2]uint32
+	// kept maps a string add kept as a block of its own to that block, so
+	// that adding the very string again, as a loop copying one long text
+	// node does, takes no block more.
+	kept map[sharedKey][2]uint32
 	// ws shares one stored value among the whitespace-only values add is
 	// given, as a parse does.
 	ws spaceTable
@@ -1734,7 +1871,18 @@ const (
 	textMask    = 1<<textShift - 1
 	textBlock   = 1 << textShift // largest ordinary block
 	textOwnFrom = textBlock / 4  // values this long get a block of their own
+	// textCopyFrom is the block count past which a value is copied rather
+	// than kept as a block of its own, and one that fits an ordinary block
+	// is packed into one: blocks are addressed by 32-textShift bits, and
+	// keeping a string costs no bytes, so values aliasing one string ran
+	// the store out of blocks. Past it a block holds 16 KB of copied bytes
+	// on average, so the remaining half of them takes a gigabyte.
+	textCopyFrom = 1 << (31 - textShift)
 )
+
+// textBlocks is the number of blocks a store addresses (32-textShift bits),
+// a variable so that a test can reach it with small input.
+var textBlocks = 1 << (32 - textShift)
 
 // str returns the value at (off, n).
 func (s *textStore) str(off, n uint32) string {
@@ -1767,8 +1915,20 @@ func (s *textStore) add(v string) (uint32, uint32) {
 	// than copied: its capacity is its length, so nothing appends into it.
 	// Every unsafe.String in the module is over append-only bytes (the
 	// tokeniser's arena, this store), which keeps that true.
-	if len(v) >= textOwnFrom {
-		return s.keep(unsafe.Slice(unsafe.StringData(v), len(v)))
+	if len(v) >= textOwnFrom && len(s.blocks) < textCopyFrom {
+		k := sharedKey{unsafe.StringData(v), len(v)}
+		if s.aux == nil {
+			s.aux = new(textAux)
+		}
+		if r, ok := s.aux.kept[k]; ok {
+			return r[0], r[1]
+		}
+		if s.aux.kept == nil {
+			s.aux.kept = map[sharedKey][2]uint32{}
+		}
+		off, n := s.keep(unsafe.Slice(unsafe.StringData(v), len(v)))
+		s.aux.kept[k] = [2]uint32{off, n}
+		return off, n
 	}
 	return s.addBytes(unsafe.Slice(unsafe.StringData(v), len(v)), 0)
 }
@@ -1894,6 +2054,9 @@ func (s *textStore) lend(blk []byte, create bool) *lendState {
 
 // keep stores b, which nothing else writes to, as a block of its own.
 func (s *textStore) keep(b []byte) (uint32, uint32) {
+	if len(s.blocks) >= textCopyFrom {
+		return s.addBytes(b, 0)
+	}
 	s.newBlock(b)
 	return uint32(len(s.blocks)-1) << textShift, uint32(len(b))
 }
@@ -1902,7 +2065,7 @@ func (s *textStore) keep(b []byte) (uint32, uint32) {
 // while nothing else has been stored behind it.
 func (s *textStore) addBytes(b []byte, extra int) (uint32, uint32) {
 	need := len(b) + extra
-	if need >= textOwnFrom {
+	if need >= textOwnFrom && (len(s.blocks) < textCopyFrom || need > textBlock) {
 		blk := make([]byte, len(b), need)
 		copy(blk, b)
 		s.newBlock(blk)
@@ -1932,8 +2095,11 @@ func (s *textStore) trim() {
 }
 
 func (s *textStore) newBlock(b []byte) {
-	if len(s.blocks) >= 1<<(32-textShift) {
-		panic("xdm: a tree's text exceeds the text store's addressable blocks")
+	if len(s.blocks) >= textBlocks {
+		// The builders have no error return: the entry points recover this
+		// (internal/xdmlimit) and return it.
+		xdmlimit.Refuse(fmt.Errorf("xdm: a tree's text exceeds the text store's %d blocks: %w",
+			textBlocks, ErrResourceLimit))
 	}
 	s.blocks = append(s.blocks, b)
 }

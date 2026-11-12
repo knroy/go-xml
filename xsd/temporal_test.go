@@ -1,6 +1,8 @@
 package xsd
 
 import (
+	"errors"
+	"math/big"
 	"strings"
 	"testing"
 
@@ -117,6 +119,192 @@ func TestValidateTemporalBounds(t *testing.T) {
 	assertValid(t, schema, `<root>2024-01-01</root>`)
 	assertInvalid(t, schema, `<root>2023-12-31</root>`, "minInclusive")
 	assertInvalid(t, schema, `<root>2025-01-01</root>`, "maxInclusive")
+}
+
+// A year too large for int64 arithmetic used to wrap (days*86400) or be
+// refused by the parser, and a value the bound check cannot compare passes it:
+// 394573983248376-06-01Z validated against a 2024 range and matched a 2024
+// enumeration. The year is now held in big arithmetic.
+func TestValidateTemporalBoundsLargeYear(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="d">
+	    <xs:restriction base="xs:date">
+	      <xs:minInclusive value="2024-01-01Z"/>
+	      <xs:maxInclusive value="2024-12-31Z"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	  <xs:simpleType name="e">
+	    <xs:restriction base="xs:date"><xs:enumeration value="2024-01-01Z"/></xs:restriction>
+	  </xs:simpleType>
+	  <xs:simpleType name="dt">
+	    <xs:restriction base="xs:dateTime"><xs:maxInclusive value="2100-12-31T00:00:00Z"/></xs:restriction>
+	  </xs:simpleType>
+	  <xs:simpleType name="y">
+	    <xs:restriction base="xs:gYear"><xs:maxInclusive value="2100"/></xs:restriction>
+	  </xs:simpleType>
+	  <xs:element name="d" type="d"/>
+	  <xs:element name="e" type="e"/>
+	  <xs:element name="dt" type="dt"/>
+	  <xs:element name="y" type="y"/>
+	</xs:schema>`
+
+	assertInvalid(t, schema, `<d>394573983248376-06-01Z</d>`, "maxInclusive")
+	assertInvalid(t, schema, `<d>-394573983248376-06-01Z</d>`, "minInclusive")
+	assertInvalid(t, schema, `<e>394573983248376-06-01Z</e>`, "enumeration")
+	assertInvalid(t, schema, `<dt>300000000000-01-01T00:00:00Z</dt>`, "maxInclusive")
+	assertInvalid(t, schema, `<y>99999999999999999999</y>`, "maxInclusive")
+	assertValid(t, schema, `<y>-99999999999999999999</y>`)
+	assertValid(t, schema, `<d>2024-06-01Z</d>`)
+}
+
+// big.Int.SetString is superlinear in the digit count, so a megabyte-long year
+// cost seconds per comparison. Part 2 §5.4 lets a processor limit the year
+// digits it supports (to no fewer than four), so a year past maxTemporalDigits is
+// refused as a resource limit, a verdict of "cannot decide" rather than
+// "invalid". A year well inside the limit still compares exactly.
+func TestValidateTemporalYearDigitLimit(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="y">
+	    <xs:restriction base="xs:gYear">
+	      <xs:maxInclusive value="100000000000000000000000000000"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	  <xs:element name="y" type="y"/>
+	  <xs:element name="d">
+	    <xs:complexType><xs:attribute name="at" type="xs:gYearMonth"/></xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	long := "1" + strings.Repeat("0", 1999)
+	for _, doc := range []string{
+		`<y>` + long + `</y>`,
+		`<y>-` + long + `</y>`,
+		`<d at="` + long + `-01"/>`,
+	} {
+		err := validateString(t, schema, doc)
+		if !errors.Is(err, xdm.ErrResourceLimit) {
+			t.Errorf("%.40s: Validate = %v, want a resource-limit refusal", doc, err)
+		}
+	}
+
+	assertValid(t, schema, `<y>100000000000000000000000000000</y>`)
+	assertInvalid(t, schema, `<y>100000000000000000000000000001</y>`, "maxInclusive")
+	assertValid(t, schema, `<y>99999999999999999999999999999</y>`)
+	assertInvalid(t, schema, `<y>+2024</y>`, "")
+
+	// SetString accepts a sign, so the year is checked as digits first.
+	var y big.Int
+	for _, v := range []string{"+2024", "2_024", "", "-", "1" + strings.Repeat("0", maxTemporalDigits)} {
+		if parseYear(v, &y) {
+			t.Errorf("parseYear(%q) accepted", v)
+		}
+	}
+	if !parseYear("-"+strings.Repeat("9", maxTemporalDigits), &y) {
+		t.Errorf("parseYear refused a year of maxTemporalDigits digits")
+	}
+}
+
+// yearFrag is unbounded (Part 2 §3.3.9), but the date lexical check read the
+// year as an int64 for the leap rule, so an xs:date or xs:dateTime with a year
+// of more than 18 digits was reported invalid. The leap rule needs only the
+// year mod 400, which the last four digits settle.
+func TestDateLexicalLongYear(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="d" type="xs:date"/>
+	  <xs:element name="dt" type="xs:dateTime"/>
+	</xs:schema>`
+	assertValid(t, schema, `<d>1234567890123456789012-02-29</d>`)       // 9012: leap
+	assertValid(t, schema, `<d>-1234567890123456788000-02-29Z</d>`)     // 8000: leap
+	assertInvalid(t, schema, `<d>1234567890123456789000-02-29</d>`, "") // 9000: not
+	assertInvalid(t, schema, `<d>1234567890123456789012-02-30</d>`, "")
+	assertValid(t, schema, `<dt>1234567890123456789012-12-31T23:59:59Z</dt>`)
+
+	err := validateString(t, schema, `<d>1`+strings.Repeat("0", 1999)+`-01-01</d>`)
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("a 2000-digit date year: Validate = %v, want a resource-limit refusal", err)
+	}
+}
+
+// big.Rat.SetString is superlinear in the digit count too, and it read every
+// fractional second and every duration field. Part 2 §5.4 lets a processor
+// limit the fractional-second precision it supports, so a digit run past
+// maxTemporalDigits is refused as a resource limit. A long fraction inside
+// the limit still compares exactly.
+func TestValidateTemporalFractionDigitLimit(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="t">
+	    <xs:restriction base="xs:time">
+	      <xs:maxInclusive value="00:00:00.000000000000000000000000000001Z"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	  <xs:element name="t" type="t"/>
+	  <xs:element name="tm" type="xs:time"/>
+	  <xs:element name="dt" type="xs:dateTime"/>
+	  <xs:element name="du" type="xs:duration"/>
+	</xs:schema>`
+
+	long := strings.Repeat("1", 2000)
+	for _, doc := range []string{
+		`<tm>00:00:00.` + long + `</tm>`,
+		`<dt>2024-01-01T00:00:00.` + long + `Z</dt>`,
+		`<du>PT1.` + long + `S</du>`,
+		`<du>P` + long + `D</du>`,
+	} {
+		err := validateString(t, schema, doc)
+		if !errors.Is(err, xdm.ErrResourceLimit) {
+			t.Errorf("%.40s: Validate = %v, want a resource-limit refusal", doc, err)
+		}
+	}
+
+	assertValid(t, schema, `<t>00:00:00.000000000000000000000000000001Z</t>`)
+	assertInvalid(t, schema, `<t>00:00:00.000000000000000000000000000002Z</t>`, "maxInclusive")
+
+	var r big.Rat
+	if parseTime("00:00:00."+strings.Repeat("1", maxTemporalDigits+1), &r) {
+		t.Error("parseTime converted a fraction past the limit")
+	}
+	if _, ok := parseDuration("PT1." + strings.Repeat("1", maxTemporalDigits+1) + "S"); ok {
+		t.Error("parseDuration converted a field past the limit")
+	}
+}
+
+// A duration's year and month fields are unbounded (duYearFrag), but they were
+// held as an int64 count of months. A field past int64 failed to parse and
+// compared as having no order, and one just inside it wrapped when multiplied
+// by twelve, so either way a bound facet let the value pass. The months are
+// now big integers and the comparison is exact.
+func TestValidateDurationBoundsLargeYear(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="d">
+	    <xs:restriction base="xs:duration">
+	      <xs:minInclusive value="-P1Y"/>
+	      <xs:maxInclusive value="P1Y"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	  <xs:simpleType name="big">
+	    <xs:restriction base="xs:duration">
+	      <xs:maxInclusive value="P100000000000000000000Y"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	  <xs:element name="d" type="d"/>
+	  <xs:element name="big" type="big"/>
+	</xs:schema>`
+
+	assertInvalid(t, schema, `<d>P100000000000000000000Y</d>`, "maxInclusive")
+	assertInvalid(t, schema, `<d>-P100000000000000000000Y</d>`, "minInclusive")
+	assertInvalid(t, schema, `<d>P800000000000000000Y</d>`, "maxInclusive")
+	assertInvalid(t, schema, `<d>P100000000000000000000M</d>`, "maxInclusive")
+	assertValid(t, schema, `<d>P11M30D</d>`)
+
+	assertValid(t, schema, `<big>P100000000000000000000Y</big>`)
+	assertValid(t, schema, `<big>P99999999999999999999Y11M</big>`)
+	assertInvalid(t, schema, `<big>P100000000000000000000Y1M</big>`, "maxInclusive")
+	assertInvalid(t, schema, `<big>P100000000000000000000YT1S</big>`, "maxInclusive")
 }
 
 func TestValidateDurationBounds(t *testing.T) {

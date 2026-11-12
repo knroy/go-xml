@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -62,6 +63,11 @@ func TestFileResolverConfinesSchemesPathsAndBytes(t *testing.T) {
 			"confinement check; if this is an open error the confinement is "+
 			"not what refused it", err)
 	}
+	// It names the href and not Root, as xslt.FileResolver's refusal does
+	// (A4-F3, R5).
+	if want := "relaxng: schema URI " + strconv.Quote(outside) + " resolves outside root"; err.Error() != want {
+		t.Errorf("refusal = %q, want %q", err, want)
+	}
 	r.MaxBytes = 4
 	_, err = r.ResolveSchema(inside)
 	if !errors.Is(err, xdm.ErrResourceLimit) {
@@ -82,5 +88,27 @@ func TestFileResolverRejectsSymlinkEscape(t *testing.T) {
 	_, err := (&FileResolver{Root: root}).ResolveSchema(link)
 	if err == nil || strings.Contains(err.Error(), "<nil>") {
 		t.Errorf("symlink escape error = %v, want refusal", err)
+	}
+}
+
+// A missing schema in a missing subdirectory of a Root reached through a
+// symlink is not found, not refused as outside the root. Escapes stay refused.
+func TestFileResolverMissingInRootThroughLink(t *testing.T) {
+	dir := t.TempDir()
+	real, link := filepath.Join(dir, "real"), filepath.Join(dir, "link")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	r := &FileResolver{Root: link}
+	_, err := r.ResolveSchema(filepath.Join(link, "nodir", "x.rng"))
+	if err == nil || strings.Contains(err.Error(), "outside root") || !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("nodir/x.rng: %v; want not-exist, not a refusal", err)
+	}
+	if _, err := r.ResolveSchema(filepath.Join(dir, "nodir", "x.rng")); err == nil ||
+		!strings.Contains(err.Error(), "outside root") {
+		t.Errorf("../nodir/x.rng: %v; want the outside-root refusal", err)
 	}
 }

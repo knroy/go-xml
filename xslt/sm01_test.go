@@ -1,0 +1,316 @@
+package xslt
+
+import (
+	"context"
+	"fmt"
+	goruntime "runtime"
+	"strings"
+	"testing"
+
+	"github.com/knroy/go-xml/v2/xdm"
+)
+
+// The tests in this file are the round SM lane-01 regressions: compile-time
+// walks over shared declaration graphs and name scans that were exponential or
+// quadratic in stylesheet size.
+
+// TestSM01CharMapLadderMemoised: a 40-level ladder where each level's two maps
+// both include both maps of the level below. Re-expanding per path visits
+// 2^40 nodes; resolving each map once visits 80.
+func TestSM01CharMapLadderMemoised(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`<xsl:character-map name="top" use-character-maps="a40 b40"/>`)
+	for i := 40; i >= 1; i-- {
+		inc := ""
+		if i > 1 {
+			inc = fmt.Sprintf(` use-character-maps="a%d b%d"`, i-1, i-1)
+		}
+		fmt.Fprintf(&b, `<xsl:character-map name="a%d"%s/>`, i, inc)
+		fmt.Fprintf(&b, `<xsl:character-map name="b%d"%s/>`, i, inc)
+	}
+	// The deepest pair carries the substitution, so it must reach the top.
+	s := strings.Replace(b.String(), `<xsl:character-map name="a1"/>`,
+		`<xsl:character-map name="a1"><xsl:output-character character="@" string="DEEP"/></xsl:character-map>`, 1)
+	got, err := runErr(t, charMapSheet(s, "@"), `<a/>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "<r>DEEP</r>" {
+		t.Errorf("got %q, want <r>DEEP</r>", got)
+	}
+}
+
+// TestSM01AttrSetLadderMemoised: a 40-level attribute-set ladder where each
+// level's two sets both use both sets of the level below runs 2^40 set bodies
+// when expanded per path. Each set must run once, and the diamond's last
+// occurrence must still decide the value: b writes x="B" but c, used again
+// after b through d, writes x="C" last.
+func TestSM01AttrSetLadderMemoised(t *testing.T) {
+	var b strings.Builder
+	for i := 40; i >= 1; i-- {
+		inc := ""
+		if i > 1 {
+			inc = fmt.Sprintf(` use-attribute-sets="a%d b%d"`, i-1, i-1)
+		}
+		fmt.Fprintf(&b, `<xsl:attribute-set name="a%d"%s/>`, i, inc)
+		fmt.Fprintf(&b, `<xsl:attribute-set name="b%d"%s/>`, i, inc)
+	}
+	sheet := `<xsl:stylesheet version="2.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+		<xsl:output omit-xml-declaration="yes"/>` + b.String() + `
+		<xsl:attribute-set name="top" use-attribute-sets="sb sd a40"/>
+		<xsl:attribute-set name="sb" use-attribute-sets="sc"><xsl:attribute name="x">B</xsl:attribute></xsl:attribute-set>
+		<xsl:attribute-set name="sd" use-attribute-sets="sc"/>
+		<xsl:attribute-set name="sc"><xsl:attribute name="x">C</xsl:attribute></xsl:attribute-set>
+		<xsl:template match="/"><r xsl:use-attribute-sets="top"/></xsl:template>
+	</xsl:stylesheet>`
+	if got := run(t, sheet, `<a/>`); got != `<r x="C"/>` {
+		t.Errorf("got %q, want <r x=\"C\"/>", got)
+	}
+}
+
+// TestSM01DeferChainLinear: v0 -> v1 -> ... -> vN, declared so that each pass
+// of a fixed point moves the deferred mark one link, with only vN deferred.
+// Every global must end up deferred, and the propagation must follow each
+// edge once: 50,000 links would be 1.25e9 reference rescans as a fixed point.
+func TestSM01DeferChainLinear(t *testing.T) {
+	const n = 50000
+	c := &compiler{sheet: &Stylesheet{}}
+	for i := 0; i <= n; i++ {
+		g := &Variable{Name: xdm.QName{Local: fmt.Sprintf("v%d", i)}}
+		if i < n {
+			g.bodyRefs = []string{fmt.Sprintf("v%d", i+1)}
+		} else {
+			g.deferred = true
+		}
+		c.sheet.globals = append(c.sheet.globals, g)
+	}
+	c.deferDependentGlobals()
+	for _, g := range c.sheet.globals {
+		if !g.deferred {
+			t.Fatalf("%s not deferred", g.Name.Local)
+		}
+	}
+}
+
+// TestSM01ExposeResolvedOncePerPackage: 4000 named templates with no
+// visibility of their own, made public by one xsl:expose. Resolving the
+// package's components and expose rules per declaration is 16M component
+// matches; once per package it is 4000. The expose must still make "main" an
+// entry point.
+func TestSM01ExposeResolvedOncePerPackage(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+		name="urn:p" package-version="1.0.0" version="3.0">
+		<xsl:output omit-xml-declaration="yes"/>
+		<xsl:expose component="template" names="*" visibility="public"/>
+		<xsl:template name="main"><ok/></xsl:template>`)
+	for i := 0; i < 4000; i++ {
+		fmt.Fprintf(&b, `<xsl:template name="t%d"/>`, i)
+	}
+	b.WriteString(`</xsl:package>`)
+	tree, err := xdm.ParseString(b.String(), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Compile(tree.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.String(); got != "<ok/>" {
+		t.Errorf("got %q, want <ok/>", got)
+	}
+}
+
+// TestSM01StaticEvalSharesNamespaces: k namespace declarations in scope of k
+// use-when expressions. Building each expression's own in-scope map is k*k
+// work; sharing the declaring element's map is k. Quadrupling k must not
+// come near to multiplying the compile's allocation by sixteen.
+func TestSM01StaticEvalSharesNamespaces(t *testing.T) {
+	alloc := func(k int) uint64 {
+		var b strings.Builder
+		b.WriteString(`<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"`)
+		for i := 0; i < k; i++ {
+			fmt.Fprintf(&b, ` xmlns:n%d="urn:n%d"`, i, i)
+		}
+		b.WriteString(`>`)
+		for i := 0; i < k; i++ {
+			fmt.Fprintf(&b, `<xsl:template name="t%d" use-when="true()"/>`, i)
+		}
+		b.WriteString(`</xsl:stylesheet>`)
+		tree, err := xdm.ParseString(b.String(), xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return totalAlloc(func() {
+			if _, err := Compile(tree.Root, CompileOptions{}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	small, large := alloc(300), alloc(1200)
+	if large > 8*small {
+		t.Errorf("compile allocation grew %d -> %d bytes for 4x the use-when "+
+			"expressions under 4x the namespaces: quadratic", small, large)
+	}
+}
+
+// probeCounter is a package and document resolver that counts how often a
+// static expression asked for probe.xml: once per static phase over the
+// package that asks.
+type probeCounter struct {
+	fixedPackages
+	probes int
+}
+
+func (p *probeCounter) ResolveModule(href, base string) (*xdm.Node, string, error) {
+	return nil, "", errNoSuchTestPackage
+}
+
+func (p *probeCounter) ResolveDocument(uri, base string) (*xdm.Tree, error) {
+	if strings.HasSuffix(uri, "probe.xml") {
+		p.probes++
+	}
+	return xdm.ParseString(`<probe/>`, xdm.ParseOptions{})
+}
+
+// TestSM01PackageReadOncePerResolvedPackage: A and B both use P, spelling its
+// version range differently. Both spellings resolve to the same package, which
+// must be read -- static phase and copy -- once, not once per spelling.
+func TestSM01PackageReadOncePerResolvedPackage(t *testing.T) {
+	const xsl = `xmlns:xsl="http://www.w3.org/1999/XSL/Transform"`
+	pc := &probeCounter{fixedPackages: fixedPackages{
+		"urn:p": `<xsl:package ` + xsl + ` name="urn:p" package-version="1.0.0" version="3.0">
+			<xsl:variable name="v" use-when="doc-available('probe.xml')" select="1"/>
+		</xsl:package>`,
+		"urn:a": `<xsl:package ` + xsl + ` name="urn:a" package-version="1.0.0" version="3.0">
+			<xsl:use-package name="urn:p" package-version="1.0.0"/>
+		</xsl:package>`,
+		"urn:b": `<xsl:package ` + xsl + ` name="urn:b" package-version="1.0.0" version="3.0">
+			<xsl:use-package name="urn:p" package-version="*"/>
+		</xsl:package>`,
+	}}
+	tree, err := xdm.ParseString(`<xsl:package `+xsl+` name="urn:top" package-version="1.0.0" version="3.0">
+		<xsl:use-package name="urn:a" package-version="1.0.0"/>
+		<xsl:use-package name="urn:b" package-version="1.0.0"/>
+		<xsl:template name="xsl:initial-template" visibility="public"><ok/></xsl:template>
+	</xsl:package>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Compile(tree.Root, CompileOptions{PackageResolver: pc, Resolver: pc}); err != nil {
+		t.Fatal(err)
+	}
+	if pc.probes != 1 {
+		t.Errorf("package urn:p went through %d static phases, want 1", pc.probes)
+	}
+}
+
+// totalAlloc answers the bytes f allocates.
+func totalAlloc(f func()) uint64 {
+	var before, after goruntime.MemStats
+	goruntime.ReadMemStats(&before)
+	f()
+	goruntime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// linearGrowth fails t when quadrupling n multiplies what build(n) allocates
+// by more than 8: linear work gives about 4, a scan per declaration 16.
+func linearGrowth(t *testing.T, what string, build func(n int)) {
+	t.Helper()
+	small := totalAlloc(func() { build(500) })
+	large := totalAlloc(func() { build(2000) })
+	if large > 8*small {
+		t.Errorf("%s: allocation grew %d -> %d bytes for 4x the declarations: quadratic",
+			what, small, large)
+	}
+}
+
+// TestSM01OverriddenParamsIndexed: a used package whose stylesheet parameters
+// are every one overridden. Finding each by a walk of the package's top-level
+// declarations resolves n*n names; an index built once resolves n. The
+// override of the last one must still take effect.
+func TestSM01OverriddenParamsIndexed(t *testing.T) {
+	const xsl = `xmlns:xsl="http://www.w3.org/1999/XSL/Transform"`
+	linearGrowth(t, "overridden parameters", func(n int) {
+		var pkg, ovr strings.Builder
+		pkg.WriteString(`<xsl:package ` + xsl + ` name="urn:p" package-version="1.0.0" version="3.0">
+			<xsl:template name="go" visibility="public"><r><xsl:value-of select="$p` +
+			fmt.Sprint(n-1) + `"/></r></xsl:template>`)
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(&pkg, `<xsl:param name="p%d" select="'orig'"/>`, i)
+			fmt.Fprintf(&ovr, `<xsl:param name="p%d" select="'over'"/>`, i)
+		}
+		pkg.WriteString(`</xsl:package>`)
+		tree, err := xdm.ParseString(`<xsl:package `+xsl+` name="urn:top" package-version="1.0.0" version="3.0">
+			<xsl:output omit-xml-declaration="yes"/>
+			<xsl:use-package name="urn:p" package-version="1.0.0"><xsl:override>`+ovr.String()+
+			`</xsl:override></xsl:use-package>
+			<xsl:template name="xsl:initial-template" visibility="public"><xsl:call-template name="go"/></xsl:template>
+		</xsl:package>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Compile(tree.Root, CompileOptions{PackageResolver: fixedPackages{"urn:p": pkg.String()}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := s.Transform(context.Background(), nil,
+			TransformOptions{InitialTemplate: "initial-template", InitialTemplateURI: xdm.NSXSL})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := res.String(); got != "<r>over</r>" {
+			t.Errorf("got %q, want <r>over</r>", got)
+		}
+	})
+}
+
+// TestSM01DuplicateDeclarationScansIndexed: the XTSE0630 check over global
+// variables and the XTSE0580 checks over a template's and a function's
+// parameters compared each new name with every one before it. The names are
+// in a namespace long enough that every comparison built its Clark names on
+// the heap. The errors
+// themselves must still be reported.
+func TestSM01DuplicateDeclarationScansIndexed(t *testing.T) {
+	sheet := func(body string) string {
+		return `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+			xmlns:q="urn:sm01:a-namespace-longer-than-the-stack-concatenation-buffer">` + body + `<xsl:template match="/"/></xsl:stylesheet>`
+	}
+	compileSrc := func(src string) error {
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Compile(tree.Root, CompileOptions{})
+		return err
+	}
+	decls := func(n int, f string) string {
+		var b strings.Builder
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(&b, f, i)
+		}
+		return b.String()
+	}
+	for _, c := range []struct{ what, wrap, decl string }{
+		{"globals", "%s", `<xsl:variable name="q:g%d" select="1"/>`},
+		{"template params", `<xsl:template name="t">%s</xsl:template>`, `<xsl:param name="q:p%d"/>`},
+		{"function params", `<xsl:function name="q:f">%s<xsl:sequence select="1"/></xsl:function>`,
+			`<xsl:param name="q:p%d"/>`},
+	} {
+		linearGrowth(t, c.what, func(n int) {
+			if err := compileSrc(sheet(fmt.Sprintf(c.wrap, decls(n, c.decl)))); err != nil {
+				t.Fatalf("%s: %v", c.what, err)
+			}
+		})
+		dup := decls(1, c.decl) + decls(1, c.decl)
+		err := compileSrc(sheet(fmt.Sprintf(c.wrap, dup)))
+		if err == nil || !strings.Contains(err.Error(), "XTSE0") {
+			t.Errorf("%s: a duplicate name compiled, got %v", c.what, err)
+		}
+	}
+}

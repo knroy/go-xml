@@ -21,10 +21,10 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 2,999 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,688 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
-| **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
+| **W3C conformance suites** | 152,260 cases | systematic divergence from the specification | what the suites do not ask about — see below |
 | **Real-world stylesheets** | 803 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
 | **Production schema sets** | 65 + CII | what modular published schemas do | industries whose schemas are shaped differently |
 | **Vendored real-world schemas** | 185 of 230 | a schema-validity rule that has become stricter than the spec, on every checkout — no licensed corpus needed | the deep industry vocabularies only UBL and CII carry |
@@ -47,7 +47,7 @@ figures* section, which fails the gate when this table drifts from the tree:
   `grep -hc "^func Test" ./*/limits_boundary*_test.go | awk '{n += $1} END {print n + 0}'`
 * **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'`
 * **W3C conformance suites** — the sum of the in-scope totals in the status
-  table: XPath 3.1 22,054 + XQuery 3.1 30,517 + XSLT 2.0 6,201 + XSLT 3.0 11,518
+  table: XPath 3.1 22,054 + XQuery 3.1 30,530 + XSLT 2.0 6,202 + XSLT 3.0 11,522
   + XSD 1.0 39,388 + XSD 1.1 41,598 + RELAX NG 965. XPath 2.0 and 3.0 are not
   added again — the QT3 catalog is one corpus measured at three XPath versions,
   and the 3.1 lane is the widest of them. An earlier
@@ -369,6 +369,7 @@ reports no summary.
 | UBL 2.1 | `GOXSLT_UBL` | — | 65 modular production schemas |
 | UN/CEFACT CII | `GOXSLT_CII` | — | EN 16931 and CII schemas |
 | Vendored schemas | *(none)* | `testdata/` | 230 real `.xsd` already in the tree; no variable, it always runs |
+| W3C xmlconf | *(none)* | `testdata/xmlconf` | XML 1.0 well-formedness and DTD validity (`xdm.Parse`, `dtd.Load`, `dtd.Validate`); fetched by `tests/fetch-xmlconf.sh` |
 
 Fetching the four W3C suites:
 
@@ -379,6 +380,35 @@ git clone --depth 1 https://github.com/w3c/xslt30-test.git   testdata/xslt30-tes
 git clone --depth 1 https://github.com/relaxng/jing-trang.git /tmp/jing-trang
 mkdir -p testdata/relaxng
 cp /tmp/jing-trang/mod/rng-validate/test/spectest.xml testdata/relaxng/
+```
+
+The XML Conformance Test Suite is one archive (`xmlts20130923`), so it is
+fetched and pinned like the Canonical XML corpus rather than cloned:
+`tests/fetch-xmlconf.sh` downloads the tarball `tests/xmlconf-corpus.txt`
+lists, checks its SHA-256 and unpacks it into `testdata/xmlconf/`, and
+`check.sh` runs it before `TestXMLConf` (`tests/xmlconf`). The test skips when
+the suite is absent unless `GOXML_XMLCONF=1`, which `check.sh` sets. A not-wf
+case passes when `xdm.Parse` refuses it; a valid one when it parses and
+`dtd.Load` plus `dtd.Validate` report nothing; an invalid one when it parses
+and either reports an error. Both parsers read external entities through a
+resolver confined to the suite. `TYPE="error"`, XML 1.1, editions before the
+Fifth and `NAMESPACE="no"` cases are out of scope and counted as skipped. The
+passing count is the `TestXMLConf` ratchet mark.
+
+The count cannot see one case start failing while another starts passing, so
+`tests/xmlconf/expected-pass.txt` lists, one ID per line and sorted, every case
+that passes. With the suite present, a listed ID that does not pass fails the
+test as `regressed: <id>: <reason>`; a passing ID that is not listed is logged
+as `newly passing: <id>` and does not fail. After a change that makes cases
+pass (or, deliberately, stop passing), regenerate the list with
+`GOXML_XMLCONF_UPDATE=1`, which rewrites the file from the run instead of
+checking it. Review `git diff tests/xmlconf/expected-pass.txt` before
+committing: every removed line is a case that stopped passing.
+
+```sh
+tests/fetch-xmlconf.sh
+go test ./tests/xmlconf/ -count=1 -run TestXMLConf -v   # every failure, by type
+GOXML_XMLCONF_UPDATE=1 go test ./tests/xmlconf/ -count=1 -run TestXMLConf   # rewrite expected-pass.txt
 ```
 
 DocBook needs its localisation files generated before it will transform
@@ -463,7 +493,13 @@ required between attributes (§3.1 [40]/[44]) and after a PI target (§2.6
 [16]); a version `1.x` other than `1.1` is read as 1.0 (§2.8, Fifth Edition);
 and `Decoder.Literal` lets `xdm` refuse character data outside the document
 element that came from a reference or a CDATA section (§2.1 [1], [27] `Misc`),
-which `&#32;` or `<![CDATA[]]>` did not reveal by its text. None of them
+which `&#32;` or `<![CDATA[]]>` did not reveal by its text. The XML
+declaration is now read only at the very start of the stream and its
+pseudo-attributes are parsed by [23]-[26] rather than found by substring
+search (§2.8; §2.6 [17] reserves every other spelling of `xml`), which `xdm`
+already enforced itself; the one observable change is that `version = "1.1"`,
+with the white space [25] `Eq` allows, now declares 1.1 rather than being read
+as 1.0. None of them
 changed a result in the corpora above. The kept leniencies are listed in
 [known-gaps.md](known-gaps.md#the-tokeniser-keeps-six-leniencies).
 
@@ -534,6 +570,448 @@ empty or mistyped recording directory is an error, never "zero differences".
 
 ---
 
+### Streaming differential
+
+Streamed execution must be byte-identical to tree mode, which stays the
+oracle. Two tools check this, and both count what took the streamed path
+([`internal/streamtrace`](../internal/streamtrace/streamtrace.go)): runs of
+the streamed core, its sNodes by kind, fallbacks and re-runs on the tree, and
+guard hits, which must be 0. The guard is xdm's posture guard: a view of a
+streamed element (`Cursor.View` in
+[`internal/xdmstream`](../internal/xdmstream/xdmstream.go)) asked for
+content it does not have panics with `streamtrace.PostureError` and counts
+a hit.
+
+```
+go run ./tests/streamdiff <base-rev> <outdir>     # ~3 min
+go test ./xslt -run 'TestStreamFuzz$' -v          # 1000 cases; GOXSLT_STREAM_FUZZ=N, _SEED=S
+```
+
+What streaming saves is measured separately:
+[`tests/streambench`](../tests/streambench/main.go) runs three streamable
+workloads on generated documents, in tree mode and through `TransformReader`,
+each run a process of its own, and prints peak RSS, peak heap and time for
+both; it fails when the outputs differ. `TestWorkloadsStreamAndAgree` checks
+each workload's outputs agree at 11 MB, and fails when a stream's peak heap
+at 45 MB of input passes twice its peak at 11 MB plus 16 MB of collector lag:
+a silent fallback to the tree (150 MB or more), or anything kept per record,
+grows with the input. It does not compare the stream's peak
+with the tree's, which counts unswept garbage and on a two-core Windows runner
+reached half the tree's without the stream holding anything. The figures are in
+[benchmark.md](benchmark.md#streaming-against-the-tree).
+
+```
+go run ./tests/streambench                 # 11, 112 and 564 MB, 3 runs each; ~4 GB free
+```
+
+The streamed XPath split ([`xslt/streamsplit.go`](../xslt/streamsplit.go))
+has its own differential against tree evaluation of the same expression:
+`go test ./xslt -run TestStreamSplit -v` runs hand-written constructs, the W3C
+suite's consuming expressions, and a fuzzer (`GOXSLT_SPLIT_FUZZ=N`,
+`GOXSLT_SPLIT_FUZZ_SEED=S`).
+
+`tests/streamdiff` records TestXSLT30Suite four times:
+1. on `<base-rev>`, extracted with `git archive`;
+2. on the checkout;
+3. on the checkout with `GOXSLT_STREAM_OFF=1`, which sends every container
+   to the tree;
+4. on the checkout with `GOXSLT_STREAM_NORERUN=1` (`streamtrace.SetNoRerun`),
+   where a container that fails while streaming returns its streamed error
+   instead of running again on the tree.
+
+It compares base with branch, and branch with off, using `tests/recdiff`
+and `tests/streamdiff/allow.txt`. That file holds 25 case-scoped rules:
+generate-id numbering in docbook-002, si-fork-801, document-2011 and
+streamable-007/-022 (a principal input `TransformReader` streamed), the clock in
+evaluate-052, cvt-042, format-date-037 and error-3160a, and three cases whose
+wanted `XTSE3430` M8's analysis now raises where the base wrote output
+(si-fork-902, si-fork-952, su-absorbing-205), which fire only against a base
+before M8. Thirteen more came with rounds L and F (c875b977), against base
+3fb9c066 (v2.1.1): the version string `system-property('xsl:product-version')`
+writes (accumulator-083/-084/-085, evaluate-052, function-lookup-008,
+su-absorbing-301, document-2011); `xsl:supports-streaming` reporting `yes`
+(system-property-012); a whitespace-stripped source keeping its document URI
+(2e860a20: document-0113/-0114/-0115 sort documents by it); and the two places
+the off leg differs by design, where `TransformReader` follows the spec and
+`Transform` of a parsed tree does not: an absent global context item in a
+streamable initial mode (§2.3.2, 6cc2247f: `streamable-116`) and an absent
+focus saved by an accumulator function item on a streamed input (§10.3.6,
+be09e991: `accumulator-061`). Two came with round SI (lane ST1, against
+70e049a5): sx-square-array-041 and -043 stream now, and their `/` sorts the
+PRICEs of two trees, whose relative order is "stable but
+implementation-dependent" (XPath 3.1 §2.4.1); the catalog accepts either
+order. Each rule cites its commit; drop it once the base moves past that
+commit.
+
+With `GOXSLT_RECORD_DIR` set, tests/xslts writes
+`<dir>/streams/<suite>.tsv`, one line per case that streamed. The runner
+fails when any of these is true:
+- a difference is unexplained;
+- fewer cases streamed than the floor (`-floor`, `GOXSLT_STREAM_FLOOR`,
+  default 2661);
+- a guard fired;
+- the off leg streamed;
+- a case with no re-run moved between the branch and norerun legs.
+
+The norerun leg is not compared with recdiff: it differs by design. Each
+judged case also gets a line in `<dir>/streams/<suite>-verdicts.tsv` (pass or
+fail, and the error code the judge reads), and for every case where a
+container failed while streaming the streamed code is set against the branch
+leg's, which is the tree's answer, into `<outdir>/errors.tsv`: the same code
+and verdict, another code the catalog also accepts (the case still passes),
+or a wrong code. That matrix says which constructs' streamed errors can be
+final (§19.8.8.5: an error during streamed processing invalidates the output
+written before it; §2.14: the first error detected may be the one raised).
+The error path's memory is pinned by `go test ./xslt -run
+TestStreamErrorPathMemory -v`: a sum over big transactions that fails at the
+last one (FORG0001, a final family) holds 3.1 MB streamed, with no re-run,
+against the tree's 48.6 MB.
+
+A container's streamed error is final, with no re-run, when its family is
+listed in `finalCodes` (`xslt/streamexec.go`; `mergeFinalCodes` adds the
+merge's own) and the rest of the document then reads, validates and
+accumulates without error (`settle`; the merge's `settleMerge` reads every
+input to its end); the list's comment gives each family's argument.
+`go test ./xslt -run TestStreamFinalErrors` raises each family streamed and
+on the tree, requires the same text with no re-run, then drops the family
+from the list and requires the re-run.
+
+An input document's invalidity is final too where the stream's first
+failure tells the tree's code (`inputFinalCodes`, `xslt/streamvalidin.go`):
+`XTTE1540` for `type=`, and `XTTE1510` for `validation="strict"` when the
+schema can assess the document element and the first failure is not an
+ID/IDREF one. This holds also when the harness's own validation of a
+preloaded source fails first, which it never reports
+(`TestStreamInputInvalidMarkedFinal`, streamable-149). The tree validates
+before its body runs, so this is its error
+whether the streamed body succeeded or failed first. Its text is the first
+failure, marked `the first failure detected`, where the tree's lists every
+failure (XSLT 3.0 §2.14: "an implementation is not required to signal any
+errors other than the first one that it detects"). So the harnesses compare
+this one family by code and every other error in full
+(`streamtrace.SameError`): `TestStreamFuzz`, `coreCheck`, the output leg,
+and streamdiff's base/branch and branch/off comparisons, which add a rule
+per such case to `<outdir>/<a>-vs-<b>.allow` and print the count.
+`validation="lax"` (XTTE1515 or XTTE1510 depending on every failure) and an
+ID-first failure still re-run (`TestStreamInputInvalidReruns`).
+
+An error from a `GroundLater` callback (`internal/xdmstream`) does not stop
+the parse. The cursor call during which the copy was handed over returns
+it, and the cursor reads on, so `settle` can read the rest of the document:
+a final family raised in a late copy (si-map-007, sx-MapExpr-007,
+stream-106's validated `xsl:copy-of`) needs no re-run
+(`TestStreamGroundLaterErrorFinal`, `TestCursorGroundLaterError`).
+
+A principal input the catalog declares `streaming="true"`, a file or inline
+`<content>` (no `@select` or XInclude, no initial-mode selection), is handed
+to `TransformReader` unparsed; a validated one through
+`TransformOptions.SourceValidation`, when it is valid and the stylesheet's
+schema types it as the environment's does; under `GOXSLT_STREAM_OFF=1` it is parsed and given
+to `Transform`, so the off leg compares Parse + Transform.
+
+An environment's `<schema>` is loaded as XSD 1.1 when it says
+`xsd-version="1.1"` or the document carries `vc:minVersion="1.1"`, and as
+1.0 otherwise; read as 1.0, a 1.1 schema such as `strip-space-009.xsd`
+(an `xs:assert`) is refused and the case runs with no schema
+(`go test ./tests/xslts -run TestEnvSchemaHonoursXSDVersion`).
+
+QT3 is different: its environment schemas are what `import schema` imports,
+so `tests/qt3` assembles every one as XSD 1.1, the version `xquery` reads an
+imported schema at (`go test ./tests/qt3 -run TestCaseSchemasReadAsXSD11`).
+A case written for a 1.0 type system declares `<dependency type="xsd-version"
+value="1.0"/>` and is skipped.
+
+`-output` runs a fifth leg with `GOXSLT_OUTPUT_CHECK`
+([`tests/xslts/outputcheck.go`](../tests/xslts/outputcheck.go)): every case
+again with its principal result streamed to `TransformOptions.Output`,
+compared byte for byte, error for error, with `Result.Serialize`, and its
+secondary results written to `TransformOptions.SecondaryOutput`, each compared
+with `SecondaryResult.Serialize` (the summary counts them). A case whose
+third, plain run also differs is counted unstable (the clock, generate-id);
+any other difference fails.
+
+At 1d789fec (rounds L, F and M), with `-output` against 3fb9c066, it reads:
+- 2,661 cases on the streamed path (2,281 at 9d90a6a7, the completion lanes
+  J1–J4): runs core 2,468, main 175 (principal inputs through
+  `TransformReader`), merge 34; 26 with a fallback (a held select past its
+  cap, or one meeting the document element, answered from the tree), 137
+  re-run on the tree; 0 guard hits;
+- zero unexplained differences: 11,509 identical, 9 explained by the rules;
+- the output leg: 0 bytes and 0 errors differ in all 11,518 cases (13
+  unstable: the clock, generate-id); of the 2,661 streamed cases 2,658 are
+  identical and 3 unstable, 664 of them writing output before the end; 561
+  secondary results in 226 cases, 99 of them in 49 streamed cases.
+
+At round SI lane ST1, with `-output` against 70e049a5: 2,661 cases streamed,
+14 with a fallback (23 before: the nine square-array cases stream now), 137
+re-run, 0 guard hits, zero unexplained differences (27 rules); the branch leg
+11,505 in scope, the norerun leg 11,501. Of the 137 containers that failed
+while streaming, 133 give the tree's code and verdict, none another accepted
+code, and 4 a wrong one: `stream-002` and `non-stream-002` (a missing
+document: the streamed open error carries no `FODC0002`) and `stream-104` and
+`non-stream-104` (`XTTE1510` where the tree's `type=` validation raises
+`XTTE1540`).
+
+At round SI lane ST3, with `-output` against a77565f9: 2,661 cases streamed,
+8 with a fallback, 28 re-run (107 at a77565f9), 0 guard hits, zero
+unexplained differences; base, branch and norerun legs 11,505 passing. All
+28 containers that still fail while streaming give the tree's code and
+verdict: XPTY0004 (14, not listed: a rewritten set operator's text says
+"union" for an `except`), the input's own invalidity under `validation=`
+(5) or `type=` (2: the tree's text lists every failure, the stream's the
+first), XTDE0640 (1), and 6 whose error the settle could not confirm
+(`merge-072`, `merge-074`, `si-map-007`, `sx-MapExpr-007`, `sx-treat-102`,
+`sx-treat-103`).
+
+At 7ee44d8b (rounds SH and SI integrated), from the stream records of a
+`TestXSLT30Suite` run: 0 fallbacks (23 at round SG) and 9 re-runs (137), 0
+guard hits, 11,505 passing. Since ST4 made XPTY0004, XTDE2220 and XTDE0640
+final, the 9 are the input's own invalidity under `validation=` (5, XTTE1510)
+or `type=` (2, XTTE1540), and `si-map-007` and `sx-MapExpr-007` (XTDE3365);
+each gives the tree's code.
+
+At round SI lane ST6 (ac7af570), with `-output` against 7ee44d8b: 2,661
+cases streamed, 0 fallbacks, 0 re-runs, 0 guard hits, zero unexplained
+differences (5 input-invalidity cases explained by code, below); the norerun
+leg has no container failing while streaming; the output leg 0 bytes and 0
+errors differ in 11,522 cases (7 unstable). Of the 9: 5 are the input's own
+invalidity (`stream-102`, `-104`, `non-stream-102`, `-104`,
+`streamable-149`), final by code, and 4 a `GroundLater` error (`si-map-007`,
+`sx-MapExpr-007`, `stream-106`, `non-stream-106`), final once the cursor
+reads on past it.
+
+The TSV line holds the runs per strategy (core: containers; main: principal
+inputs `TransformReader` streamed; merge: streamed merge sources), fallbacks, guard hits, re-runs and
+sNodes per kind. The core has its own differential, `go test ./xslt -run
+TestStreamCore -v`: hand-written bodies × documents × whitespace
+declarations, the document-element fallback, the result budgets pinned to
+the retired burst path's, and, without `-short`, peak heap against the tree.
+
+`TestStreamFuzz` (skipped under `-short`) generates a record document and a
+streamable stylesheet per seed. It runs each streamed and on the tree and
+requires exactly the same output and error text; a re-run where the tree
+succeeds counts as a difference. The core's shapes come from their own random
+stream, and modes and template rules from a third (`GOXSLT_STREAM_FUZZ_CORE=0`
+and `GOXSLT_STREAM_FUZZ_MODES=0` reproduce the earlier cases). Grouping
+cases come from a fourth stream (key-run documents, every grouping form, the
+body reading the group or refused; the modes grammar's rules group too, for
+`TestStreamFuzzMain`); `GOXSLT_STREAM_FUZZ_GROUPS=0` reproduces the M2 cases. Try and function-call
+cases come from a fifth stream, and the modes grammar's rules get tries and
+calls too; `GOXSLT_STREAM_FUZZ_TRY=0` leaves them out. Accumulator cases
+come from a stream of their own (random declarations read in every way a run
+answers, `use-accumulators` lists, failing rules), and a fifth of the modes
+grammar's stylesheets get accumulators, so `TestStreamFuzzMain` has them;
+`GOXSLT_STREAM_FUZZ_ACCUMS=0` leaves them out. Fork and map cases (1–4
+prongs or entries, duplicate keys, a fork per record, under `xsl:try` (which
+streams since L1's cca65c41), with limits) come from another, and the modes grammar's rule bodies get forks
+and maps too; `GOXSLT_STREAM_FUZZ_FORKS=0` leaves them out.
+`TestStreamFuzzMerge` generates 1–3 logs (sorted, ties, out of order,
+non-numeric keys, malformed) and 1–3 merge sources over them, with collected
+sources, descending order, seven actions and node limits. `TestStreamOutFuzz`
+gives each case of the core and modes grammars random serialization
+parameters (method, indent, character maps, cdata-section-elements, now and
+then one that holds the result to the end) and a random shape around its
+output (an element, an html page, a try), and requires the bytes `Output`
+receives and the error to be `Result.Serialize`'s; a share of its cases wrap
+template bodies in tries (rollback yes and no, nested, items and errors before
+and after, catches that take or miss the error; `GOXSLT_STREAM_FUZZ_TRYOUT=0`
+leaves them out), and a share of those try bodies make one element (plain,
+attributes before or after content, html) or begin with attributes.
+`TestSecondaryOutputFuzz` runs result-documents before,
+after and inside streamed containers and streamable modes (per record, per
+group, failing, under a try, nested, colliding) with and without
+`SecondaryOutput`, comparing the principal result, every secondary result by
+URI and the error text, and that each writer is opened and closed once. The gap lanes added
+grammars of their own, each drawing its share of the seeds first, so per-grammar
+tallies at a seed are not comparable across them: held and counted selects,
+`xsl:copy` select, on-empty and validation (`GOXSLT_STREAM_FUZZ_HOLD=0` leaves
+them out); set operators, maps, positional steps and loop or apply windows
+(`GOXSLT_STREAM_FUZZ_PATHS=0`); maps making nodes, `tail()`, text value
+templates, consuming tests, arrays and maps (`GOXSLT_STREAM_FUZZ_SHAPES=0`);
+whole-argument functions, `trace`, `xsl:message` (messages compared too),
+tries over folds, `xsl:fallback` (`GOXSLT_STREAM_FUZZ_G5=0`); validated
+documents (`GOXSLT_STREAM_FUZZ_VALID=0`); and climbing and
+leaf tails and patterns drawn inside the core grammars. `TestStreamFuzzG6`
+compares `xsl:result-document` (principal and secondary results), `.`
+groupings and copy populations with the tree. A failing case prints its seed
+and the command that replays it.
+
+At 7344aa13, 100,000 cases (seed 1) give 0 differences, 36,142 of them
+streamed and 11,523 of those mode shapes; 100,000 of the M1 grammar alone
+give 0 too, as do 100,000 of the earlier grammar, in which the retired burst
+loops needed an error-order allowance of 9 per 100k (at 75a97759). At
+0b88ba7a, 100,000 cases (seed 1) give 0 differences: 42,763 streamed, 11,526
+of them running a streamed grouping; `TestStreamFuzzMain` 100,000 give 0,
+1,719 running a grouping rule; 50,000 (seed 12345) with
+`GOXSLT_STREAM_FUZZ_GROUPS=0` give the base's cases and 0 differences. At
+40ab5b4b, 100,000 cases give 0 differences, 637 of them catching an error on
+the cursor; `TestStreamFuzzMain` 100,000 give 0, 1,992 streamed with a try
+rule. At badba78b, 100,000 cases each (seed 11) of `TestStreamFuzz`,
+`TestStreamFuzzMain`, `TestStreamFuzzMerge` and `TestStreamOutFuzz` give 0
+differences, and at fe989cf3 100,000 each (seed 1) give 0 again. Each gap
+lane ran the four at 100,000 (seed 1) with 0 differences on its own branch;
+the path grammar's first run found 6 faults its lane then fixed, and a run
+after the merge (seed 31) 5 more, in loops over kept leaves. At c257efe2
+`TestStreamFuzz` and `TestStreamFuzzMain`, 100,000 each (seed 51), give 0
+differences. After H1–H3, `TestStreamFuzz`, `TestStreamFuzzMain`,
+`TestStreamFuzzMerge`, `TestStreamOutFuzz`, `TestStreamFuzzG6` and
+`TestSecondaryOutputFuzz` each give 0 differences in 100,000 cases. After the
+completion lanes (J1–J4) the six are run at 100,000 cases (seed 91). After
+round L the first run (seed 91) found 9 seeds over four causes, fixed in round
+F (F8); at 1d789fec, after rounds F and M, `TestStreamFuzzMain`,
+`TestStreamFuzzMerge`, `TestStreamOutFuzz`, `TestStreamFuzzG6` and
+`TestSecondaryOutputFuzz` give 0 differences and `TestStreamFuzz` 2 (seeds
+34820 and 71752, both OUTPUT), fixed by F9 (537885e3): after it `TestStreamFuzz`
+gives 0 differences in 100,000 cases (seed 91).
+
+Audit round A (at 32e31c6f) ran four lanes against the streaming branch, each
+with reproducers through the public API kept outside the tree (`zz_*` probe
+files, not committed). A1, streaming correctness: hand-written differentials
+of streamed against tree runs over the rounds' new shapes, `git bisect run` to
+find each fault's commit, and `TestStreamFuzz` and `TestStreamFuzzMain` at
+100,000 cases on three new seeds (1000001, 2000001, 3000001): 2, 1 and 1
+differences, all one fault (A1-F1), and 0 for `TestStreamFuzzMain`. A2,
+memory: a harness sampling peak heap, live heap and RSS of 42 strategies at
+10 to 500 MB against the tree, every row checked to have streamed and to give
+the tree's output, with goroutines and the heap after return. A3, profiling:
+benchmarks against v2.1.1 (n=10, interleaved) and CPU and allocation profiles
+of five streamed workloads over 111 MB of XMark. A4, security: 26 href forms
+over four instructions with real and symlinked roots, DTD and entity
+expansion, every resource limit with and without `Output`, recursion depth,
+and a 600 s native fuzz of `TransformReader` (6.94M executions, 0 failures).
+It found 4 silent wrong results, 9 P1 and 12 P2 items; fix round R (R1 to R6)
+closed 17, and [known-gaps.md](known-gaps.md) records what is open. After R1
+`TestStreamFuzz` gives 0 differences at all three new seeds, 100,000 cases
+each. At ce880ea0 (all of round R merged) the six differential fuzzers give
+0 differences at 100,000 cases each (seed 91), and `tests/streamdiff` 0
+unexplained with 2661 cases streamed.
+
+Round R added fifteen regression tests:
+`TestStreamTailFocusPosition`, `TestStreamIterateLast`
+(`xslt/streamtailfocus_test.go`; A1-F1, A1-F4); rows in `l7Rows`
+(`xslt/streaml7_test.go`; A1-F2, A1-F3); `TestStreamCopyAccumulatorValues`
+(`xslt/streamcopyaccum_test.go`) and `TestCopyOriginReleasedWithCopy`
+(`xslt/copyorigin_test.go`; A2-1, A2-2); `TestLiveCarriedTreeMeasuredOnce`
+(`xslt/livebudget_test.go`), `TestCancelledBuiltInRulesAndStreams`
+(`xslt/transform_test.go`) and `TestCancelledStreamIsNotRerun`
+(`xslt/streamexec_test.go`; A4-F1, A4-F2, A2-5, A2-4);
+`TestStreamForkGroupByMaxNodes` (`xslt/streamcopy_l3_test.go`),
+`TestStreamMainLeafTopUnderOutput` (`xslt/stream_mm8_test.go`),
+`TestStreamInlinedRecursionLimit` (`xslt/streamfn_inline_test.go`),
+`TestMergeSourceURIChecked` (`xslt/mergestreamable_test.go`) and
+`TestFileResolverOutsideErrorNamesOnlyTheHref` (`xslt/resolver_test.go`;
+A2-3, A2-6, A4-F5, A4-F6, A4-F3); `TestCrossModulesWalkedOnce`
+(`xslt/streamxmod_memo_test.go`), `TestRewindKeepsWhatWasRead` and
+`TestDrainStoresTextOnce` (`internal/xdmstream/rewind_test.go`; A3-1, A3-2).
+
+`TestStreamFuzzMain` applies each case of the modes grammar to its document
+in an initial mode through `TransformReader` and through `xdm.Parse` +
+`Transform`, compared exactly, `Result.Nodes` included (`GOXSLT_STREAM_FUZZ=N`,
+`_SEED=S`). At 6a4d2832, 100,000 cases give 0 differences: 32,613 streamed,
+7,855 of them ending in an error, each Parse + Transform's. `go test ./xslt
+-run TestStreamMain -v` compares `TransformReader` with Parse + Transform over
+hand-written cases, errors and parse limits, and, without `-short`, peak
+heap. `go test ./xslt -run TestStreamGroup -v` compares groupings with the
+tree over key-run documents and whitespace declarations, errors in the
+tree's order through `TransformReader`, and, without `-short`, peak heap.
+`go test ./xslt -run 'TestStreamTry|TestStreamCall|TestStreamAttributeSets' -v`
+compares tries (errors at record k, the tree's error code and description, a
+parse error after a caught one, `TransformReader`), calls and attribute sets
+with the tree. `go test ./xslt -run TestStreamAccum -v` compares accumulators
+with the tree in containers and through `TransformReader`, errors in the
+tree's order, the item limit, and, without `-short`, peak heap;
+`go test ./internal/xdmstream -run 'TestObserverSeesEverything|TestTee'`
+checks the cursor's observer against a tree walk and the tee against one
+cursor. `go test ./xslt -run 'TestStreamFork|TestStreamMerge|TestStreamDynamicCall' -v`
+compares forks, maps and merges with the tree, the tee's error order, host
+function items reaching a stream (a hang fails), dynamic calls, and, without
+`-short`, a merge's peak heap. `go test ./xslt -run TestStreamOut -v`
+compares `Output` with `Result.Serialize` over shapes, `MaxNodes` under
+`Output`, indented output held as bytes, and, without `-short`, peak heap.
+The gap lanes' differentials, each core or `TransformReader` against the tree:
+`go test ./xslt -run 'TestStreamHold|TestStreamResultValidation|TestStreamCopySelect|TestStreamOnEmpty'`
+(held and counted selects, validation, `xsl:copy` select, on-empty);
+`-run 'TestStreamUnion|TestStreamIdentity|TestStreamPop'` (set operators, the
+identity template, loop and apply populations); `-run TestStreamShapes`
+(maps, `tail()`, text value templates, consuming tests, arrays);
+`-run 'TestStreamLeaves|TestStreamClimb'` and `go test ./internal/xdmstream
+-run 'TestLeafMatchesTree|TestCursorParsesOnTheReader'` (kept leaves,
+climbing, the step-function cursor); `-run 'TestStreamWholeFns|TestStreamMessages|TestStreamTryFoldOrder|TestStreamFallback|TestStreamMainLiteralGlobals|TestStreamPatternMatchesNoNode'`;
+`-run 'TestStreamResultDoc|TestStreamGroupDotPattern|TestStreamForkFused'`;
+and `go test ./tests/xslts -run TestStreamedSourceInline` (the harness hands
+inline streaming sources to `TransformReader`). For validated inputs, try
+output and secondary results: `go test ./xsd -run
+'TestStreamValidationMatchesTree|TestStreamValidationRefusals'` (the validator
+on a cursor's events against the typed copy) and `go test ./xslt -run
+'TestStreamInputValidation|TestStreamMergeValidation|TestStreamMainValidation'`;
+`go test ./xslt -run TestStreamTryOut` (tries under `Output`: rollback,
+nesting, indent, html, namespaces, `rollback-output="no"` and XTDE3530, against
+`Result.Serialize`); `go test ./xslt -run TestSecondaryOutput` (each writer's
+bytes against `SecondaryResult.Serialize`, held results, errors and
+`MaxNodes`); `go test ./xslt -run
+'TestXTDE1500SymlinkedPath|TestResultHrefNotSymlinkResolved'` (doc() and
+streamed source-document, both directions; hrefs compared lexically). For the
+completion lanes: `go test ./xslt -run
+'TestStreamForeignUnionOrder|TestStreamHeldGroupCap'` (unions with a
+variable's nodes in either creation order, the held group-by's cap);
+`-run TestStreamTryOutOneElement` (a try around one large element under
+`Output`: `MaxNodes` with `rollback-output="no"`, peak heap with "yes");
+`-run 'TestStreamLiveBuiltIn|TestStreamDispatchAllocs|TestStreamDispatchWarnings'`
+(the built-in rule on the parse's record, allocations per record against the
+tree's, warnings as the tree's). For the completion lanes K1–K5, written and
+not yet run except where marked: `-run
+'TestStreamSheetCalls|TestStreamK2|TestStreamGroundIdentity'` (stylesheet
+functions on values or grounded copies; the split's shapes, conditions and
+value templates, of which the `($v | P)/T` rows ran; identity and set
+operators in a grounded loop body), `-run
+'TestStreamAsReadMarked|TestStreamMinOfContextBelowRoot'` (a harness-validated
+document read with the default validation, `min(.)` below the document node),
+and `-run TestStreamOutLiveHeapFlat` (the live heap under `Output` may grow
+by at most 1 MiB from 10% to 90% of the output; skipped under `-short` and
+`-race`); new rows in `TestStreamUnion`, `TestStreamShapes`,
+`TestStreamWholeFns`, `TestStreamPop` and the core tables, and in
+`TestStreamResultValidation` (ran) for `xsl:copy` with validation of items that
+are never attributes. For the completion round L (L1–L7):
+`-run 'TestStreamXMLToJSONMatchesTree|TestStreamInlinedCallsMatchTree'`
+(`xml-to-json` from the events; function bodies with instructions planned in
+the caller's plan, call frames, one-node parameters); `-run
+'TestStreamDocCopyEvents|TestStreamCopyDocNode|TestStreamCopyChoice|TestStreamLeafAtomicSequence|TestStreamAtomicTypedVariable|TestStreamApplyLeafMatches|TestStreamDocCopyIDs|TestStreamDocEntities|TestStreamCommentSelectValues|TestStreamValueOfTextBeside|TestStreamApplyFreshCopies|TestStreamGroupByEventCopies'`
+(document-level copies, the DOCTYPE, leaf rules, copies applied and
+grouped); `-run
+'TestStreamAccumReadsMatchTree|TestStreamTryAccumFailsAtStart|TestStreamTryApplyMatchesTree|TestAccumDynamicCallStreamedInput|TestStreamMergeL4|TestStreamMergeAccums|TestStreamCopyAccumulatorsNo'`
+(accumulators reading accumulators, §18.2.5 errors in both modes, try over
+apply-templates, §10.3.6 on a streamed input, merges with `last()`, messages,
+accumulators and the two-pass collect, `copy-accumulators`); `-run
+TestStreamL6MatchesTree` (loop bodies at a leaf's focus, copies applied,
+`has-children`, choice and union populations); and `-run
+'TestStreamL7MatchesTree|TestStreamL7UsePackageTrust|TestStreamL7ImportTrust|TestStreamL7PackageFrame'`
+(analysis rows, the alias guard, §2.3.2, trust across packages and imports,
+the cross-package call frame). L1 and L5 added rows only: `TestStreamApply`,
+`TestStreamCore`, `TestStreamFork`, `TestStreamMain` (with a new `ndata`
+document), `TestStreamUnion`, `TestStreamGroup`, and `TestStreamSheetCalls`
+gained rows from L2. `mainRun`, the main-mode oracle, compares
+`TransformReader` with `xdm.Parse` + `Transform` except for rows marked
+`<!--2.3.2-->` (`globalItemRow`), whose globals read the context item; those
+compare with `TransformReader`'s own tree fallback, where the global context
+item is absent too (e3659459). Rounds F and M added, in
+`xslt/streamstrval_test.go`, `-run
+'TestStreamStringOfTyped|TestStreamCopyNamespaceOrder'` (`string()` of a typed
+node is its string value; a streamed copy declares namespaces in source
+order); in `xslt/streamf6_test.go`, `-run
+'TestStreamGroupOuterReadsNoGroup|TestStreamValuesApplyTakesNoParams|TestStreamAccumCircularAfterCopy'`
+(`current-group()` outside a split's consuming path, a values population with
+parameters, XTDE3400 on every read of a circular accumulator); in
+`xslt/stream_mm5_test.go`, `-run
+'TestStreamAccumMapTyped|TestStreamAccumQuantifiedPattern|TestStreamApplyInMapTypedVariable|TestStreamTryCatchPrefixes|TestStreamMergeCollectedPathKeys|TestStreamGroupMapOfAtomics'`;
+in `xslt/stream_mm7_test.go`, `-run
+'TestStreamGroupCopiesParam|TestStreamLoopCopiesSized|TestStreamSnapshotClimb|TestStreamInstrBodyBurst|TestStreamOneMatchTail|TestStreamDynCallCopies'`;
+and in `xslt/stream_mm8_test.go`, `-run
+'TestStreamXMLToJSONNestedMatches|TestStreamMainLeafTop|TestStreamSchemaTypedMax|TestStreamGroupNodeFreeBody|TestStreamSourceDocumentFragment|TestStreamEvaluatePreprocessor'`.
+Each compares the streamed run with the tree's and asserts whether it streamed;
+the other fixes added rows to the existing tables (`mainCases`, `coreBodies`,
+`l7Rows`, `accumReadDecls`, `tryOutSheets`, `TestStreamDocCopyEvents`).
+
+
 ## The ratchet
 
 `tests/ratchet.txt` records the highest passing count this repository has
@@ -545,15 +1023,16 @@ RelaxNGSpectest 965
 TestQT3XPath20 15217
 TestQT3XPath30 19362
 TestQT3XPath31 22054
-TestQT3XQuery 30516
-TestXSLT30Suite 11495
-TestXSLTSuite 6193
+TestQT3XQuery 30529
+TestXMLConf 1965
+TestXSLT30Suite 11505
+TestXSLTSuite 6194
 VendoredSchemas 185
-XSD10 39358
-XSD10I 24973
+XSD10 39359
+XSD10I 24974
 XSD10S 14385
-XSD11 41567
-XSD11I 26217
+XSD11 41568
+XSD11I 26218
 XSD11S 15350
 XSpec 225
 ```
@@ -633,11 +1112,11 @@ different unit-test counts, and an XSD split was current in `README.md` while
 `tests/docfigures.sh`, run by `check.sh` in the *documented figures* section,
 reads `tests/ratchet.txt` and examines every documentation line that names a
 suite's **in-scope denominator** -- the one number in a figure that does not
-move between runs (11,518 for XSLT 3.0, 30,346 for XQuery, and so on). The
+move between runs (11,522 for XSLT 3.0, 30,530 for XQuery, and so on). The
 passing count, failure count and percentage written beside it must equal the
-ratchet's, in every form the documents use: `11,495 of 11,518`,
-`23 of 11,518`, `11,495 / 11,518 (99.80%)`, `= 99.80%`, `(23 failing)`, and
-the `| 11,518 | 11,495 | 99.80% | **23** |` summary-table row. A line stating
+ratchet's, in every form the documents use: `11,505 of 11,522`,
+`17 of 11,522`, `11,505 / 11,522 (99.85%)`, `= 99.84%`, `(17 failing)`, and
+the `| 11,522 | 11,505 | 99.85% | **17** |` summary-table row. A line stating
 two figures is read as two claims. Failures name the file, line and the value
 wanted.
 
@@ -965,6 +1444,29 @@ The rule this leaves: a test in a `go test ./...` package is a unit test, and a
 unit test that costs minutes is a bug in the test. Drive a budget's edges at a
 forced budget and assert the production value separately.
 
+### The race lane samples volume
+
+The full-streaming work's stream-vs-tree differentials took the xslt package
+to 1312 s under `-race` on ubuntu CI, and past the 25-minute deadline on
+Windows. Under `-race` (`raceEnabled`, xslt/race_on_test.go):
+
+- the `Test*MatchesTree` differentials check one case in `raceStride` (4),
+  picked by `raceSkip` from a hash of the case's own values, so every race run
+  checks the same cases;
+- `TestStreamFuzz`, `TestStreamFuzzMain` and `TestStreamOutFuzz` run seeds
+  1–100 instead of 1–1000;
+- the live-heap tests (`TestStream*Memory`, `TestStreamCopyAccumulatorsReleased`,
+  the heap half of `TestStreamMainLeafTopUnderOutput`) and `TestLiveNodesBuilt`
+  skip; their bounds were already off under `-race`, or they only build
+  millions of nodes on one goroutine.
+
+The streaming paths these walk run on one goroutine, so the race detector gains
+nothing from the extra cases. The plain `go test` step still runs every case.
+The concurrency tests (Tee, fork, concurrent compile and transform, shared
+caches) run in full under `-race`. Locally (12-core arm64) the package went from
+1081 s to 404 s under `-race`. Most of what is left is the budget tests that
+main already had, about 219 s of main's run.
+
 `op:same-key-023` was the case that proved the rule from the other side: it
 builds 75³ = 421,875 keys and calls `map:put` and `map:remove` once for each,
 and while `MapItem` was an entries slice plus a rebuilt index both were O(n),
@@ -1224,7 +1726,7 @@ git worktree, whose `testdata` is a symlink, was traced to
 **Skipped is not failed.** The suites skip cases by declared dependency — a
 specific Unicode version, a spec version not being measured. (Streaming used to
 head that list and no longer does: it was measured and found implemented.) The
-XSLT 3.0 suite has 14,601 cases and 11,518 in scope; counting the difference as
+XSLT 3.0 suite has 14,601 cases and 11,522 in scope; counting the difference as
 failures would understate the engine, and counting it as passes would overstate
 it. Both figures are reported separately for that reason.
 
@@ -1236,13 +1738,13 @@ processor may leave out — the wrong `<spec>` version, a construct that only
 exists in the version not being measured, a Unicode version, an optional
 numbering language or calendar, a document only the network can supply, a case
 that needs a feature this engine *has* to be absent. *Unimplemented* is the rest:
-a gap wearing a skip label. At the last run that is **2,949 out of scope and 134
-unimplemented** of the 3,083 XSLT 3.0 skips, and **8,332 / 68** of the 8,400 at
-the 2.0 target. The XSLT 3.0 unimplemented 134 are: `disabling_output_escaping`
+a gap wearing a skip label. At the last run that is **2,951 out of scope and 128
+unimplemented** of the 3,079 XSLT 3.0 skips, and **8,332 / 66** of the 8,398 at
+the 2.0 target. The XSLT 3.0 unimplemented 128 are: `disabling_output_escaping`
 (33), `xsl-stylesheet-processing-instruction` (18), `enable_assertions` (24),
 `package_version_resolution` (12), `additional_normalization_form` (12),
 `streaming-fallback` (7), `maximum_number_of_decimal_digits` (7),
-`supported_calendars_in_date_formatting_functions` (4), `HTML4`/`HTML5` (6),
+`supported_calendars_in_date_formatting_functions` (4),
 `unparsed_text_encoding` (3), and one or two each of `default_output_encoding`,
 `ignore_doc_failure`, `default_language_for_numbering`,
 `detect_accumulator_cycles`, `extension-function` and
@@ -1252,7 +1754,7 @@ same admission from the other side — it cannot run the case under the conditio
 the case asked for.
 
 Folding those 134 into the denominator as failures is a defensible alternative
-reading, and it gives 11,495 of 11,652, or 98.65%. It is **not** the figure this
+reading, and it gives 11,499 of 11,652, or 98.69%. It is **not** the figure this
 repository publishes, for the same reason the other skips are not: an
 unmodelled dependency is not a measured disagreement with the specification, and
 scoring it as one would put a number on cases that were never run. The published

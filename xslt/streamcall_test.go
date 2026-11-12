@@ -1,0 +1,133 @@
+package xslt
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// callDecls are stylesheet functions of each category, some that are their
+// bodies exactly and some that are not (a conversion that may fail, a
+// recursive body, a global variable, a cache).
+const callDecls = `<xsl:variable name="g" select="'k'"/>
+<xsl:function name="p:depth" as="xs:integer" streamability="inspection"><xsl:param name="e" as="node()"/><xsl:sequence select="count($e/ancestor-or-self::*)"/></xsl:function>
+<xsl:function name="p:att" as="xs:string" streamability="inspection"><xsl:param name="e" as="node()"/><xsl:param name="n" as="xs:string"/><xsl:sequence select="string($e/@*[local-name() = $n])"/></xsl:function>
+<xsl:function name="p:cd" as="xs:integer" streamability="absorbing"><xsl:param name="in" as="node()*"/><xsl:sequence select="count($in/descendant::*)"/></xsl:function>
+<xsl:function name="p:cd2" as="xs:integer" streamability="absorbing"><xsl:param name="in" as="node()*"/><xsl:sequence select="count($in ! descendant::*)"/></xsl:function>
+<xsl:function name="p:txt" as="xs:string" streamability="absorbing"><xsl:param name="in" as="node()"/><xsl:sequence select="string($in)"/></xsl:function>
+<xsl:function name="p:keep" as="node()?" streamability="filter"><xsl:param name="in" as="node()"/><xsl:param name="t" as="xs:boolean"/><xsl:sequence select="$in[$t]"/></xsl:function>
+<xsl:function name="p:kids" as="node()*" streamability="shallow-descent"><xsl:param name="in" as="node()"/><xsl:sequence select="$in/sub"/></xsl:function>
+<xsl:function name="p:all" as="node()*" streamability="deep-descent"><xsl:param name="in" as="node()"/><xsl:sequence select="$in//sub"/></xsl:function>
+<xsl:function name="p:up" as="node()*" streamability="ascent"><xsl:param name="in" as="node()"/><xsl:sequence select="$in/ancestor::*"/></xsl:function>
+<xsl:function name="p:num" as="xs:integer" streamability="inspection"><xsl:param name="e" as="node()"/><xsl:sequence select="xs:integer($e/@v)"/></xsl:function>
+<xsl:function name="p:rec" as="xs:integer" streamability="inspection"><xsl:param name="e" as="node()"/><xsl:sequence select="if ($e/.. instance of document-node()) then 1 else p:rec($e/..) + 1"/></xsl:function>
+<xsl:function name="p:glob" as="xs:boolean" streamability="inspection"><xsl:param name="e" as="node()"/><xsl:sequence select="exists($e/@*[name() = $g])"/></xsl:function>
+<xsl:function name="p:cached" as="xs:integer" streamability="inspection" cache="yes"><xsl:param name="e" as="node()"/><xsl:sequence select="count($e/ancestor::*)"/></xsl:function>
+<xsl:function name="p:wrong" as="xs:string" streamability="inspection"><xsl:param name="e" as="node()"/><xsl:sequence select="count($e/ancestor::*)"/></xsl:function>
+<xsl:function name="p:pred" as="node()*" streamability="filter"><xsl:param name="e" as="node()"/><xsl:sequence select="$e/@*[name() = name($e)]"/></xsl:function>
+<xsl:function name="p:sum" as="xs:double" streamability="unclassified"><xsl:param name="in" as="xs:double*"/><xsl:sequence select="sum($in)"/></xsl:function>`
+
+// callBodies are container bodies calling them; stream says the core must
+// take the container.
+var callBodies = []struct {
+	body   string
+	stream bool
+}{
+	{`<o><xsl:value-of select="/doc/rec ! p:depth(.)"/></o>`, true},
+	{`<o><xsl:value-of select="//sub ! p:depth(.)"/></o>`, true},
+	{`<o><xsl:value-of select="/doc/rec ! p:att(., 'k')"/></o>`, true},
+	{`<o><xsl:value-of select="/doc/rec ! p:cd(.)"/></o>`, true},
+	{`<o><xsl:value-of select="/doc/rec ! p:cd2(.)"/></o>`, true},
+	{`<o><xsl:value-of select="p:cd(/doc/rec)"/></o>`, true},
+	{`<o><xsl:value-of select="/doc/rec ! p:txt(.)" separator="|"/></o>`, true},
+	// A call in a motionless instruction is not inlined (the builder's
+	// view check refuses it): the container stays on the tree.
+	{`<o><xsl:for-each select="/doc/rec"><r d="{p:depth(.)}"><xsl:value-of select="p:cd(.)"/></r></xsl:for-each></o>`, false},
+	// K1 (19593eda): the split reads the call on the match's grounded copy.
+	{`<o><xsl:value-of select="count(p:kids(/doc/rec[1]))"/></o>`, true},
+	// The simple map of atomic values as a path, with no function.
+	{`<o><xsl:value-of select="/doc/rec ! name()"/></o>`, true},
+	{`<o><xsl:value-of select="sum(/doc/rec ! string-length(@k))"/></o>`, true},
+	{`<o><xsl:value-of select="/doc/rec ! (@k || '-')"/></o>`, true}, // R the per-match tail (streamshapes.go)
+	// Not inlined, but read by the split as calls the function's own code
+	// runs on each match's grounded copy or on values (K1, 19593eda): a
+	// result that may be empty where the type wants one (p:num), a wrong
+	// result type, $e in a predicate, a global, an atomic parameter given a
+	// path, a node result kept. A recursive call climbing to the parent
+	// (lane L2, d2a31582: an ancestor's copy answers its name and
+	// existence). Their errors are the tree's.
+	{`<o><xsl:value-of select="/doc/rec ! p:num(.)"/></o>`, true},
+	{`<o><xsl:value-of select="/doc/rec ! p:rec(.)"/></o>`, true},
+	{`<o><xsl:value-of select="/doc/rec ! p:wrong(.)"/></o>`, true},
+	{`<o><xsl:value-of select="/doc/rec ! count(p:pred(.))"/></o>`, true},
+	{`<o><xsl:value-of select="/doc/rec ! p:glob(.)"/></o>`, true},
+	{`<o><xsl:value-of select="p:sum(/doc/rec/@v)"/></o>`, true},
+	{`<o><xsl:copy-of select="/doc/rec ! p:keep(., true())"/></o>`, true},
+	// Refused: a cache.
+	{`<o><xsl:value-of select="/doc/rec ! p:cached(.)"/></o>`, false},
+}
+
+// TestStreamCallMatchesTree: calls on stylesheet functions in streamed
+// selects, inlined where the body is the call exactly, give the tree's
+// output or error over every document and whitespace declaration.
+func TestStreamCallMatchesTree(t *testing.T) {
+	dir := t.TempDir()
+	streamed := 0
+	docs := map[string]string{"try": tryDocs["nan3"], "bad": tryDocs["bad"]}
+	for k, v := range coreDocs {
+		docs[k] = v
+	}
+	for name, doc := range docs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range callBodies {
+			for _, d := range coreDecls {
+				where := fmt.Sprintf("doc %s, decls %q, body %s", name, d, c.body)
+				if raceSkip(where) {
+					continue
+				}
+				streamed += coreCheck(t, coreSheetWith(d+callDecls, c.body), dir, where, c.stream, TransformOptions{})
+			}
+		}
+	}
+	if streamed == 0 {
+		t.Error("nothing streamed without a re-run")
+	}
+}
+
+// TestStreamAttributeSets: streamable attribute sets on streamed literal
+// result elements and xsl:element run on the view, as the tree runs them;
+// a set that reads content, or is not streamable, leaves the container on
+// the tree.
+func TestStreamAttributeSets(t *testing.T) {
+	decls := `<xsl:attribute-set name="s1" streamable="yes"><xsl:attribute name="n" select="name()"/><xsl:attribute name="k" select="@k"/></xsl:attribute-set>
+<xsl:attribute-set name="s2" streamable="yes" use-attribute-sets="s1"><xsl:attribute name="d" select="count(ancestor::*)"/></xsl:attribute-set>
+<xsl:attribute-set name="s2" streamable="yes"><xsl:attribute name="v" select="xs:integer(@v)"/></xsl:attribute-set>
+<xsl:attribute-set name="deep" streamable="yes"><xsl:attribute name="c" select="count(sub)"/></xsl:attribute-set>
+<xsl:attribute-set name="plain"><xsl:attribute name="p" select="1"/></xsl:attribute-set>`
+	dir := t.TempDir()
+	streamed := 0
+	for name, doc := range map[string]string{"flat": coreDocs["flat"], "ns": coreDocs["ns"], "nan": tryDocs["nan3"], "bad": tryDocs["bad"]} {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range []struct {
+			body   string
+			stream bool
+		}{
+			{`<o><xsl:for-each select="*/*"><r xsl:use-attribute-sets="s1"><xsl:copy-of select="sub"/></r></xsl:for-each></o>`, true},
+			{`<o><xsl:for-each select="*/*"><xsl:element name="r" use-attribute-sets="s2"><xsl:value-of select="."/></xsl:element></xsl:for-each></o>`, true},
+			{`<o xsl:use-attribute-sets="s1"><xsl:value-of select="count(//sub)"/></o>`, false}, // @k of the document node
+			{`<o><xsl:for-each select="*/*"><r xsl:use-attribute-sets="deep"/></xsl:for-each></o>`, false},
+			{`<o><xsl:for-each select="*/*"><r xsl:use-attribute-sets="plain"><xsl:copy-of select="sub"/></r></xsl:for-each></o>`, false},
+		} {
+			where := fmt.Sprintf("doc %s, body %s", name, c.body)
+			streamed += coreCheck(t, coreSheetWith(decls, c.body), dir, where, c.stream, TransformOptions{})
+		}
+	}
+	if streamed == 0 {
+		t.Error("nothing streamed without a re-run")
+	}
+}

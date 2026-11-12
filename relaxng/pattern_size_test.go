@@ -231,3 +231,42 @@ func TestStoredPatternSizeMatchesWalk(t *testing.T) {
 		}
 	}
 }
+
+// The same growth reaches the pattern through the tokens of a list, in text
+// and in attribute values alike. listDeriv took every token's derivative with
+// no check between them and collapsed the result to empty or notAllowed, so
+// neither the element nor the attribute check ever saw it: twenty tokens cost
+// 25 s and 224 MB whatever MaxPatternSize said. Twelve tokens is small enough
+// that the unbounded code finishes, so a lost bound fails here rather than
+// hanging; at MaxPatternSize 50 the bound must refuse, and name itself.
+func TestListTokenPatternSizeIsBounded(t *testing.T) {
+	const list = `<list><oneOrMore><oneOrMore><data type="string"/></oneOrMore></oneOrMore></list>`
+	toks := strings.TrimSpace(strings.Repeat("v ", 12))
+	for _, c := range []struct{ sch, doc string }{
+		{`<element name="r" xmlns="http://relaxng.org/ns/structure/1.0">` + list + `</element>`,
+			`<r>` + toks + `</r>`},
+		{`<element name="r" xmlns="http://relaxng.org/ns/structure/1.0"><attribute name="a">` +
+			list + `</attribute></element>`,
+			`<r a="` + toks + `"/>`},
+	} {
+		schTree, err := xdm.ParseString(c.sch, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Compile(schTree.Root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Validate(doc.Root); err != nil {
+			t.Fatalf("%s: refused under the default bound: %v", c.doc, err)
+		}
+		err = s.ValidateWithOptions(doc.Root, ValidateOptions{MaxPatternSize: 50})
+		if err == nil || !strings.Contains(err.Error(), "the derivative pattern exceeds") {
+			t.Errorf("%s: got %v, want the pattern bound to refuse", c.doc, err)
+		}
+	}
+}

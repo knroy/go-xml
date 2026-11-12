@@ -14,7 +14,9 @@ import (
 // place a second pass would help (static typing) is not implemented, and the
 // spec permits a dynamically-typed implementation.
 type Expr interface {
-	// Eval evaluates the expression in ctx and returns a sequence.
+	// Eval evaluates the expression in ctx and returns a sequence. A
+	// resource-limit refusal is returned as an error wrapping
+	// xdm.ErrResourceLimit, as Compiled.Eval returns it.
 	Eval(ctx *Context) (xdm.Sequence, error)
 	// String returns a source-like rendering, used in error messages and to
 	// make test failures readable.
@@ -316,6 +318,10 @@ type InlineFunctionExpr struct {
 	Result *SequenceType
 	Body   Expr
 
+	// spine is the height of the body's tallest operator chain, charged to
+	// the recursion depth on every call. See spineDepth.
+	spine int
+
 	// needs is what closureNeeds found, computed on first evaluation.
 	needs atomic.Pointer[closureVars]
 }
@@ -454,6 +460,13 @@ type SequenceType struct {
 	// is keyed by: matching a value against it means asking the schema, not
 	// the type codes here, and a derived type's identity is exactly its name.
 	SchemaType string
+
+	// schemaEnv is the type environment of the schema SchemaType came from,
+	// captured with SchemaValueValid. A value a cast annotates as SchemaType
+	// carries it, so "instance of" walks that schema's derivation chain and
+	// not the process-global table, which a later unrelated xsd.Load
+	// redefining the same name rewrites. nil when the resolver has none.
+	schemaEnv *xdm.TypeEnvironment
 
 	// SchemaValueValid checks a lexical value against the imported schema
 	// type SchemaType names, when that name is a simple type. It is captured

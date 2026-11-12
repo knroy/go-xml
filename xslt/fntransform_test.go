@@ -423,7 +423,7 @@ func mustFileResolver(t *testing.T, dir string) *xslt.FileResolver {
 // A static="yes" variable may call fn:transform. Section 9.7 gives a static
 // expression the whole F&O library and excludes nothing from it, so the
 // nested transformation runs during the STATIC PHASE of the outer
-// compilation -- while Compile still holds compileMu and the package state
+// compilation -- while Compile still holds compileSlot and the package state
 // that goes with it. transform-004 is the suite case.
 func TestStaticTransform(t *testing.T) {
 	dir := t.TempDir()
@@ -693,6 +693,28 @@ func TestFnTransformSourceLocationConflicts(t *testing.T) {
 	}
 }
 
+// F&O 3.1 asks for the stylesheet "either by supplying exactly one of"
+// stylesheet-location, stylesheet-node and stylesheet-text "Or by supplying
+// exactly one of" package-location, package-node, package-text and
+// package-name, and raises FOXT0002 "if two mutually-exclusive parameters are
+// supplied". A package-* option beside a stylesheet-* one was ignored.
+func TestFnTransformPackageAndStylesheetConflict(t *testing.T) {
+	for _, pkg := range []string{
+		`'package-location': 'p.xsl'`, `'package-node': /`, `'package-text': '&lt;p/&gt;'`,
+	} {
+		t.Run(pkg, func(t *testing.T) {
+			_, err := runPP(t, `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+			  <xsl:template match="/">
+			    <xsl:sequence select="transform(map{'stylesheet-node': /, 'source-node': /, `+pkg+`})?output"/>
+			  </xsl:template>
+			</xsl:stylesheet>`, `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:template match="/"><ok/></xsl:template></xsl:stylesheet>`)
+			if code := xdm.ErrorCode(err); code != "FOXT0002" || !strings.Contains(err.Error(), "mutually exclusive") {
+				t.Fatalf("got %v, want FOXT0002 for mutually exclusive options", err)
+			}
+		})
+	}
+}
+
 // F&O 3.1 applies the option parameter conventions to fn:transform's map: "It
 // is not an error if the options map contains options with names other than
 // those described in this specification." A misspelled string key and a
@@ -786,18 +808,21 @@ func fnTransformWith(t *testing.T, extra string) (string, error) {
 }
 
 // requested-properties is matched against what fn:system-property reports;
-// F&O 3.1 leaves an unmet request implementation-defined and this processor
-// refuses it with FOXT0001. true() and false() stand for yes and no, and
-// xsl:version is ignored.
+// F&O 3.1 §16.3.2 leaves an unmet request implementation-defined and this
+// processor refuses it with FOXT0001. true() and false() stand for yes and
+// no, and a boolean property set to false() is "an explicit request for a
+// processor in which the value of the property is false": supports-streaming
+// is "yes", so 'yes' is met and false() is not. xsl:version is ignored.
 func TestFnTransformRequestedProperties(t *testing.T) {
 	const xsl = `'http://www.w3.org/1999/XSL/Transform'`
 	for _, tc := range []struct{ name, req, code string }{
-		{"met boolean", `QName(` + xsl + `, 'supports-streaming'): false()`, ""},
+		{"met boolean", `QName(` + xsl + `, 'supports-streaming'): true()`, ""},
 		{"met string", `QName(` + xsl + `, 'xpath-version'): '3.1'`, ""},
 		{"version ignored", `QName(` + xsl + `, 'version'): '9.9'`, ""},
 		{"product", `QName(` + xsl + `, 'product-name'): 'Xalan'`, "FOXT0001"},
 		{"unmet boolean", `QName(` + xsl + `, 'supports-namespace-axis'): false()`, "FOXT0001"},
-		{"streaming", `QName(` + xsl + `, 'supports-streaming'): 'yes'`, "FOXT0001"},
+		{"streaming", `QName(` + xsl + `, 'supports-streaming'): 'yes'`, ""},
+		{"no streaming", `QName(` + xsl + `, 'supports-streaming'): false()`, "FOXT0001"},
 		{"schema-aware", `QName(` + xsl + `, 'is-schema-aware'): false()`, "FOXT0001"},
 		{"other namespace", `QName('urn:x', 'p'): 'v'`, "FOXT0001"},
 		{"string key", `'product-name': 'go-xml'`, "XPTY0004"},
@@ -814,6 +839,29 @@ func TestFnTransformRequestedProperties(t *testing.T) {
 				t.Fatalf("got %v, want %s", err, tc.code)
 			}
 		})
+	}
+}
+
+// F&O 3.1 §16.3.2: a static error from the nested compilation fails
+// fn:transform "retaining the XSLT error code". The §19.8 XTSE3430 carries its
+// code only as a trailing "(XTSE3430)", which was relabelled FOXT0002 once
+// supports-streaming became "yes" (qt3 fn-transform-77: x/y + x/z in a
+// streamable rule, run by initial-template).
+func TestFnTransformRetainsTrailingStaticCode(t *testing.T) {
+	src := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+	  <xsl:variable name="inner"><![CDATA[
+	    <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+	      <xsl:mode streamable="yes"/>
+	      <xsl:template match="/"><out><xsl:value-of select="x/y + x/z"/></out></xsl:template>
+	      <xsl:template name="main"><ok/></xsl:template>
+	    </xsl:stylesheet>]]></xsl:variable>
+	  <xsl:template match="/">
+	    <xsl:sequence select="transform(map{'stylesheet-text': string($inner),
+	        'initial-template': QName('', 'main')})?output"/>
+	  </xsl:template>
+	</xsl:stylesheet>`
+	if _, err := runPP(t, src, `<r/>`); xdm.ErrorCode(err) != "XTSE3430" {
+		t.Fatalf("got %v, want XTSE3430", err)
 	}
 }
 

@@ -19,7 +19,8 @@ import (
 //     report it now; they once borrowed XPST0003, "syntactically invalid",
 //     about a type or expression that was perfectly well-formed.
 //   - FORX0002 means "invalid regular expression". A pattern that exhausts the
-//     backtracking budget is valid; the budget is what ran out.
+//     backtracking budget is valid; the budget is what ran out, so it now
+//     reports XPDY0130 as well.
 //   - FOAR0002 means "numeric overflow or underflow". Nothing overflowed when
 //     a range bound is refused; the enumeration was declined.
 //
@@ -91,7 +92,19 @@ func TestResourceLimitsCarrySentinelAndKeepTheirCode(t *testing.T) {
 					`", "(a*)*\1b")`, ctx, nil)
 				return err
 			},
-			"FORX0002", "backtracking step budget",
+			"XPDY0130", "backtracking step budget",
+		},
+		{
+			// xpath/operators.go, evalRange. A bound outside int64 is an
+			// ordinary xs:integer; what is refused is the item count, and
+			// XPath 3.1 2.3.1 names XPDY0130 for that, not FOAR0002.
+			"range length", func() error {
+				ctx := NewContext(nil, Builtins())
+				ctx = ctx.WithVersion(XPath31)
+				_, err := Eval(`count(1 to 100000000000000000000000000)`, ctx, nil)
+				return err
+			},
+			"XPDY0130", "exceeds the",
 		},
 	}
 	for _, tt := range tests {
@@ -113,35 +126,6 @@ func TestResourceLimitsCarrySentinelAndKeepTheirCode(t *testing.T) {
 					"match on message text would break", err, tt.wantText)
 			}
 		})
-	}
-}
-
-// The FOAR0002 range-bound refusal is exercised through its own function
-// rather than through an expression, because singleInteger currently has no
-// caller: "to" reads its bounds through bigInteger, which keeps the arbitrary
-// precision rather than narrowing. The site is wrapped anyway -- it is
-// reachable the moment anything calls it again, and a limit that reports
-// FOAR0002 without the sentinel is exactly the defect this contract exists to
-// prevent from recurring.
-func TestRangeBoundRefusalCarriesSentinel(t *testing.T) {
-	ctx := NewContext(nil, Builtins())
-	ctx = ctx.WithVersion(XPath31)
-	huge, err := Parse("100000000000000000000000000", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = singleInteger(ctx, huge)
-	if err == nil {
-		t.Fatal("expected a refusal for a bound outside int64")
-	}
-	if !errors.Is(err, xdm.ErrResourceLimit) {
-		t.Errorf("errors.Is(%v, ErrResourceLimit) = false", err)
-	}
-	if code := xdm.ErrorCode(err); code != "FOAR0002" {
-		t.Errorf("code = %q, want FOAR0002", code)
-	}
-	if !strings.Contains(err.Error(), "is too large to enumerate") {
-		t.Errorf("message %q lost its leading text", err)
 	}
 }
 

@@ -41,6 +41,9 @@ type parser struct {
 	// static context's map cannot answer it: the five predeclared prefixes
 	// are in there from the start, and rebinding one of those is legal.
 	declaredNS map[string]bool
+	// moduleDeclPrefix is the prefix a library module's declaration bound,
+	// which §4.12 lets a module import reuse for the same namespace.
+	moduleDeclPrefix string
 
 	// ctorPrefixes records every prefix bound by an xmlns declaration
 	// attribute on a direct element constructor, anywhere in the module.
@@ -84,6 +87,10 @@ type parser struct {
 	// whole prolog, so that each import consults the resolver once and the
 	// components fold into one merged schema. nil for a query with no import.
 	schemaLoader *schemaLoader
+	// schemaBytes is the compilation's MaxSchemaBytes spend, shared with the
+	// parser of every library module the compilation loads so that the budget
+	// is cumulative across them. nil until the first "import schema".
+	schemaBytes *int64
 
 	// vars and funcs accumulate the prolog's declarations. They are on the
 	// parser rather than returned from parseProlog because a declaration
@@ -92,6 +99,12 @@ type parser struct {
 	// name needs everything seen so far.
 	vars  []*varDecl
 	funcs []*funcDecl
+	// varNames and funcNames index vars and funcs by expanded name (and,
+	// for a function, arity), so the XQST0049 and XQST0034 checks are a
+	// lookup: a scan of every earlier declaration was quadratic in the
+	// prolog, with two Clark strings built per comparison.
+	varNames  map[declKey]bool
+	funcNames map[declKey]bool
 
 	// contextItem is "declare context item", when the prolog made one.
 	contextItem *contextItemDecl
@@ -126,6 +139,12 @@ type parser struct {
 	// its own imports could not be counted, and the count is what bounds a
 	// cyclic or fanning import graph. See moduleLoader.
 	moduleImports []moduleImport
+
+	// memo and base let every parser reading a substring of the module
+	// source share one record of the direct constructors already parsed:
+	// base is the offset of src[0] in that source. See ctorMemo.
+	memo *ctorMemo
+	base int
 }
 
 // compiledExpr is an expression compiled by xpath, kept with the source it
@@ -176,6 +195,9 @@ type compiledExpr struct {
 	// compile the rest. Each one is reached through a "local:xq-stepN()"
 	// call installed before xpc is evaluated. See substituteOperands.
 	ops []liftedOperand
+	// spine is the extra recursion depth evaluating xpc costs, charged by
+	// bind. See spineDepth.
+	spine int32
 }
 
 // inspect returns the compiled expression for STATIC ANALYSIS ONLY — reading
@@ -203,10 +225,21 @@ func (e *compiledExpr) inspect() *xpath.Compiled {
 // case; the library is only built for an expression compileExpr had to
 // rewrite.
 func (e *compiledExpr) bind(ctx *evalContext) (*xpath.Context, error) {
-	if len(e.ops) == 0 {
-		return ctx.xp, nil
+	xp := ctx.xp
+	if e.spine > 0 {
+		// A tall expression costs extra levels while it runs; Descend
+		// refuses past the limit and adds the last one.
+		sub := *xp
+		sub.Depth += e.spine - 1
+		var err error
+		if xp, err = sub.Descend(); err != nil {
+			return nil, err
+		}
 	}
-	return bindLifted(ctx.xp, e.ops, ctx), nil
+	if len(e.ops) == 0 {
+		return xp, nil
+	}
+	return bindLifted(xp, e.ops, ctx), nil
 }
 
 // evalIn evaluates the xpath half in a context derived from the bound one.
@@ -600,7 +633,7 @@ func isXMLChar(r rune) bool {
 // source first — see literal.go. Everything else about the expression language
 // is shared, which is why these are the only three.
 func (p *parser) compileExpr(src string) (*compiledExpr, error) {
-	if err := rejectNamespaceAxis(src); err != nil {
+	if err := rejectNamespaceAxis(src, p.sc.xqVersion); err != nil {
 		return nil, err
 	}
 	// %public and %private have to be refused before the strip removes them.
@@ -633,7 +666,7 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		// Substituting those and recompiling is the same split applied once
 		// more, so it is tried before the error is reported. Failing that,
 		// xpath's own error stands, because it names the construct.
-		ops, rewritten, serr := p.substituteOperands(expanded)
+		ops, rewritten, serr := p.substituteOperands(expanded, -1)
 		if serr != nil || len(ops) == 0 {
 			return nil, err
 		}
@@ -677,7 +710,8 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		c = c.WithDefaultCollationURI(coll,
 			resolveBase(p.sc.baseURI, p.sc.defaultCollation))
 	}
-	return &compiledExpr{src: src, xpc: c, sc: p.sc, ops: opsOut}, nil
+	return &compiledExpr{src: src, xpc: c, sc: p.sc, ops: opsOut,
+		spine: spineLevels(c)}, nil
 }
 
 // rejectNamespaceAxis refuses the namespace axis, which XQuery does not have.
@@ -685,7 +719,7 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 // The test is lexical because the expression has not been parsed yet, and it
 // deliberately does not fire inside a string literal or a comment, where
 // "namespace::" is just text.
-func rejectNamespaceAxis(src string) error {
+func rejectNamespaceAxis(src string, v XQVersion) error {
 	for i := 0; i+len("namespace::") <= len(src); i++ {
 		// A literal, a comment or a pragma is not source, and "namespace::"
 		// inside one is text rather than the axis. An unterminated region
@@ -711,7 +745,7 @@ func rejectNamespaceAxis(src string) error {
 		return fmt.Errorf(
 			"XPST0003: XQuery has no %q axis", "namespace")
 	}
-	return rejectNamespaceNodeStep(src)
+	return rejectNamespaceNodeStep(src, v)
 }
 
 // rejectNamespaceNodeStep refuses "namespace-node()" written as a step of its
@@ -726,13 +760,11 @@ func rejectNamespaceAxis(src string) error {
 // two, so the test is for the test standing alone after a "/" or at the head
 // of the expression.
 //
-// XQST0134 is raised whatever version the module declared, and deliberately.
-// The namespace-node() kind test does not exist in XQuery 1.0 at all, so a 1.0
-// module writing this step is in error either way -- only the code a 1.0
-// processor would report differs, and it would be a grammar error rather than
-// a right answer this engine withholds. Routing it would trade one refusal for
-// another and is not worth a branch.
-func rejectNamespaceNodeStep(src string) error {
+// XQST0134 is XQuery 3.0's code. The namespace-node() kind test does not exist
+// in XQuery 1.0, which reads the step as a call to a function nobody defined:
+// Axes127 asserts XPST0017 for "/*/namespace-node()" under "XQ10", and Axes128
+// XQST0134 for the same source under "XQ30+".
+func rejectNamespaceNodeStep(src string, v XQVersion) error {
 	const kind = "namespace-node("
 	for i := 0; i+len(kind) <= len(src); i++ {
 		// A literal, a comment or a pragma is not source, and "namespace::"
@@ -762,6 +794,11 @@ func rejectNamespaceNodeStep(src string) error {
 			if r, _ := utf8.DecodeLastRuneInString(src[:j]); xdm.IsNameChar(r) {
 				continue
 			}
+		}
+		if !v.atLeast30() {
+			return fmt.Errorf(
+				"XPST0017: XQuery 1.0 has no namespace-node() test, and no "+
+					"function %s) is defined", kind)
 		}
 		return fmt.Errorf(
 			"XQST0134: XQuery has no %q axis, so %s) cannot stand as a step",

@@ -41,6 +41,9 @@ type boundedCache[K comparable, V any] struct {
 	mu    sync.Mutex
 	items map[K]V
 	max   int
+	// maxWeight bounds the sum of the weights PutWeighted was given for the
+	// entries held. weight is that sum.
+	maxWeight, weight int
 }
 
 // Get returns the memoised value for k.
@@ -70,8 +73,38 @@ func (c *boundedCache[K, V]) Put(k K, v V) {
 	}
 	if len(c.items) >= c.max {
 		c.items = make(map[K]V)
+		c.weight = 0
 	}
 	c.items[k] = v
+}
+
+// PutWeighted is Put for an entry that retains about w bytes, in a cache with
+// a maxWeight: the table is also cleared when the weights it holds would pass
+// maxWeight, and an entry heavier than maxWeight is not kept at all. A key
+// already held keeps its entry, which is the same value since every value is
+// reproducible from its key, so no weight is counted twice.
+func (c *boundedCache[K, V]) PutWeighted(k K, v V, w int) {
+	if w > c.maxWeight {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.items[k]; ok {
+		return
+	}
+	if c.items == nil || len(c.items) >= c.max || c.weight+w > c.maxWeight {
+		c.items = make(map[K]V)
+		c.weight = 0
+	}
+	c.items[k] = v
+	c.weight += w
+}
+
+// Weight reports the sum of the weights of the entries held.
+func (c *boundedCache[K, V]) Weight() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.weight
 }
 
 // Len reports the number of entries held.

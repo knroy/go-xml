@@ -623,9 +623,10 @@ func TestSourceModelRejectsBadShape(t *testing.T) {
 // TestSourceModelAcceptsRefForms covers the shapes the check must not reject:
 // a <group>, <attributeGroup> or identity constraint written as a reference
 // carries no children of its own beyond an annotation. Requiring a selector
-// on every <unique> rejected the saxonData Id id040 and id043 schemas.
+// on every <unique> rejected the saxonData Id id040 and id043 schemas. The
+// identity-constraint ref is XSD 1.1, so the schema is loaded under 1.1.
 func TestSourceModelAcceptsRefForms(t *testing.T) {
-	mustParseSchema(t, `
+	load11(t, `
 	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
 	           targetNamespace="urn:t" xmlns:t="urn:t">
 	  <xs:element name="outer">

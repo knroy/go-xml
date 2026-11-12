@@ -1103,7 +1103,7 @@ func xpathFloor(v xpath.Version) xpath.Version {
 // overrideXPathVersion pins the XPath version for the stylesheet being
 // compiled, ignoring what the stylesheet itself declares.
 //
-// It is package state guarded by compileMu, for the same reason compileSchema
+// It is package state guarded by compileSlot, for the same reason compileSchema
 // is: newNSResolver is called from a dozen places that have no compiler in
 // scope, and threading the option through all of them would touch far more
 // code than the option is worth. See compileSchema for the full argument.

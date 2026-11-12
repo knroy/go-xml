@@ -10,15 +10,727 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does | Commit |
 |---|---|---|
-| Streamed record paths with `//`, wildcards and `outermost()` | `//rec`, `doc//rec`, `/*/*/rec`, `*:rec`, `p:*` stream in both shapes; nested matches ride inside their outermost record. Small records share one tree: 900-deep `count(//rec)` 2.0 s CPU. | [`df9677e`][df9677e], [`fd31bb3`][fd31bb3], [`382983c`][382983c], [`22af5f4`][22af5f4] |
+| Streamed record paths with `//`, wildcards and `outermost()` | `//rec`, `doc//rec`, `/*/*/rec`, `*:rec`, `p:*` stream; nested matches ride inside their outermost record. Small records share one tree: 900-deep `count(//rec)` 2.0 s CPU. | [`df9677e`][df9677e], [`fd31bb3`][fd31bb3], [`382983c`][382983c], [`22af5f4`][22af5f4] |
+| Streamed core for `xsl:source-document` | One streamed path for every trusted container: wrappers, choose, loops, split selects; an error is the tree's: final where the stream raises it as the tree does, otherwise re-run on the tree. W3C streamed cases 450 → 2,661. | [`ff0c463`][ff0c463], [`44db07f`][44db07f], [`096a587`][096a587], [`d1a98a8`][d1a98a8] |
+| `Stylesheet.TransformReader`, `TransformOptions.SourceParseOptions` | Applies a stylesheet to a reader, streaming it when the initial mode is streamable and verified (a 1 GB filter in 620 MB heap, not 7.3 GB); otherwise exactly Parse + Transform. | [`bdf45d8`][bdf45d8] |
+| Streamed `xsl:apply-templates` | Template rules, built-in rules, `next-match`, `apply-imports` and tunnels run on the cursor in a streamable container: a 1 GB filter in 624 MB, not 7.4 GB. | [`c8c0a01`][c8c0a01] |
+| Streamed `xsl:for-each-group` | group-adjacent, -starting-with and -ending-with over a child path stream in a streamable container or rule, each group as it closes, `current-group()` read once off the cursor: a 1 GB log grouped in 158 MB heap, not 6.0 GB. | [`fe1eb18`][fe1eb18] |
+| Streamed `xsl:try` | A try in a streamable container or rule streams its body; a caught error skips the rest of the context on the cursor and the catch runs on the start tag's view. The catch sees the tree's first error. | [`2447ca0`][2447ca0] |
+| Stylesheet functions in streamed selects | A call whose body is its value exactly (one `xsl:sequence`, no failing conversion) is split as its body; `path ! f(.)` of atomic values reads as `path/f(.)`: an absorbing function over 1 GB of records in 3 MB heap, not 11 GB. | [`6abbb27`][6abbb27] |
+| Streamable attribute sets | `xsl:use-attribute-sets` on streamed literal result elements, `xsl:element` and `xsl:copy`. | [`26caed6`][26caed6] |
+| Streamed accumulators | `xsl:accumulator` values are computed as a streamed document is read, in a streamable `xsl:source-document` and through `TransformReader`: a running total over 1 GB in 3 MB heap, not 15 GB. | [`42902f3`][42902f3] |
+| Streamed `xsl:fork` and `xsl:map` | Several prongs or entries reading one streamed document each run on a parse of their own over one read of its bytes, in turn; outputs in prong order, the first error the tree's. | [`2a1d6ad`][2a1d6ad] |
+| Streamed `xsl:merge` | Each `for-each-source` document of a streamable merge source is read on its own cursor and merged by key as the tree merges: two 512 MB logs in 3.9 MB of heap. | [`2089255`][2089255] |
+| `TransformOptions.Output` | Serializes the principal result to a writer as it is built: a 1 GB identity in 4.5 MB heap, not 9.4 GB. Written nodes no longer count toward `MaxNodes`; buffered results keep the cumulative count. | [`34e6b36`][34e6b36] |
+| `TransformOptions.SecondaryOutput` | Each `xsl:result-document` is serialized to the writer the function returns for its URI, as it is made, and closed at its end; a 1 GB split into 7,018 files in 5.6 MB heap. | [`e94d4e0`][e94d4e0] |
+| `TransformOptions.SourceValidation` (`SourceStrict`, `SourceLax`) | Validates the principal input against the stylesheet's schema; `TransformReader` validates it while streaming, with the tree's typing, defaults and error. | [`081c9d3`][081c9d3] |
 | `TransformOptions` `MaxNodes`, `MaxBytes`, `MaxNodesBuilt`, `MaxBytesBuilt` | Held and total-work bounds for result and temporary trees and strings. Zero keeps the defaults; negative removes the bound. | [`294b965`][294b965] |
+| `xslt.CompileContext` | `Compile` with a context: a call waiting for the compile slot returns `ctx.Err()`; the static phase and nested `fn:transform` compiles run under it. | [`cfa135c`][cfa135c], [`4694fa3`][4694fa3], [`0ecee9c`][0ecee9c] |
+| `CompileOptions.MaxSchemaBytes`, `xslt.DefaultMaxSchemaBytes` | Total schema source `xsl:import-schema` may read per compile, closures included; zero means 16 MB. | [`4ad352d`][4ad352d] |
+| `xdm.FlattenContext`, `XIncludeOptions.Context` | A cancellable `Flatten` that returns its step refusal as an error, and a cancellable XInclude pass. | [`9399efd`][9399efd] |
+| `c14n.FromXPathFilterContext`, `FromXPathContext` | XML-DSig XPath transforms under a context; a filter's per-node evaluations share one item and byte budget. | [`2a41550`][2a41550] |
+| `c14n.FromXPathFilterHere`, `FromXPathHere` | XML-DSig filters can call `here()`: the node bearing the expression, a text node read as its parent; a node outside the document is refused. | [`e0d2c13`][e0d2c13] |
+| `xdm.ParseOptions.Warn` | Receives xml:id errors (duplicate ID, non-NCName value) as XQDY0091 `*xdm.Error`s, at most 100 then one summary; nil stays silent. | [`0caab03`][0caab03], [`c6508c3`][c6508c3] |
+| `xslt.StreamingDocumentResolver`, `FileResolver.OpenDocument` | A resolver with `OpenDocument` streams streamable `xsl:source-document` and merge sources; one without it still builds the tree. | [`0d9c103`][0d9c103] |
+| `tests/streambench` | Measures one transform on the tree against the same transform streamed through `TransformReader`, per process: 15–20 MB of RSS at 11, 112 and 564 MB streamed, against 46 MB to 2.4 GB on the tree, at 0.9–1.5× the time (docs/benchmark.md, "Streaming against the tree"). | [`1db051a`][1db051a] |
 
 ### Changed
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| `(P/position()) ! R` streamed position 1 for every item (the tail ran on each match's copy) | A path tail reading `position()` or `last()` of P's focus is refused for streaming. | [`1f0c721`][1f0c721] |
+| An `xsl:iterate` over copies reading `last()` failed (XPDY0002) or re-ran on the tree | It is sized as a for-each over `copy-of(P)` is, or refused when the plan is made. | [`f4a7e22`][f4a7e22] |
+| Copies of a streamed match ordered after a document the body loaded first (`union`, `<<`, `>>`) | The stream's tree id is fixed when its cursor opens. | [`0824c9c`][0824c9c] |
+| A path's dedupe, `outermost()` over a stream node or `doc()` of its URI streamed wrong counts (since v2.2.0, [`3f185fe`][3f185fe]) | The alias guard counts them as uses. | [`a31a4fe`][a31a4fe] |
+| Accumulators read on `copy-of(.)` of a streamed match or document answered with the copy's own values | The copy records its original's values and answers with them (§18.2.10). | [`9155044`][9155044] |
+| With an accumulator declared, every streamed copy and its original were kept to the end: 1.4–1.6× the tree | A copy's record lives as long as the copy; loops hand temporaries back. | [`19b9185`][19b9185] |
+| A streamed `xsl:iterate` carrying a large tree re-walked it after every item: 39 s against the tree's 0.1 s at 0.9 MB | A carried tree is measured once, an unchanged value not at all, after the cheap checks. | [`18670ae`][18670ae] |
+| Streamed reads (a string value, an idle split loop, the drain) ignored a cancelled context, so an endless stream ran on | The cursor fails its next read with the context's error. | [`68b9320`][68b9320] |
+| Cancelling a streamed `xsl:source-document` or `xsl:merge` re-ran it on the tree, building the whole document first | A cancelled stream returns the context's error, with no re-run. | [`383ed3d`][383ed3d] |
+| A `group-by` in `xsl:fork` under `TransformReader` charged its event copies to `MaxNodes`, failing where the tree succeeds | They are built outside the result budget. | [`368b6c0`][368b6c0] |
+| Under `Output`, an identity with a rule for `/` built the whole document (28 MB against 1.5 MB) | With `Result.Nodes` unused a kept leaf's copy serves, and nothing is built. | [`0201119`][0201119] |
+| Streamed recursion through an inlined function failed as template recursion, where the tree raises XPDY0001 | The call is bounded by the XPath call depth, as the tree's is. | [`b2f4cb9`][b2f4cb9] |
+| Compiling a multi-module stylesheet walked every module once per module (DocBook +37% time, +102% allocations) | The cross-module walk is memoised per module set. | [`9ac0f40`][9ac0f40] |
+| A stream parse started a 64-byte text block and rebuilt its whitespace table after every element | Both carry over rewinds: a drain 9% faster, 3.3M allocations down to 2.9k. | [`edd4923`][edd4923] |
+| Tree mode too: built-in template rules ignored a cancelled context, so an identity ran to completion | They check it per node and return the context's error. | [`68b9320`][68b9320] |
+| Tree mode too: a `FileResolver` refusal named the resolved path and roots, revealing whether outside files exist | It names the href as written, and is `fs.ErrPermission`. | [`2f825da`][2f825da] |
+| Tree mode too: an `xsl:merge` `for-each-source` href that is not a URI (a backslash, a bad `%`-escape) raised FODC0002 | It raises FODC0005, as `xsl:source-document` does. | [`acc5556`][acc5556] |
+| Tree mode too: with an accumulator declared, every `copy-of()`/`snapshot()` copy was kept to the transform's end | A dropped copy is freed; output unchanged. | [`19b9185`][19b9185] |
+| `xdm.ParseBursts` built an element off its path whole before dropping it | It now drops it as it parses, holding only the open path. | [`d1a98a8`][d1a98a8] |
+| Streamed loop errors could come in a different order from tree mode | The burst loops are gone; the core re-runs on the tree after any error. | [`d1a98a8`][d1a98a8] |
+| A consuming attribute value template or an `xsl:sequence` of nodes sent a streamed container to the tree | One consuming value-template part per element, and `xsl:sequence` in element content, stream as copy-of does. | [`fe1eb18`][fe1eb18] |
+| A streamed `xsl:iterate` that carried a copy of its item, or read it in `xsl:next-iteration`, ran on the tree | The parameter is read off the cursor at the item; copies are carried on. | [`009d510`][009d510] |
+| A grouping over grounded values (`group-by`, `xsl:sort`) in a streamed container ran it on the tree | Its select is read off the cursor; the tree's grouping runs over the values. | [`09174d4`][09174d4] |
+| A streamed `treat as` over a path atomized the path's nodes first, raising XPDY0050 and re-running on the tree | The operand of `treat as` is kept as it is. | [`ba6c23f`][ba6c23f] |
+| `accumulator-before`/`-after` on a node copied out of a stream walked the copy's tree | It answers from the stream's observer, or the container falls back to the tree; values are never computed over a copy. | [`42902f3`][42902f3] |
+| A fork or map in a loop over records sent its container to the tree | The loop runs its body on a grounded copy of each record; `$m('k')` and `?k` on a variable proven a map or array are motionless. | [`2a1d6ad`][2a1d6ad] |
+| A host function item reaching streamed evaluation could hang the transform | Every goroutine streaming evaluates on (prongs, parses, merge inputs) hands xpath's EvalLock back at each switch. | [`83e45c5`][83e45c5] |
+| A namespace node added after an element's content, under `Output` | Raises XTDE0410 (§5.7.1) where the tree builder admits it: the streamed start tag is already written. | [`44d2374`][44d2374] |
+| A streamed select at the document node that needs its matches (remove, treat as, deep-equal, a sequence of copies) ran the container on the tree | The matches are held, capped at the records the tree would hold; past that the tree answers. | [`e629035`][e629035] |
+| A streamed count, exists, empty, boolean or not over remove/insert-before/subsequence/tail/... of a node path held copies of the matches | It counts them: no copy is made. | [`48b2598`][48b2598] |
+| A validation or type attribute on a constructor in a streamed container ran it on the tree | The constructor streams and validates what it built, as the tree does; on `xsl:copy` only validation strip or preserve. | [`2f9f1b4`][2f9f1b4] |
+| `xsl:copy` with a consuming select ran its container on the tree | It streams as a loop over its one item, the body reading the item's content off the cursor. | [`41ec3ba`][41ec3ba] |
+| A consuming `xsl:on-empty` or `xsl:on-non-empty` ran its container on the tree | Both stream as `xsl:sequence` does; the §8.4.4 order is the tree's. | [`e65c621`][e65c621] |
+| union, intersect and except of two streamed paths sent the container to the tree | One walk tests each node against every operand's path; a match is delivered once, in document order. | [`7765fca`][7765fca] |
+| The identity template in a streamable mode, written with `select="@*"` and `select="node()"`, did not stream the principal input | Leaf and attribute rules apply templates over their empty children on the copy; `select="node()"` is the children. | [`75d485f`][75d485f] |
+| A simple map or a position filter over streamed paths (`ITEM ! (PRICE \| QUANTITY)`, `(A \| B)[position() mod 2 = 0]`) ran on the tree | `P ! Q` reads as `P/Q` where that is the map exactly; the filter is applied to the values. | [`966b4ac`][966b4ac] |
+| A positional step predicate other than `[n]` (`ITEM[position() lt 4]`) sent the container to the tree | It is counted on the cursor per context, as `[n]` is. | [`aea7acd`][aea7acd] |
+| A for-each or iterate over `head()`, `subsequence()`, `insert-before()`, `($v, P)`, `P/@a`, `copy-of(P)` or a motionless choice ran on the tree | The select is normalised into the walk: motionless parts first, windows over the matches. | [`d1efae2`][d1efae2] |
+| apply-templates over `head()`, `subsequence()` or `remove()` of a streamed path ran its container on the tree | Each match passes the window at its start tag and is dispatched as a bare path's is. | [`ddaa14c`][ddaa14c] |
+| `count(P union $v)`, `P except $v`, `$v intersect P` over a streamed path ran its container on the tree | A variable's nodes are not the stream's: the operator is rewritten, the path still read and the variable checked. | [`30b4475`][30b4475] |
+| A streamed select over `P ! R` making nodes, `tail(P)`, or `count(if (C) then A else B)` ran on the tree | R is P's per-match tail, `tail()` skips a match, a motionless choice is hoisted. | [`80f2586`][80f2586] |
+| A text value template in a streamable body sent the container to the tree | Its parts read as an AVT's: motionless on the view, or one consuming part split on the cursor. | [`d37b98c`][d37b98c] |
+| An `xsl:if` or `xsl:when` whose test reads the streamed node sent the container to the tree | The test is split on the cursor as `boolean(test)`; the motionless body runs on the view. | [`7a35cf3`][7a35cf3] |
+| An array or map constructor, lookup or `array:`/`map:` call over a streamed path ran on the tree | The path is split inside it and the value built from the collected values; `array:size` counts members. | [`2beca7b`][2beca7b] |
+| Kept text, comment and PI nodes of a streamed document (`copy-of //text()`, a loop over `text()`) ran on the tree | They are copies with the tree's identity, order and ancestors; leaf patterns may name ancestors. | [`66766f4`][66766f4] |
+| A tail climbing from streamed matches (`//P/ancestor-or-self::*/@*`) ran on the tree | Climbed nodes are taken from the matches' views once each, in document order, read only for what a view has. | [`399418f`][399418f] |
+| A simple map climbing from streamed matches (`P ! ancestor::*`) ran on the tree | P runs on the cursor with R as its per-match tail on the view, not merged across matches. | [`3c57043`][3c57043] |
+| A path with a tail after text matches (`outermost(//PRICE/text()) ! (.+1)`) ran on the tree | The tail runs on each leaf's copy. | [`df0bc8f`][df0bc8f] |
+| fold-left, filter, for-each, distinct-values, codepoints-to-string over a streamed path sent the container to the tree | The path's values are collected and the call made once at the context's end; function items in it are motionless. | [`ef2ae38`][ef2ae38] |
+| `fn:trace` around a streamed select sent it to the tree | It is read as its argument, which is what it returns. | [`05eef52`][05eef52] |
+| `xsl:message` in a streamable container or rule sent it to the tree | It streams; messages are the tree's, once each and in order, through re-runs and fork prongs. | [`4e19855`][4e19855] |
+| A streamed `xsl:try` refused sum/avg/min/max over a path whose items could fail first | The fold cannot fail on numeric items or values a predicate compared numerically: the try streams. | [`1126c8b`][1126c8b] |
+| An `xsl:fallback` in a streamed body, or an `xsl:iterate` parameter defaulting to `map{}`, sent the container to the tree | The fallback of a recognised instruction is skipped; map and array constructors are focus-free defaults. | [`9ca9f64`][9ca9f64] |
+| A filter over a constant or variable beside a streamed select counted as a second consumer | Its predicates read the base's items, not the stream: it is motionless. | [`39e1a8e`][39e1a8e] |
+| `TransformReader` did not stream a stylesheet with a global whose content is literal | Literal content reads nothing of the context item. | [`2303780`][2303780] |
+| A mode with a rule for maps (`.[. instance of map(*)]`) did not stream its principal input | Such a rule matches no node of the input. | [`65212a3`][65212a3] |
+| `snapshot()` of a streamed path written into an element sent the container to the tree | Each match is copied as it is read, which is what the snapshot's copy writes. | [`24fb4d6`][24fb4d6] |
+| `xsl:result-document` in a streamed body sent the container to the tree | It streams as a wrapper; its result is built in memory, and a re-run takes back the failed run's results. | [`4de00c8`][4de00c8] |
+| Under `TransformOptions.Output` with `indent="yes"`, an element was held as a tree to its end | It is held as its serialized bytes, indents recorded and kept or dropped once the serializer's rule decides. | [`f11ed2b`][f11ed2b] |
+| `group-starting-with="."` or `group-ending-with="."` sent a streamed grouping to the tree | The pattern `.` is decided on any view. | [`691f6d1`][691f6d1] |
+| A grouping over copies (`Order/copy-of()`) in a streamed body ran on the tree | The copies are numbered as the tree's select numbers them, so they order alike. | [`f08285d`][f08285d] |
+| `current-group()` of a grounded group inside a nested `xsl:source-document` was unknown to the analysis | Allowed, as for any focus change over a grounded group (si-group-051, as the catalog expects). | [`a504b6b`][a504b6b] |
+| A streamed merge whose sources wrote `data-type="{...}"` and `data-type="text"` ran on the tree | One type once the template is "text". | [`449f068`][449f068] |
+| A streamed merge whose action called a named template or wrote `xsl:result-document` ran on the tree | The template is walked by the same rule; secondary results are taken back on a re-run. | [`df18696`][df18696] |
+| Every streamed event cost a goroutine switch | The cursor parses in steps on the reader's goroutine: a 100 MB identity 1.73× → 1.43× the tree's CPU. | [`158bbb7`][158bbb7] |
+| Each reading `xsl:fork` prong parsed the document again | Prongs that are folds share one walk: four aggregates over 100 MB 3.4× → 1.37× the tree's CPU. | [`bb81a54`][bb81a54] |
+| `fn:transform` reported a nested XTSE3430 as FOXT0002 (fn-transform-77) | A static error code written as a trailing `(XTSE3430)` is kept, as F&O 3.1 §16.3.2 says. | [`5c154ba`][5c154ba] |
+| A rule applied to a streamed group's member that read `accumulator-after` of it gave `TransformReader` an internal error | It reads the value as anywhere else. | [`d0ed436`][d0ed436] |
+| A streamed merge's re-run took back secondary results but not messages, so a merge under `xsl:try` told each message twice | The re-run takes back the messages its failed run told. | [`c257efe`][c257efe] |
+| An `xsl:source-document` with validation or type ran on the tree (parse, then validate a copy) | The document is validated as the cursor reads it; views and copies carry the tree's typing and defaults; an invalid one gets the tree's error. | [`d79951f`][d79951f] |
+| A streamed merge source with validation, and a validated principal input, ran on the tree | Both validate on their cursor; `input-type-annotations="strip"` strips on the stream. | [`5772ca2`][5772ca2] |
+| An `xsl:try` under `TransformOptions.Output` held its whole output as a tree until it ended | Each item it completes is written provisionally and rolled back on a caught error: a 100 MB loop in 41 MB heap, not 430 MB. | [`4cce5af`][4cce5af] |
+| `rollback-output="no"` under `Output` buffered like "yes" | With a catch for every error its output is written through; XTDE3530 exactly as the tree raises it. | [`ba1fbb6`][ba1fbb6] |
+| `TransformReader` gave "streaming: internal error" when a result-document body held a node of the stream | The stylesheet compiles to the tree path instead: the refusal is made at compile time. | [`971e795`][971e795] |
+| XTDE1500 was missed when a read and a written `file:` URI named one file through a symlink (macOS `/var`) | A read is recorded under its real path and the URI it was asked for; hrefs compare lexically ([`e7f1116`][e7f1116]). | [`c5dbb81`][c5dbb81] |
+| A union of a streamed path with a variable's nodes under `copy-of`, `sum` or a filter sent the container to the tree | The split hands the matches to the outer, which unions them as the tree does. | [`96d1d94`][96d1d94] |
+| A `group-by` over a streamed population in `xsl:fork` sent the container to the tree | The population is held as copies under the tree's cap and grouped by the tree's code. | [`d1005db`][d1005db] |
+| A union of two streamed paths sharing a tail (`A/ancestor::* union B/ancestor::*`) sent the container to the tree | It streams as `(A union B)/T`. | [`fe113df`][fe113df] |
+| A loop over `snapshot(P)` sent the container to the tree | Each match's copy is handed with its ancestors, snapshotted; the body runs on the snapshots. | [`d29874a`][d29874a] |
+| A local `xsl:variable` whose select read the streamed document sent the container to the tree | The select is read off the cursor where the variable is bound. | [`d52121f`][d52121f] |
+| `outermost()` of ancestors climbed from streamed matches sent the container to the tree | The call runs over the climbed nodes, taken once each off the matches' views. | [`962f1dc`][962f1dc] |
+| `($v, P)/T` and `insert-before(P, n, $v)/T` sent the container to the tree | They stream as the union of the paths they make. | [`ddafb12`][ddafb12] |
+| A motionless `xsl:for-each` in a streamed body sent the container to the tree | Over a variable's items it runs as the tree runs it; over the view's nodes, on the view. | [`d244a2e`][d244a2e] |
+| A text value template in a streamed `xsl:for-each` or `xsl:iterate` body sent the container to the tree | Its motionless parts are evaluated on each match's view. | [`0b75658`][0b75658] |
+| A loop over `(P)[position() = 1 to n]` sent the container to the tree | It streams as a window over P. | [`1c1cb10`][1c1cb10] |
+| A validated streamed input whose schema gives an element a default or fixed value ran on the tree | The stream validates the value as the typed copy does: the default for an empty element, the fixed check at the end tag. | [`bbdefe5`][bbdefe5] |
+| A validated streamed input whose schema has XSD 1.1 open content ran on the tree | The stream admits what the open-content wildcard admits, interleaved or as a suffix, as the tree does. | [`8b5460b`][8b5460b] |
+| A validated streamed input whose schema defaults an attribute in a namespace ran on the tree | The stream adds it with the in-scope prefix, or the XSD 1.1 fixup declaration, as the typed copy does. | [`b9c352c`][b9c352c] |
+| A validated streamed input whose schema has `xs:key`, `xs:unique` or `xs:keyref` ran on the tree | The constraints are evaluated as the cursor reads, keeping only their key tables, with the tree's verdicts and messages. | [`c31fc14`][c31fc14] |
+| A validated streamed source with a DOCTYPE ran on the tree | It is read as the typed copy reads it, without the DTD. | [`c36f667`][c36f667] |
+| A validated streamed input could fail where the tree validates, on a content model nesting bounded `maxOccurs` | Such a schema is validated on the tree, decided before reading; others stream as before. | [`182fdef`][182fdef] |
+| A validated streamed principal input dropped the ignorable whitespace of an element with `xml:space="preserve"` | It is kept, as the typed copy keeps it. | [`65d7c6f`][65d7c6f] |
+| An `xsl:try` under `Output` whose body was one large element held that element as a tree to the try's end | The element is built in place where the try writes, its content written provisionally as made. | [`895b6a4`][895b6a4] |
+| An `xsl:try` that was the first output under `Output`, with no `xsl:output` method, held its output to its end | The method is chosen provisionally from what the try writes; a caught error leaves it to the catch. | [`59b58c1`][59b58c1] |
+| An `xsl:try` right after text in its element under `Output` held its output to its end | The text is left unwritten under the try's checkpoint, merged with as in tree mode, and restored on a rollback. | [`a2b8f9f`][a2b8f9f] |
+| An `xsl:try` under `Output` whose body began with attributes held its output to its end | The attributes go on to the empty element it writes to, only its start tag held; a caught error puts the element back. | [`e2ccec2`][e2ccec2] |
+| An `xsl:try` in a document node's streamed content (`xsl:copy` of `/`, the built-in document rule) under `Output` held its output to its end | It writes provisionally like a try in an element. | [`4ab5460`][4ab5460] |
+| Every element of a streamed identity got a view even when no rule could match it | The built-in rule runs on the parse's record: identity 100 MB 1.52× → 1.27× the tree's CPU. | [`1a0ee45`][1a0ee45] |
+| A streamed apply op's feed and a children filter were made per element | Both are made once per run: two-instruction identity 88 → 76 allocations per record. | [`40d9b34`][40d9b34] |
+| A streamed leaf a rule matched got one runtime for matching and another for its copy | It gets one: 76 → 64 allocations per record. | [`a41d41d`][a41d41d] |
+| A matched streamed node's runtime was copied twice, for its focus and its selection | Once: 64 → 52 allocations per record (the tree's 61), two-instruction identity 1.58× → 1.39× CPU. | [`f34dfa2`][f34dfa2] |
+| An `xsl:try` rolled back under `Output` before the sink began could panic, or lose whitespace written ahead of the mark | A rollback puts back the items of the result's top and document level written after the mark. | [`a7befda`][a7befda] |
+| A nested `xsl:try` rolled back on an element an outer try built in place under `Output` could miss XTDE0410 for a later attribute | The rollback keeps the child written before its mark. | [`7ff197b`][7ff197b] |
+| A streamed expression calling a recursive or non-inlinable stylesheet function sent the container to the tree | The call runs on values, or on each match's grounded copy, when its body allows. | [`19593ed`][19593ed] |
+| `[A, B]?*/T` over a streamed path sent the container to the tree | It streams as `(A, B)/T` when no member is a path of the stream (that is XTSE3430, §19.8.8). | [`ae36f0b`][ae36f0b] |
+| A simple map over streamed text, comment or PI nodes sent the container to the tree | R runs on each kept leaf, as a path's tail over leaves does. | [`94181b7`][94181b7] |
+| `replace()` over the streamed document's text sent the container to the tree | It is read off the stream as `matches()` is. | [`6ee4b2e`][6ee4b2e] |
+| `($v \| P)/T`, a path over a union of a variable and a streamed path, sent the container to the tree | It is read as `($v union ())/T union P/T`, which streams. | [`95944f3`][95944f3] |
+| `P ! (* union $v)` and the other set operators of a match's nodes and a variable sent the container to the tree | They run per match on the grounded copy, which orders as its original. | [`c665e0d`][c665e0d] |
+| A for, some or every over values of a streamed path whose return used `\|\|` or an xs constructor sent the container to the tree | A return reading only its variables is evaluated over the values. | [`9f41f98`][9f41f98] |
+| `(if ($c) then A else B) ! R` over streamed paths sent the container to the tree | The choice is lifted over the map; only the chosen branch streams. | [`e8246dc`][e8246dc] |
+| A separator, name or namespace value template of `xsl:value-of`, `xsl:attribute` or `xsl:element` reading the stream sent the container to the tree | That part streams as a literal result element's value template does. | [`4ac277f`][4ac277f] |
+| `generate-id()` of the context element in a streamed rule or loop sent the container to the tree | It reads the view's origin, the tree's id for the node. | [`4f9aea4`][4f9aea4] |
+| A rule pattern whose predicate reads `accumulator-before` sent the streamed apply to the tree | The predicate reads the observer's value at the start tag. | [`2f6bca5`][2f6bca5] |
+| A streamed path ending in a sequence of value paths, `P/(@a/string(), c/string())`, sent the container to the tree | The tail is known to make values and runs per match on its copy. | [`afadaf0`][afadaf0] |
+| The range operator over a streamed operand, `1 to count(.//*)`, sent the container to the tree | The split takes it as it takes arithmetic. | [`fcf384f`][fcf384f] |
+| A streamed loop body using `is`, `union`, `intersect` or `except` on its match sent the container to the tree | The body runs on a grounded copy, which has the original's identity and order. | [`a4162b6`][a4162b6] |
+| `xsl:apply-templates` over `(P, $v)`, `insert-before(P, n, $v)` or `if ($c) then () else P` sent the container to the tree | The stream's matches are dispatched as read, the other items as the tree dispatches them. | [`b75f94e`][b75f94e] |
+| `xsl:copy` with validation strict or lax, or a type, in a streamed container sent it to the tree, even for an element | It streams when the copied item is never an attribute, read from the select or the enclosing loop. | [`aa91721`][aa91721] |
+| An `xsl:global-context-item` sent a streamable mode's principal input to the tree | With no type it reads nothing of the input, so the input streams. | [`904f322`][904f322] |
+| `xsl:comment` or `xsl:processing-instruction` with a select reading the stream sent the container to the tree | The select is split as `xsl:sequence`'s and read off the cursor. | [`595bcf2`][595bcf2] |
+| Streamed `Output` looked to grow its heap with output size (300,000 elements, 90 MB peak) | Its live heap is flat in output size; the growth was `1 to N`'s integers, held in tree mode too. A test pins it. | [`ac8bb00`][ac8bb00] |
+| A document the conformance harness preloads as validated ran on the tree when read with the default validation | It streams, repeating the harness's validation as it reads. | [`e086524`][e086524] |
+| `min(.)` or `max(.)` in a template rule below the document node ran on the tree | They stream, folded once over the context's values. | [`9643910`][9643910] |
+| Tree mode too: under `TransformReader` in a streamable initial mode, a global read the input as its context item | The global context item is absent for a streamed input (XSLT 3.0 §2.3.2), streamed or on the tree fallback: XPDY0002. | [`6cc2247`][6cc2247] |
+| Tree mode too: an `accumulator-after#1` item made on a `TransformReader` input kept its focus | §10.3.6 saves an absent focus on a streamed input, streamed or on the tree fallback: its call raises XTDE3350. | [`be09e99`][be09e99] |
+| Tree mode too: an accumulator whose walk failed anywhere failed every read of it | A read fails only when its value depends on the failed computation (§18.2.5); values set before it stand. A cycle fails every read (below). | [`b90d54e`][b90d54e] |
+| Tree mode too: a merge made its trees in source order, so an unstreamed source after a streamed one ran on the tree | Both modes collect unstreamed sources first (order across trees is implementation-dependent, XPath 3.1 §2.4.1). | [`df063a5`][df063a5] |
+| Tree mode too: `document-uri()` of a source document stripped by `xsl:strip-space` returned the empty sequence | The stripped copy keeps the document's URI (F&O §2.6). | [`2e860a2`][2e860a2] |
+| Tree mode too: a circular accumulator read at the document node gave its initial value (`error-3410a`) | Every read of it raises XTDE3400 (§18.2.6); a rule reading the value it computes is not streamed. | [`3916423`][3916423] |
+| A streamed rule whose body read its element twice (two fork prongs, a copy beside a read) sent the container to the tree | The rule runs on a grounded copy of its element, at most the tree's memory. | [`5663391`][5663391] |
+| `base-uri()`, `document-uri()` or `. instance of document-node()` at a streamed document node sent the container to the tree | The stand-in has the document's URIs from the start. | [`8e3270a`][8e3270a] |
+| A streamed map constructor whose entries each read the document sent the container to the tree | Each entry is read on its own tee cursor; the first error in entry order is the map's. | [`fb356ca`][fb356ca] |
+| An `xsl:fork` whose prongs each read the document, inside `xsl:try`, sent the container to the tree | The first error in prong order is the try's; a failed prong reads on, so parse errors stay the document's. | [`cca65c4`][cca65c4] |
+| A streamed rule calling a global `accumulator-after#1` through a variable ran on the tree | The call reads no focus (§2.3.2, §10.3.6), so it is motionless; a supplied parameter declines streaming. | [`844cd8f`][844cd8f] |
+| `unparsed-entity-uri()` in a streamed rule on a grounded copy answered "" | The copy is given the document's DTD. | [`6b07dab`][6b07dab] |
+| `unparsed-entity-uri()` in a streamed rule for `/` before its consumer sent the input to the tree | The run moves to the document element first, where the DOCTYPE is known. | [`13f330b`][13f330b] |
+| A streamed call on a function whose body climbs (recursion on `$n/..`, `parent::X` tests) ran on the tree | Bodies are judged per value kind; ancestors' copies answer names, attributes and existence. | [`d2a3158`][d2a3158] |
+| `fn:xml-to-json` of a streamed document node or element ran on the tree | It is written from the parse events as the tree writes it; invalid input goes to the tree for its error. | [`5ed3b7d`][5ed3b7d], [`eb66e23`][eb66e23] |
+| A streamed `filter(P, f#1)` or `outermost(copy-of(P))` ran on the tree | Named function references are read as calls; outermost or innermost of copies are the copies. | [`9f02ee9`][9f02ee9] |
+| A streamed call on a function whose body has instructions (apply-templates, grouping, literal elements) ran on the tree | The body is planned and run inside the caller's plan. | [`0489759`][0489759] |
+| A streamed body calling a stylesheet function on a variable's copies sent the container to the tree | The call reads nothing of the stream and is motionless. | [`c68e9b4`][c68e9b4] |
+| A streamed call passing a path to an atomic parameter of a function with node parameters ran on the tree | The argument is read off the stream as values. | [`8a4f213`][8a4f213] |
+| A streamed function recursing on the current group ran on the tree | Each recursive call site gets a call frame, a plan of its own run in the caller's stream. | [`0dfff09`][0dfff09] |
+| A streamed call passing a path to a one-node parameter, or recursing as `$n!*!f(.)`, ran on the tree | It runs as a loop over the matches with the tree's cardinality check. | [`d7f3a71`][d7f3a71] |
+| A streamed call whose value is copied gave up at the document element | The element's grounded copy is held under the tree's cap, as the tree holds it and the copy. | [`9354f1d`][9354f1d], [`63dd3ad`][63dd3ad], [`328460b`][328460b] |
+| A streamed for-each over a stylesheet call on a path ran on the tree | The call runs on the matches' grounded copies and the loop over its value. | [`c942506`][c942506] |
+| `copy-of(.)`, `snapshot(.)` or `value-of` of `.` at a streamed document node sent the container to the tree | The copy is written from the parse events, or built once; the string value is read off the text. | [`29cc3e9`][29cc3e9] |
+| `xsl:copy` of a streamed document node sent the container to the tree unless its body was one apply-templates | The stand-in takes the DOCTYPE and base URI when the parse meets the root. | [`b9cbc6d`][b9cbc6d] |
+| A copy-of or sequence of a choice of paths, in a rule that may match the document element, was refused | The condition is evaluated first and the chosen branch's matches copied as read. | [`932bb98`][932bb98] |
+| A streamed rule for text, comment or PI nodes returning atomic values with `xsl:sequence` was refused | A select that can return only atomic values hands on no copy of the leaf. | [`ead3f81`][ead3f81] |
+| A streamed `xsl:variable` with an atomic `as` type selecting its context was refused as a grounded copy | The declared type atomizes the value, which is read off the cursor. | [`2cfd986`][2cfd986] |
+| apply-templates over a streamed path that may select text, comment or PI nodes sent the container to the tree | Each such match is dispatched on its complete copy, in place. | [`9a7551b`][9a7551b] |
+| Copies of a streamed document made from the parse's events lost the DTD's ID attributes | They keep is-id and is-idrefs, and all typing where the tree's copy does. | [`f05fd39`][f05fd39] |
+| `unparsed-entity-uri()` of a streamed document node sent the container to the tree | It reads the DOCTYPE the stand-in takes at the root, once the document is read. | [`ff1f3ac`][ff1f3ac] |
+| A streamed `xsl:comment` or `xsl:processing-instruction` selecting elements in a loop that may match the root was refused | Their select is simple content, read as values. | [`302ddf2`][302ddf2] |
+| `xsl:value-of` of text nodes beside a streamed path of elements was refused | Only the path is read as values; the text nodes merge as in the tree. | [`64ae463`][64ae463] |
+| apply-templates over `copy-of()` or `P ! snapshot(.)` of a streamed node sent the container to the tree | The copies are read off the cursor and the templates applied to them on the tree. | [`8a68af2`][8a68af2] |
+| A group-by over members that may be the root's children was refused by the memory rule | They are held as one fragment of copies made from the events, when the body cannot tell a copy. | [`a6f13b1`][a6f13b1] |
+| An accumulator rule reading another accumulator, or itself, sent the document to the tree | The read accumulator is stepped first at the node, in the tree's error order; mutual reads stay refused. | [`87cea8b`][87cea8b] |
+| `xsl:try` or `xsl:message` reading an accumulator sent the container to the tree | Under §18.2.5's errors both modes raise at the same read, so they stream. | [`827e309`][827e309], [`b90d54e`][b90d54e] |
+| `xsl:apply-templates` inside a streamed `xsl:try` sent the mode to the tree | It streams when no rule it reaches can fail but the built-ins, whose first error both modes meet at one node. | [`1ac69c5`][1ac69c5] |
+| A merge action asking for `last()` sent the merge to the tree | The streamed merge forms every group first, holding only the items' snapshots. | [`54dbc38`][54dbc38] |
+| `xsl:message` in a merge action, or boolean or global-map merge keys, sent the merge to the tree | Admitted: messages are taken back on a re-run, key classes read from the expression. | [`54dbc38`][54dbc38] |
+| A merge whose first streamed source's `for-each-source` failed re-ran on the tree | The error, the tree's first, is returned at once. | [`54dbc38`][54dbc38] |
+| A streamed merge source with `use-accumulators` sent the merge to the tree | An observer per document gives each item's snapshot its values; a failing walk re-runs on the tree. | [`cb7bc56`][cb7bc56] |
+| `copy-accumulators="no"` on a streamed `xsl:copy-of` sent it to the tree | It is the default and streams as the attribute's absence does. | [`3507414`][3507414] |
+| An accumulator rule reading `base-uri(/)` sent the document to the tree | The parse's document node has the document's base URI from the start, so the rule streams. | [`b3cf350`][b3cf350] |
+| `xsl:copy-of copy-accumulators="yes"` of streamed nodes sent the container to the tree | The matches' values are recorded while they are grounded and answer for the copies. | [`816d8ec`][816d8ec] |
+| `intersect` or `except` of two climbing paths (`A/ancestor::* intersect B/ancestor::*`) sent the container to the tree | Each operand's climbed nodes are recorded once with a branch mask; the operator applies at the end. | [`fd303aa`][fd303aa] |
+| A streamed `xsl:for-each-group` over `subsequence(P, a, b)` sent the container to the tree | The population walk counts P's matches and passes over those outside the window. | [`0bd7034`][0bd7034] |
+| `xsl:for-each-group` over attributes, text nodes or `outermost(P)` of a stream sent the container to the tree | The population is held as collected, under the memory cap, and grouped by the tree's code. | [`de0784c`][de0784c] |
+| A grouping over `(//x)[...]` with a motionless body, or text value templates in its body, sent the container to the tree | The population is walked as the split walks it, nested members included. | [`960370b`][960370b] |
+| A grouping over attributes, text or `node()` in a rule for the document element sent it to the tree | The population is a pruned copy built from the events; the body runs off the stream. | [`5bbaba2`][5bbaba2] |
+| A group-by in `xsl:fork` whose body applied templates to or sequenced `current-group()` sent the run to the tree | The members are held as copies under their ancestors' copies, from the events. | [`b79ca81`][b79ca81] |
+| A streamed for-each over attributes or text nodes whose body read `data(.)` or `copy-of(.)` sent the container to the tree | The body is planned at a leaf's focus and runs on each complete item. | [`e73ae6b`][e73ae6b] |
+| A for-each over a streamed element's attributes whose body read `.` sent the container to the tree | Its body is checked at a leaf's focus: each attribute is complete. | [`1d406ab`][1d406ab] |
+| A streamed `xsl:iterate` over attributes or values whose body read `.` sent the container to the tree | Its body is checked at a leaf's focus, as a for-each's. | [`65ebe0e`][65ebe0e] |
+| `xsl:apply-templates` over `copy-of(P)` or `P/copy-of(.)` of a streamed document sent the container to the tree | The copies are collected as read and dispatched as the tree does, with its sort, parameters and `last()`. | [`a52bc6b`][a52bc6b] |
+| A streamed for-each over `P/copy-of(.)` whose matches may nest sent the container to the tree | It runs over the copies of a population, one grounded match at a time. | [`2536f98`][2536f98] |
+| A streamed for-each over copies whose body read `last()` raised XPDY0002 where the tree gives the count | Such a loop runs on the tree; a body that cannot read `last()` still streams. | [`d2c48ef`][d2c48ef] |
+| `xsl:value-of` over the context's own subtree, such as `descendant-or-self::*`, in a streamed rule sent the container to the tree | The context is grounded once and the values made from its copy. | [`d5178af`][d5178af] |
+| A motionless `xsl:iterate` over a node's ancestors, or a motionless for-each with `xsl:sort` over a variable, sent the container to the tree | Both are checked as a motionless for-each is. | [`a0e226c`][a0e226c] |
+| A streamed rule using `key()` over a global's document, or `current()` in its pattern, sent the container to the tree | Both are read off the candidate's view. | [`91af2f9`][91af2f9] |
+| `current()` in a streamed rule's instruction, or apply-templates `select="@*"` on the document node, sent the stylesheet to the tree | `current()` is the instruction's item; `@*` of the document node is empty. | [`e4ecbd7`][e4ecbd7] |
+| A streamed rule matching text nodes too that copied `@* except @a` sent the container to the tree | On a text node both operands are empty, so it is motionless. | [`0a73669`][0a73669] |
+| A streamed rule applying templates to copies of its attributes, a map of its values or a variable's copies sent the container to the tree | The items go to the tree's rules off the cursor. | [`b50e009`][b50e009] |
+| `has-children()` in a streamed rule's motionless instruction or pattern sent the stylesheet to the tree | The dispatch peeks past the element's start tag and records the answer on its view. | [`a386ca5`][a386ca5] |
+| A streamed for-each or apply-templates over `if ($c) then P else Q`, or `$v union P`, sent the container to the tree | The chosen branch's own split is read; `$v`'s nodes are merged into the matches by order. | [`44fc1c0`][44fc1c0] |
+| `xsl:apply-templates` over a value computed from the stream, such as `if (P) then 0 else 1`, sent the container to the tree | The values are read off the stream and dispatched as the tree does. | [`1f91b5d`][1f91b5d] |
+| A streamed for-each or apply-templates over `[$v, P/copy-of()]?*` sent the container to the tree | The array's members are read as a sequence population. | [`c92d154`][c92d154] |
+| An apply-templates in a streamed loop body over snapshots or copies required a streamable mode, sending the container to the tree | It runs the tree's dispatch on the copy, in any mode. | [`d26ad2e`][d26ad2e] |
+| A streamed `xsl:call-template` passing a child of the context, atomized by the callee, sent the container to the tree | The parameter is read off the cursor as `xsl:next-iteration`'s is. | [`0f78020`][0f78020] |
+| `outermost(P)/T` over a document where P's matches nest sent the container to the tree | The outermost matches do not nest: T runs on each one's copy. | [`bf94023`][bf94023] |
+| A streamed rule applying templates to `doc()` of another document sent the container to the tree | That document's nodes go to the tree's rules; the streamed document itself is declined at run time. | [`6feaadd`][6feaadd] |
+| `xsl:apply-templates` over a filter of copies, `(copy-of(P))[pred]`, sent the container to the tree | The copies are collected, filtered and dispatched as the tree does. | [`35d5ad7`][35d5ad7] |
+| A window over a streamed path mapped to a name, `subsequence(P, 1, 4) ! name(..)`, sent the container to the tree | It is read as the window over the mapped path, which streams. | [`40bb829`][40bb829] |
+| A streamed apply-templates over copies whose rules read accumulator values sent the stylesheet to the tree | The observer keeps the values of the nodes read while the copies are made, as the tree's tables would. | [`1b4d62e`][1b4d62e] |
+| A streamed container reading a non-streamable accumulator ran on the tree | It streams and raises XTDE3362 as the tree does. | [`065b5b5`][065b5b5] |
+| `root()` of a copied node, or `fold-right()` over values of the stream, left the streamed container with no verdict | The analysis models them for a grounded operand, by §19.8.9.18 and §19.8.9.9. | [`ef9e55b`][ef9e55b] |
+| `xsl:copy` of a streamed attribute with a `type` sent the container to the tree | The attribute's name and value are assessed against the type as a detached copy, as the tree's result. | [`b7e79f7`][b7e79f7] |
+| A for-each over a union of two same-depth paths with a `\|\|` body ran on the tree | The trusting walk reads the union as striding, since such nodes cannot nest; the refusal is unchanged. | [`4f2cc85`][4f2cc85] |
+| `copy-of()` of the attributes a streamed path climbs to sent the container to the tree | A copy of an attribute or leaf is taken from its view, as complete as the tree's node. | [`adc813c`][adc813c] |
+| `xsl:perform-sort` over copies or values of the streamed document sent the streamed rule to the tree | Its select is read off the stream and the sort runs on what it returned. | [`157f717`][157f717] |
+| `xsl:apply-templates` building an `xsl:map` held in a typed variable sent the streamed container to the tree | The map's content is maps or an error alike in both modes, so the apply streams. | [`167a347`][167a347] |
+| A stylesheet comparing streamed nodes with `doc()` nodes of the same document could stream a different answer from the tree's | It runs on the tree when a load may reach the streamed URI; a literal other URI still streams. | [`60cf53e`][60cf53e], [`ddcaebf`][ddcaebf] |
+| A streamed container in a stylesheet that uses a package ran on the tree | A plain `xsl:use-package` leaves the using module's own declarations trusted, so it streams. | [`381a787`][381a787] |
+| A streamable mode whose rules sit in imported or included modules ran on the tree | Its rules are verified across every module, by import precedence, and stream. | [`954a278`][954a278] |
+| A streamed container in a package that overrides a used package's function ran on the tree | The overriding declarations are the using package's own and are trusted. | [`0175e4b`][0175e4b] |
+| A streamed container calling a function of a used package ran on the tree | The function is verified in its own package and called as itself. | [`8d10f9e`][8d10f9e] |
+| A streamed call on a stylesheet function with an instruction body over atomic arguments ran on the tree | The call is given values only and runs as itself. | [`d4feb67`][d4feb67] |
+| A streamed call on a used package's absorbing function, such as the spec's xml-to-json package, ran on the tree | Its body runs as a call frame in the caller's stream, compiled in the package's state, its modes planned per package. | [`38629c8`][38629c8] |
+| `accumulator-after` on an element whose subtree failed an accumulator rule gave a value when streamed | The read re-takes its frame after consuming the element and raises the error (§18.2.5). | [`59e5ee0`][59e5ee0] |
+| A mode reading an accumulator whose end rule calls `accumulator-after` was not verified streamable | §19.8.9.1 rules 4 and 5: motionless in an end rule, free-ranging in a start rule. | [`a8b0eeb`][a8b0eeb] |
+| A streamed rule on a grounded copy at the top of a principal result ran on the tree | It streams when its body's top makes only new nodes. | [`724617a`][724617a] |
+| A streamed container ran on the tree when a used package declared an accumulator of the same name | The package's accumulator is its own and no longer refuses it. | [`d30a7e8`][d30a7e8] |
+| A call on a used package's absorbing function through a wrapper still ran on the tree | The wrapper call is rewritten in place, `map:get` is focus-free, values calls are not inlined. | [`0ae8a17`][0ae8a17] |
+| A streamed call `f(.)` at an element, on a function with an instruction body, ran on the tree | `.` at an element is the match the inlined body consumes. | [`678c4ef`][678c4ef] |
+| A recursive streamed function over `tail(current-group())` ran on the tree | The frame's grouping reads the enclosing group past its first member. | [`4bdcad8`][4bdcad8] |
+| A streamed call passing a path to a one-node parameter never streamed | Its loop path is split from a fresh parse; the body reads the parameter as the match's view. | [`0a00b54`][0a00b54] |
+| A select calling an instruction-bodied function the inliner refused ran on the tree | It is planned by the split, as before inlining. | [`36ecaac`][36ecaac] |
+| `P ! f(.)/@x` over nested matches with a climbing `f` ran on the tree | Atomized, it runs on each match's grounded copy. | [`a788a32`][a788a32] |
+| A streamed group key reading a function parameter raised XPST0008 inside an inlined call (`su-absorbing-301`) | The key sees its grouping's own locals. | [`79b94b5`][79b94b5] |
+| `tail(P) ! R` streamed ran R on P's first match, raising its error where the tree drops it | The split skips the match before its tail runs. | [`5804464`][5804464] |
+| `xsl:value-of` of `(if (c) then A else B) ! R` sent the container to the tree | The choice is hoisted through simple content's `data()`. | [`8fe2846`][8fe2846] |
+| A loop over `(P)[position() = L to H]` went to the tree again once filtered copies were read first | A refused filtered-copies reading leaves the window reading free. | [`cccfc14`][cccfc14] |
+| A streamed for-each over `copy-of(P)` whose body read `last()` failed XPDY0002 (guard) | A population read off the cursor is checked for `last()` as an unplanned loop is. | [`3208035`][3208035] |
+| An apply-templates over `snapshot(P)` whose rules read accumulators failed on the stream | The tree's dispatch over the copies keeps the originals' values, as for `copy-of`. | [`6fc06e9`][6fc06e9] |
+| A for-each or apply-templates over `copy-of(//P)` or `snapshot(//P)` sent the container to the tree | Only the last step says whether a match may be a leaf. | [`608935d`][608935d] |
+| An `xsl:iterate` or for-each over `P/name()` sent the container to the tree | A loop over an atomic tail of each match is a loop over values. | [`db6f542`][db6f542] |
+| `subsequence(P, 1, 2) ! name(ancestor::*[1])` sent the container to the tree | A map climbing inside a function call is a mapped path, read off the matches' views. | [`5ab15c4`][5ab15c4] |
+| `id()`, `idref()` or `unparsed-entity-uri()` on a variable's copy of the streamed document sent the container to the tree | A call whose node argument is a variable reads that node's document. | [`0b676e7`][0b676e7] |
+| A streamed group's variable copying `current-group()` beside `copy-of(.)` hit the posture guard | A split whose outer calls `current-group()` is refused. | [`36f470e`][36f470e] |
+| apply-templates over `$t/*` in a streamed group, with a with-param reading the group, hit the posture guard | A values population takes no with-param. | [`35422d9`][35422d9] |
+| A streamed `string(.)` of a typed node gave its typed value's form ("4.5"), not its string value ("4.50") | The split takes `fn:string`'s argument as string values. | [`c2e2af2`][c2e2af2] |
+| A streamed copy of the document declared each element's namespaces sorted by prefix, not in source order | `copy-of`'s binding order is used, for the document and a grouping's pruned copies. | [`9315ac0`][9315ac0], [`4f1dad9`][4f1dad9] |
+| A streamed `tail(*)` or `tail(/*)` copied at the document node wrote the document element | The root copy skips it, as `tail()` does. | [`5c09c9d`][5c09c9d] |
+| A streamed source-document inside another dropped the outer run's accumulator observer, re-running its rules on the tree | The rules' runtime no longer replaces the transform-wide list. | [`23da903`][23da903] |
+| Under `Output`, a nested `xsl:try`'s rollback could lose the catch's text when a node reused a taken-back child's slot | The rollback trusts that child only while the sink holds it. | [`76bc90b`][76bc90b] |
+| A streamed `tail(P)` over a path cut at a predicate the stream cannot check skipped the cut's first match, not P's: nothing was written | Such a `tail()` is refused; the tree runs it. | [`537885e`][537885e] |
+| A `separator="\|"`, or `is` over `doc()` nodes alone, kept a whole stylesheet on the tree | The alias guard follows the parsed expressions as a flow, refusing only where a stream's node may meet a load's. | [`90b29d9`][90b29d9] |
+| An `xsl:evaluate` given a stream's node was not counted by the alias guard | It is an identity use of both kinds (§10.4.2). | [`2de588e`][2de588e] |
+| `last()` in a streamed rule's for-each over its ancestors sent the mode to the tree | A motionless loop's `last()` is its select's size, known before the body. | [`305b99d`][305b99d] |
+| `xsl:next-match` in a streamed rule for text nodes sent the mode to the tree | The next rule runs on the complete text node, as the tree's does. | [`bf58cad`][bf58cad] |
+| apply-templates over a variable holding `xsl:copy-of`'s copies sent a streamed mode to the tree | Such a variable holds new trees; the rules run on them. | [`acf9a9c`][acf9a9c] |
+| A streamed text-node pattern reading an accumulator sent the mode to the tree | The observer keeps the text node's values for its pattern. | [`9f896b0`][9f896b0] |
+| apply-templates over a global tree with a `copy-of(.)` parameter sent a streamed loop to the tree | The parameter is read off the cursor before the tree's rules run. | [`9e7f579`][9e7f579] |
+| An `xsl:iterate` comparing carried copies with `current()`, or binding `copy-of()`, went to the tree | Both read the view and the item's copy. | [`acc785d`][acc785d] |
+| A streamed path whose `text()` or `node()` step tested its parent's attribute went to the tree | The leaf's predicate reads its ancestors on its copy under theirs. | [`b0894e2`][b0894e2] |
+| A streamed for-each over `head(//X)` whose body copied content went to the tree | The body runs on the first match; matches inside it are no items. | [`96b8df3`][96b8df3] |
+| A test or predicate calling an inspection `xsl:function` on the stream went to the tree | The call is checked as its body; `[position() = N and P]` reads as `[N][P]`. | [`0e0d2b8`][0e0d2b8] |
+| A streamed path testing its outermost ancestor by `ancestor-or-self::*[last()]` went to the tree | The view has every ancestor: positions among them are read on it. | [`af1a9e5`][af1a9e5] |
+| A streamed rule filtering tokens of its own string by `last()` went to the tree | The outer has the whole value: `last()` is its count. | [`c4323f5`][c4323f5] |
+| apply-templates to an array built of snapshots of the stream went to the tree | The array is made over the collected copies and dispatched. | [`f638162`][f638162] |
+| A for-each over climbed ancestors (`function-5017`, `-5018`) ran on the tree | It streams when the body is motionless on their views. | [`256759e`][256759e] |
+| `unparsed-entity-uri#1` in a rule for an element ran on the tree | The view's tree has the document's DTD, so it streams. | [`8a9d83d`][8a9d83d] |
+| An accumulator rule with a sequence-constructor body (`accumulator-036s`) kept the mode on the tree | It is judged at its matched node, as a select is. | [`a98e534`][a98e534] |
+| A used package's streamable `xsl:source-document` (`override-misc-007`) ran on the tree | It is trusted when used through `xsl:accept` alone, and its accumulators are observed. | [`66777b6`][66777b6] |
+| A call at the document node on a module function given the document node (`function-5002`) ran on the tree | It is inlined as a call frame. | [`5a0eab3`][5a0eab3] |
+| An instruction-body function given `copy-of(.)` in a tail (`function-5011`) ran on the tree | A call given only copies and values streams. | [`4bea4f9`][4bea4f9] |
+| A copy of `/doc/chap[2]` at the document node kept a principal input on the tree | A held select with at most one match streams it. | [`eb144dd`][eb144dd] |
+| A filter over `tokenize()`'s strings at the document node kept a principal input on the tree | Its predicates read atomic values only, and it streams. | [`8be963f`][8be963f] |
+| A rule whose group is read beside its consuming path kept the mode on the tree | The rule runs on a grounded copy of its element. | [`7bec012`][7bec012] |
+| A rule with a map of two consuming values kept the mode on the tree | The rule runs on a grounded copy of its element. | [`f6e3637`][f6e3637] |
+| A rule on a grounded copy refused accumulators | The copy carries the document's accumulator values. | [`4e56b21`][4e56b21] |
+| A copy-of whose tail runs on a copy of the document element kept a principal input on the tree | The element is grounded, as the tree holds it. | [`75c5d3c`][75c5d3c] |
+| A leaf's rule returning a stylesheet function of the leaf stayed on the tree | The call is checked through its inlined body. | [`cac3851`][cac3851] |
+| `current-group()!copy-of()` over the document element's children stayed on the tree | Each member is copied as its path's tail and the ground let go. | [`16a64ec`][16a64ec] |
+| An `xsl:try` whose catch had `exclude-result-prefixes` ran on the tree | The attribute is not an instruction; the try streams. | [`cc11df5`][cc11df5] |
+| apply-templates in a variable typed as maps or arrays ran on the tree | No node is an instance of that type: it streams, with the same XTTE. | [`7730dcb`][7730dcb] |
+| An accumulator typed as a map or array of atomic values ran on the tree | Such a value holds no node of the parse: it streams. | [`95171aa`][95171aa] |
+| `accumulator-before('m')(k)` was refused in a streamed rule | A call on an accumulator's value with atomic arguments reads nothing of the stream. | [`ce41a32`][ce41a32] |
+| An accumulator pattern with a `some` or `every` predicate was refused | Quantified predicates over attribute values are decided at the start tag. | [`d02cb54`][d02cb54] |
+| A merge of a collected path-keyed source with streamed string keys ran on the tree | It streams when the collected keys are untyped, checked as read. | [`42ce08f`][42ce08f] |
+| A `group-by` in `xsl:fork` returning `map{...}` ran on the tree | A map constructor of atomic values hands no member on. | [`5531827`][5531827] |
+| `f(snapshot(.))` in a rule for the document element (`sf-unparsed-entity-03`, `-04`) stayed on the tree | The one copy of the match streams, at the tree's memory. | [`a7d0796`][a7d0796] |
+| `xsl:perform-sort` over `copy-of(item)` (`si-perform-sort-001`) stayed on the tree | Each item is copied as its tail and the ground let go. | [`20a5eef`][20a5eef] |
+| `innermost` or `reverse` over `snapshot(/chapter)`, or `snapshot(/)`, at the document node stayed on the tree | The select runs on the document built off the stream. | [`4f870c3`][4f870c3] |
+| A `snapshot(/*)` variable read with `$v/..` (`sf-snapshot-0101b`) stayed on the tree | In its scope the variable is read as the tree it is. | [`609bc45`][609bc45], [`3fbd05e`][3fbd05e] |
+| An unclassified function given `copy-of(.)` at `/` (`function-5001`) stayed on the tree | The call is not inlined and runs on the document built. | [`330e96a`][330e96a] |
+| A `copy-of(current-group())` parameter refused streaming | It is read from the group's members at the instruction; one group's copies are held. | [`19f2492`][19f2492] |
+| A for-each over copies reading `last()` ran on the tree | The copies are collected first, then looped with their count. | [`c6b67df`][c6b67df] |
+| A path climbing out of `snapshot(P)` ran on the tree | P's matches are grounded and the snapshots' own ancestors climbed. | [`bedbb23`][bedbb23] |
+| An instruction-body function given the match in a tail ran on the tree | It runs on the match's grounded copy when its body sets no focus and reads only down. | [`84c0f1f`][84c0f1f] |
+| `outermost(doc/f(x))`, and a loop over a tail on grounded copies, ran on the tree | The path is the document element, the tail run on its grounded copy. | [`d32fa1d`][d32fa1d] |
+| `$f(snapshot(.))`, and `snapshot(@a)` applied in a tree mode, ran on the tree | A dynamic call given copies streams; `snapshot(@a)` is applied as `copy-of(@a)` is. | [`cc32228`][cc32228] |
+| `xml-to-json()` of a path whose matches may nest stayed on the tree | The writer matches below the first match; a second raises the tree's XPTY0004. | [`eb315d3`][eb315d3] |
+| A built-in copy of a comment, PI or text node at the top of a streamed principal result was refused | The document is built as read and `Result.Nodes` holds its nodes. | [`5cd3316`][5cd3316] |
+| `max()` or `min()` below the document node over schema-typed elements stayed on the tree | A schema list of one atomic item type makes the fold exact. | [`6930e60`][6930e60] |
+| A `group-by` body returning arrays or maps of atomic values kept its members on the tree | Such a body hands no member on; members are copied as events. | [`c5c4fa9`][c5c4fa9] |
+| `xsl:source-document` with a `#id` fragment never streamed | The cursor is read to the element, whose copy is the body's context; absent, the tree runs. | [`11c4ba5`][11c4ba5] |
+| `evaluate-046`'s preprocessor stayed on the tree | Atomic results in the alias flow, an accumulator's own value, except-patterns, a motionless `xsl:evaluate`. | [`69101da`][69101da], [`13ecb6e`][13ecb6e], [`615676a`][615676a], [`95338d5`][95338d5] |
+| `system-property('xsl:supports-streaming')` answered `no` | It answers `yes`, and `fn:transform` requested-properties match it; `streaming-fallback` is not claimed. | [`de7aab2`][de7aab2] |
+| `\|\|` was unmodelled in the §19.8 analysis, so si-fork-902 and -952 compiled | Modelled per §19.8.8 (`A \|\| A`), withheld in a crawling focus; both now get XTSE3430. | [`1f6576d`][1f6576d] |
+| A streamable function whose body was not one `xsl:sequence` was never checked | Its sequence constructor is assessed (§19.8.5); su-absorbing-205 gets XTSE3430. All 151 W3C XTSE3430 cases now refuse. | [`6e960b7`][6e960b7] |
+| The analysis took a simple map's sweep from its right operand only | The wider of both operands' sweeps (§19.8.8.7). | [`973790f`][973790f] |
+| Absorbing `a ! @x` was charged a read of the stream | A simple map has its right operand's type (§19.8.1, §19.8.8.7). | [`03be6e6`][03be6e6] |
+| `xsl:where-populated`, `xsl:on-empty`, `xsl:on-non-empty` were unmodelled in the §19.8 analysis | §19.8.4.42, .31 and .32 rules; their containers can stream. | [`43ddd9d`][43ddd9d] |
+| 38 §19.8.9 proforma rows were missing from the analysis (`concat#2`, `trace`, `tokenize#1` …) | Added; constructs using them get verdicts. | [`785a0c6`][785a0c6] |
+| `map:`, `array:` and `math:` calls were unknown to the §19.8 analysis | Their §19.8.9 rows added. | [`4fdf376`][4fdf376] |
+| The match pattern `.` was unknown to the §19.8 analysis | Motionless (§19.8.10). | [`b54aee5`][b54aee5] |
+| A rule pattern calling `accumulator-before` left its streamable mode unverified | Verified when the accumulator is (§19.8.9.2). | [`7e2bec4`][7e2bec4] |
 | Streamed loops were refused after ~1M records of flat state | The node and byte budgets counted every temporary ever built. A loop item that writes no output now hands back what it dropped. | [`294b965`][294b965] |
 | `fn:copy-of` and `fn:snapshot` copies were not charged to the result-node budget | Unlike `xsl:copy-of`. They are charged before the copy, so a transform making over 2M such copies is now refused. | [`294b965`][294b965] |
+| A dynamic call on `f#n`, an inline function, a map or `g()` took navigation, so its container ran on the tree | Arguments take the usages of the base's §19.1 signature and stream; a function-typed parameter is inspection (§19.8.1). | [`900ce70`][900ce70], [`c3ff080`][c3ff080], [`ef170f9`][ef170f9] |
+| `P treat as T*` and a union under `instance of T*` held every match and fell back to the tree (8 W3C cases) | `treat as` is a per-item check on the view; a union is split per operand (§19.8.8.4, §19.8.8.6). | [`6f7d630`][6f7d630] |
+| `[$x, P/copy-of()]` hit the hold cap and fell back to the tree (9 `sx-square-array` cases) | A `copy-of()`/`snapshot()` tail is held uncapped, as the tree holds it; `MaxNodes` still bounds it. | [`d4b8353`][d4b8353] |
+| A validated `copy-of` of the document element re-read the document on the tree (6 `si-copy-of` cases) | It is built off the cursor and assessed as the tree's copy is. With the two rows above, fallbacks 23 → 0. | [`1bacfcc`][1bacfcc] |
+| A streamed container that failed re-ran on the tree, at the tree's memory | Its error is returned when the family is final and the rest reads cleanly (§2.14): re-runs 137 → 9, 3.1 MB vs 48.6 MB. | [`1bacfcc`][1bacfcc], [`fbcfc71`][fbcfc71], [`86cde00`][86cde00] |
+| A streamed input invalid against `type=` or `validation="strict"` re-ran on the tree | It is final with the tree's code and its first failure as the text (§2.14). | [`ac7af57`][ac7af57] |
+| An error in a `GroundLater` copy stopped the parse, forcing a re-run | The cursor returns it from the call that met it and reads on: re-runs 9 → 0. | [`ac7af57`][ac7af57] |
+| Under `Output` or `SecondaryOutput` an HTML5 result was held to its end | Prefix normalisation is decided per element and the bare doctype waits only for the first element, so HTML5 streams. | [`b888d21`][b888d21] |
+| The §19.8 analysis judged root(X) of a striding X, and a leading /, without a static type, leaving valid stylesheets unknown and missing XTSE3430s | §19.1/§19.2 context item types decide §19.8.9.18's rewrite: root() in xsl:source-document streams, //x in a match="*" rule is refused. | [`f201db3`][f201db3] |
+| The stream plan dropped the §19.2 context item type from each record, so re-analysing a record alone disagreed with the walk | Plan records and site parses carry the context item type; the agreement test re-analyses with it. | [`bfedf0c`][bfedf0c] |
+| A dead `FOAR0002` range-bound check remained, one call from reporting a resource limit as overflow | Removed; the live `to` refusal is `XPDY0130` wrapping `xdm.ErrResourceLimit` (XPath 3.1 §2.3.1), pinned. | [`40345b7`][40345b7] |
+| Where c14n's 1.0-compatibility XPath agrees with XPath 1.0 for DSig filters was untested | Seventeen agreements are pinned; the number-model differences left are listed in the test and known-gaps. | [`c58c9c5`][c58c9c5] |
+| Entity, external-DTD and XInclude limits were fixed constants | They are ParseOptions/XIncludeOptions fields; defaults unchanged, recursion depths clamp to a ceiling. | [`1c789ca`][1c789ca] |
+| The dtd, relaxng, xsd and xslt compile/merge budgets could not be configured | They are option fields with zero = today's default; externalRef and nested fn:transform compiles inherit the caller's settings. | [`7dd3159`][7dd3159], [`ae41e4c`][ae41e4c], [`2188003`][2188003], [`80e124e`][80e124e], [`58415b6`][58415b6] |
+| FileResolver had no entity limits, and fn:parse-xml and nested stylesheet-text ignored xdm's entity limits | FileResolver gains the seven xdm entity-limit fields; they bind its parses, fn:parse-xml and nested stylesheet-text. | [`9df608b`][9df608b] |
+
+
+### Fixed
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| XPath constant folding gave each fold a fresh 5M-item budget and ignored the compile deadline: 241 bytes allocated 2.98 GB | One shared 4,096-item fold budget per compile, bound to its Context; unequal literal ranges are not folded. | [`e73a30b`][e73a30b] |
+| `ParseOptions.MaxNodes` charged only start tags, so a document of PIs or comments passed any bound | Text that is not all white space, comments and PIs now count one node each. | [`9e9a6f9`][9e9a6f9], [`089c346`][089c346] |
+| k ATTLIST defaults on one tag cost k×k comparisons, reachable from `fn:parse-xml` | A tag whose declarations times attributes pass 64 indexes its attributes by name. | [`43ca7b2`][43ca7b2] |
+| Copying one long text node into many elements used up the text store's blocks and panicked | One string reuses its block; past half the block space values are copied and packed. | [`ad032d1`][ad032d1] |
+| A tree whose text needed over 1<<17 store blocks (~1 GiB copied) panicked the host | Parse, XPath, XQuery, XSLT and XSD entry points return `xdm.ErrResourceLimit` and no result. | [`91f30c9`][91f30c9] |
+| Href-less `xi:include xpointer` copies doubled per level, with no fetch or depth charged | One pass's inclusions count what they copy in against `Parse.MaxNodes`. | [`eb4d0ae`][eb4d0ae] |
+| A date plus `xs:yearMonthDuration` built a year the parser refuses, which compared wrongly and hung `format-date` `[W]` | It raises FODT0001; the ISO week-year search tests ±1 only. | [`734f53c`][734f53c], [`e720aa3`][e720aa3] |
+| `format-number` found an exponent picture's exponent one power of ten per step, quadratic in digits | It is estimated from the digit counts. | [`eb5b289`][eb5b289] |
+| Irregular grouping in `format-integer` and `format-number` scanned every separator per digit, quadratic in the picture | Separators are indexed by position. | [`78d92a8`][78d92a8] |
+| The regex cache gate counted a character class as one instruction, so a class-heavy 1 KB key pinned megabytes | Each class's rune table counts, ten runes to an instruction. | [`a97b803`][a97b803] |
+| Backreference width analysis rescanned the pattern per reference and per nesting level | It runs once per group, capped at 4M steps (`ErrResourceLimit`). | [`ba64164`][ba64164] |
+| A nested function body or `xsl:evaluate` in a `for` reset the shared item count, so `MaxItems` never bound it | `Compiled.Eval` restores the enclosing item and byte count on return. | [`ab7d256`][ab7d256] |
+| A `cache="yes"` or `new-each-time="no"` function memo held its results with no total against `MaxItems` | The memo totals what it holds and raises XPDY0130 past the bound. | [`3926b3e`][3926b3e] |
+| Each `xsl:key` index, one per temporary tree, got a fresh `MaxItems` | Key entries are totalled across every index the transform holds. | [`d06d0f3`][d06d0f3] |
+| A static `fn:transform` of its own stylesheet overflowed the stack: the static phase had no depth bound | It takes `DefaultMaxDepth` and the caller's depth (`ErrResourceLimit`). | [`a97ca6a`][a97ca6a] |
+| A package using itself, directly or through another, overflowed the stack through `xsl:use-package` | Packages on the path are tracked; a revisit is XTSE3005. | [`dce8830`][dce8830] |
+| An attribute value, comment, PI or nested element inside an html `<script>` or `<style>` could write `</` and close it | Every raw write there is held to the text rule: SERE0007. | [`f09487b`][f09487b] |
+| A computed `xsl:result-document/@standalone` was written raw into the XML declaration, so `"?>` injected markup | Values other than yes, no and omit raise SEPM0016. | [`877b3af`][877b3af] |
+| Result-document hrefs were symlink-resolved on the host with no file access granted | Hrefs compare lexically; a read is also recorded under its URI, so XTDE1500 holds. | [`e7f1116`][e7f1116] |
+| A streamed `xsl:merge` held every `for-each-source` document open at once, two descriptors and a goroutine each | A merge of more than 64 inputs runs on the tree. | [`e621bf7`][e621bf7] |
+| Streamed grounding copied every ancestor's attributes per record: N records × S attributes | Batches wait for 4× their spine copy; past 16M copies, over 64 per record is refused. | [`f90e97d`][f90e97d] |
+| `xsi:nil` on a nillable complex-typed element skipped its attribute, ID, abstract-type and assertion checks | A nilled element gets every check except content, tree and stream. | [`50492e0`][50492e0] |
+| Under XSD 1.1, `xsi:type` naming the declared type escaped an `xs:error` or tighter type alternative | `xsi:type` must derive from the selected type, tree and stream. | [`9aed5a3`][9aed5a3] |
+| A key or unique duplicate in a nested scope below a lax or `xsi:type` wildcard child went unreported | The child's identity tables now go up, tree and stream. | [`7fdea1e`][7fdea1e] |
+| The streamed identity check buffered text in every open complex-typed field, depth × text bytes | Complex fields keep no text and fail at their end tag. | [`9a34abe`][9a34abe] |
+| A dense XSD content model was compiled in full before the UPA width gate refused it | The compile stops at the first follow set wider than `maxUPAStateWidth`. | [`2a27fc6`][2a27fc6] |
+| Particle Valid (Restriction) flattened a group-ref DAG to one member per path | Flattened lengths are memoised per group and refused past the position budget. | [`df96ba9`][df96ba9] |
+| XSD 1.1 assertions ignored the `ValidateContext` deadline and returned a verdict | The assertion carries the run's context; a cut-short evaluation returns `ctx.Err()`. | [`f065ab2`][f065ab2] |
+| Each union member reference kept its own `{namespace}local` copy in the never-evicted global type tables | Duplicate members are dropped and one string is shared per name. | [`9e39b51`][9e39b51] |
+| Each distinct XSD type kept its whole `{namespace}local` name in the global type tables: 49 MB for 10,000 types under a 4 KB namespace | The namespace is interned once per table: 0.64 MB. | [`6e51253`][6e51253] |
+| `WithInstanceLocations` statted instance-named paths before the resolver saw them | Its dedup asks the filesystem only inside the schema's own directories. | [`aeae707`][aeae707] |
+| `xsdnet.HTTPResolver` passed a `file:` location in a remote schema to an unrooted `FileResolver`, so a remote author read local files | It is refused before `Files` is asked. | [`a85f40a`][a85f40a] |
+| `c14n.FromXPath` and `FromXPathFilter` ran XML-DSig XPath 1.0 transforms by 2.0 rules, so `"10" < "9"` was true | They evaluate in XPath 1.0 compatibility mode. | [`0c70a04`][0c70a04] |
+| `dtd.Validate` ignored undeclared attributes and matched names by local part, missing `xml:lang` | Undeclared attributes are reported and names matched as written. | [`915eb63`][915eb63] |
+| RELAX NG include and externalRef fan-out had no total bound, so a few tiny schemas cost F^depth fetches | One compilation makes at most 10,000 fetches, then `ErrResourceLimit`. | [`cfc090e`][cfc090e] |
+| A module imported on several paths was compiled once per path, so imports doubling per level cost 2^N | One compilation resolves at most 10,000 include/import occurrences, then `ErrResourceLimit`. | [`77c3c5d`][77c3c5d] |
+| XQuery `validate lax` with no imported schema wrote `xsi:type` annotations into the caller's tree | It annotates and returns the §3.21 copy; the input is left as it was. | [`f46ec7b`][f46ec7b] |
+| Rooted file resolvers statted a `//host/share` or `file:////host/...` path before containment, reaching the host over SMB on Windows | It is refused first, unless a root is on that share. | [`60fed8a`][60fed8a] |
+| A panic while `xslt.FileResolver` parsed a file left other callers waiting on it blocked forever | The in-flight entry is released by a defer and its waiters get an error. | [`60fed8a`][60fed8a] |
+| A package used on several paths was read and compiled once per path, so a layered `xsl:use-package` DAG cost 2^N | Its read is shared per `Compile`; each read and compile counts against the 10,000 module visits. | [`4c5c3ee`][4c5c3ee] |
+| `array:flatten` over an array doubled with `[$a,$a]` walked 2^k leaves with no charge or cancellation | `xdm.Flatten` refuses past 1<<24 items inside arrays; `array:flatten` and `fn:data` charge their growth to `MaxItems`. | [`9c19935`][9c19935], [`0d82e86`][0d82e86] |
+| `Node.AddNamespace` copied and interned the whole frame per binding, so an element of K declarations kept K(K+1)/2 bindings | A frame of 8+ bindings that ends its tree is extended in place; assertion, alternative and copy scopes build their frame in one pass. | [`93f91ae`][93f91ae], [`952e6d2`][952e6d2], [`9999789`][9999789] |
+| Href-less XInclude xpointers were charged by node count only (9 KB copied 65 MB of text), and each walked the tree from its root | One pass's copied values share `MaxBytes`, and its local searches share a visit budget of `MaxNodes`. | [`ed500f2`][ed500f2] |
+| DTD and entity scanners searched for `;` again at every `&` or `%`, so a run without one was quadratic (200k `%`: 2.5 s) | Each `;` is found once per scan, in `xdm` and in `dtd.Load`. | [`e9e1442`][e9e1442], [`b9aebdf`][b9aebdf] |
+| `dtd.Load`: parameter-entity references that expanded to nothing were free, so a doubling ladder over an empty entity ran without bound | Each reference is charged at least its own length against `MaxEntityBytes`. | [`b9aebdf`][b9aebdf] |
+| `dtd.Validate` accepted a root other than the element the DOCTYPE names, skipping that element's attributes and model | It checks XML 1.0 VC Root Element Type. | [`a543265`][a543265] |
+| `dtd.Validate` built a dense content model's n²/2 follow edges in full before refusing it, for every element: 36 s and 4 GB per element | The DTD matcher bounds its stored follow pieces at 2²⁰, so a repeated choice is linear; XSD models keep the 256-width cap. | [`e21d0c1`][e21d0c1], [`0c7f0eb`][0c7f0eb] |
+| Each nested repeated group ref kept another copy of the inner model's edges: 216 MB retained from a 14.6 KB schema | Each follow edge is recorded once, against its innermost scope. | [`f856400`][f856400], [`6bb84b2`][6bb84b2] |
+| Particle Valid (Restriction) walked parallel group-ref chains once per path, 2^n calls for an 11 KB schema | Each particle pair is decided once per check; subsumption state sets use `slices.Sort`. | [`282aec6`][282aec6], [`fce2d5e`][fce2d5e] |
+| Each restriction of a union re-stored the whole member list in the never-evicted global type table, N×K names | Unions with identical member lists share one stored list, in `RegisterUnion` and `Merge`. | [`ed4a60f`][ed4a60f] |
+| An XSD date year past about 2.9e11 wrapped in int64 or was refused, and then passed facets, enumerations and keyrefs | Temporal values compare with an unbounded year, in 400-year eras. | [`7b3b8cf`][7b3b8cf] |
+| xs:gYear and xs:gYearMonth accepted any int64 year, so `daysFromCivil` wrapped and different years compared equal | The year is held to the xs:date range: FODT0001. | [`75039ea`][75039ea] |
+| An element with `xsi:nil="true"` skipped the keys and keyrefs on its own declaration, tree and stream | Both validators evaluate a nilled element's identity constraints and pass its tables up. | [`ee8aaa2`][ee8aaa2] |
+| Each nested asserted element deep-copied its subtree outside every budget, even after cancellation | The copy checks stop and cancel first and charges every node to the assertion node budget. | [`952e6d2`][952e6d2] |
+| `WithInstanceLocations` checked only a pair's namespace text, so a document defining another namespace was loaded | A document not defining the namespace it was named for is declined, never added (src-import.3.1). | [`c767803`][c767803] |
+| With `xsdnet.HTTPResolver`'s nil `Files`, an instance location could open any readable host file as its schema | A local location outside the schema's directories is declined before any resolver is asked. | [`c767803`][c767803] |
+| `MaxDocuments` was counted as documents were dequeued, so references past the limit were fetched first | Each new document is charged after its reference resolves and before it is read and parsed. | [`429b9c6`][429b9c6] |
+| `IsForeignNetworkPath` missed the NT `\??\` prefix, so `\??\UNC\host\share` could reach the host on Windows | `\??\` paths are device paths, refused whatever the roots. | [`639bcb4`][639bcb4] |
+| `fn:parse-ietf-date` panicked out of Eval on seconds 00–09 with a fraction below 1e-9 | The one-digit seconds string is padded without indexing past it. | [`8211a76`][8211a76] |
+| JSON fallback replacements, `fn:json-to-xml` nodes and `fn:xml-to-json` text (amplified 2×depth by indent) were built uncharged | Fallback uses and output text are charged to `MaxBytes`, built nodes to `MaxNodes`, streamed and tree alike. | [`406c6e1`][406c6e1], [`5423f40`][5423f40] |
+| `unparsed-text`, `unparsed-text-lines` and `json-doc` returned resolver text uncharged, so repeated reads kept unbounded copies | Every read is charged to `MaxBytes`. | [`3251f40`][3251f40] |
+| `fn:serialize`'s map form took a doctype-system with both quote kinds, breaking out of the literal into live DTD markup | It is checked like the element form: SEPM0016. | [`2f9d010`][2f9d010] |
+| `format-number` padding added one zero per step and exponent splitting rescanned the prefix per separator, O(n²) in the picture | Both are linear. | [`d5e2b0f`][d5e2b0f] |
+| A closed subtree whose constant fold failed was re-evaluated by every ancestor, so `() + 1 + 1 …` was quadratic in Compile | A declined fold is recorded and never retried. | [`42ac077`][42ac077] |
+| The operator chain bound was counted per loop, so nested sub-limit chains composed into a spine that overflowed the stack | The parser bounds the chained height of each path at 10,000, postfix and lookup chains included (XPDY0130). | [`e965b1f`][e965b1f] |
+| The opt-in backtracking regex recursed once per consumed character, so a long subject overflowed the stack | Recursion depth is capped at 50,000; past it is the XPDY0130 budget error. | [`a97ac65`][a97ac65] |
+| Go's onepass copy duplicates a class per instruction, so `^\p{L}{990}$` cached about 8 MB and a facet kept as much | `CompileBounded` charges each onepass use against `MaxRegexpProgram`; the cache weighs it too. | [`d258054`][d258054], [`6ad619f`][6ad619f] |
+| `group by` concatenated non-grouping variables uncharged, and sliding windows copied n(n+1)/2 items past `MaxItems` | Merged values and window copies are charged to the item budget; the window boundary scan observes cancellation. | [`11da206`][11da206] |
+| An imported schema's include closure was read uncharged, and each library module got a fresh `MaxSchemaBytes` | The closure is read through a charging resolver, and one schema byte counter spans every module of a compile. | [`4fafb61`][4fafb61] |
+| A module imported thousands of times was recompiled per import, since only the number of imports was capped | Module compiles charge their node count against 500,000 per `Compile` (`ErrResourceLimit`). | [`d0591ae`][d0591ae] |
+| A static variable calling `fn:transform` on its own stylesheet ran B^K nested compiles, each with its own counts | Static-phase nested compiles share the outer `Compile`'s visit and node budget. | [`d0591ae`][d0591ae] |
+| A global param bound to `accumulator-after#1`, and a used package's frame function, pinned every compiled stylesheet forever | Both global records are weak and die with their stylesheet. | [`69648fe`][69648fe] |
+| `fn:transform` from bare XPath zeroed the caller's byte counter, so each call reset the bound | An adopted byte counter arrives held, so the nested run continues the count. | [`8aa67d3`][8aa67d3] |
+| `xsl:sequence` into an as-typed variable charged no items, so sibling variables doubled to 10× `MaxItems` | A sequence constructor's held items are checked against `MaxItems` after each append. | [`5423f40`][5423f40] |
+| Nested streamed merges each held 64 inputs open, about 128 descriptors per level, with no total | Open merge inputs are counted across the nest; a merge past 64 runs on the tree. | [`c1836df`][c1836df] |
+| Streaming copied every spine element per burst but charged only attributes | The refusal counts every ancestor record; since small bursts share copies it is a backstop. | [`b2fcde5`][b2fcde5] |
+| c14n under `Func`/`FromXPath` sets rescanned every in-scope binding and ancestor attribute at each apex, with no output | An apex considers only bindings that differ from those rendered; inherited `xml:*` is computed once per parent. | [`94aa606`][94aa606] |
+| RELAX NG §7 checks re-walked a definition per `<ref>`: a 1.9 KB diamond chain took 8.7 s to compile | Each definition is checked once per relevant context. | [`5734988`][5734988] |
+| RELAX NG list tokens skipped `MaxPatternSize`: 20 tokens in a nested-oneOrMore list cost 25 s and 224 MB | The bound is checked between list tokens. | [`f6079cf`][f6079cf] |
+| Repeated RELAX NG includes were parsed and kept per fetch, so one 256 KB leaf held about 2.6 GB | Fetched documents share one compile-wide node and byte budget. | [`aff6564`][aff6564] |
+| `not('a' eq 'A')` and other foldable parents of a comparison were folded under codepoint order, ignoring the default collation | A comparison is not closed to the folder, so its ancestors run under the collation in force. | [`967b27a`][967b27a] |
+| `xsl:import-schema` read its include and import closure uncharged | Every closure document is charged to `MaxSchemaBytes`, one counter per `Compile`; over is `ErrResourceLimit`, not XTSE0220. | [`4ad352d`][4ad352d] |
+| `c14n.FromXPathFilter` ran each node under a fresh, uncancellable context: a 70-byte filter held a CPU 4 s | `FromXPathFilterContext` runs them on one context, cancellable within a node, under one budget. | [`2a41550`][2a41550] |
+| `xdm.Flatten` and XInclude could not be cancelled, and the CLI `-timeout` started after `-xinclude` | `FlattenContext` polls every 1024 steps, the pass checks its `Context`, and `-timeout` covers both. | [`9399efd`][9399efd] |
+| A `Compile` queued behind another could not give up, and the static phase ran on `context.Background()` | `CompileContext` waits on a channel slot, and static and nested `fn:transform` compiles use the caller's context. | [`cfa135c`][cfa135c], [`4694fa3`][4694fa3], [`0ecee9c`][0ecee9c] |
+| Package serials were process globals never reset, so generated `xsl:original` names depended on earlier compiles | Serials and composition caches live in a per-compile environment. | [`f84502b`][f84502b] |
+| Overrides wrote the generated `xsl:original` namespace into literal results, then dropped user ones sharing its prefix | Only the exact URIs a compile generated are excluded (XSLT 3.0 §11.1.3). | [`591831a`][591831a], [`4950817`][4950817] |
+| A transform's run-time `fn:transform` calls each minted a fresh compile budget | Each transform holds one budget, adopted by every nested call; a cache hit charges nothing. | [`e975737`][e975737] |
+| Streamed grounding copied the document node, spine and attributes per burst, then refused deep documents | Small bursts share ancestor copies in one ground batch; the spine refusal is a backstop. | [`49721db`][49721db] |
+| On Linux an `os.Root` symlink escape returned a raw error naming the resolved path | Any `os.Root` refusal but not-found is the outside-roots error naming only the href. | [`ddc6ee2`][ddc6ee2] |
+| `fold-left`, `for-each`, `sort` and other function-item loops never polled cancellation | `callItem` polls the context once per call. | [`9aefe48`][9aefe48] |
+| Regex size, backtracking and backreference-analysis limits raised FORX0002, and `Flatten`'s had no code | They raise XPDY0130 (XPath §2.3.1), and `xsl:analyze-string` no longer re-wraps them as XTDE1140. | [`e7042aa`][e7042aa], [`f077a70`][f077a70] |
+| A regex compiled up to three times per call, and a program over 4,096 instructions was never cached | It compiles once; the cache is weighed by program bytes: 32 MiB in all, 4 MB an entry. | [`1efb8e1`][1efb8e1], [`f077a70`][f077a70] |
+| `unparsed-text-available` charged the bytes it read, so a guarded `unparsed-text` paid twice | The probe runs the read's check, then refunds; a failed read charges nothing. | [`87743b2`][87743b2] |
+| `FlattenContext` copied every input, so `fn:data` paid an O(n) copy with no array present | An array-free sequence is returned as it is (F&O §17.3.18). | [`e8f4dfa`][e8f4dfa] |
+| Since `967b27a` no comparison folded, so `1 eq 1` and its ancestors waited for run time | A comparison of two numeric literals folds again; it needs no collation. | [`390b351`][390b351] |
+| The backtracker's depth `defer` made it about 2.8× slower | Each return releases the depth directly; the bound is unchanged. | [`c870472`][c870472] |
+| `MaxDocuments` was charged before dedup, so a cyclic set of exactly `MaxDocuments` could not load | Only a document not read yet is charged, after resolve and before parse. | [`6297a00`][6297a00] |
+| An instance location outside the schema directories, unresolvable, or of another namespace failed the call | It is declined (XSD §4.3.2) and the call succeeds with the rest. | [`7e92b19`][7e92b19] |
+| Errors about instance-reached schema documents quoted the absolute host path | They quote the location as written; resolver errors keep only their kind. | [`7b6ae04`][7b6ae04], [`25eea7b`][25eea7b] |
+| A megabyte-long gYear cost seconds per comparison, and `parseYear` took a `+` sign | Over 1000 digits is refused with `ErrResourceLimit` (Part 2 §5.4); `+` is refused. | [`97fccf5`][97fccf5] |
+| A date year over 18 digits was reported invalid, and long fractional seconds parsed superlinearly | The leap rule reads the last four digits; any temporal field over 1000 digits is refused. | [`eb9ddf8`][eb9ddf8] |
+| Duration years and months were int64 months, so `P800000000000000000Y` compared shorter than `-P1Y` | Months are a `big.Int` and compare exactly. | [`177fbff`][177fbff] |
+| A deterministic DTD `(a1|…|a1100)*` was refused: each last position copied the group's first set | Follow sets share disjoint pieces, about 2n for a repeated choice of n. | [`b6a5d50`][b6a5d50] |
+| `fn:id`, `fn:idref` and `fn:element-with-id` took any unprefixed `id`/`idref`/`idrefs` attribute as typed | Only is-id/is-idrefs nodes count: DTD- or schema-typed, or `xml:id` (F&O §14.5). | [`b9171e8`][b9171e8], [`0caab03`][0caab03] |
+| `fn:id` and `fn:element-with-id` returned every element holding a duplicated ID value | Each returns the first in document order (F&O §14.5.1); `fn:idref` still returns all. | [`ca1607b`][ca1607b] |
+| An external subset declaring ATTLISTs but no entities never applied its attribute types | The expanded subset is re-read whenever it differs from the directive, so its `ID` types hold. | [`c5d5bce`][c5d5bce] |
+| Date and time component accessors reported a failed untyped cast as XPTY0004 | They propagate the cast's FORG0001, as the duration accessors do (XPath §3.1.5.2). | [`1505000`][1505000] |
+| `fn:serialize` with the xhtml method wrote `<br/>` and `<p/>` | A void element is `<br />`, any other empty one `<p></p>`, as `xsl:output` writes them (Serialization §6). | [`5ad849d`][5ad849d] |
+| `fn:serialize` html left the added meta bare in an XHTML head and did not self-close XML islands | Both serializers share `htmlser.MetaEnd` and `htmlser.Island` (Serialization §7.1). | [`b12ff0b`][b12ff0b], [`bee5b12`][bee5b12] |
+| The html method at version 5.0 wrote a C1 control in text raw | It is written as a character reference, as attribute values already were (Serialization §7.1). | [`9d7cf65`][9d7cf65] |
+| `cache="yes"` returned the same nodes from a node-building function where fresh ones were due | A proactive function reuses only all-atomic results; an elidable one is memoised (XSLT §10.3.8). | [`605d0be`][605d0be] |
+| `fn:transform` refused an atomic or function `global-context-item`, and ignored `package-*` beside `stylesheet-*` | Any item becomes the global context item; the mixed options raise FOXT0002. | [`57a0c9d`][57a0c9d] |
+| A declared function type was split at commas, so a valid streamed `$f(.)` got XTSE3430 | The type is read with `xpath.ParseSequenceType` (XSLT §19.8.8.11). | [`2f78c52`][2f78c52] |
+| §19.8 gave no verdict on text value templates, `fn:root`, `fold-right`, `function-lookup`, empty axes, `?` and `\|\|` | Each is modelled, so a required XTSE3430 is raised. | [`a5013a4`][a5013a4], [`b0428d0`][b0428d0], [`f41bb8c`][f41bb8c] |
+| A namespace node after content was admitted in a tree, and `xsl:sequence` dropped a late attribute | Both raise XTDE0410 (XSLT §5.7.1), tree and stream. | [`090a9a8`][090a9a8], [`2ef0012`][2ef0012] |
+| XQuery dropped a namespace node that followed content in a constructor | It raises XQTY0024 (XQuery §3.9.1.3). | [`2a1e3b9`][2a1e3b9] |
+| `validate type T` with T out of scope was XQDY0084 at run time, and `xs:anyType` was refused | XQST0104 at compile; every built-in type is in scope (XQuery §3.21). | [`ff9032d`][ff9032d], [`1889367`][1889367] |
+| `declare construction strip` left copied nodes typed | Copies get `xs:untyped` (attributes `xs:untypedAtomic`); the original keeps its type (XQuery §4.6). | [`fa87dcc`][fa87dcc] |
+| `(1, <w>{1}</w>)` in a clause expression was XPST0003: a `<` after a comma read as less-than | It opens a direct constructor. | [`c13aa92`][c13aa92] |
+| A library module importing its own namespace under its own prefix was XQST0033 | It is accepted (XQuery §4.12). | [`c114ef5`][c114ef5] |
+| XQuery 1.0 and 3.0 modules were held to 3.1's `ordered{}`, pragma-name and `namespace-node()` rules | Each version applies its own (XPST0003, XPST0081, XPST0017). | [`cc13393`][cc13393] |
+| An undeclared entity where XML §4.1 makes it a VC was dropped silently: `x&u;y` read as `xy` | It is an error naming the VC (§4.4.3: inform the application). | [`8650527`][8650527] |
+| Under `AllowDOCTYPE` malformed DTD declarations and text declarations were accepted: 417 xmlconf not-wf cases | The declaration grammar is checked; 23 remain. | [`252b65b`][252b65b] |
+| The tokeniser took any `<?xml` PI as the declaration and read its pseudo-attributes by substring | Only at offset 0, parsed by XML §2.8 [23]-[26]. | [`72599d9`][72599d9] |
+| `dtd.Validate` passed a 1.0 document whose DTD loads a 1.1 external entity | `Load` records the entity and `Validate` refuses it (XML 1.1 §4.3.4). | [`ee5018c`][ee5018c] |
+| XInclude did no language fixup, so an included element lost its inherited `xml:lang` | `xml:lang` is added where the languages differ (XInclude §4.5.6). | [`93b8855`][93b8855] |
+| XSD 1.0 parsed and silently ignored 1.1-only components such as `xs:assert` | They are refused, "requires XSD 1.1"; `vc:minVersion` exclusion is kept. | [`f9a904d`][f9a904d] |
+| A key field on an attribute a skip or lax wildcard left unassessed was accepted (`idZ015`) | The field fails (XSD §3.11.4 clause 3); under 1.1 a skipped one leaves the field. | [`7362b27`][7362b27] |
+| RELAX NG's overlap test ignored `anyName` exceptions, refusing `xspec.rnc` | It uses jing's representative-name test (§7.3, §7.4). | [`e960da2`][e960da2] |
+| `dtd.Validate` never saw `xmlns` attributes, so a `#REQUIRED xmlns:p` refused every document | Namespace declarations are checked as XML 1.0 attributes, as xmllint does. | [`c516340`][c516340] |
+| `xsl:stream`, the last-call draft's name, was accepted beside `xsl:source-document` | It is XTSE0010 under version 3.0 again (REC change log, Bug29747). | [`b6aef3e`][b6aef3e] |
+| `Result.Warnings` grew with the input under `warning-on-no-match` | It keeps the first 100 and one "further warnings suppressed" line. | [`94acc9f`][94acc9f] |
+| `P instance of T*` at the document node held every match and fell back to the tree | It streams as a count of matches failing T (§27.5); fallbacks 26 → 23. | [`50bba71`][50bba71] |
+| An external DTD subset's IGNORE sections were kept and their `%e;` keyword never substituted, so ignored defaults applied | Conditional sections are resolved before declarations are read (XML 1.0 §3.4). | [`170d907`][170d907] |
+| `dtd.Validate` compared a `#FIXED` value with its raw default, so `&#41;` never matched `)` | The comparison uses the normalized default (XML 1.0 §3.3.3). | [`b50260b`][b50260b] |
+| An XSD 1.0 schema could name `xs:anyAtomicType`, `xs:yearMonthDuration` and `xs:dayTimeDuration` | All five 1.1 built-ins are `src-resolve` under 1.0, as `vc:typeAvailable` already said. | [`5c39a0c`][5c39a0c] |
+| XQuery read imported schemas as XSD 1.0, so `xq-e18.xsd` restricting a 1.1 duration failed | Imports are read as XSD 1.1, this engine's type system (XQuery 3.1 Appendix D). | [`b42e77e`][b42e77e] |
+| An imported schema that parsed but was invalid raised XQST0059 "could not be loaded" | It is XQST0012 (XQuery 3.1 §4.11); XQST0059 stays for a schema not found or not well-formed. | [`9148c2d`][9148c2d] |
+| `fn:serialize`'s map form read an absent `html-version` as 4, and a `()` entry raised XPTY0004 | Absent or `()` takes the F&O 3.1 default, html-version 5; the xhtml method writes the HTML5 doctype. | [`c9adbaf`][c9adbaf], [`9180ee3`][9180ee3] |
+| `fn:serialize` wrote the DOCTYPE before the XML declaration, never declared xhtml, and put prolog comments after it | Declaration first, doctype at the first element; the bare HTML5 doctype needs only whitespace text before it. | [`99a96a5`][99a96a5] |
+| The bare HTML doctype was written before a non-`html` document element and for any `html-version` | Only before an `html` element (§7.4.6) and under version 5; item-separator text counts as text before it. | [`da68710`][da68710] |
+| A streamed `//rec except $v` raised XPTY0004 naming "union" | The check uses the operator itself, so the text is the tree's. | [`86cde00`][86cde00] |
+| An internal-only DTD subset never expanded its parameter entities, so `%e;` declared nothing | The internal subset goes through the loader on every path (XML 1.0 §2.8). | [`4bab79c`][4bab79c] |
+| A parameter entity declared in an INCLUDE section was out of scope, and an IGNORE one was read | The subset is expanded once in document order, each conditional section where it stands (§3.4). | [`64f2243`][64f2243] |
+| `dtd.Validate` never checked the lexical form of NMTOKEN(S), ID, IDREF(S) or ENTITY(IES) values | Each is checked; ID, IDREF and ENTITY values are NCNames, as xdm parses with namespaces. | [`8c47532`][8c47532], [`0cc940b`][0cc940b] |
+| An `EMPTY` element validated with a comment, PI or white space in it | It admits no content at all (§3 VC: Element Valid, erratum E15). | [`8a2b2da`][8a2b2da] |
+| Declaration-level VCs went unchecked: repeated element types, duplicate tokens, ID defaults, two IDs, bad defaults | `dtd.Load` records them and `dtd.Validate` reports them, used or not (§3.2, §3.3.1, §3.3.2, §4.2.2). | [`72903d9`][72903d9] |
+| A UTF-16 external subset or parameter-entity module was read as UTF-8 and declared nothing | Each fetched resource is decoded by its BOM; the expansion charge is on the decoded size (§4.3.3). | [`3f7b697`][3f7b697] |
+| A non-`Char` in the DOCTYPE, an unused PE value or a DOCTYPE comment was accepted | The tokeniser checks the DOCTYPE as it checks content; under 1.1 a literal RestrictedChar is refused. | [`12b68fa`][12b68fa], [`dabed51`][dabed51] |
+| A colon in an entity or notation name was accepted | Refused (Namespaces in XML §7). | [`cb762f7`][cb762f7] |
+| A `standalone="yes"` document could use an entity only the external subset declares | Refused (§4.1 WFC: Entity Declared), including one an internal-subset PE declares. | [`af26eb4`][af26eb4], [`ca0d7be`][ca0d7be] |
+| Improper PE nesting in a declaration, group or conditional section was accepted, or failed the load | A validity error from `dtd.Validate`; the DTD still loads (§2.8, §3.2.1, §3.4). | [`337c660`][337c660] |
+| A PE between declarations could open a comment or declaration the text after it closed | Its replacement text must match extSubsetDecl alone (§2.8 WFC: PE Between Declarations). | [`243a7af`][243a7af] |
+| Entity text could balance tags outside it, put `<` or a bare `&` in an attribute, or stand outside the root | Each entity's text must match content alone (§4.3.2); a reference at depth 0 is refused. | [`43ca8b3`][43ca8b3], [`9753ec8`][9753ec8] |
+| An external entity referenced in an attribute value was fetched and spliced in, and PEs in IGNORE were fetched | Refused (§3.1 WFC: No External Entity References); an IGNORE section is copied through unread. | [`dabed51`][dabed51] |
+| Standalone and element-content validity facts the tree loses were never checked (xmlconf I4, I5) | xdm records them as it parses, at most 100, and `dtd.Validate` reports them (§2.9, §3 VC). | [`ca0d7be`][ca0d7be] |
+| A source rewritten for markup entities was parsed again against the internal subset only, losing external defaults and refusing undeclared entities | The second parse reuses the first parse's DTD; an undeclared entity in an ATTLIST default is dropped and recorded where every declaration was read. | [`2d60ddd`][2d60ddd] |
+| The PrivateFunctionsVisibleToEvaluate comment still said private visibility applied only inside a real xsl:package | It now says the field is a no-op and the rule applies to every stylesheet (§3.5, §10.4.1). | [`7e6845f`][7e6845f] |
+| XInclude `parse="text"` inclusions were not charged to the pass byte budget | The text node is charged like `parse="xml"`, against `Parse.MaxBytes`. | [`bd467ae`][bd467ae] |
+| Nested RELAX NG compact `div`/`include` blocks and chained `* - * - …` overflowed the stack (fatal) | Both charge the compact nesting bound and fail with its error. | [`e43cba2`][e43cba2] |
+| A RELAX NG `<param name="pattern">` was recompiled for every value checked | It is compiled once with the schema; an invalid pattern still fails at the value. | [`5ca44f5`][5ca44f5] |
+| The RELAX NG §7.3/7.4 competition check compared name classes pairwise, n² per two branches | Single names intersect through a set; only open classes are tested one by one. | [`d75f52e`][d75f52e] |
+| `dtd` duplicate checks, `;` searches and attribute checks rescanned per token, byte or element | Sets and indexes make the scans linear; refused models are cached; IGNORE-reduced PEs charge their text. | [`bae3d32`][bae3d32] |
+| `xsl:merge` entries retained across anchors, and a streamed source's implicit snapshot, were uncharged | Entries are totalled against `MaxItems`; the snapshot is charged to the node budget first. | [`aa6ac52`][aa6ac52] |
+| Every constructed fragment shared one accumulator table (nil `Tree`), and the tables were uncharged | Tables are keyed by root identity (§18.2) and their slots charged against `MaxItems`. | [`bf6cedd`][bf6cedd] |
+| The streamability analyser recursed per `let`/`for`/`some` clause (fatal) and copied scope per binding | Clauses are walked in a loop over one scoped environment; results unchanged (§19.8.8). | [`d685d75`][d685d75] |
+| An XQuery direct constructor followed by an operator was reparsed about 3^d times for d levels | A per-module memo keyed by source offset parses each constructor once (§3.9.1). | [`cbb2d1d`][cbb2d1d] |
+| XSD assertion and type-alternative scope copies charged child nodes only | Every copied attribute and namespace binding is charged to the run's node budget. | [`7a194ca`][7a194ca] |
+| Effective Total Range and particle emptiability walked a shared group DAG once per path (exponential) | The group-level answer is memoised per `*ModelGroup` (§3.8.6, §3.9.6). | [`4e4ce7f`][4e4ce7f] |
+| A cast to an imported schema type read the process-global type table, which a later `xsd.Load` rewrites | The value carries its schema's type environment; `instance of` and `treat as` use it (XPath 3.1 §2.5.5). | [`93fd8d5`][93fd8d5] |
+| c14n's XPath Filter input held one namespace node per element and binding at once, uncharged | The input is walked lazily in document order, each namespace node charged to `MaxItems`. | [`795af54`][795af54] |
+| Instructions that build their own buffer (`xsl:try`, `xsl:perform-sort`, …) skipped the item bound | `execSequenceBody` checks `MaxItems` after every instruction, beside the node budget. | [`f068f13`][f068f13] |
+| Duration and fractional-second casts bypassed `MaxDigits`: a 1e6-digit `dayTimeDuration` took 1.7 s | The same text bound applies to them, refused as FOCA0003 with `ErrResourceLimit`. | [`35cd6bf`][35cd6bf] |
+| A streamed view batch was replaced by record count only, so a 64 KB root attribute was copied per 4096 views | Batches count value bytes too, so total copying stays linear in the input. | [`edd10a6`][edd10a6] |
+| Copying M children of a root declaring K prefixes was K² per copy (30 s, 48 GB at K=1000, M=2000) | `scopeBindings` sorts once and binds in one call; inherited bindings are charged to the byte budget. | [`53a70a1`][53a70a1] |
+| Exclusive C14N considered every PrefixList entry at every element | The PrefixList is a set, with differing bindings tracked as inclusive mode does; output unchanged. | [`759ba94`][759ba94] |
+| XQuery copied the prefix and constructor-namespace maps per direct element: K×N retained entries | A declaring element links a scope to its parent's; the rest read the parent's (§3.9.1.2). | [`ae84d0b`][ae84d0b] |
+| A `FileResolver` waiter got the loader's entity-budget failure, failing every concurrent `fn:doc` | A waiter under another budget loads the path again under its own. | [`2695815`][2695815] |
+| A deeply nested DTD content model overflowed the stack (fatal), and nested IGNORE skips were Θ(k²) | Groups and INCLUDE sections are read on heap stacks; `ignoreSectEnd` is one forward pass. | [`4e9d70f`][4e9d70f] |
+| UTF-16 input was read whole and held about ten copies before the tokeniser saw a byte | Only the XML declaration is held; the rest is decoded in 32 KiB chunks (§4.3.3 unchanged). | [`ef129c5`][ef129c5] |
+| Each INCLUDE section recopied the subset's tail (7.4 GB for 32,000), and `baseAt` scanned every span | One forward pass resolves sections; spans are shifted per reference and searched by binary search. | [`119a290`][119a290] |
+| An empty-leaf entity ladder (`aN = &aN-1;&aN-1;`) expanded 2^N times uncharged | Each nested reference and markup substitution charges the entity budget. | [`2745346`][2745346] |
+| Long `for`/`some`/`every` binding lists overflowed the stack, and overlapping steps held N² nodes | Bindings run on a frame stack; steps dedupe past 4096 entries; free-variable walks are O(k). | [`a3bdff3`][a3bdff3], [`2023aef`][2023aef] |
+| An `xs:redefine` group was checked before its element types were bound, and attribute wildcards never | The check runs after fixups and compares wildcards (src-redefine 6.2.2, 7.2.2). | [`470c573`][470c573] |
+| Nested `(?:` groups and `-[` class subtractions recursed without bound (fatal with the backtracker) | Both count against a depth of 1000 and fail FORX0002 wrapping `ErrResourceLimit`. | [`835d67f`][835d67f] |
+| `xsl:number level="any"` walked every earlier node per execution, uncancellable | Name-only patterns number the tree once per instruction; every walk polls the context. | [`18f6233`][18f6233] |
+| The `fn:transform` cache keyed resolvers by address, so zero-size resolvers collided | The key carries each resolver's dynamic type too. | [`a5885ce`][a5885ce] |
+| Nested streamed `xsl:result-document` held one host writer open per level | Past 16 open writers a nested one is built as a tree and written once complete. | [`e75f9f1`][e75f9f1] |
+| C14N 1.0 deduplicated inherited `xml:*` attributes by linear scans, K² per apex | Local names are kept in a set; output unchanged (§2.4). | [`a544525`][a544525] |
+| UCA `contains` and kin re-keyed the needle per span and never polled the context (cubic) | The needle is keyed once, spans are cut 32 bytes past it, and each span polls `Env.Ctx`. | [`da4780a`][da4780a] |
+| `map:merge` with `duplicates: combine` recopied each value per duplicate, uncharged | Values grow in place, are charged to `MaxItems`, and each input map polls the context. | [`dbc271b`][dbc271b] |
+| A DTD choice of N identical alternatives cost N² per child in `matchNames` (0.8 s at N=4096) | Positions that step alike are classed at build; one live state per class is walked. | [`63fb23b`][63fb23b] |
+| The `FromXPathFilter` comment claimed the item budget bounds total work | Both legacy forms say they bound what is held, not time, and point at the Context forms. | [`3a78c1c`][3a78c1c] |
+| XSLT static declarations rescanned each other (O(V²), no ctx), and import occurrences were uncharged | Static variables are indexed, ctx is checked, and each occurrence is charged to `MaxModuleNodes`. | [`11393c5`][11393c5] |
+| `fn:parse-xml` and `fn:parse-xml-fragment` results were not charged to `MaxNodes` | The returned tree is charged; an overrun is XPDY0130. | [`1594bc4`][1594bc4] |
+| `format-number` rounded at 10^maxFrac, so a wide picture was superlinear even for 0.1 | A value with fewer places is returned as is; digits are padded, not scaled. | [`432cd6a`][432cd6a] |
+| An html/xhtml comment opening with `>` or `->` let its text become live markup; HTML5 wrote two `xmlns` | Such a comment is SERE0003; a displaced default declaration is no longer written. | [`df6517f`][df6517f] |
+| A long map constructor or `xsl:fork` teed one parse and goroutine per reading part, unbounded | Over 64 reading parts the construct runs on the tree, with the same result. | [`f41fadc`][f41fadc] |
+| An instance-supplied `FILE:///abs/p` was checked as a relative path, then opened as `/abs/p` | The scheme is normalised first, and the checked path is the one opened. | [`1dd4163`][1dd4163] |
+| `href="host.xml#m"` searched the whole host document per include occurrence (N×K) | Each host's IDs are indexed once per compilation; first in document order wins. | [`8fd2d46`][8fd2d46] |
+| Declined XSD instance locations cost a resolver call each, past `MaxDocuments` | Each declined fetch counts as a document read. | [`ef95910`][ef95910] |
+| XQuery tuples copied every binding per clause: V `let` clauses allocated O(V²) | The owning extension writes in place; copies double capacity, so a chain is O(V). | [`ac050c8`][ac050c8] |
+| `fn:load-xquery-module` compiled afresh per call, each with a full module budget | One cache per evaluation; distinct calls spend `MaxModules`/`MaxModuleBytes` cumulatively. | [`1dd0db1`][1dd0db1] |
+| The serializer scanned its namespace scope per declaration: K² (13 s at K=128,000) | Past 32 bindings a prefix index is kept; K=128,000 serializes in 16 ms. | [`9599531`][9599531] |
+| `xsl:use-package` walked the whole package tree per hidden or absent component (C×N) | One scan indexes every name mentioned; references are answered from it. | [`f757efb`][f757efb] |
+| Implicit atomization flattened each shared-member array uncharged, and `Expr.Eval` could panic | One charged `FlattenContext` per sequence; the refusal is returned as an error. | [`83a0b0e`][83a0b0e] |
+| `deep-equal` and `fn:serialize` walked every leaf of shared-member arrays past refusal and deadline | Equal member pairs are remembered, `Env.Ctx` is polled, and a failed sink stops every walker. | [`27282ba`][27282ba] |
+| `fn:serialize` html wrote a PI's content unchecked, so `>` ended it early | It raises SERE0015, as the `xsl:output` html serializer does; xhtml is exempt. | [`25e8d08`][25e8d08] |
+| `Result.Serialize`, `xslt.Serialize` and `Pattern.Matches` let a resource refusal panic in the host | They recover it as an error; a refusal is no longer a silent non-match. | [`08560cc`][08560cc] |
+| `xsl:number` spelling `math.MinInt64` (via `start-at`) recursed until a fatal stack overflow | The negation and `start-at` rebase are done in `big.Int`. | [`a337ed8`][a337ed8] |
+| A recursive function whose body is a sub-limit operator chain multiplied `maxChainLength` by `MaxDepth`: fatal overflow | XPath inline, XQuery and `xsl:function` bodies cost one depth level per 200 of height (XPDY0001). | [`289a0e6`][289a0e6], [`780f7b9`][780f7b9], [`b631123`][b631123] |
+| Streamed trust recursed per chained declaration (fatal), and template and accumulator lookups walked the module per call | Chains past `DefaultMaxDepth` run on the tree; templates and accumulators are indexed per module. | [`cd27e57`][cd27e57] |
+| Accumulator read chains recursed per link, streamed and on the tree (fatal past a few thousand) | Streamed reads past 16 nested steps are set aside and stepped later; the tree walk is iterative. | [`a3200dc`][a3200dc], [`2bacb7c`][2bacb7c] |
+| XQuery `function() as` chains and sub-parsers that reset the nesting depth overflowed the stack; bodies were reparsed 3^d times | The type chain is a loop; every bracketed body charges `maxNestDepth` and is parsed once per offset. | [`d641f49`][d641f49], [`e413019`][e413019] |
+| A cyclic XSD union reached member recursion before the cycle check (fatal); union DAGs were walked per path | Union and base cycles are checked first in one SCC walk; member DAGs are memoised per type and value. | [`4055730`][4055730], [`f846243`][f846243], [`04a5f30`][04a5f30] |
+| A `redefine` reaching a circular group hung `Load` or overflowed the stack | The restriction check leaves a cyclic group to mg-props-correct.2 and applies the `inlinedTooLong` gate. | [`14d2eb3`][14d2eb3] |
+| XSD 1.1 all-group flattening built a 2^N slice before the position budget was consulted | Shared all groups are inlined at most twice and counted in the `inlinedTooLong` gate. | [`34383fa`][34383fa], [`be6bebd`][be6bebd] |
+| XSD content-model compile, all-branch counts, compositor inlining and union restriction walked a shared group DAG per path | Each is memoised per model group or member type; empty-leaf DAGs compile in graph time. | [`e677f53`][e677f53], [`61fee5a`][61fee5a], [`fc00a92`][fc00a92], [`3b6d799`][3b6d799] |
+| `matchNames` walked every identical alternative's live state; `a?`, `a*`, `a+` created counters that decide nothing | Such particles get no counter, so classes merge; a counter-free model walks each follow run once. | [`2634957`][2634957] |
+| XSD wildcard subsets, list membership, attribute-group wildcards, versioning prefixes and `optionalAllMembers` scanned quadratically | They use hash sets, per-group memos, one in-scope map and a particle index. | [`7d94f4d`][7d94f4d], [`d1be9ff`][d1be9ff], [`b7769d8`][b7769d8], [`1975ba3`][1975ba3], [`eeae70d`][eeae70d] |
+| An assertion's `instance of` read the process-wide type table, which a later schema could overwrite | The scope copy carries the validating schema's type environment. | [`8e85b21`][8e85b21] |
+| A relative instance location such as `./file:/etc/x` cleaned to a `file:` URI the resolver re-read | Instance locations are handed to the resolver as absolute paths. | [`0817160`][0817160] |
+| RELAX NG walked a shared `define` DAG once per path in `nullable`, `staticFree` and derivatives (exponential) | Definition bodies are always memoised, and `MaxPatternSize` is checked before every derivative walk. | [`678f986`][678f986] |
+| RELAX NG compact postfix and `datatype - pattern` chains bypassed `maxCompactDepth` (fatal overflow) | Each link counts against the 500-deep limit. | [`1664d17`][1664d17] |
+| RELAX NG competition, `prune` and choice folding were pairwise or rescanned per node | Name sets are ranked and merged, `prune` is memoised per node, and choices go through a hash index. | [`51da347`][51da347], [`b3715fe`][b3715fe], [`763ecf2`][763ecf2], [`c4be9d6`][c4be9d6] |
+| `dtd.Validate` held one near-budget matcher per declaration (54 MB per 4.2 KB of DTD) and walked past `MaxErrors` | Models are matched per declaration, one live at a time; the walk stops at `MaxErrors`. | [`687726d`][687726d] |
+| The parameter-entity pre-passes ended a PI at its first `>` and rescanned an unterminated IGNORE per section | A PI ends at `?>` in `dtd` and `xdm`; an unterminated IGNORE stops the pass. | [`71bfffc`][71bfffc], [`48be9b0`][48be9b0] |
+| XInclude charged a nested included document only after recursing, so every level was parsed first | It is charged to `Parse.MaxNodes`/`MaxBytes` before recursing. | [`ec47776`][ec47776], [`62ccb0f`][62ccb0f] |
+| A streamed view batch recopied ancestor namespace frames without counting them toward its size | Copied frames count toward the replacement threshold. | [`0df8234`][0df8234] |
+| `xdmbuild` panicked on a flatten refusal or the text-store ceiling | Error-returning calls return `ErrResourceLimit`; the others latch it for the next; copied value bytes are charged. | [`eea98c7`][eea98c7], [`df2f529`][df2f529], [`54a602b`][54a602b] |
+| XQuery content copies were uncharged to `MaxNodes`, flattened uncancellably, and wrote namespace bindings unshared | Copies and flattening are charged and cancellable; bindings are written in one sorted, charged batch. | [`0d75787`][0d75787] |
+| `fn:load-xquery-module` minted a schema budget per compile and counted only successful modules | One schema counter per evaluation; failed compiles count, and a load past `MaxModules` is refused first. | [`2f2152a`][2f2152a] |
+| XQuery tuples copied W parent bindings into each of N children; `reachableVars` rebuilt closures per `Eval` | Wide parents share a frame; the call graph is indexed and each global's closure cached at compile. | [`34be195`][34be195], [`77a593b`][77a593b] |
+| Duplicate-declaration checks (XQST0049/0034/0039, XTSE0630/0580) and override-parameter lookups were O(N²) | They are map lookups by expanded name; the used package's parameters are indexed once. | [`f85a991`][f85a991], [`7fc2805`][7fc2805] |
+| `Compiled.Eval` started each expression's item count at zero, ignoring live local bindings | It starts at what the bindings hold, so sibling variables and recursive frames share `MaxItems`. | [`bafe94f`][bafe94f] |
+| A function item ran under the node, entity and digit limits of the evaluation that made it | It runs under the caller's budgets. | [`b9ad97f`][b9ad97f] |
+| Implicit conversions through `CastAtomic`/`CastToDerived` skipped the digit bound | They refuse over 10^6 digits (FOCA0003); casts apply the host's `MaxDigits`. | [`ec9408a`][ec9408a] |
+| `fn:tail`, list-type casts, atomic path steps and `!` built their results before charging `MaxItems` | Each charges as it grows; a mixed node/atomic step fails as soon as it mixes. | [`dfe60f2`][dfe60f2], [`258f49d`][258f49d], [`af0a0b6`][af0a0b6] |
+| `[f]` pictures and `format-number` exponent pictures scaled by powers of ten bounded only by length | Both are refused past `maxPictureWidth` (65536); padding is one `Repeat`. | [`898f42e`][898f42e], [`e24a461`][e24a461] |
+| UCA substring search keyed every span up to the needle's length, O(n·m²), uncharged | Short spans are skipped by bisection, and keyed bytes are charged to `MaxBytes`. | [`b9bafc5`][b9bafc5] |
+| `fn:serialize` html/xhtml wrote a comment starting `>` or `->` verbatim | It raises SERE0003, as the XSLT serializer does. | [`173bd58`][173bd58] |
+| The fixed-width backreference path admitted a variable-width head (`a*(a)\1` on `aa` was false) and rescanned per start | Admission is decided on the parsed pattern; matching slides one anchored RE2 window; `backrefAnalysisMax` is gone. | [`32ae444`][32ae444], [`adb6535`][adb6535] |
+| Attribute sets were re-expanded per path at run time and character maps per path at compile (exponential) | Each set runs and each map resolves once; the expansion polls the context. | [`5cee1ef`][5cee1ef], [`a64bd1f`][a64bd1f] |
+| The rule index held mode × match × wildcard copies, and each global its callees' whole closure (cubic, quadratic retained) | Wildcard and `#all` lists are merged at dispatch; globals keep direct calls only. | [`298eb94`][298eb94], [`95bd2aa`][95bd2aa] |
+| Global deferral, static namespace maps, `xsl:expose` and use-package reads rescanned per pass or declaration | Reverse-edge worklist, one shared map, and memos per package. | [`69778dc`][69778dc], [`d66c95d`][d66c95d], [`4a9b64f`][4a9b64f], [`1306d0a`][1306d0a] |
+| The streamability analyser walked the module per call, per binding and per container | Functions, attribute sets and call judgements are kept per plan or compile; closures are judged in one walk. | [`73a2503`][73a2503], [`fba1550`][fba1550], [`cee68eb`][cee68eb], [`4425745`][4425745] |
+| A streamed `if` rebuilt both branches after a failed choice, 2^depth at compile | Each branch is built once. | [`cd089ea`][cd089ea] |
+| The 64-consumer tee cap applied per tee: nested forks multiplied parses (64×64 OOM-killed 2 GiB) | The count is transform-wide across forks, map tees and streamed `source-document`; past it, the tree. | [`2969e1b`][2969e1b], [`f42220b`][f42220b] |
+| A streamed copy gave every element below its top its parent's bindings again, uncharged | Each gets only the bindings it declares; the top's inherited ones are charged. | [`ffbf248`][ffbf248] |
+| `xsl:message` text, `inherit-namespaces="no"` undeclarations and copied value bytes were uncharged | They count toward `MaxBytes`; undeclarations are made once per child. | [`8b6220d`][8b6220d], [`ce94988`][ce94988], [`9d1dd6e`][9d1dd6e] |
+| Number tables, `on-empty` output, streamed merge groups, accumulator recorders and `climbSort` held nodes skipped `MaxItems` | Each is charged; a refused number table is not built and that execution walks. | [`26039a1`][26039a1], [`622522b`][622522b], [`6edc92b`][6edc92b], [`41e02d2`][41e02d2], [`ff39163`][ff39163] |
+| `fn:transform` `stylesheet-text` was parsed outside the evaluation's entity budget | It shares `MaxTotalEntityBytes`. | [`4051d75`][4051d75] |
+| The html method wrote foreign-namespace `script`/`style` content as raw text | Only HTML-namespace script and style are raw. | [`cdc71e8`][cdc71e8] |
+| A stylesheet could write the abstract-component marker and turn its declarations into XTDE3052 stubs | The marker namespace carries a per-process random suffix. | [`8ca4e94`][8ca4e94] |
+| An empty `-allow-dir` segment or blank `NewFileResolver` root granted the working directory | The CLI ignores blank segments; the resolver refuses a blank root, and a blank `Roots` entry grants nothing. | [`e34e85c`][e34e85c], [`83902a6`][83902a6] |
+
+### Changed — behaviour
+
+| Change | What it means | Commit |
+|---|---|---|
+| XML-DSig XPath filters used XPath 2.0 numbers: number('1e3') was 1000, string(1 div 0) was 'INF', 1 < 2 < 3 was refused | New `xpath.CompileOptions.XPath10` applies the XPath 1.0 number model and comparison grammar; c14n's FromXPath*/FromXPathFilter* use it, so some filters select different nodes and an exponent literal is refused. | [`1df119d`][1df119d] |
+| An XSD validation refused at `MaxDepth`, or an assertion declined, has no validity code | Its `ValidationError.Code` is "" (was `cvc-elt.1` / `cvc-assertion.3`) and `Err` wraps `xdm.ErrResourceLimit`; the document is still refused. | [`de6e686`][de6e686] |
+| A 1.1 restriction rejected after a subsumption budget decline wraps `xdm.ErrResourceLimit` | Still refused, now as undecided with no constraint code; raising the `xsd.Options` budgets may admit it. | [`5203922`][5203922] |
+| `dtd.Validate` reports undeclared attributes | A document that validated before may now fail; `Options.AllowUndeclared` skips them, as it skips undeclared elements. | [`915eb63`][915eb63] |
+| XQuery `validate lax` with no imported schema returns a copy of its operand | The result is a new node, not the input node, as §3.21 requires; the input keeps no annotation. | [`f46ec7b`][f46ec7b] |
+| A tree past the text store's block ceiling is an error, not a panic | Entry points that return an error return `xdm.ErrResourceLimit`; `xdm`/`xdmbuild` methods with no error return still panic, with an error value that matches it. | [`91f30c9`][91f30c9] |
+| `ParseOptions.MaxNodes` counts text that is not all white space, comments and PIs | A document near the bound may now be refused; whitespace-only text is still not counted. | [`9e9a6f9`][9e9a6f9], [`089c346`][089c346] |
+| One XInclude pass shares a node budget | Everything its inclusions copy in counts against `Parse.MaxNodes`, once per level it is copied through. | [`eb4d0ae`][eb4d0ae] |
+| An `xsl:use-package` cycle is XTSE3005 | A package that uses itself, directly or through another, is a static error, not a crash. | [`dce8830`][dce8830] |
+| `Compile` refuses a stylesheet needing over 10,000 module visits | Each include/import resolution counts, in the static phase and the compile; real stylesheets need about 120. | [`77c3c5d`][77c3c5d] |
+| Package reads and compiles count as module visits | A package graph compiling over 10,000 package copies is refused with `ErrResourceLimit`; the W3C package cases need at most 16. | [`4c5c3ee`][4c5c3ee] |
+| A streamed parse refuses over 64 ancestor attributes per record past 16M copies | It returns `ErrResourceLimit` where Parse + Transform succeeds; back off to the tree on `errors.Is`. | [`f90e97d`][f90e97d] |
+| A streamed `xsl:merge` of more than 64 inputs runs on the tree | Output is unchanged; memory is the tree's. | [`e621bf7`][e621bf7] |
+| `Serialize` refuses an `OutputSettings.Standalone` other than "", omit, yes or no | SEPM0016, where a value such as "true" was written raw. | [`877b3af`][877b3af] |
+| `xsl:key` entries are bounded per transform | They are totalled across every index against `MaxItems`, so many keyed temporary trees can raise XPDY0130. | [`d06d0f3`][d06d0f3] |
+| c14n XPath transforms use XPath 1.0 rules | A relational comparison of two strings converts both to numbers, as XML-DSig requires. | [`0c70a04`][0c70a04] |
+| Rooted file resolvers refuse UNC and device paths | `//host/…`, `\\host\…`, `file:////host/…` and `\\?\…` fail with "names a network path" on every OS unless a root is on that `\\host\share`. | [`60fed8a`][60fed8a] |
+| `dtd.Validate` checks the root element against the DOCTYPE name | A document whose root is another declared element is now invalid, as XML 1.0 requires. | [`a543265`][a543265] |
+| XPath refuses a chained-operator path over 10,000 nodes deep | XPDY0130 where a deeper expression used to overflow the stack; the longest real chain seen is 190. | [`e965b1f`][e965b1f] |
+| The backtracking regex refuses subjects needing over 50,000 nested calls | XPDY0130 (`ErrResourceLimit`), about 25,000 characters under `.*`; only with the backtracker enabled. | [`a97ac65`][a97ac65] |
+| Anchored regexes with large class payloads are refused | Only an onepass-sized anchored one: `^\pL{753}$` or a 990-copy facet fails `MaxRegexpProgram`; unanchored compiles. | [`d258054`][d258054], [`6ad619f`][6ad619f] |
+| `Flatten` refuses over 16.7M items inside arrays | Even with `MaxItems` raised or -1; `array:flatten` and `fn:data` also charge the host's `MaxItems`. | [`9c19935`][9c19935], [`0d82e86`][0d82e86] |
+| Resource text, JSON, sequence constructors, group-by and windows count against the item, node and byte budgets | Large results can now raise XPDY0130; `unparsed-text-available` raises the budget error instead of answering false. | [`406c6e1`][406c6e1], [`3251f40`][3251f40], [`5423f40`][5423f40], [`11da206`][11da206] |
+| XInclude passes share byte and visit budgets | A pass whose inclusions copy over `MaxBytes`, or whose local searches visit over `MaxNodes`, is refused. | [`ed500f2`][ed500f2] |
+| `Compile` refuses stylesheets whose modules total over 500,000 nodes | Counted across imports, includes, packages and static `fn:transform`; xslTNG needs about 40,000. | [`d0591ae`][d0591ae] |
+| `WithInstanceLocations` binds documents to their namespace and the schema directories | A mismatched namespace, or a local location outside the schema's directories, is declined (XSD §4.3.2): skipped, and the call succeeds. | [`c767803`][c767803] |
+| `\??\` paths are refused as device paths | A local `\??\C:\…` spelling is refused too, as `\\?\C:\` already was. | [`639bcb4`][639bcb4] |
+| XSD `MaxDocuments` is charged per new document read | Charged after resolve and before parse; the document past the limit is never read, and repeat references cost nothing. | [`429b9c6`][429b9c6] |
+| Nilled elements enforce their own identity constraints | A nilled element breaking a key on its own declaration is now invalid, tree and stream. | [`ee8aaa2`][ee8aaa2] |
+| RELAX NG list derivatives and fetched documents are bounded | A list derivative past `MaxPatternSize`, or fetched documents totalling over xdm's single-document limits, are refused. | [`f6079cf`][f6079cf], [`aff6564`][aff6564] |
+| `fn:serialize` map-form doctype parameters are checked | Values the element form refuses (SEPM0016) are refused in the map form too. | [`2f9d010`][2f9d010] |
+| Regex and `Flatten` limits raise XPDY0130 | `catch err:FORX0002` no longer sees them; a malformed pattern is still FORX0002, and `xsl:analyze-string` passes them through. | [`e7042aa`][e7042aa], [`f077a70`][f077a70] |
+| `xsl:import-schema` reads at most 16 MB per compile | Counted across modules, packages and static `fn:transform`; raise `CompileOptions.MaxSchemaBytes` for larger schema sets. | [`4ad352d`][4ad352d] |
+| `WithInstanceLocations` declines rather than fails | An outside, unresolvable or mismatched location is skipped and the call succeeds; a reference needing it fails at the reference. | [`7e92b19`][7e92b19] |
+| XSD temporal fields over 1000 digits are refused | `ValidationError.Err` wraps `xdm.ErrResourceLimit`: "cannot decide", not invalid. | [`97fccf5`][97fccf5], [`eb9ddf8`][eb9ddf8] |
+| The CLI's `-timeout` covers `-xinclude` | A slow XInclude pass now counts against the same deadline as the transform. | [`9399efd`][9399efd] |
+| `fn:id`, `fn:idref`, `fn:element-with-id` ignore undeclared `id` attributes | Declare the attribute `ID` in a DTD or schema, or use `xml:id`; a non-NCName token is ignored. | [`b9171e8`][b9171e8], [`0caab03`][0caab03] |
+| An undeclared entity where XML §4.1 makes it a VC is refused | Such a document used to parse with the reference dropped; supply `ParseOptions.ExternalEntities` to read it. | [`8650527`][8650527] |
+| Malformed DTD declarations are refused under `AllowDOCTYPE` | DTDs accepted before are refused when they break the XML 1.0 declaration grammar. | [`252b65b`][252b65b] |
+| `dtd.Validate` refuses a 1.0 document using a 1.1 external entity | XML 1.1 §4.3.4; a tree with no declared version is 1.0. | [`ee5018c`][ee5018c] |
+| `dtd.Validate` checks `xmlns` and `xmlns:p` as attributes | An undeclared namespace declaration is now a validity error, as in xmllint `--valid`. | [`c516340`][c516340] |
+| XSD 1.0 refuses XSD 1.1 components | A 1.1 schema loaded as 1.0 fails with "requires XSD 1.1" instead of losing its constraints. | [`f9a904d`][f9a904d] |
+| A key field on an unassessed wildcard attribute is invalid | Tree and stream, XSD 1.0 and 1.1; declare the attribute globally to keep a lax match typed. | [`7362b27`][7362b27] |
+| `xsl:stream` is XTSE0010 | Write `xsl:source-document`; forwards-compatible mode takes the `xsl:fallback`. | [`b6aef3e`][b6aef3e] |
+| An attribute after content in a successful `xsl:try` body is XTDE0410 caught by that try | §8.3: errors during the try's evaluation, its output included, are caught; it was dropped. Matches Saxon. | [`2ef0012`][2ef0012], [`400c28c`][400c28c] |
+| `cache="yes"` on a proactive function returns fresh nodes | Only node-free results (atomics, arrays and maps of them) are reused; `new-each-time="maybe"` memoises nodes. | [`605d0be`][605d0be], [`9298bc6`][9298bc6] |
+| `fn:transform` refuses `package-*` beside `stylesheet-*` | FOXT0002 where the `package-*` option was ignored. | [`57a0c9d`][57a0c9d] |
+| Date and time component accessors raise FORG0001 for a bad untyped value | `catch err:XPTY0004` no longer sees a failed cast there. | [`1505000`][1505000] |
+| XQuery `validate type` checks its type at compile | XQST0104 from `Compile`; a built-in type with no schema import validates instead of XQDY0084. | [`ff9032d`][ff9032d], [`1889367`][1889367] |
+| XQuery 1.0 and 3.0 modules apply their own version's rules | Empty `ordered{}`, an unprefixed pragma and a bare `namespace-node()` step are refused there; unversioned modules are 3.1. | [`cc13393`][cc13393] |
+| The html method defaults to HTML5 for XSLT 2.0 and 3.0 stylesheets | `<!DOCTYPE HTML>` and the HTML5 void list unless `version="4.0"`; xhtml stays XHTML 1.0. Matches Saxon-HE 12.7 (§26). | [`da68710`][da68710] |
+| A streamed container's error is the stream's when its family is final | No second read on the tree; the code and text are the tree's, the first error detected (§2.14). | [`fbcfc71`][fbcfc71], [`86cde00`][86cde00] |
+| An XSD 1.0 schema naming any XSD 1.1 built-in type fails `src-resolve` | Load it as `Version11`; XQuery and XSLT 3.0 imports already are. | [`5c39a0c`][5c39a0c], [`b42e77e`][b42e77e] |
+| An invalid imported XQuery schema is XQST0012 | `catch err:XQST0059` no longer sees it. | [`9148c2d`][9148c2d] |
+| With every declaration read, an entity declared in neither subset is a validity error | The document parses with the reference dropped, and `dtd.Validate` reports it (§4.1, erratum E13). | [`dbe610d`][dbe610d] |
+| `dtd.Validate` reports more validity errors | A DTD repeating an element type across subsets, or a document breaking the new VCs, is invalid now. | [`72903d9`][72903d9], [`8c47532`][8c47532], [`ca0d7be`][ca0d7be] |
+| An internal-only DOCTYPE that references an external PE needs a resolver | `dtd.Load` returns `ErrNoResolver`, as for an external subset; `InternalSubsetOnly` leaves it unread. | [`4bab79c`][4bab79c] |
+| Ill-formed DTD and entity forms are refused | The WFC fixes above make documents that parsed fail; all were ill-formed. | [`cb762f7`][cb762f7], [`af26eb4`][af26eb4], [`243a7af`][243a7af], [`43ca8b3`][43ca8b3], [`9753ec8`][9753ec8], [`12b68fa`][12b68fa], [`dabed51`][dabed51] |
+| XInclude `parse="text"` counts against `Parse.MaxBytes` | A pass whose text inclusions exceed it is refused, as `parse="xml"` already was. | [`bd467ae`][bd467ae] |
+| Duration, `xs:time` and `xs:dateTime` casts are bounded by `MaxDigits` | Over-long component text is FOCA0003 wrapping `ErrResourceLimit`, before parsing. | [`35cd6bf`][35cd6bf] |
+| `xsl:merge` entries, implicit snapshots, accumulator tables and inherited namespaces are charged | Large merges or copies can now raise XPDY0130 under the item, node or byte budget. | [`aa6ac52`][aa6ac52], [`bf6cedd`][bf6cedd], [`53a70a1`][53a70a1] |
+| Sequence-constructor output is bounded per instruction | `xsl:try`, as-typed templates, `xsl:perform-sort` and kin inside a loop can raise XPDY0130. | [`f068f13`][f068f13] |
+| A type alternative whose test the budget refuses stops XSD validation | A resource-limit failure, where the test was taken as false and a later alternative chosen. | [`7a194ca`][7a194ca] |
+| `xs:redefine` checks more | A redefined group retyping an element, or an attribute group widening its wildcard, is refused. | [`470c573`][470c573] |
+| Regex group and class-subtraction nesting over 1000 is refused | FORX0002 wrapping `ErrResourceLimit`, the depth RE2 refuses. | [`835d67f`][835d67f] |
+| `fn:parse-xml`, `map:merge` combine, `array:join` and atomization are charged | They count against `MaxNodes` or `MaxItems`, so large results can raise XPDY0130. | [`1594bc4`][1594bc4], [`dbc271b`][dbc271b], [`83a0b0e`][83a0b0e] |
+| html/xhtml comments opening with `>` or `->` are SERE0003; `fn:serialize` html PIs with `>` are SERE0015 | Such output used to be written; the xml method is unchanged. | [`df6517f`][df6517f], [`25e8d08`][25e8d08] |
+| A map constructor or `xsl:fork` of over 64 reading parts runs on the tree | Output is unchanged; memory is the tree's. | [`f41fadc`][f41fadc] |
+| Past 16 open writers a nested `xsl:result-document` is written once complete | The same bytes reach the `SecondaryOutput` later, not while its body runs. | [`e75f9f1`][e75f9f1] |
+| `fn:load-xquery-module` calls in one evaluation share the module budget | Distinct calls spend `MaxModules`/`MaxModuleBytes` cumulatively; a repeat reuses the compile or error. | [`1dd0db1`][1dd0db1] |
+| Declined XSD instance locations count against `MaxDocuments` | Many unresolvable locations can now refuse the load. | [`ef95910`][ef95910] |
+| `Expr.Eval` and `Pattern.Matches` return resource refusals as errors | No xdmlimit panic escapes; a refused or cancelled pattern match is an error, not false. | [`83a0b0e`][83a0b0e], [`08560cc`][08560cc] |
+| Each XSLT import occurrence is charged to `MaxModuleNodes` in the static phase | A stylesheet importing one module many times is refused before the work, not after. | [`11393c5`][11393c5] |
+| CLI `-allow-dir` ignores empty and whitespace segments | They no longer grant the working directory. | [`e34e85c`][e34e85c] |
+| `xslt.NewFileResolver` refuses an empty or whitespace root | It returns an error; a blank entry in a hand-set `Roots` grants nothing. | [`83902a6`][83902a6] |
+| XInclude charges a nested document before recursing | A chain of inclusions is refused earlier under `Parse.MaxNodes`/`MaxBytes`. | [`ec47776`][ec47776] |
+| No `xdmbuild` call panics on the text-store ceiling or a flatten refusal | Error-returning calls return `ErrResourceLimit`; others latch it (`Refused`) for the next error-returning call. | [`eea98c7`][eea98c7], [`df2f529`][df2f529] |
+| XQuery charges content copies, array flattening and copied namespace bindings | Nodes to `MaxNodes`, values to `MaxBytes`, items to `MaxItems`, 32 B per binding; large constructions can raise XPDY0130. | [`0d75787`][0d75787], [`df2f529`][df2f529] |
+| XQuery's 200-level nesting bound applies to every bracketed body | try/catch, `ordered`, `validate`, `switch`, `if`, computed constructors, interpolation, inline functions: XPDY0130. | [`e413019`][e413019] |
+| `fn:load-xquery-module` spends one `MaxSchemaBytes` per evaluation | Failed compiles count toward `MaxModules`, and a load past it is refused before compiling. | [`2f2152a`][2f2152a] |
+| Expressions, inline functions and `xsl:function` bodies 200+ levels tall cost extra recursion depth | Deep recursion through them raises XPDY0001 sooner. | [`289a0e6`][289a0e6], [`780f7b9`][780f7b9], [`b631123`][b631123] |
+| `CastAtomic`/`CastToDerived` refuse over 1,000,000 digits for every caller | FOCA0003 wrapping `ErrResourceLimit`; `MaxDigits=-1` lifts it only for cast expressions, constructors and function conversion. | [`ec9408a`][ec9408a] |
+| Function items run under the caller's node, entity, item and digit limits | A closure from another evaluation no longer brings its own allowances. | [`b9ad97f`][b9ad97f] |
+| XSLT `MaxItems` covers live local variables and parameters, and more producers charge as they grow | `fn:tail`, list-type casts, path steps and `!` charge items; a mixed node/atomic step fails early, same code. | [`bafe94f`][bafe94f], [`dfe60f2`][dfe60f2], [`258f49d`][258f49d], [`af0a0b6`][af0a0b6] |
+| `[f]` and `format-number` exponent pictures are limited to 65,536 | Wider pictures are refused with `ErrResourceLimit`. | [`898f42e`][898f42e], [`e24a461`][e24a461] |
+| UCA `contains`, `starts-with` and `substring-before/after` charge keyed bytes to `MaxBytes` | Large collated searches can raise XPDY0130. | [`b9bafc5`][b9bafc5] |
+| `fn:serialize` html/xhtml comments starting `>` or `->` are SERE0003 | As the XSLT serializer already did. | [`173bd58`][173bd58] |
+| The default backreference path admits only shapes it answers correctly | Others go to the opt-in backtracker or fail FORX0002; patterns refused as XPDY0130 by the removed analysis now compile. | [`32ae444`][32ae444], [`adb6535`][adb6535] |
+| Cyclic XSD unions and base types are refused before any value walk | st-props-correct.2 only: such schemas no longer add postFixup or facet diagnostics. | [`4055730`][4055730] |
+| A 2^n all-group DAG is refused, not a positions error | cos-nonambig on the validate path, `ErrResourceLimit` on the restriction path. | [`34383fa`][34383fa], [`be6bebd`][be6bebd] |
+| A `redefine` reaching a circular group reports mg-props-correct.2 | Where it hung or overflowed the stack. | [`14d2eb3`][14d2eb3] |
+| XSD content models drop counters that cannot change a decision | Same verdicts; fewer simultaneous states. | [`2634957`][2634957] |
+| XSD instance locations reach the resolver as absolute paths | Custom resolvers and error texts see the absolute form. | [`0817160`][0817160] |
+| Assertion `instance of` uses the validating schema's type environment | Not the process-wide table a later schema could overwrite. | [`8e85b21`][8e85b21] |
+| `dtd.Validate` stops walking at `MaxErrors` and holds one compiled element-only model at a time | `MaxContentModel*` also bound what one call holds; failures keep document order. | [`687726d`][687726d] |
+| The DTD loader and xdm pre-pass end a PI at `?>` | A `>` inside a PI no longer ends it, so a `%ref` there is not substituted. | [`48be9b0`][48be9b0], [`71bfffc`][71bfffc] |
+| RELAX NG compact postfix and `datatype - pattern` chains count toward the 500-deep limit | `MaxPatternSize` is also checked after the last attribute, before children and before the end tag. | [`1664d17`][1664d17], [`678f986`][678f986] |
+| XSLT `MaxBytes` counts kept `xsl:message` text, undeclarations and copied values under 8 KiB | In `snapshot()`, `copy-of()` and `xsl:sequence`; large outputs can raise XPDY0130. | [`8b6220d`][8b6220d], [`ce94988`][ce94988], [`9d1dd6e`][9d1dd6e] |
+| XSLT `MaxItems` limits number tables, `on-empty`/`on-non-empty`, streamed merge groups, recorders and `climbSort` | A refused `level="any"` table falls back to walking and never refuses. | [`26039a1`][26039a1], [`622522b`][622522b], [`6edc92b`][6edc92b], [`41e02d2`][41e02d2], [`ff39163`][ff39163] |
+| `fn:transform` `stylesheet-text` shares `MaxTotalEntityBytes` | A nested stylesheet's entities count against the caller's budget. | [`4051d75`][4051d75] |
+| The html method escapes `script`/`style` in a foreign namespace | Only HTML-namespace ones are raw text. | [`cdc71e8`][cdc71e8] |
+| `xsl:number` `start-at` at `MinInt64` is correct and spelling it no longer crashes | Where the process died of a stack overflow. | [`a337ed8`][a337ed8] |
+| Shared attribute sets reached through several branches may order attributes differently | Each set runs once, at its last occurrence; values are unchanged. | [`5cee1ef`][5cee1ef] |
+| A streamability trust chain longer than `DefaultMaxDepth` runs on the tree | Output unchanged; memory is the tree's. | [`cd27e57`][cd27e57] |
+| The 64-consumer tee bound is transform-wide | Across nested forks and streamed `source-document`s; past it the run goes to the tree, output unchanged. | [`2969e1b`][2969e1b], [`f42220b`][f42220b] |
+| Modes whose `@mode` × `@match` fan-out is huge are left unindexed | Dispatch is a linear scan there, still correct. | [`298eb94`][298eb94] |
+| The internal abstract-marker namespace is no longer a fixed string | It carries a per-process random suffix. | [`8ca4e94`][8ca4e94] |
 
 ## v2.2.0 — 2026-11-01
 
@@ -744,7 +1456,7 @@ New package `c14n`: Canonical XML 1.0, 1.1 and Exclusive C14N. It ships ahead of
 | `XTDE1490` compared `href`s as written, so `out.xml` and `./out.xml` overwrote each other | The two resolve to one URI; the comparison now happens after resolution. | [`6eacc2d`][6eacc2d] |
 | `fn:deep-equal` had its collation carve-out inverted, comparing namespace URIs case-blind | F&O 3.1 exempts names from the supplied collation; the exemption was applied to everything *but* them. | [`6eacc2d`][6eacc2d] |
 | Seven smaller divergences in one audit | A JSON fallback could put a character into the tree that serialization then dropped silently; the regex `q` flag did not suppress `x`; `byte-order-mark` was ignored by the `json` and `adaptive` methods; `fn:serialize` rejected the empty-sequence `standalone`; `cdata-section-elements` worked in the map spelling and not the element one; an uncomputable tabulated calendar was an error rather than the §9.8.4.6 fallback; and a minimum width was parsed and discarded. | [`6eacc2d`][6eacc2d] |
-| `xsl:stream` was rejected though it is the name the Recommendation uses | The element was absent from the table entirely, so every stylesheet using the REC spelling failed to compile. `xsl:source-document`, the withdrawn draft name, stays accepted beside it. | [`75d633e`][75d633e] |
+| `xsl:stream` was rejected | Accepted beside `xsl:source-document`. This entry first had the names reversed: `xsl:stream` is the last-call draft's name, the Recommendation renamed it `xsl:source-document` (Bug29747), and `xsl:stream` is XTSE0010 again since round SG. | [`75d633e`][75d633e] |
 | Forwards compatible processing was decided against a fixed 3.0, so a 2.0 processor rejected a construct it must ignore | §3.9 measures the effective version against the version the processor implements, which `CompileOptions.MaxVersion` sets. | [`187dfec`][187dfec] |
 | Three rooted resolvers checked containment and then opened, so only `xslt` enforced its root at open time | `xsd`, `dtd` and the CLI's RELAX NG resolver open through `os.OpenRoot`; the string check stays as diagnosis, not enforcement. | [`37972d9`][37972d9] |
 | `fn:transform` accepted the `post-process` option and ignored it, so a pipeline silently ran one stage short | The function is applied to every result document after delivery, and an option name the processor does not know is now `FOXT0002` rather than silence. Reported as issue #5. | [`e8ebf4b`][e8ebf4b] |
@@ -1906,8 +2618,675 @@ here so every entry in this file sits under a release.
 [48b1a38]: https://github.com/knroy/go-xml/commit/48b1a38
 [3157566]: https://github.com/knroy/go-xml/commit/3157566
 [4944511]: https://github.com/knroy/go-xml/commit/4944511
+[1f0c721]: https://github.com/knroy/go-xml/commit/1f0c721
+[f4a7e22]: https://github.com/knroy/go-xml/commit/f4a7e22
+[0824c9c]: https://github.com/knroy/go-xml/commit/0824c9c
+[a31a4fe]: https://github.com/knroy/go-xml/commit/a31a4fe
+[9155044]: https://github.com/knroy/go-xml/commit/9155044
+[19b9185]: https://github.com/knroy/go-xml/commit/19b9185
+[18670ae]: https://github.com/knroy/go-xml/commit/18670ae
+[68b9320]: https://github.com/knroy/go-xml/commit/68b9320
+[383ed3d]: https://github.com/knroy/go-xml/commit/383ed3d
+[368b6c0]: https://github.com/knroy/go-xml/commit/368b6c0
+[0201119]: https://github.com/knroy/go-xml/commit/0201119
+[b2f4cb9]: https://github.com/knroy/go-xml/commit/b2f4cb9
+[9ac0f40]: https://github.com/knroy/go-xml/commit/9ac0f40
+[edd4923]: https://github.com/knroy/go-xml/commit/edd4923
+[2f825da]: https://github.com/knroy/go-xml/commit/2f825da
+[acc5556]: https://github.com/knroy/go-xml/commit/acc5556
 [df9677e]: https://github.com/knroy/go-xml/commit/df9677e
 [fd31bb3]: https://github.com/knroy/go-xml/commit/fd31bb3
 [382983c]: https://github.com/knroy/go-xml/commit/382983c
 [22af5f4]: https://github.com/knroy/go-xml/commit/22af5f4
+[d1a98a8]: https://github.com/knroy/go-xml/commit/d1a98a8
+[bdf45d8]: https://github.com/knroy/go-xml/commit/bdf45d8
+[c8c0a01]: https://github.com/knroy/go-xml/commit/c8c0a01
+[fe1eb18]: https://github.com/knroy/go-xml/commit/fe1eb18
+[009d510]: https://github.com/knroy/go-xml/commit/009d510
+[09174d4]: https://github.com/knroy/go-xml/commit/09174d4
+[e629035]: https://github.com/knroy/go-xml/commit/e629035
+[48b2598]: https://github.com/knroy/go-xml/commit/48b2598
+[2f9f1b4]: https://github.com/knroy/go-xml/commit/2f9f1b4
+[41ec3ba]: https://github.com/knroy/go-xml/commit/41ec3ba
+[e65c621]: https://github.com/knroy/go-xml/commit/e65c621
+[7765fca]: https://github.com/knroy/go-xml/commit/7765fca
+[75d485f]: https://github.com/knroy/go-xml/commit/75d485f
+[966b4ac]: https://github.com/knroy/go-xml/commit/966b4ac
+[aea7acd]: https://github.com/knroy/go-xml/commit/aea7acd
+[d1efae2]: https://github.com/knroy/go-xml/commit/d1efae2
+[ddaa14c]: https://github.com/knroy/go-xml/commit/ddaa14c
+[30b4475]: https://github.com/knroy/go-xml/commit/30b4475
+[80f2586]: https://github.com/knroy/go-xml/commit/80f2586
+[d37b98c]: https://github.com/knroy/go-xml/commit/d37b98c
+[7a35cf3]: https://github.com/knroy/go-xml/commit/7a35cf3
+[2beca7b]: https://github.com/knroy/go-xml/commit/2beca7b
+[66766f4]: https://github.com/knroy/go-xml/commit/66766f4
+[399418f]: https://github.com/knroy/go-xml/commit/399418f
+[3c57043]: https://github.com/knroy/go-xml/commit/3c57043
+[df0bc8f]: https://github.com/knroy/go-xml/commit/df0bc8f
+[ef2ae38]: https://github.com/knroy/go-xml/commit/ef2ae38
+[05eef52]: https://github.com/knroy/go-xml/commit/05eef52
+[4e19855]: https://github.com/knroy/go-xml/commit/4e19855
+[1126c8b]: https://github.com/knroy/go-xml/commit/1126c8b
+[9ca9f64]: https://github.com/knroy/go-xml/commit/9ca9f64
+[39e1a8e]: https://github.com/knroy/go-xml/commit/39e1a8e
+[2303780]: https://github.com/knroy/go-xml/commit/2303780
+[65212a3]: https://github.com/knroy/go-xml/commit/65212a3
+[24fb4d6]: https://github.com/knroy/go-xml/commit/24fb4d6
+[4de00c8]: https://github.com/knroy/go-xml/commit/4de00c8
+[f11ed2b]: https://github.com/knroy/go-xml/commit/f11ed2b
+[691f6d1]: https://github.com/knroy/go-xml/commit/691f6d1
+[f08285d]: https://github.com/knroy/go-xml/commit/f08285d
+[a504b6b]: https://github.com/knroy/go-xml/commit/a504b6b
+[449f068]: https://github.com/knroy/go-xml/commit/449f068
+[df18696]: https://github.com/knroy/go-xml/commit/df18696
+[158bbb7]: https://github.com/knroy/go-xml/commit/158bbb7
+[bb81a54]: https://github.com/knroy/go-xml/commit/bb81a54
+[5c154ba]: https://github.com/knroy/go-xml/commit/5c154ba
+[d0ed436]: https://github.com/knroy/go-xml/commit/d0ed436
+[c257efe]: https://github.com/knroy/go-xml/commit/c257efe
+[e94d4e0]: https://github.com/knroy/go-xml/commit/e94d4e0
+[081c9d3]: https://github.com/knroy/go-xml/commit/081c9d3
+[d79951f]: https://github.com/knroy/go-xml/commit/d79951f
+[5772ca2]: https://github.com/knroy/go-xml/commit/5772ca2
+[4cce5af]: https://github.com/knroy/go-xml/commit/4cce5af
+[ba1fbb6]: https://github.com/knroy/go-xml/commit/ba1fbb6
+[971e795]: https://github.com/knroy/go-xml/commit/971e795
+[c5dbb81]: https://github.com/knroy/go-xml/commit/c5dbb81
+[96d1d94]: https://github.com/knroy/go-xml/commit/96d1d94
+[d1005db]: https://github.com/knroy/go-xml/commit/d1005db
+[fe113df]: https://github.com/knroy/go-xml/commit/fe113df
+[d29874a]: https://github.com/knroy/go-xml/commit/d29874a
+[d52121f]: https://github.com/knroy/go-xml/commit/d52121f
+[962f1dc]: https://github.com/knroy/go-xml/commit/962f1dc
+[ddafb12]: https://github.com/knroy/go-xml/commit/ddafb12
+[d244a2e]: https://github.com/knroy/go-xml/commit/d244a2e
+[0b75658]: https://github.com/knroy/go-xml/commit/0b75658
+[1c1cb10]: https://github.com/knroy/go-xml/commit/1c1cb10
+[bbdefe5]: https://github.com/knroy/go-xml/commit/bbdefe5
+[8b5460b]: https://github.com/knroy/go-xml/commit/8b5460b
+[b9c352c]: https://github.com/knroy/go-xml/commit/b9c352c
+[c31fc14]: https://github.com/knroy/go-xml/commit/c31fc14
+[c36f667]: https://github.com/knroy/go-xml/commit/c36f667
+[182fdef]: https://github.com/knroy/go-xml/commit/182fdef
+[65d7c6f]: https://github.com/knroy/go-xml/commit/65d7c6f
+[895b6a4]: https://github.com/knroy/go-xml/commit/895b6a4
+[59b58c1]: https://github.com/knroy/go-xml/commit/59b58c1
+[a2b8f9f]: https://github.com/knroy/go-xml/commit/a2b8f9f
+[e2ccec2]: https://github.com/knroy/go-xml/commit/e2ccec2
+[4ab5460]: https://github.com/knroy/go-xml/commit/4ab5460
+[1a0ee45]: https://github.com/knroy/go-xml/commit/1a0ee45
+[40d9b34]: https://github.com/knroy/go-xml/commit/40d9b34
+[a41d41d]: https://github.com/knroy/go-xml/commit/a41d41d
+[f34dfa2]: https://github.com/knroy/go-xml/commit/f34dfa2
+[a7befda]: https://github.com/knroy/go-xml/commit/a7befda
+[7ff197b]: https://github.com/knroy/go-xml/commit/7ff197b0
+[19593ed]: https://github.com/knroy/go-xml/commit/19593ed
+[ae36f0b]: https://github.com/knroy/go-xml/commit/ae36f0b
+[94181b7]: https://github.com/knroy/go-xml/commit/94181b7
+[6ee4b2e]: https://github.com/knroy/go-xml/commit/6ee4b2e
+[95944f3]: https://github.com/knroy/go-xml/commit/95944f3
+[c665e0d]: https://github.com/knroy/go-xml/commit/c665e0d
+[9f41f98]: https://github.com/knroy/go-xml/commit/9f41f98
+[e8246dc]: https://github.com/knroy/go-xml/commit/e8246dc
+[4ac277f]: https://github.com/knroy/go-xml/commit/4ac277f
+[4f9aea4]: https://github.com/knroy/go-xml/commit/4f9aea4
+[2f6bca5]: https://github.com/knroy/go-xml/commit/2f6bca5
+[afadaf0]: https://github.com/knroy/go-xml/commit/afadaf0
+[fcf384f]: https://github.com/knroy/go-xml/commit/fcf384f
+[a4162b6]: https://github.com/knroy/go-xml/commit/a4162b6
+[b75f94e]: https://github.com/knroy/go-xml/commit/b75f94e
+[aa91721]: https://github.com/knroy/go-xml/commit/aa91721
+[904f322]: https://github.com/knroy/go-xml/commit/904f322
+[595bcf2]: https://github.com/knroy/go-xml/commit/595bcf2
+[ac8bb00]: https://github.com/knroy/go-xml/commit/ac8bb00
+[e086524]: https://github.com/knroy/go-xml/commit/e086524
+[9643910]: https://github.com/knroy/go-xml/commit/9643910
+[6cc2247]: https://github.com/knroy/go-xml/commit/6cc2247
+[be09e99]: https://github.com/knroy/go-xml/commit/be09e99
+[b90d54e]: https://github.com/knroy/go-xml/commit/b90d54e
+[df063a5]: https://github.com/knroy/go-xml/commit/df063a5
+[5663391]: https://github.com/knroy/go-xml/commit/5663391
+[8e3270a]: https://github.com/knroy/go-xml/commit/8e3270a
+[fb356ca]: https://github.com/knroy/go-xml/commit/fb356ca
+[cca65c4]: https://github.com/knroy/go-xml/commit/cca65c4
+[844cd8f]: https://github.com/knroy/go-xml/commit/844cd8f
+[6b07dab]: https://github.com/knroy/go-xml/commit/6b07dab
+[13f330b]: https://github.com/knroy/go-xml/commit/13f330b
+[d2a3158]: https://github.com/knroy/go-xml/commit/d2a3158
+[5ed3b7d]: https://github.com/knroy/go-xml/commit/5ed3b7d
+[eb66e23]: https://github.com/knroy/go-xml/commit/eb66e23
+[9f02ee9]: https://github.com/knroy/go-xml/commit/9f02ee9
+[0489759]: https://github.com/knroy/go-xml/commit/0489759
+[c68e9b4]: https://github.com/knroy/go-xml/commit/c68e9b4
+[8a4f213]: https://github.com/knroy/go-xml/commit/8a4f213
+[0dfff09]: https://github.com/knroy/go-xml/commit/0dfff09
+[d7f3a71]: https://github.com/knroy/go-xml/commit/d7f3a71
+[9354f1d]: https://github.com/knroy/go-xml/commit/9354f1d
+[63dd3ad]: https://github.com/knroy/go-xml/commit/63dd3ad
+[328460b]: https://github.com/knroy/go-xml/commit/328460b
+[c942506]: https://github.com/knroy/go-xml/commit/c942506
+[29cc3e9]: https://github.com/knroy/go-xml/commit/29cc3e9
+[b9cbc6d]: https://github.com/knroy/go-xml/commit/b9cbc6d
+[932bb98]: https://github.com/knroy/go-xml/commit/932bb98
+[ead3f81]: https://github.com/knroy/go-xml/commit/ead3f81
+[2cfd986]: https://github.com/knroy/go-xml/commit/2cfd986
+[9a7551b]: https://github.com/knroy/go-xml/commit/9a7551b
+[f05fd39]: https://github.com/knroy/go-xml/commit/f05fd39
+[ff1f3ac]: https://github.com/knroy/go-xml/commit/ff1f3ac
+[302ddf2]: https://github.com/knroy/go-xml/commit/302ddf2
+[64ae463]: https://github.com/knroy/go-xml/commit/64ae463
+[8a68af2]: https://github.com/knroy/go-xml/commit/8a68af2
+[a6f13b1]: https://github.com/knroy/go-xml/commit/a6f13b1
+[87cea8b]: https://github.com/knroy/go-xml/commit/87cea8b
+[827e309]: https://github.com/knroy/go-xml/commit/827e309
+[1ac69c5]: https://github.com/knroy/go-xml/commit/1ac69c5
+[54dbc38]: https://github.com/knroy/go-xml/commit/54dbc38
+[cb7bc56]: https://github.com/knroy/go-xml/commit/cb7bc56
+[3507414]: https://github.com/knroy/go-xml/commit/3507414
+[b3cf350]: https://github.com/knroy/go-xml/commit/b3cf350
+[816d8ec]: https://github.com/knroy/go-xml/commit/816d8ec
+[fd303aa]: https://github.com/knroy/go-xml/commit/fd303aa
+[0bd7034]: https://github.com/knroy/go-xml/commit/0bd7034
+[de0784c]: https://github.com/knroy/go-xml/commit/de0784c
+[960370b]: https://github.com/knroy/go-xml/commit/960370b
+[5bbaba2]: https://github.com/knroy/go-xml/commit/5bbaba2
+[b79ca81]: https://github.com/knroy/go-xml/commit/b79ca81
+[e73ae6b]: https://github.com/knroy/go-xml/commit/e73ae6b
+[1d406ab]: https://github.com/knroy/go-xml/commit/1d406ab
+[65ebe0e]: https://github.com/knroy/go-xml/commit/65ebe0e
+[a52bc6b]: https://github.com/knroy/go-xml/commit/a52bc6b
+[2536f98]: https://github.com/knroy/go-xml/commit/2536f98
+[d2c48ef]: https://github.com/knroy/go-xml/commit/d2c48ef
+[d5178af]: https://github.com/knroy/go-xml/commit/d5178af
+[a0e226c]: https://github.com/knroy/go-xml/commit/a0e226c
+[91af2f9]: https://github.com/knroy/go-xml/commit/91af2f9
+[e4ecbd7]: https://github.com/knroy/go-xml/commit/e4ecbd7
+[0a73669]: https://github.com/knroy/go-xml/commit/0a73669
+[b50e009]: https://github.com/knroy/go-xml/commit/b50e009
+[a386ca5]: https://github.com/knroy/go-xml/commit/a386ca5
+[44fc1c0]: https://github.com/knroy/go-xml/commit/44fc1c0
+[1f91b5d]: https://github.com/knroy/go-xml/commit/1f91b5d
+[c92d154]: https://github.com/knroy/go-xml/commit/c92d154
+[d26ad2e]: https://github.com/knroy/go-xml/commit/d26ad2e
+[0f78020]: https://github.com/knroy/go-xml/commit/0f78020
+[bf94023]: https://github.com/knroy/go-xml/commit/bf94023
+[6feaadd]: https://github.com/knroy/go-xml/commit/6feaadd
+[35d5ad7]: https://github.com/knroy/go-xml/commit/35d5ad7
+[40bb829]: https://github.com/knroy/go-xml/commit/40bb829
+[1b4d62e]: https://github.com/knroy/go-xml/commit/1b4d62e
+[065b5b5]: https://github.com/knroy/go-xml/commit/065b5b5
+[ef9e55b]: https://github.com/knroy/go-xml/commit/ef9e55b
+[b7e79f7]: https://github.com/knroy/go-xml/commit/b7e79f7
+[4f2cc85]: https://github.com/knroy/go-xml/commit/4f2cc85
+[adc813c]: https://github.com/knroy/go-xml/commit/adc813c
+[157f717]: https://github.com/knroy/go-xml/commit/157f717
+[167a347]: https://github.com/knroy/go-xml/commit/167a347
+[60cf53e]: https://github.com/knroy/go-xml/commit/60cf53e
+[ddcaebf]: https://github.com/knroy/go-xml/commit/ddcaebf
+[381a787]: https://github.com/knroy/go-xml/commit/381a787
+[954a278]: https://github.com/knroy/go-xml/commit/954a278
+[0175e4b]: https://github.com/knroy/go-xml/commit/0175e4b
+[8d10f9e]: https://github.com/knroy/go-xml/commit/8d10f9e
+[d4feb67]: https://github.com/knroy/go-xml/commit/d4feb67
+[38629c8]: https://github.com/knroy/go-xml/commit/38629c8
+[de7aab2]: https://github.com/knroy/go-xml/commit/de7aab2
+[1f6576d]: https://github.com/knroy/go-xml/commit/1f6576d
+[6e960b7]: https://github.com/knroy/go-xml/commit/6e960b7
+[973790f]: https://github.com/knroy/go-xml/commit/973790f
+[03be6e6]: https://github.com/knroy/go-xml/commit/03be6e6
+[43ddd9d]: https://github.com/knroy/go-xml/commit/43ddd9d
+[785a0c6]: https://github.com/knroy/go-xml/commit/785a0c6
+[4fdf376]: https://github.com/knroy/go-xml/commit/4fdf376
+[b54aee5]: https://github.com/knroy/go-xml/commit/b54aee5
+[7e2bec4]: https://github.com/knroy/go-xml/commit/7e2bec4
+[42902f3]: https://github.com/knroy/go-xml/commit/42902f3
+[2a1d6ad]: https://github.com/knroy/go-xml/commit/2a1d6ad
+[2089255]: https://github.com/knroy/go-xml/commit/2089255
+[34e6b36]: https://github.com/knroy/go-xml/commit/34e6b36
+[83e45c5]: https://github.com/knroy/go-xml/commit/83e45c5
+[44d2374]: https://github.com/knroy/go-xml/commit/44d2374
+[2447ca0]: https://github.com/knroy/go-xml/commit/2447ca0
+[6abbb27]: https://github.com/knroy/go-xml/commit/6abbb27
+[26caed6]: https://github.com/knroy/go-xml/commit/26caed6
+[ba6c23f]: https://github.com/knroy/go-xml/commit/ba6c23f
+[ff0c463]: https://github.com/knroy/go-xml/commit/ff0c463
+[44db07f]: https://github.com/knroy/go-xml/commit/44db07f
+[096a587]: https://github.com/knroy/go-xml/commit/096a587
 [294b965]: https://github.com/knroy/go-xml/commit/294b965
+[2e860a2]: https://github.com/knroy/go-xml/commit/2e860a2
+[3916423]: https://github.com/knroy/go-xml/commit/3916423
+[59e5ee0]: https://github.com/knroy/go-xml/commit/59e5ee0
+[a8b0eeb]: https://github.com/knroy/go-xml/commit/a8b0eeb
+[724617a]: https://github.com/knroy/go-xml/commit/724617a
+[d30a7e8]: https://github.com/knroy/go-xml/commit/d30a7e8
+[0ae8a17]: https://github.com/knroy/go-xml/commit/0ae8a17
+[678c4ef]: https://github.com/knroy/go-xml/commit/678c4ef
+[4bdcad8]: https://github.com/knroy/go-xml/commit/4bdcad8
+[0a00b54]: https://github.com/knroy/go-xml/commit/0a00b54
+[36ecaac]: https://github.com/knroy/go-xml/commit/36ecaac
+[a788a32]: https://github.com/knroy/go-xml/commit/a788a32
+[79b94b5]: https://github.com/knroy/go-xml/commit/79b94b5
+[5804464]: https://github.com/knroy/go-xml/commit/5804464
+[8fe2846]: https://github.com/knroy/go-xml/commit/8fe2846
+[cccfc14]: https://github.com/knroy/go-xml/commit/cccfc14
+[3208035]: https://github.com/knroy/go-xml/commit/3208035
+[6fc06e9]: https://github.com/knroy/go-xml/commit/6fc06e9
+[608935d]: https://github.com/knroy/go-xml/commit/608935d
+[db6f542]: https://github.com/knroy/go-xml/commit/db6f542
+[5ab15c4]: https://github.com/knroy/go-xml/commit/5ab15c4
+[0b676e7]: https://github.com/knroy/go-xml/commit/0b676e7
+[36f470e]: https://github.com/knroy/go-xml/commit/36f470e
+[35422d9]: https://github.com/knroy/go-xml/commit/35422d9
+[c2e2af2]: https://github.com/knroy/go-xml/commit/c2e2af2
+[9315ac0]: https://github.com/knroy/go-xml/commit/9315ac0
+[4f1dad9]: https://github.com/knroy/go-xml/commit/4f1dad9
+[5c09c9d]: https://github.com/knroy/go-xml/commit/5c09c9d
+[537885e]: https://github.com/knroy/go-xml/commit/537885e
+[23da903]: https://github.com/knroy/go-xml/commit/23da903
+[76bc90b]: https://github.com/knroy/go-xml/commit/76bc90b
+[90b29d9]: https://github.com/knroy/go-xml/commit/90b29d9
+[2de588e]: https://github.com/knroy/go-xml/commit/2de588e
+[305b99d]: https://github.com/knroy/go-xml/commit/305b99d
+[bf58cad]: https://github.com/knroy/go-xml/commit/bf58cad
+[acf9a9c]: https://github.com/knroy/go-xml/commit/acf9a9c
+[9f896b0]: https://github.com/knroy/go-xml/commit/9f896b0
+[9e7f579]: https://github.com/knroy/go-xml/commit/9e7f579
+[acc785d]: https://github.com/knroy/go-xml/commit/acc785d
+[b0894e2]: https://github.com/knroy/go-xml/commit/b0894e2
+[96b8df3]: https://github.com/knroy/go-xml/commit/96b8df3
+[0e0d2b8]: https://github.com/knroy/go-xml/commit/0e0d2b8
+[af1a9e5]: https://github.com/knroy/go-xml/commit/af1a9e5
+[c4323f5]: https://github.com/knroy/go-xml/commit/c4323f5
+[f638162]: https://github.com/knroy/go-xml/commit/f638162
+[256759e]: https://github.com/knroy/go-xml/commit/256759e
+[8a9d83d]: https://github.com/knroy/go-xml/commit/8a9d83d
+[a98e534]: https://github.com/knroy/go-xml/commit/a98e534
+[66777b6]: https://github.com/knroy/go-xml/commit/66777b6
+[5a0eab3]: https://github.com/knroy/go-xml/commit/5a0eab3
+[4bea4f9]: https://github.com/knroy/go-xml/commit/4bea4f9
+[eb144dd]: https://github.com/knroy/go-xml/commit/eb144dd
+[8be963f]: https://github.com/knroy/go-xml/commit/8be963f
+[7bec012]: https://github.com/knroy/go-xml/commit/7bec012
+[f6e3637]: https://github.com/knroy/go-xml/commit/f6e3637
+[4e56b21]: https://github.com/knroy/go-xml/commit/4e56b21
+[75c5d3c]: https://github.com/knroy/go-xml/commit/75c5d3c
+[cac3851]: https://github.com/knroy/go-xml/commit/cac3851
+[16a64ec]: https://github.com/knroy/go-xml/commit/16a64ec
+[cc11df5]: https://github.com/knroy/go-xml/commit/cc11df5
+[7730dcb]: https://github.com/knroy/go-xml/commit/7730dcb
+[95171aa]: https://github.com/knroy/go-xml/commit/95171aa
+[ce41a32]: https://github.com/knroy/go-xml/commit/ce41a32
+[d02cb54]: https://github.com/knroy/go-xml/commit/d02cb54
+[42ce08f]: https://github.com/knroy/go-xml/commit/42ce08f
+[5531827]: https://github.com/knroy/go-xml/commit/5531827
+[a7d0796]: https://github.com/knroy/go-xml/commit/a7d0796
+[20a5eef]: https://github.com/knroy/go-xml/commit/20a5eef
+[4f870c3]: https://github.com/knroy/go-xml/commit/4f870c3
+[609bc45]: https://github.com/knroy/go-xml/commit/609bc45
+[3fbd05e]: https://github.com/knroy/go-xml/commit/3fbd05e
+[330e96a]: https://github.com/knroy/go-xml/commit/330e96a
+[19f2492]: https://github.com/knroy/go-xml/commit/19f2492
+[c6b67df]: https://github.com/knroy/go-xml/commit/c6b67df
+[bedbb23]: https://github.com/knroy/go-xml/commit/bedbb23
+[84c0f1f]: https://github.com/knroy/go-xml/commit/84c0f1f
+[d32fa1d]: https://github.com/knroy/go-xml/commit/d32fa1d
+[cc32228]: https://github.com/knroy/go-xml/commit/cc32228
+[eb315d3]: https://github.com/knroy/go-xml/commit/eb315d3
+[5cd3316]: https://github.com/knroy/go-xml/commit/5cd3316
+[6930e60]: https://github.com/knroy/go-xml/commit/6930e60
+[c5c4fa9]: https://github.com/knroy/go-xml/commit/c5c4fa9
+[11c4ba5]: https://github.com/knroy/go-xml/commit/11c4ba5
+[69101da]: https://github.com/knroy/go-xml/commit/69101da
+[13ecb6e]: https://github.com/knroy/go-xml/commit/13ecb6e
+[615676a]: https://github.com/knroy/go-xml/commit/615676a
+[95338d5]: https://github.com/knroy/go-xml/commit/95338d5
+[9e9a6f9]: https://github.com/knroy/go-xml/commit/9e9a6f9
+[089c346]: https://github.com/knroy/go-xml/commit/089c346
+[43ca7b2]: https://github.com/knroy/go-xml/commit/43ca7b2
+[ad032d1]: https://github.com/knroy/go-xml/commit/ad032d1
+[91f30c9]: https://github.com/knroy/go-xml/commit/91f30c9
+[f46ec7b]: https://github.com/knroy/go-xml/commit/f46ec7b
+[eb4d0ae]: https://github.com/knroy/go-xml/commit/eb4d0ae
+[734f53c]: https://github.com/knroy/go-xml/commit/734f53c
+[e720aa3]: https://github.com/knroy/go-xml/commit/e720aa3
+[eb5b289]: https://github.com/knroy/go-xml/commit/eb5b289
+[78d92a8]: https://github.com/knroy/go-xml/commit/78d92a8
+[a97b803]: https://github.com/knroy/go-xml/commit/a97b803
+[ba64164]: https://github.com/knroy/go-xml/commit/ba64164
+[ab7d256]: https://github.com/knroy/go-xml/commit/ab7d256
+[3926b3e]: https://github.com/knroy/go-xml/commit/3926b3e
+[d06d0f3]: https://github.com/knroy/go-xml/commit/d06d0f3
+[a97ca6a]: https://github.com/knroy/go-xml/commit/a97ca6a
+[dce8830]: https://github.com/knroy/go-xml/commit/dce8830
+[f09487b]: https://github.com/knroy/go-xml/commit/f09487b
+[877b3af]: https://github.com/knroy/go-xml/commit/877b3af
+[e7f1116]: https://github.com/knroy/go-xml/commit/e7f1116
+[e621bf7]: https://github.com/knroy/go-xml/commit/e621bf7
+[f90e97d]: https://github.com/knroy/go-xml/commit/f90e97d
+[50492e0]: https://github.com/knroy/go-xml/commit/50492e0
+[9aed5a3]: https://github.com/knroy/go-xml/commit/9aed5a3
+[7fdea1e]: https://github.com/knroy/go-xml/commit/7fdea1e
+[9a34abe]: https://github.com/knroy/go-xml/commit/9a34abe
+[2a27fc6]: https://github.com/knroy/go-xml/commit/2a27fc6
+[df96ba9]: https://github.com/knroy/go-xml/commit/df96ba9
+[f065ab2]: https://github.com/knroy/go-xml/commit/f065ab2
+[9e39b51]: https://github.com/knroy/go-xml/commit/9e39b51
+[6e51253]: https://github.com/knroy/go-xml/commit/6e51253
+[aeae707]: https://github.com/knroy/go-xml/commit/aeae707
+[e73a30b]: https://github.com/knroy/go-xml/commit/e73a30b
+[a85f40a]: https://github.com/knroy/go-xml/commit/a85f40a
+[0c70a04]: https://github.com/knroy/go-xml/commit/0c70a04
+[915eb63]: https://github.com/knroy/go-xml/commit/915eb63
+[cfc090e]: https://github.com/knroy/go-xml/commit/cfc090e
+[77c3c5d]: https://github.com/knroy/go-xml/commit/77c3c5d
+[60fed8a]: https://github.com/knroy/go-xml/commit/60fed8a
+[4c5c3ee]: https://github.com/knroy/go-xml/commit/4c5c3ee
+[2a41550]: https://github.com/knroy/go-xml/commit/2a41550
+[4ad352d]: https://github.com/knroy/go-xml/commit/4ad352d
+[1db051a]: https://github.com/knroy/go-xml/commit/1db051a
+[9399efd]: https://github.com/knroy/go-xml/commit/9399efd
+[cfa135c]: https://github.com/knroy/go-xml/commit/cfa135c
+[4694fa3]: https://github.com/knroy/go-xml/commit/4694fa3
+[0ecee9c]: https://github.com/knroy/go-xml/commit/0ecee9c
+[f84502b]: https://github.com/knroy/go-xml/commit/f84502b
+[49721db]: https://github.com/knroy/go-xml/commit/49721db
+[ddc6ee2]: https://github.com/knroy/go-xml/commit/ddc6ee2
+[9aefe48]: https://github.com/knroy/go-xml/commit/9aefe48
+[591831a]: https://github.com/knroy/go-xml/commit/591831a
+[4950817]: https://github.com/knroy/go-xml/commit/4950817
+[e975737]: https://github.com/knroy/go-xml/commit/e975737
+[6297a00]: https://github.com/knroy/go-xml/commit/6297a00
+[7e92b19]: https://github.com/knroy/go-xml/commit/7e92b19
+[e7042aa]: https://github.com/knroy/go-xml/commit/e7042aa
+[87743b2]: https://github.com/knroy/go-xml/commit/87743b2
+[97fccf5]: https://github.com/knroy/go-xml/commit/97fccf5
+[e8f4dfa]: https://github.com/knroy/go-xml/commit/e8f4dfa
+[b6a5d50]: https://github.com/knroy/go-xml/commit/b6a5d50
+[eb9ddf8]: https://github.com/knroy/go-xml/commit/eb9ddf8
+[7b6ae04]: https://github.com/knroy/go-xml/commit/7b6ae04
+[25eea7b]: https://github.com/knroy/go-xml/commit/25eea7b
+[1efb8e1]: https://github.com/knroy/go-xml/commit/1efb8e1
+[177fbff]: https://github.com/knroy/go-xml/commit/177fbff
+[390b351]: https://github.com/knroy/go-xml/commit/390b351
+[c870472]: https://github.com/knroy/go-xml/commit/c870472
+[f077a70]: https://github.com/knroy/go-xml/commit/f077a70
+[e0d2c13]: https://github.com/knroy/go-xml/commit/e0d2c13
+[0caab03]: https://github.com/knroy/go-xml/commit/0caab03
+[c6508c3]: https://github.com/knroy/go-xml/commit/c6508c3
+[0d9c103]: https://github.com/knroy/go-xml/commit/0d9c103
+[b9171e8]: https://github.com/knroy/go-xml/commit/b9171e8
+[ca1607b]: https://github.com/knroy/go-xml/commit/ca1607b
+[c5d5bce]: https://github.com/knroy/go-xml/commit/c5d5bce
+[1505000]: https://github.com/knroy/go-xml/commit/1505000
+[5ad849d]: https://github.com/knroy/go-xml/commit/5ad849d
+[b12ff0b]: https://github.com/knroy/go-xml/commit/b12ff0b
+[bee5b12]: https://github.com/knroy/go-xml/commit/bee5b12
+[9d7cf65]: https://github.com/knroy/go-xml/commit/9d7cf65
+[605d0be]: https://github.com/knroy/go-xml/commit/605d0be
+[57a0c9d]: https://github.com/knroy/go-xml/commit/57a0c9d
+[2f78c52]: https://github.com/knroy/go-xml/commit/2f78c52
+[a5013a4]: https://github.com/knroy/go-xml/commit/a5013a4
+[b0428d0]: https://github.com/knroy/go-xml/commit/b0428d0
+[f41bb8c]: https://github.com/knroy/go-xml/commit/f41bb8c
+[090a9a8]: https://github.com/knroy/go-xml/commit/090a9a8
+[2ef0012]: https://github.com/knroy/go-xml/commit/2ef0012
+[400c28c]: https://github.com/knroy/go-xml/commit/400c28c
+[9298bc6]: https://github.com/knroy/go-xml/commit/9298bc6
+[170d907]: https://github.com/knroy/go-xml/commit/170d907
+[b50260b]: https://github.com/knroy/go-xml/commit/b50260b
+[900ce70]: https://github.com/knroy/go-xml/commit/900ce70
+[c3ff080]: https://github.com/knroy/go-xml/commit/c3ff080
+[ef170f9]: https://github.com/knroy/go-xml/commit/ef170f9
+[6f7d630]: https://github.com/knroy/go-xml/commit/6f7d630
+[d4b8353]: https://github.com/knroy/go-xml/commit/d4b8353
+[1bacfcc]: https://github.com/knroy/go-xml/commit/1bacfcc
+[fbcfc71]: https://github.com/knroy/go-xml/commit/fbcfc71
+[86cde00]: https://github.com/knroy/go-xml/commit/86cde00
+[ac7af57]: https://github.com/knroy/go-xml/commit/ac7af57
+[b888d21]: https://github.com/knroy/go-xml/commit/b888d21
+[5c39a0c]: https://github.com/knroy/go-xml/commit/5c39a0c
+[b42e77e]: https://github.com/knroy/go-xml/commit/b42e77e
+[9148c2d]: https://github.com/knroy/go-xml/commit/9148c2d
+[c9adbaf]: https://github.com/knroy/go-xml/commit/c9adbaf
+[9180ee3]: https://github.com/knroy/go-xml/commit/9180ee3
+[99a96a5]: https://github.com/knroy/go-xml/commit/99a96a5
+[da68710]: https://github.com/knroy/go-xml/commit/da68710
+[4bab79c]: https://github.com/knroy/go-xml/commit/4bab79c
+[64f2243]: https://github.com/knroy/go-xml/commit/64f2243
+[8c47532]: https://github.com/knroy/go-xml/commit/8c47532
+[0cc940b]: https://github.com/knroy/go-xml/commit/0cc940b
+[8a2b2da]: https://github.com/knroy/go-xml/commit/8a2b2da
+[72903d9]: https://github.com/knroy/go-xml/commit/72903d9
+[3f7b697]: https://github.com/knroy/go-xml/commit/3f7b697
+[12b68fa]: https://github.com/knroy/go-xml/commit/12b68fa
+[dabed51]: https://github.com/knroy/go-xml/commit/dabed51
+[cb762f7]: https://github.com/knroy/go-xml/commit/cb762f7
+[af26eb4]: https://github.com/knroy/go-xml/commit/af26eb4
+[ca0d7be]: https://github.com/knroy/go-xml/commit/ca0d7be
+[2d60ddd]: https://github.com/knroy/go-xml/commit/2d60ddd
+[7e6845f]: https://github.com/knroy/go-xml/commit/7e6845f
+[f201db3]: https://github.com/knroy/go-xml/commit/f201db3
+[bfedf0c]: https://github.com/knroy/go-xml/commit/bfedf0c
+[40345b7]: https://github.com/knroy/go-xml/commit/40345b7
+[c58c9c5]: https://github.com/knroy/go-xml/commit/c58c9c5
+[1c789ca]: https://github.com/knroy/go-xml/commit/1c789ca
+[7dd3159]: https://github.com/knroy/go-xml/commit/7dd3159
+[ae41e4c]: https://github.com/knroy/go-xml/commit/ae41e4c
+[2188003]: https://github.com/knroy/go-xml/commit/2188003
+[80e124e]: https://github.com/knroy/go-xml/commit/80e124e
+[58415b6]: https://github.com/knroy/go-xml/commit/58415b6
+[de6e686]: https://github.com/knroy/go-xml/commit/de6e686
+[5203922]: https://github.com/knroy/go-xml/commit/5203922
+[9df608b]: https://github.com/knroy/go-xml/commit/9df608b
+[1df119d]: https://github.com/knroy/go-xml/commit/1df119d
+[337c660]: https://github.com/knroy/go-xml/commit/337c660
+[243a7af]: https://github.com/knroy/go-xml/commit/243a7af
+[43ca8b3]: https://github.com/knroy/go-xml/commit/43ca8b3
+[9753ec8]: https://github.com/knroy/go-xml/commit/9753ec8
+[dbe610d]: https://github.com/knroy/go-xml/commit/dbe610d
+[2a1e3b9]: https://github.com/knroy/go-xml/commit/2a1e3b9
+[ff9032d]: https://github.com/knroy/go-xml/commit/ff9032d
+[1889367]: https://github.com/knroy/go-xml/commit/1889367
+[fa87dcc]: https://github.com/knroy/go-xml/commit/fa87dcc
+[c13aa92]: https://github.com/knroy/go-xml/commit/c13aa92
+[c114ef5]: https://github.com/knroy/go-xml/commit/c114ef5
+[cc13393]: https://github.com/knroy/go-xml/commit/cc13393
+[8650527]: https://github.com/knroy/go-xml/commit/8650527
+[252b65b]: https://github.com/knroy/go-xml/commit/252b65b
+[72599d9]: https://github.com/knroy/go-xml/commit/72599d9
+[ee5018c]: https://github.com/knroy/go-xml/commit/ee5018c
+[93b8855]: https://github.com/knroy/go-xml/commit/93b8855
+[f9a904d]: https://github.com/knroy/go-xml/commit/f9a904d
+[7362b27]: https://github.com/knroy/go-xml/commit/7362b27
+[e960da2]: https://github.com/knroy/go-xml/commit/e960da2
+[c516340]: https://github.com/knroy/go-xml/commit/c516340
+[b6aef3e]: https://github.com/knroy/go-xml/commit/b6aef3e
+[94acc9f]: https://github.com/knroy/go-xml/commit/94acc9f
+[50bba71]: https://github.com/knroy/go-xml/commit/50bba71
+[0c7f0eb]: https://github.com/knroy/go-xml/commit/0c7f0eb
+[0d82e86]: https://github.com/knroy/go-xml/commit/0d82e86
+[11da206]: https://github.com/knroy/go-xml/commit/11da206
+[282aec6]: https://github.com/knroy/go-xml/commit/282aec6
+[2f9d010]: https://github.com/knroy/go-xml/commit/2f9d010
+[3251f40]: https://github.com/knroy/go-xml/commit/3251f40
+[406c6e1]: https://github.com/knroy/go-xml/commit/406c6e1
+[429b9c6]: https://github.com/knroy/go-xml/commit/429b9c6
+[42ac077]: https://github.com/knroy/go-xml/commit/42ac077
+[4fafb61]: https://github.com/knroy/go-xml/commit/4fafb61
+[5423f40]: https://github.com/knroy/go-xml/commit/5423f40
+[5734988]: https://github.com/knroy/go-xml/commit/5734988
+[639bcb4]: https://github.com/knroy/go-xml/commit/639bcb4
+[69648fe]: https://github.com/knroy/go-xml/commit/69648fe
+[6ad619f]: https://github.com/knroy/go-xml/commit/6ad619f
+[6bb84b2]: https://github.com/knroy/go-xml/commit/6bb84b2
+[75039ea]: https://github.com/knroy/go-xml/commit/75039ea
+[7b3b8cf]: https://github.com/knroy/go-xml/commit/7b3b8cf
+[8211a76]: https://github.com/knroy/go-xml/commit/8211a76
+[8aa67d3]: https://github.com/knroy/go-xml/commit/8aa67d3
+[93f91ae]: https://github.com/knroy/go-xml/commit/93f91ae
+[94aa606]: https://github.com/knroy/go-xml/commit/94aa606
+[952e6d2]: https://github.com/knroy/go-xml/commit/952e6d2
+[967b27a]: https://github.com/knroy/go-xml/commit/967b27a
+[9999789]: https://github.com/knroy/go-xml/commit/9999789
+[9c19935]: https://github.com/knroy/go-xml/commit/9c19935
+[a543265]: https://github.com/knroy/go-xml/commit/a543265
+[a97ac65]: https://github.com/knroy/go-xml/commit/a97ac65
+[aff6564]: https://github.com/knroy/go-xml/commit/aff6564
+[b2fcde5]: https://github.com/knroy/go-xml/commit/b2fcde5
+[b9aebdf]: https://github.com/knroy/go-xml/commit/b9aebdf
+[c1836df]: https://github.com/knroy/go-xml/commit/c1836df
+[c767803]: https://github.com/knroy/go-xml/commit/c767803
+[d0591ae]: https://github.com/knroy/go-xml/commit/d0591ae
+[d258054]: https://github.com/knroy/go-xml/commit/d258054
+[d5e2b0f]: https://github.com/knroy/go-xml/commit/d5e2b0f
+[e21d0c1]: https://github.com/knroy/go-xml/commit/e21d0c1
+[e965b1f]: https://github.com/knroy/go-xml/commit/e965b1f
+[e9e1442]: https://github.com/knroy/go-xml/commit/e9e1442
+[ed4a60f]: https://github.com/knroy/go-xml/commit/ed4a60f
+[ed500f2]: https://github.com/knroy/go-xml/commit/ed500f2
+[ee8aaa2]: https://github.com/knroy/go-xml/commit/ee8aaa2
+[f6079cf]: https://github.com/knroy/go-xml/commit/f6079cf
+[f856400]: https://github.com/knroy/go-xml/commit/f856400
+[fce2d5e]: https://github.com/knroy/go-xml/commit/fce2d5e
+[bd467ae]: https://github.com/knroy/go-xml/commit/bd467ae
+[e43cba2]: https://github.com/knroy/go-xml/commit/e43cba2
+[5ca44f5]: https://github.com/knroy/go-xml/commit/5ca44f5
+[d75f52e]: https://github.com/knroy/go-xml/commit/d75f52e
+[bae3d32]: https://github.com/knroy/go-xml/commit/bae3d32
+[aa6ac52]: https://github.com/knroy/go-xml/commit/aa6ac52
+[bf6cedd]: https://github.com/knroy/go-xml/commit/bf6cedd
+[d685d75]: https://github.com/knroy/go-xml/commit/d685d75
+[cbb2d1d]: https://github.com/knroy/go-xml/commit/cbb2d1d
+[7a194ca]: https://github.com/knroy/go-xml/commit/7a194ca
+[4e4ce7f]: https://github.com/knroy/go-xml/commit/4e4ce7f
+[93fd8d5]: https://github.com/knroy/go-xml/commit/93fd8d5
+[795af54]: https://github.com/knroy/go-xml/commit/795af54
+[f068f13]: https://github.com/knroy/go-xml/commit/f068f13
+[35cd6bf]: https://github.com/knroy/go-xml/commit/35cd6bf
+[edd10a6]: https://github.com/knroy/go-xml/commit/edd10a6
+[53a70a1]: https://github.com/knroy/go-xml/commit/53a70a1
+[759ba94]: https://github.com/knroy/go-xml/commit/759ba94
+[ae84d0b]: https://github.com/knroy/go-xml/commit/ae84d0b
+[2695815]: https://github.com/knroy/go-xml/commit/2695815
+[4e9d70f]: https://github.com/knroy/go-xml/commit/4e9d70f
+[ef129c5]: https://github.com/knroy/go-xml/commit/ef129c5
+[119a290]: https://github.com/knroy/go-xml/commit/119a290
+[2745346]: https://github.com/knroy/go-xml/commit/2745346
+[a3bdff3]: https://github.com/knroy/go-xml/commit/a3bdff3
+[2023aef]: https://github.com/knroy/go-xml/commit/2023aef
+[470c573]: https://github.com/knroy/go-xml/commit/470c573
+[835d67f]: https://github.com/knroy/go-xml/commit/835d67f
+[18f6233]: https://github.com/knroy/go-xml/commit/18f6233
+[a5885ce]: https://github.com/knroy/go-xml/commit/a5885ce
+[e75f9f1]: https://github.com/knroy/go-xml/commit/e75f9f1
+[a544525]: https://github.com/knroy/go-xml/commit/a544525
+[da4780a]: https://github.com/knroy/go-xml/commit/da4780a
+[dbc271b]: https://github.com/knroy/go-xml/commit/dbc271b
+[63fb23b]: https://github.com/knroy/go-xml/commit/63fb23b
+[3a78c1c]: https://github.com/knroy/go-xml/commit/3a78c1c
+[11393c5]: https://github.com/knroy/go-xml/commit/11393c5
+[1594bc4]: https://github.com/knroy/go-xml/commit/1594bc4
+[432cd6a]: https://github.com/knroy/go-xml/commit/432cd6a
+[df6517f]: https://github.com/knroy/go-xml/commit/df6517f
+[f41fadc]: https://github.com/knroy/go-xml/commit/f41fadc
+[1dd4163]: https://github.com/knroy/go-xml/commit/1dd4163
+[8fd2d46]: https://github.com/knroy/go-xml/commit/8fd2d46
+[ef95910]: https://github.com/knroy/go-xml/commit/ef95910
+[ac050c8]: https://github.com/knroy/go-xml/commit/ac050c8
+[1dd0db1]: https://github.com/knroy/go-xml/commit/1dd0db1
+[9599531]: https://github.com/knroy/go-xml/commit/9599531
+[f757efb]: https://github.com/knroy/go-xml/commit/f757efb
+[83a0b0e]: https://github.com/knroy/go-xml/commit/83a0b0e
+[27282ba]: https://github.com/knroy/go-xml/commit/27282ba
+[25e8d08]: https://github.com/knroy/go-xml/commit/25e8d08
+[08560cc]: https://github.com/knroy/go-xml/commit/08560cc
+[a337ed8]: https://github.com/knroy/go-xml/commit/a337ed8
+[289a0e6]: https://github.com/knroy/go-xml/commit/289a0e6
+[780f7b9]: https://github.com/knroy/go-xml/commit/780f7b9
+[b631123]: https://github.com/knroy/go-xml/commit/b631123
+[cd27e57]: https://github.com/knroy/go-xml/commit/cd27e57
+[a3200dc]: https://github.com/knroy/go-xml/commit/a3200dc
+[2bacb7c]: https://github.com/knroy/go-xml/commit/2bacb7c
+[d641f49]: https://github.com/knroy/go-xml/commit/d641f49
+[e413019]: https://github.com/knroy/go-xml/commit/e413019
+[4055730]: https://github.com/knroy/go-xml/commit/4055730
+[f846243]: https://github.com/knroy/go-xml/commit/f846243
+[04a5f30]: https://github.com/knroy/go-xml/commit/04a5f30
+[14d2eb3]: https://github.com/knroy/go-xml/commit/14d2eb3
+[34383fa]: https://github.com/knroy/go-xml/commit/34383fa
+[be6bebd]: https://github.com/knroy/go-xml/commit/be6bebd
+[e677f53]: https://github.com/knroy/go-xml/commit/e677f53
+[61fee5a]: https://github.com/knroy/go-xml/commit/61fee5a
+[fc00a92]: https://github.com/knroy/go-xml/commit/fc00a92
+[3b6d799]: https://github.com/knroy/go-xml/commit/3b6d799
+[2634957]: https://github.com/knroy/go-xml/commit/2634957
+[7d94f4d]: https://github.com/knroy/go-xml/commit/7d94f4d
+[d1be9ff]: https://github.com/knroy/go-xml/commit/d1be9ff
+[b7769d8]: https://github.com/knroy/go-xml/commit/b7769d8
+[1975ba3]: https://github.com/knroy/go-xml/commit/1975ba3
+[eeae70d]: https://github.com/knroy/go-xml/commit/eeae70d
+[8e85b21]: https://github.com/knroy/go-xml/commit/8e85b21
+[0817160]: https://github.com/knroy/go-xml/commit/0817160
+[678f986]: https://github.com/knroy/go-xml/commit/678f986
+[1664d17]: https://github.com/knroy/go-xml/commit/1664d17
+[51da347]: https://github.com/knroy/go-xml/commit/51da347
+[b3715fe]: https://github.com/knroy/go-xml/commit/b3715fe
+[763ecf2]: https://github.com/knroy/go-xml/commit/763ecf2
+[c4be9d6]: https://github.com/knroy/go-xml/commit/c4be9d6
+[687726d]: https://github.com/knroy/go-xml/commit/687726d
+[71bfffc]: https://github.com/knroy/go-xml/commit/71bfffc
+[48be9b0]: https://github.com/knroy/go-xml/commit/48be9b0
+[ec47776]: https://github.com/knroy/go-xml/commit/ec47776
+[62ccb0f]: https://github.com/knroy/go-xml/commit/62ccb0f
+[0df8234]: https://github.com/knroy/go-xml/commit/0df8234
+[eea98c7]: https://github.com/knroy/go-xml/commit/eea98c7
+[df2f529]: https://github.com/knroy/go-xml/commit/df2f529
+[54a602b]: https://github.com/knroy/go-xml/commit/54a602b
+[0d75787]: https://github.com/knroy/go-xml/commit/0d75787
+[2f2152a]: https://github.com/knroy/go-xml/commit/2f2152a
+[34be195]: https://github.com/knroy/go-xml/commit/34be195
+[77a593b]: https://github.com/knroy/go-xml/commit/77a593b
+[f85a991]: https://github.com/knroy/go-xml/commit/f85a991
+[7fc2805]: https://github.com/knroy/go-xml/commit/7fc2805
+[bafe94f]: https://github.com/knroy/go-xml/commit/bafe94f
+[b9ad97f]: https://github.com/knroy/go-xml/commit/b9ad97f
+[ec9408a]: https://github.com/knroy/go-xml/commit/ec9408a
+[dfe60f2]: https://github.com/knroy/go-xml/commit/dfe60f2
+[258f49d]: https://github.com/knroy/go-xml/commit/258f49d
+[af0a0b6]: https://github.com/knroy/go-xml/commit/af0a0b6
+[898f42e]: https://github.com/knroy/go-xml/commit/898f42e
+[e24a461]: https://github.com/knroy/go-xml/commit/e24a461
+[b9bafc5]: https://github.com/knroy/go-xml/commit/b9bafc5
+[173bd58]: https://github.com/knroy/go-xml/commit/173bd58
+[32ae444]: https://github.com/knroy/go-xml/commit/32ae444
+[adb6535]: https://github.com/knroy/go-xml/commit/adb6535
+[5cee1ef]: https://github.com/knroy/go-xml/commit/5cee1ef
+[a64bd1f]: https://github.com/knroy/go-xml/commit/a64bd1f
+[298eb94]: https://github.com/knroy/go-xml/commit/298eb94
+[95bd2aa]: https://github.com/knroy/go-xml/commit/95bd2aa
+[69778dc]: https://github.com/knroy/go-xml/commit/69778dc
+[d66c95d]: https://github.com/knroy/go-xml/commit/d66c95d
+[4a9b64f]: https://github.com/knroy/go-xml/commit/4a9b64f
+[1306d0a]: https://github.com/knroy/go-xml/commit/1306d0a
+[73a2503]: https://github.com/knroy/go-xml/commit/73a2503
+[fba1550]: https://github.com/knroy/go-xml/commit/fba1550
+[cee68eb]: https://github.com/knroy/go-xml/commit/cee68eb
+[4425745]: https://github.com/knroy/go-xml/commit/4425745
+[cd089ea]: https://github.com/knroy/go-xml/commit/cd089ea
+[2969e1b]: https://github.com/knroy/go-xml/commit/2969e1b
+[f42220b]: https://github.com/knroy/go-xml/commit/f42220b
+[ffbf248]: https://github.com/knroy/go-xml/commit/ffbf248
+[8b6220d]: https://github.com/knroy/go-xml/commit/8b6220d
+[ce94988]: https://github.com/knroy/go-xml/commit/ce94988
+[9d1dd6e]: https://github.com/knroy/go-xml/commit/9d1dd6e
+[26039a1]: https://github.com/knroy/go-xml/commit/26039a1
+[622522b]: https://github.com/knroy/go-xml/commit/622522b
+[6edc92b]: https://github.com/knroy/go-xml/commit/6edc92b
+[41e02d2]: https://github.com/knroy/go-xml/commit/41e02d2
+[ff39163]: https://github.com/knroy/go-xml/commit/ff39163
+[4051d75]: https://github.com/knroy/go-xml/commit/4051d75
+[cdc71e8]: https://github.com/knroy/go-xml/commit/cdc71e8
+[8ca4e94]: https://github.com/knroy/go-xml/commit/8ca4e94
+[e34e85c]: https://github.com/knroy/go-xml/commit/e34e85c
+[83902a6]: https://github.com/knroy/go-xml/commit/83902a6

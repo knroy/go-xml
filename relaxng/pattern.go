@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // pattern is a RELAX NG pattern.
@@ -45,7 +46,9 @@ type textPat struct{}
 // choicePat matches either branch.
 type choicePat struct {
 	Left, Right pattern
-	size        int // patternSize; set by newChoicePat
+	size        int    // patternSize; set by newChoicePat
+	hash        uint64 // patHash; set by newChoicePat
+	alts        int    // altCount; set by newChoicePat
 }
 
 // interleavePat matches both branches with their items in any interleaving.
@@ -55,19 +58,22 @@ type choicePat struct {
 // and they interleave rather than merely being unordered.
 type interleavePat struct {
 	Left, Right pattern
-	size        int // patternSize; set by newInterleavePat
+	size        int    // patternSize; set by newInterleavePat
+	hash        uint64 // patHash; set by newInterleavePat
 }
 
 // groupPat matches the left branch followed by the right.
 type groupPat struct {
 	Left, Right pattern
-	size        int // patternSize; set by newGroupPat
+	size        int    // patternSize; set by newGroupPat
+	hash        uint64 // patHash; set by newGroupPat
 }
 
 // oneOrMorePat matches its pattern one or more times.
 type oneOrMorePat struct {
 	Pattern pattern
-	size    int // patternSize; set by newOneOrMorePat
+	size    int    // patternSize; set by newOneOrMorePat
+	hash    uint64 // patHash; set by newOneOrMorePat
 }
 
 // elementPat matches one element whose name the class admits and whose content
@@ -109,7 +115,8 @@ type dataPat struct {
 // listPat matches a whitespace-separated list of tokens against a pattern.
 type listPat struct {
 	Pattern pattern
-	size    int // patternSize; set by newListPat
+	size    int    // patternSize; set by newListPat
+	hash    uint64 // patHash; set by newListPat
 }
 
 // afterPat is an internal Pattern: it matches the first pattern, then continues
@@ -120,7 +127,8 @@ type listPat struct {
 // rather than a separate stack is what makes the algorithm one recursion.
 type afterPat struct {
 	Left, Right pattern
-	size        int // patternSize; set by newAfterPat
+	size        int    // patternSize; set by newAfterPat
+	hash        uint64 // patHash; set by newAfterPat
 }
 
 // refPat is a definition not yet expanded.
@@ -145,6 +153,10 @@ type refPat struct {
 	// unchanged. It depends only on the schema, so it is learnt once and
 	// shared by every validation.
 	attrFree atomic.Bool
+	// null memoises nullable of the expansion: 0 not yet known, 1 false, 2
+	// true. A definition the compiler shares is reached along many paths,
+	// 2^N of them in a ladder d_i = d_{i-1} d_{i-1}, and was asked on each.
+	null atomic.Uint32
 	// open memoises startTagOpenDeriv of the expansion by element name.
 	// The derivative of a schema pattern depends only on the pattern and
 	// the name, and patterns are immutable values, so the result is shared
@@ -160,7 +172,6 @@ type staticInfo struct {
 	size     int32 // patternSize of the subtree
 	null     bool  // nullable
 	dataFree bool  // no valuePat, dataPat or listPat before an element
-	selfEq   bool  // patEq of the subtree with itself (false if it holds data)
 	// text memoises textDeriv when dataFree: with no datatype to consult the
 	// derivative does not depend on the string.
 	text atomic.Pointer[patBox]
@@ -267,6 +278,11 @@ type patBox struct {
 }
 
 // get expands the reference.
+//
+// It writes done and cached without synchronisation. That is sound because
+// Compile resolves every reachable lazy reference before it publishes the
+// Schema (checkCompetition walks them all, and addMemoPoints again), so a
+// validation only reads.
 func (r *refPat) get() (pattern, error) {
 	if !r.done {
 		r.done = true
@@ -282,6 +298,20 @@ func (r *refPat) get() (pattern, error) {
 type param struct {
 	Name  string
 	Value string
+	// re and reErr are a pattern param's compiled form, set once when the
+	// <data> is compiled so that checking a value does not compile the
+	// regular expression again. Both are zero for any other param.
+	re    *xsd.Pattern
+	reErr error
+}
+
+// newParam builds a param, compiling a pattern param's expression once.
+func newParam(name, value string) param {
+	p := param{Name: name, Value: value}
+	if name == "pattern" {
+		p.re, p.reErr = xsd.CompilePattern(value)
+	}
+	return p
 }
 
 func (notAllowedPat) nullable() bool    { return false }
@@ -307,11 +337,17 @@ func (r *refPat) nullable() bool {
 	if r.static != nil {
 		return r.static.null
 	}
-	p, err := r.get()
-	if err != nil {
-		return false
+	if n := r.null.Load(); n != 0 {
+		return n == 2
 	}
-	return p.nullable()
+	p, err := r.get()
+	ok := err == nil && p.nullable()
+	if ok {
+		r.null.Store(2)
+	} else {
+		r.null.Store(1)
+	}
+	return ok
 }
 
 // nameClass decides which names a pattern admits.
@@ -354,15 +390,21 @@ func (c nameChoicePat) contains(n xdm.QName) bool {
 // The compound constructors fix each node's patternSize when it is built, so
 // measuring a derivative before every element costs one field read instead of
 // a walk of the whole derivative. Every compound node must come from one of
-// them: a struct literal would carry size 0.
-func newChoicePat(l, r pattern) *choicePat { return &choicePat{l, r, sizeOf2(l, r)} }
-func newGroupPat(l, r pattern) *groupPat   { return &groupPat{l, r, sizeOf2(l, r)} }
-func newAfterPat(l, r pattern) *afterPat   { return &afterPat{l, r, sizeOf2(l, r)} }
-func newInterleavePat(l, r pattern) *interleavePat {
-	return &interleavePat{l, r, sizeOf2(l, r)}
+// them: a struct literal would carry size 0. They fix patHash the same way.
+func newChoicePat(l, r pattern) *choicePat {
+	return &choicePat{l, r, sizeOf2(l, r), hash2(kChoice, l, r), addSize(altCount(l), altCount(r))}
 }
-func newOneOrMorePat(p pattern) *oneOrMorePat { return &oneOrMorePat{p, addSize(1, patternSize(p))} }
-func newListPat(p pattern) *listPat           { return &listPat{p, addSize(1, patternSize(p))} }
+func newGroupPat(l, r pattern) *groupPat { return &groupPat{l, r, sizeOf2(l, r), hash2(kGroup, l, r)} }
+func newAfterPat(l, r pattern) *afterPat { return &afterPat{l, r, sizeOf2(l, r), hash2(kAfter, l, r)} }
+func newInterleavePat(l, r pattern) *interleavePat {
+	return &interleavePat{l, r, sizeOf2(l, r), hash2(kInterleave, l, r)}
+}
+func newOneOrMorePat(p pattern) *oneOrMorePat {
+	return &oneOrMorePat{p, addSize(1, patternSize(p)), hash2(kOneOrMore, p, emptyPat{})}
+}
+func newListPat(p pattern) *listPat {
+	return &listPat{p, addSize(1, patternSize(p)), hash2(kList, p, emptyPat{})}
+}
 
 func sizeOf2(l, r pattern) int { return addSize(1, addSize(patternSize(l), patternSize(r))) }
 

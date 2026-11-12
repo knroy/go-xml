@@ -40,9 +40,59 @@ type flwor struct {
 // scan over four entries beats hashing, and the order is meaningful for
 // grouping, where the non-grouping variables are exactly the ones not named
 // in the group-by clause.
+//
+// A clause that binds onto many tuples from one parent -- a "for" over N
+// items after W "let"s -- would give each of the N its own copy of the W
+// bindings, N x W held for a stream the item budget counts as N. So past
+// growSlack bindings the parent's are frozen into a frame the children share
+// (up), and each child holds only what it binds itself. A binding in names
+// shadows one of the same name in up.
 type tuple struct {
+	up    *frame
 	names []xdm.QName
 	vals  []xdm.Sequence
+	// valsTip and namesTip record how much of the backing array of vals and
+	// of names has been handed out, so that the one extension owning the
+	// next slot writes it in place instead of copying; see grow. nil means
+	// unknown, and the slot is never written in place.
+	valsTip, namesTip *int
+}
+
+// frame is a run of bindings several tuples share. Never written.
+type frame struct {
+	up    *frame
+	names []xdm.QName
+	vals  []xdm.Sequence
+}
+
+// growSlack is the binding count from which a copied slice is given room to
+// grow. A chain of V let clauses over one tuple copied every binding at every
+// clause, O(V^2) allocation for O(V) of query; doubling the capacity once the
+// tuple is this wide makes the chain amortised O(V). Below it a copy costs a
+// few words, and exact capacity keeps a wide stream of narrow tuples compact.
+const growSlack = 8
+
+// grow returns s with v appended, sharing s's backing array when tip says
+// the slot after s is unclaimed and s owns it, and copying otherwise. A
+// tuple holding a shorter prefix of the array never sees the slot written,
+// so a captured tuple stays immutable.
+func grow[T any](s []T, tip *int, v T) ([]T, *int) {
+	n := len(s)
+	if tip != nil && *tip == n && n < cap(s) {
+		*tip = n + 1
+		s = s[:n+1]
+		s[n] = v
+		return s, tip
+	}
+	c := n + 1
+	if n >= growSlack {
+		c = 2 * n
+	}
+	out := make([]T, n+1, c)
+	copy(out, s)
+	out[n] = v
+	nt := n + 1
+	return out, &nt
 }
 
 // bind adds or replaces a binding, returning a tuple that shares nothing
@@ -56,12 +106,15 @@ type tuple struct {
 func (t tuple) bind(name xdm.QName, val xdm.Sequence) tuple {
 	for i, n := range t.names {
 		if n == name {
-			out := tuple{names: t.names, vals: slices.Clone(t.vals)}
+			out := tuple{up: t.up, names: t.names, vals: slices.Clone(t.vals)}
 			out.vals[i] = val
 			return out
 		}
 	}
+	// A name bound in up is shadowed rather than replaced there: the frame
+	// is shared.
 	out := tuple{
+		up:    t.up,
 		names: append(append([]xdm.QName(nil), t.names...), name),
 		vals:  append(append([]xdm.Sequence(nil), t.vals...), val),
 	}
@@ -72,27 +125,63 @@ func (t tuple) bind(name xdm.QName, val xdm.Sequence) tuple {
 // to. A clause binds one name onto every tuple of its stream, and the tuples
 // of a stream mostly share one names slice, so the extended slice is made
 // once per shared input slice rather than once per tuple.
-type nameExt struct{ from, to []xdm.QName }
+type nameExt struct {
+	from, to []xdm.QName
+	toTip    *int
+	// up is the frame last made for a parent tuple, and upVals and upFrom
+	// the parent it was made from, so the children of one parent share one.
+	up     *frame
+	upVals []xdm.Sequence
+	upFrom *frame
+	// one is the names slice of a child that binds only this clause's name.
+	one []xdm.QName
+}
 
-func (x *nameExt) extend(names []xdm.QName, name xdm.QName) []xdm.QName {
+// frameOf returns t's bindings as a frame, made once per parent tuple.
+func (x *nameExt) frameOf(t tuple) *frame {
+	n := len(t.vals)
+	if x.up == nil || x.upFrom != t.up || len(x.upVals) != n || &x.upVals[0] != &t.vals[0] {
+		x.up = &frame{up: t.up, names: t.names[:n:n], vals: t.vals[:n:n]}
+		x.upVals, x.upFrom = t.vals, t.up
+	}
+	return x.up
+}
+
+// shares reports whether binding onto t should start a frame: t is wide, and
+// extending it would copy its bindings because a sibling already holds the
+// slot after them.
+func (t tuple) shares() bool {
+	n := len(t.vals)
+	return n >= growSlack && (t.valsTip == nil || *t.valsTip != n)
+}
+
+func (x *nameExt) extend(names []xdm.QName, tip *int, name xdm.QName) ([]xdm.QName, *int) {
 	if x.to == nil || len(names) != len(x.from) ||
 		(len(names) > 0 && &names[0] != &x.from[0]) {
 		x.from = names
-		x.to = append(append(make([]xdm.QName, 0, len(names)+1), names...), name)
+		x.to, x.toTip = grow(names, tip, name)
 	}
-	return x.to
+	return x.to, x.toTip
 }
 
 // bindx is bind for a clause binding name onto every tuple of a stream, with
 // the extended names slice shared through x.
 func (t tuple) bindx(x *nameExt, name xdm.QName, val xdm.Sequence) tuple {
-	if slices.Contains(t.names, name) {
+	if t.has(name) {
 		return t.bind(name, val)
 	}
-	vals := make([]xdm.Sequence, len(t.vals)+1)
-	copy(vals, t.vals)
-	vals[len(t.vals)] = val
-	return tuple{names: x.extend(t.names, name), vals: vals}
+	if t.shares() {
+		if x.one == nil {
+			x.one = []xdm.QName{name}
+		}
+		tip := 1
+		return tuple{up: x.frameOf(t), names: x.one, vals: []xdm.Sequence{val},
+			valsTip: &tip}
+	}
+	out := tuple{up: t.up}
+	out.names, out.namesTip = x.extend(t.names, t.namesTip, name)
+	out.vals, out.valsTip = grow(t.vals, t.valsTip, val)
+	return out
 }
 
 func (t tuple) lookup(name xdm.QName) (xdm.Sequence, bool) {
@@ -101,7 +190,50 @@ func (t tuple) lookup(name xdm.QName) (xdm.Sequence, bool) {
 			return t.vals[i], true
 		}
 	}
+	for f := t.up; f != nil; f = f.up {
+		for i, n := range f.names {
+			if n == name {
+				return f.vals[i], true
+			}
+		}
+	}
 	return nil, false
+}
+
+// has reports whether t binds name.
+func (t tuple) has(name xdm.QName) bool {
+	_, ok := t.lookup(name)
+	return ok
+}
+
+// visible returns every binding t holds, each name once with its innermost
+// value, in binding order.
+func (t tuple) visible() ([]xdm.QName, []xdm.Sequence) {
+	if t.up == nil {
+		return t.names, t.vals
+	}
+	var chain []*frame
+	for f := t.up; f != nil; f = f.up {
+		chain = append(chain, f)
+	}
+	var names []xdm.QName
+	var vals []xdm.Sequence
+	at := map[xdm.QName]int{}
+	add := func(ns []xdm.QName, vs []xdm.Sequence) {
+		for i, n := range ns {
+			if j, ok := at[n]; ok {
+				vals[j] = vs[i]
+				continue
+			}
+			at[n] = len(names)
+			names, vals = append(names, n), append(vals, vs[i])
+		}
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		add(chain[i].names, chain[i].vals)
+	}
+	add(t.names, t.vals)
+	return names, vals
 }
 
 // context returns the evaluation context a clause expression sees.
@@ -112,7 +244,23 @@ func (t tuple) lookup(name xdm.QName) (xdm.Sequence, bool) {
 // than at parse, so nothing about the names has to reach the expression
 // parser: binding the values here is the whole of the scoping.
 func (t tuple) context(ctx *evalContext) *xpath.Context {
-	return ctx.xp.WithVars(t.names, t.vals)
+	return t.up.context(ctx.xp).WithVars(t.names, t.vals)
+}
+
+// context layers f's bindings, outermost first, onto xp.
+func (f *frame) context(xp *xpath.Context) *xpath.Context {
+	if f == nil {
+		return xp
+	}
+	var buf [8]*frame
+	chain := buf[:0]
+	for ; f != nil; f = f.up {
+		chain = append(chain, f)
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		xp = xp.WithVars(chain[i].names, chain[i].vals)
+	}
+	return xp
 }
 
 // sub is context wrapped back up as an evalContext, which is what a
@@ -209,7 +357,7 @@ func (f *flwor) evalNode(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq, ctx.sc)
+	return appendSequence(out, seq, ctx)
 }
 
 // evalItems evaluates a parsed item list to a sequence, which is what a
@@ -616,17 +764,26 @@ func (c *groupByClause) apply(in []tuple, ctx *evalContext) ([]tuple, error) {
 	for _, k := range order {
 		p := byKey[k]
 		var merged tuple
-		for i, name := range p.key.names {
+		keyNames, keyVals := p.key.visible()
+		for i, name := range keyNames {
 			if c.isGrouping(name) {
 				// A grouping variable keeps one value: the one every member
 				// of the partition compared equal on. The first member's is
 				// taken because they are equal by construction.
-				merged = merged.bind(name, p.key.vals[i])
+				merged = merged.bind(name, keyVals[i])
 				continue
 			}
+			// The members can share one value -- a "let" before a "for"
+			// binds the same slice into every tuple -- so the concatenation
+			// is the first place those items are materialised once per
+			// member. Charging it is what keeps "let $big := 1 to 3000 for
+			// $i in 1 to 3000 group by $k := 0" inside MaxItems.
 			var all xdm.Sequence
 			for _, m := range p.member {
 				v, _ := m.lookup(name)
+				if err := ctx.xp.ChargeItems(len(v)); err != nil {
+					return nil, err
+				}
 				all = append(all, v...)
 			}
 			merged = merged.bind(name, all)

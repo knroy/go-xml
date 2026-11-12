@@ -53,49 +53,59 @@ func registerSerialize(l *Library) {
 		// for it back produces the declaration the XML output method defines.
 		// A standalone value can only be written in a declaration, so asking
 		// for one is also a request for the declaration itself.
-		// The HTML method writes a doctype declaration ahead of the document.
-		// html-version 5 is the only one this serialiser is asked for, and
-		// its doctype carries no public or system identifier.
-		//
-		// A declaration belongs to a *document*, though, and fn:serialize is
-		// as often handed a fragment: serialize($doc//body, ...) asks for the
-		// markup of that element, not for a standalone HTML page wrapped
-		// around it. A doctype there is a character the caller did not ask
-		// for, which is what serialize-html-003 -- "html method - HTML5
-		// fragment - no DOCTYPE" -- asserts with an exact string value.
-		//
-		// What separates the two is the document element. serialize-html-001
-		// and -002 serialise a whole <html> element and want the declaration;
-		// -003 serialises the <body> inside it and wants none. So the
-		// declaration is written when the thing being serialised really is an
-		// HTML document -- an <html> element, or a document node containing
-		// one -- and withheld otherwise. The name is matched case-blind
-		// because HTML element names are, and it is the local name that is
-		// matched, since a prefix is not part of the element's identity.
-		if opts.method == "html" && serializesHTMLDocument(seqArg(args, 0)) {
-			sb.WriteString("<!DOCTYPE html>\n")
-		}
-		// A document type declaration, when either external identifier was
-		// given. XSLT 2.0 (xslt-rec20.xml:26420-26431) gives doctype-system
-		// and doctype-public their effect; both were accepted and ignored, so
-		// the caller's DTD reference vanished from the output.
-		//
-		// It is written only for the XML-family methods. The html method has
-		// its own bare HTML5 declaration above, and writing a second one
-		// would produce two.
+		// The XML declaration comes first: XML 1.0's prolog puts it ahead
+		// of everything else. Serialization 3.1 §6.1.6 gives the xhtml
+		// method the xml method's rules for it (§5.1.6): "The XML output
+		// method MUST output an XML declaration if the omit-xml-declaration
+		// parameter has the value no". It was written for xml alone, and
+		// after the doctype.
 		if (opts.method == "xml" || opts.method == "xhtml") &&
-			(opts.doctypeSystem != "" || opts.doctypePublic != "") {
-			if name := documentElementName(seqArg(args, 0)); name != "" {
-				writeDoctype(sb, name, opts)
-			}
-		}
-		if opts.method == "xml" && (!opts.omitXMLDecl || opts.standalone != "") {
+			(!opts.omitXMLDecl || opts.standalone != "") {
 			sb.WriteString(`<?xml version="` + xmlDeclVersion(opts.version) +
 				`" encoding="UTF-8"`)
 			if opts.standalone != "" {
 				sb.WriteString(` standalone="` + opts.standalone + `"`)
 			}
 			sb.WriteString("?>\n")
+		}
+		// The document type declaration goes "immediately before the first
+		// element" (§5.1.7, §6.1.7, §7.4.6), so serializeNode writes it when
+		// it reaches that element, after any comment or processing
+		// instruction ahead of it.
+		//
+		// The html method writes the bare HTML5 declaration. A declaration
+		// belongs to a *document*, though, and fn:serialize is as often
+		// handed a fragment: serialize($doc//body, ...) asks for the markup
+		// of that element, not for a page wrapped around it, which is what
+		// serialize-html-003 -- "html method - HTML5 fragment - no DOCTYPE"
+		// -- asserts. So it is written when the document element is <html>,
+		// matched case-blind on the local name, and withheld otherwise.
+		//
+		// The xhtml method's bare XHTML5 declaration names the element
+		// (§6.1.7); htmlser holds the element test, shared with
+		// xslt/serialize.go. Otherwise doctype-system asks for the XML form,
+		// under the XML-family methods only (doctypeDecl).
+		//
+		// Both bare forms are also conditional on "any text node preceding
+		// that element in document order" being whitespace only (§6.1.7,
+		// §7.4.6). Normalisation makes text of the atomic and text items
+		// ahead of it as well as of its preceding siblings, so the test is
+		// made on what is written: see serializeSink.noteText.
+		seq := seqArg(args, 0)
+		if el := documentElement(seq); el != nil {
+			switch {
+			case opts.method == "html":
+				if opts.html5() && strings.EqualFold(el.Name().Local, "html") {
+					sb.doctype, sb.bareDoctype = "<!DOCTYPE html>\n", true
+				}
+			case opts.method == "xhtml" && opts.html5() && opts.doctypeSystem == "":
+				if htmlser.XHTML5Doctype(el) {
+					sb.doctype, sb.bareDoctype = "<!DOCTYPE "+el.Name().Local+">\n", true
+				}
+			case opts.method == "xml" || opts.method == "xhtml":
+				sb.doctype = doctypeDecl(elementName(el), opts)
+			}
+			sb.doctypeAt = el
 		}
 		// An explicit item-separator goes between every pair of items and
 		// replaces the default. Without one, sequence normalization (step 4
@@ -104,10 +114,13 @@ func registerSerialize(l *Library) {
 		// We used to write the items back to back, so serialize((1, true()))
 		// came out as "1true" rather than "1 true".
 		prevAtomic := false
-		for i, it := range seqArg(args, 0) {
+		for i, it := range seq {
 			_, atomic := it.(*xdm.Atomic)
 			switch {
 			case opts.hasItemSep && i > 0:
+				// Separator text ahead of the document element is text
+				// preceding it, which withholds the bare doctype (§7.4.6).
+				sb.noteText(opts.itemSeparator)
 				sb.WriteString(opts.itemSeparator)
 			case !opts.hasItemSep && atomic && prevAtomic:
 				sb.WriteString(" ")
@@ -144,37 +157,6 @@ func registerSerialize(l *Library) {
 		}
 		return strSeq(out), nil
 	})
-}
-
-// serializesHTMLDocument reports whether a sequence being serialised with the
-// html method is an HTML document rather than a fragment of one, which is what
-// decides whether a document type declaration is written ahead of it.
-//
-// The test is the document element: an <html> element, or a document node
-// whose element child is one. A fragment rooted anywhere else -- a <body>, a
-// <p> -- is markup to be embedded, and prefixing it with a doctype produces a
-// string the caller cannot use where it meant to use it.
-func serializesHTMLDocument(seq xdm.Sequence) bool {
-	for _, it := range seq {
-		n, ok := it.(*xdm.Node)
-		if !ok {
-			continue
-		}
-		switch n.Kind() {
-		case xdm.KindElement:
-			// Case-blind on the local name: HTML element names are, and the
-			// prefix is not part of the element's identity.
-			return strings.EqualFold(n.Name().Local, "html")
-		case xdm.KindDocument:
-			for c := range n.Children() {
-				if c.Kind() == xdm.KindElement {
-					return strings.EqualFold(c.Name().Local, "html")
-				}
-			}
-			return false
-		}
-	}
-	return false
 }
 
 // serializeOptions are the serialization parameters this implementation reads.
@@ -810,6 +792,7 @@ func serializeItem(sb *serializeSink, it xdm.Item, opts serializeOptions) error 
 		// item that cannot be written.
 		return fmt.Errorf("SENR0001: a function item cannot be serialized")
 	case *xdm.Atomic:
+		sb.noteText(v.String())
 		sb.WriteString(v.String())
 		return nil
 	}
@@ -909,6 +892,10 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 			serializeNode(sb, c, opts, depth)
 		}
 	case xdm.KindElement:
+		if n == sb.doctypeAt {
+			sb.WriteString(sb.doctype)
+			sb.doctypeAt = nil
+		}
 		sb.WriteString("<")
 		writeName(sb, n)
 		writeNamespaceDecls(sb, n, opts)
@@ -949,16 +936,25 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 			// document went through xsl:result-document as "<br>" and through
 			// fn:serialize as "<br/>".
 			//
-			// The xhtml method is deliberately not handled here. It has a
-			// third rule again -- void elements self-closed with a space,
-			// non-void ones with a full end tag, and recognition gated on the
-			// XHTML namespace under version 4 -- and this serialiser has
-			// never implemented it. Changing xhtml's output is a separate
-			// change with its own cases to answer to.
-			if opts.method == "html" {
-				if opts.isVoidElement(n.Name().Local) {
+			// The xhtml method has a third rule (Serialization 3.1 §6): a
+			// void element is written "<br />", any other empty element
+			// with a full end tag, since an HTML parser reads "<p/>" as an
+			// unclosed "<p>". A name counts as void only for an element the
+			// method recognises as HTML's: the XHTML namespace, or no
+			// namespace under HTML5. xslt/serialize.go's xhtmlVoidElement
+			// is the same rule.
+			if opts.method == "html" || opts.method == "xhtml" {
+				switch {
+				// An XML island is written as XML, self-closed:
+				// htmlser.Island, shared with xslt/serialize.go.
+				case opts.method == "html" && htmlser.Island(n, opts.html5()):
+					sb.WriteString("/>")
+				case opts.method == "html" && opts.isVoidElement(n.Name().Local):
 					sb.WriteString(">")
-				} else {
+				case opts.method == "xhtml" && opts.isVoidElement(n.Name().Local) &&
+					(n.Name().URI == htmlser.NSXHTML || n.Name().URI == "" && opts.html5()):
+					sb.WriteString(" />")
+				default:
 					sb.WriteString("></")
 					writeName(sb, n)
 					sb.WriteString(">")
@@ -978,16 +974,12 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// attribute in its place. The full serializer already writes this
 		// form -- see the meta branch of writeElement in xslt/serialize.go --
 		// so the two spellings were also disagreeing with each other.
-		// The xhtml method writes the same element as XML, closed with the
-		// space the HTML compatibility guidelines ask for (§6.1.14).
+		// The xhtml method, and an XML island under html, write the same
+		// element as XML: htmlser.MetaEnd, shared with xslt/serialize.go.
 		if htmlHead {
-			meta := `<meta http-equiv="Content-Type" content="` +
-				escapeAttr(htmlser.MetaContent(opts.mediaType, opts.encoding)) + `"`
-			if opts.method == "xhtml" {
-				sb.WriteString(meta + ` />`)
-			} else {
-				sb.WriteString(meta + `>`)
-			}
+			sb.WriteString(`<meta http-equiv="Content-Type" content="` +
+				escapeAttr(htmlser.MetaContent(opts.mediaType, opts.encoding)) +
+				htmlser.MetaEnd(n, opts.method == "xhtml", opts.html5()))
 		}
 		// An element named by cdata-section-elements has its text written as
 		// a CDATA section instead of with escaping, which is what the
@@ -1057,12 +1049,36 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		writeName(sb, n)
 		sb.WriteString(">")
 	case xdm.KindText:
+		sb.noteText(n.Value())
 		writeEscaped(sb, opts.normalized(n.Value()), false)
 	case xdm.KindComment:
+		// "<!-->" and "<!--->" are abruptly closed empty comments to an HTML
+		// parser, so the rest would be live markup. Refused as the tree
+		// serializer in package xslt refuses it (validateComment).
+		if v := n.Value(); (opts.method == "html" || opts.method == "xhtml") &&
+			(strings.HasPrefix(v, ">") || strings.HasPrefix(v, "->")) {
+			if sb.e == nil {
+				sb.latch(fmt.Errorf("SERE0003: comment content starts with %q, which "+
+					"ends the comment in an HTML parser", v[:strings.IndexByte(v, '>')+1]))
+			}
+			return
+		}
 		sb.WriteString("<!--")
 		sb.WriteString(n.Value())
 		sb.WriteString("-->")
 	case xdm.KindPI:
+		// Serialization 3.1 §7.3: the html method ends a processing
+		// instruction at the first ">", so a ">" in its content is SERE0015
+		// rather than something to write: there is no escape for it, and
+		// what followed it would be read as markup. The tree serializer in
+		// package xslt makes the same check. XHTML is XML and is exempt.
+		if opts.method == "html" && strings.Contains(n.Value(), ">") {
+			if sb.e == nil {
+				sb.latch(fmt.Errorf("SERE0015: a processing instruction " +
+					"contains '>', which ends it in the html output method"))
+			}
+			return
+		}
 		sb.WriteString("<?")
 		sb.WriteString(n.Name().Local)
 		if n.Value() != "" {
@@ -1277,13 +1293,11 @@ func (o serializeOptions) escapesURIAttrs() bool {
 	return o.escapeURIAttrs == nil || *o.escapeURIAttrs
 }
 
-// documentElementName returns the name the document type declaration must
-// name, which is the element the declaration precedes.
-//
-// XML's grammar makes the DOCTYPE name match the document element, so a
-// sequence with no element to be the document element gets no declaration at
-// all rather than one naming nothing.
-func documentElementName(seq xdm.Sequence) string {
+// documentElement returns the element a document type declaration precedes:
+// the first element item, or the first document item's element child. XML's grammar makes the DOCTYPE name match
+// it, so a sequence with none gets no declaration rather than one naming
+// nothing.
+func documentElement(seq xdm.Sequence) *xdm.Node {
 	for _, it := range seq {
 		n, ok := it.(*xdm.Node)
 		if !ok {
@@ -1291,38 +1305,37 @@ func documentElementName(seq xdm.Sequence) string {
 		}
 		switch n.Kind() {
 		case xdm.KindElement:
-			return elementName(n)
+			return n
 		case xdm.KindDocument:
 			for c := range n.Children() {
 				if c.Kind() == xdm.KindElement {
-					return elementName(c)
+					return c
 				}
 			}
 		}
 	}
-	return ""
+	return nil
 }
 
-// writeDoctype writes the document type declaration.
+// doctypeDecl is the document type declaration naming name, or "".
 //
 // The shape is XML's: PUBLIC takes both identifiers and SYSTEM only the
 // system one. A public identifier alone cannot be written under an XML-family
 // method -- the grammar puts the system literal after PUBLIC and makes it
-// required -- so it degrades to the SYSTEM form's absence rather than
-// producing markup no parser would accept. This mirrors
-// xslt/serialize.go's writeDoctypeFor, so both serialisers write the same
-// declaration for the same parameters.
-func writeDoctype(sb *serializeSink, name string, opts serializeOptions) {
+// required -- so it gets no declaration rather than markup no parser would
+// accept. This mirrors xslt/serialize.go's writeDoctypeFor, so both
+// serialisers write the same declaration for the same parameters.
+func doctypeDecl(name string, opts serializeOptions) string {
 	if opts.doctypeSystem == "" {
-		return
+		return ""
 	}
-	sb.WriteString("<!DOCTYPE " + name)
+	d := "<!DOCTYPE " + name
 	if opts.doctypePublic != "" {
-		sb.WriteString(" PUBLIC " + quoteExternalID(opts.doctypePublic))
+		d += " PUBLIC " + quoteExternalID(opts.doctypePublic)
 	} else {
-		sb.WriteString(" SYSTEM")
+		d += " SYSTEM"
 	}
-	sb.WriteString(" " + quoteExternalID(opts.doctypeSystem) + ">\n")
+	return d + " " + quoteExternalID(opts.doctypeSystem) + ">\n"
 }
 
 // quoteExternalID wraps an external identifier in quotes it does not itself
@@ -1333,38 +1346,6 @@ func quoteExternalID(v string) string {
 		return "'" + v + "'"
 	}
 	return `"` + v + `"`
-}
-
-// voidElements are the HTML elements that take no end tag, in every HTML
-// version this serialiser writes. Three more are void only in HTML 4 and four
-// only in HTML 5, which is what the two maps below are for.
-//
-// This is the same table xslt/serialize.go carries, and the two must move
-// together: an element written "<br/>" by one serialiser and "<br>" by the
-// other is the same request answered two ways, decided by which spelling the
-// caller used. A single shared definition would be better and is not blocked
-// by the import graph -- xslt already imports xpath -- but moving it needs an
-// edit to xslt/serialize.go's call sites, which this change does not own. If
-// you touch either copy, touch both.
-var voidElements = map[string]bool{
-	"area": true, "base": true, "br": true, "col": true, "embed": true,
-	"hr": true, "img": true, "input": true, "link": true, "meta": true,
-	"param": true,
-}
-
-// html4VoidElements are void in HTML 4 and gone from HTML 5, which has no
-// frameset and no isindex at all. Writing "<frame>" unclosed under HTML 5
-// leaves an element an HTML 5 parser reads as open, swallowing what follows.
-// Kept identical to xslt/serialize.go's map of the same name.
-var html4VoidElements = map[string]bool{
-	"basefont": true, "frame": true, "isindex": true,
-}
-
-// html5VoidElements are void in HTML 5 and unknown to HTML 4, where an
-// unclosed one would be an unrecognised start tag rather than an empty
-// element. Kept identical to xslt/serialize.go's map of the same name.
-var html5VoidElements = map[string]bool{
-	"keygen": true, "source": true, "track": true, "wbr": true,
 }
 
 // isVoidElement reports whether an element takes no end tag under the html
@@ -1379,26 +1360,26 @@ var html5VoidElements = map[string]bool{
 //
 // html-version decides, falling back to version. That fallback is the html
 // method's alone in xslt/serialize.go, because for xhtml @version is the
-// version of XML; this function is only reached from the html method, so the
-// fallback is unconditional here.
+// version of XML, which never starts with "5", so the fallback is harmless
+// for the xhtml method too.
 func (o *serializeOptions) isVoidElement(local string) bool {
-	local = strings.ToLower(local)
-	if voidElements[local] {
-		return true
-	}
-	if o.html5() {
-		return html5VoidElements[local]
-	}
-	return html4VoidElements[local]
+	return htmlser.Void(local, o.html5())
 }
 
 // html5 reports whether the HTML version asked for is 5 or later, which is
 // what selects between the two version-specific void-element lists. The
-// spelling test is xslt/serialize.go's: a prefix match on "5", so that "5.0"
-// and "5" both say HTML 5 and an absent parameter says HTML 4.
+// rule is xslt/serialize.go's effectiveHTMLVersion: html-version, else for
+// the html method version, else 5; for xhtml an absent html-version is below
+// 5 (version is the version of XML there). A prefix match on "5" makes "5.0"
+// and "5" both say HTML 5. The map form defaults html-version to 5 by F&O's
+// table; the element form leaves the default implementation-defined, and
+// takes xsl:output's.
 func (o *serializeOptions) html5() bool {
 	v := o.htmlVersion
-	if v == "" {
+	if v == "" && o.method == "html" {
+		if o.version == "" {
+			return true
+		}
 		v = o.version
 	}
 	return strings.HasPrefix(v, "5")
@@ -1547,6 +1528,14 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 		return a.String(), nil
 	}
 
+	// The map form, unlike the element form, has a fixed default for
+	// html-version. F&O 3.1 fn:serialize: "The default value is used when the
+	// map contains no entry for the parameter in question, and also when an
+	// entry is present, with the empty sequence as its value", and its table
+	// gives "html-version xs:decimal? 5". The element form and the
+	// one-argument call leave absent parameters implementation-defined, and
+	// html5 gives them xsl:output's default: 5 for html, below 5 for xhtml.
+	opts.htmlVersion = "5"
 	err := m.Entries(func(key *xdm.Atomic, val xdm.Sequence) error {
 		// Serialization 3.1 §3: the key naming a parameter defined by these
 		// specifications is an xs:string. An xs:QName key is reserved for an
@@ -1567,6 +1556,15 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 		// is ignored too, and both cases assert on the output rather than on
 		// an error.
 		if key.Type == xdm.TypeQName {
+			return nil
+		}
+		// An entry holding the empty sequence is the same as no entry: F&O
+		// 3.1 fn:serialize, "The default value is used when the map contains
+		// no entry for the parameter in question, and also when an entry is
+		// present, with the empty sequence as its value". Every parameter's
+		// default is what opts already holds, so the entry is skipped here,
+		// once, rather than each reader raising XPTY0004 for ().
+		if len(val) == 0 {
 			return nil
 		}
 		name := key.String()
@@ -1627,11 +1625,8 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 			// The string " omit " stays a type error: "omit" is a spelling
 			// the *element* form needs because an attribute can carry
 			// nothing but a string, and the map form, being typed, says the
-			// same thing with () instead (serialize-xml-131a).
-			if len(val) == 0 {
-				opts.standalone = ""
-				break
-			}
+			// same thing with () instead (serialize-xml-131a), which the
+			// empty-entry skip above handles.
 			v, err := boolParam(name, val)
 			if err != nil {
 				return err
@@ -1705,18 +1700,24 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 					opts.suppressIndent[xdm.QName{URI: qn.URI, Local: qn.Local}] = true
 				}
 			}
-		case "doctype-public":
+		case "doctype-public", "doctype-system":
 			v, err := strParam(name, val)
 			if err != nil {
 				return err
 			}
-			opts.doctypePublic = v
-		case "doctype-system":
-			v, err := strParam(name, val)
-			if err != nil {
-				return err
+			// The value is written into a quoted literal that has no
+			// escaping, so it gets the element form's check: a system
+			// literal holding both quote kinds ended its own quoting and
+			// wrote the rest as live DTD markup. Given directly, the
+			// error is SEPM0016 (§3) rather than the element form's SEPM0017.
+			if _, err := CheckSerializationParam(name, v); err != nil {
+				return fmt.Errorf("SEPM0016: %w", err)
 			}
-			opts.doctypeSystem = v
+			if name == "doctype-public" {
+				opts.doctypePublic = v
+			} else {
+				opts.doctypeSystem = v
+			}
 		case "escape-uri-attributes":
 			// Typed here, as every boolean in the map form is.
 			v, err := boolParam(name, val)
@@ -1745,7 +1746,7 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 			// html method minimises against. Serialization 3.1 types it as a
 			// decimal, but only its leading "5" is ever tested, so it is read
 			// through the same string reader the element form uses and kept
-			// as written.
+			// as written. The empty sequence keeps the default, 5.
 			v, err := strParam(name, val)
 			if err != nil {
 				return err
@@ -2770,13 +2771,40 @@ type serializeSink struct {
 	reserve int
 	// depth counts the maps and arrays open at this point; see enter.
 	depth int
+	// doctype is the document type declaration serializeNode writes
+	// immediately before element doctypeAt, once. bareDoctype marks the
+	// HTML5 form, which text ahead of the element withholds (noteText).
+	doctype     string
+	doctypeAt   *xdm.Node
+	bareDoctype bool
+}
+
+// noteText records text written ahead of the document element. Serialization
+// 3.1 §6.1.7 writes the bare XHTML5 doctype only if "any text node preceding
+// that element in document order contains only whitespace characters", and
+// §7.4.6 the html method's likewise; anything written while the doctype is
+// still owed precedes the element.
+func (s *serializeSink) noteText(v string) {
+	if s.bareDoctype && s.doctypeAt != nil && !xdm.IsXMLWhitespace(v) {
+		s.doctype = ""
+	}
 }
 
 // enter opens one level of map or array nesting, refusing past maxJSONDepth.
 // The writers recurse, so a value nested a million deep is a million Go stack
 // frames and a fatal stack overflow rather than an error. A caller that gets
 // nil must call leave when the level closes.
+//
+// A sink that has latched an error refuses every level too, with that error.
+// Every map and array a writer walks opens a level here, so this is where a
+// byte refusal or a cancelled context stops the walk: an array holds its
+// members by reference, and k charged doublings describe 2^k leaves that the
+// writers would otherwise go on visiting, writing nothing, long after the
+// refusal.
 func (s *serializeSink) enter() error {
+	if s.e != nil {
+		return s.e
+	}
 	if s.depth >= maxJSONDepth {
 		err := fmt.Errorf("XPDY0130: serialization nests maps and arrays more "+
 			"than %d levels deep: %w", maxJSONDepth, xdm.ErrResourceLimit)
@@ -2836,8 +2864,17 @@ func (s *serializeSink) charge(n int) bool {
 
 // chargeSlow draws a new block, or refuses. Split from charge so that the
 // common case stays inlinable.
+//
+// It is also where the evaluation's context is checked, once a block: a
+// serialization that runs past the host's deadline latches the context's
+// error, and enter stops the walk on it.
 func (s *serializeSink) chargeSlow(n int) bool {
 	if s.e != nil {
+		return false
+	}
+	if err := s.ctx.Err(); err != nil {
+		s.e = err
+		s.reserve = 0
 		return false
 	}
 	want := sinkReserveBlock

@@ -1,8 +1,12 @@
 package xdm
 
 import (
+	"context"
+	"errors"
 	"strconv"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 )
 
 // The map's behaviour as a persistent, insertion-ordered structure. These
@@ -309,5 +313,97 @@ func TestHAMTCollision(t *testing.T) {
 	root.walk(func(*mapEntry) { count++ })
 	if count != 2 {
 		t.Fatalf("walk saw %d entries, want 2", count)
+	}
+}
+
+// An array keeps its members by reference, so doubling one k times costs k
+// steps but describes 2^k leaves. Flatten must refuse such a value rather
+// than walk it: the leaves here are empty arrays, so the walk would add no
+// items and only the visit count shows the cost.
+func TestFlattenRefusesSharedExpansion(t *testing.T) {
+	a := NewArray(Sequence{NewArray()})
+	for i := 0; i < 30; i++ {
+		a = NewArray(Sequence{a}, Sequence{a})
+	}
+	err := func() (err error) {
+		defer xdmlimit.Recover(&err)
+		Flatten(Sequence{a})
+		return nil
+	}()
+	if !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("Flatten of a 2^30-leaf shared array: err=%v, want ErrResourceLimit", err)
+	}
+	// A small shared array still flattens in full.
+	b := NewArray(Sequence{NewInteger(1)})
+	for i := 0; i < 4; i++ {
+		b = NewArray(Sequence{b}, Sequence{b})
+	}
+	if n := len(Flatten(Sequence{b})); n != 16 {
+		t.Fatalf("Flatten of a 16-leaf shared array gave %d items", n)
+	}
+}
+
+// Atomize and AtomizeChecked flatten the whole sequence in one walk, so
+// Flatten's step bound covers the sequence and not each array in it: three
+// references to a 2^23-leaf array are past the bound together though each is
+// under it alone. AtomizeChecked returns the refusal rather than panicking.
+func TestAtomizeFlattensTheSequenceOnce(t *testing.T) {
+	a := NewArray(Sequence{NewArray()})
+	for i := 0; i < 23; i++ {
+		a = NewArray(Sequence{a}, Sequence{a})
+	}
+	seq := Sequence{a, a, a}
+	if _, err := AtomizeChecked(seq); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("AtomizeChecked of three 2^23-leaf references: err=%v, want ErrResourceLimit", err)
+	}
+	err := func() (err error) {
+		defer xdmlimit.Recover(&err)
+		Atomize(seq)
+		return nil
+	}()
+	if !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("Atomize of three 2^23-leaf references: err=%v, want ErrResourceLimit", err)
+	}
+	b := NewArray(Sequence{NewInteger(1)}, Sequence{NewArray(Sequence{NewInteger(2)})})
+	if got, err := AtomizeChecked(Sequence{b, NewInteger(3), b}); err != nil || len(got) != 5 {
+		t.Fatalf("AtomizeChecked([1,[2]], 3, [1,[2]]): %v, %v", got, err)
+	}
+}
+
+// FlattenContext stops a shared-member expansion when its context is done,
+// and returns the step ceiling as an error, neither by panicking.
+func TestFlattenContextStopsOnCancel(t *testing.T) {
+	a := NewArray(Sequence{NewArray()})
+	for i := 0; i < 30; i++ {
+		a = NewArray(Sequence{a}, Sequence{a})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := FlattenContext(ctx, Sequence{a}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("FlattenContext under a cancelled context: err=%v, want context.Canceled", err)
+	}
+	if _, err := FlattenContext(context.Background(), Sequence{a}); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("FlattenContext of a 2^30-leaf shared array: err=%v, want ErrResourceLimit", err)
+	}
+	// A cancelled context does not stop a flatten too small to reach a check.
+	if out, err := FlattenContext(ctx, Sequence{NewArray(Sequence{NewInteger(1)})}); err != nil || len(out) != 1 {
+		t.Fatalf("FlattenContext of [1]: %v, %v", out, err)
+	}
+}
+
+// A sequence that holds no array is already flat, so FlattenContext returns it
+// as it stands rather than copying it: fn:data paid an O(n) copy for every
+// call even with no array in sight.
+func TestFlattenContextWithoutArraysDoesNotCopy(t *testing.T) {
+	seq := make(Sequence, 10000)
+	for i := range seq {
+		seq[i] = NewInteger(int64(i))
+	}
+	if n := testing.AllocsPerRun(10, func() {
+		if _, err := FlattenContext(nil, seq); err != nil {
+			t.Fatal(err)
+		}
+	}); n != 0 {
+		t.Errorf("FlattenContext of 10k atomics allocated %v times, want 0", n)
 	}
 }

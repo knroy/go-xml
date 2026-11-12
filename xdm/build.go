@@ -127,7 +127,7 @@ func (p *Node) AppendCopy(src *Node) *Node {
 		p.tree.text.planFrom(src.tree, src.self, min(src.tree.endOf(src), limit))
 	}
 	c := p.AppendShallowCopy(src)
-	fillCopy(c, src, nil, limit)
+	fillCopy(c, src, nil, limit, c.BaseURI())
 	return c
 }
 
@@ -135,6 +135,13 @@ func (p *Node) AppendCopy(src *Node) *Node {
 // namespace declarations, and returns it open: the start of a copy the caller
 // completes, changing what it needs to on the way.
 func (p *Node) AppendShallowCopy(src *Node) *Node {
+	c := p.appendShallow(src)
+	c.SetBaseURI(src.BaseURI())
+	return c
+}
+
+// appendShallow is AppendShallowCopy leaving the copy's base URI inherited.
+func (p *Node) appendShallow(src *Node) *Node {
 	var c *Node
 	switch src.Kind() {
 	case KindAttribute:
@@ -145,7 +152,6 @@ func (p *Node) AppendShallowCopy(src *Node) *Node {
 	default:
 		c = p.appendLeafFrom(src.Kind(), src.Name(), src.Value(), src)
 	}
-	c.SetBaseURI(src.BaseURI())
 	c.CopyTypingFrom(src)
 	return c
 }
@@ -162,7 +168,7 @@ func Copy(n *Node) *Node { return CopyPruned(n, nil) }
 func CopyPruned(n *Node, drop func(*Node) bool) *Node {
 	limit := n.tree.n
 	c := ShallowCopy(n)
-	fillCopy(c, n, drop, limit)
+	fillCopy(c, n, drop, limit, c.BaseURI())
 	return c
 }
 
@@ -177,9 +183,14 @@ func ShallowCopy(n *Node) *Node {
 
 // fillCopy gives c, a shallow copy of src, copies of src's namespace
 // declarations, attributes and children. Records at limit and beyond are
-// not read: they were appended after the copy began.
-func fillCopy(c, src *Node, drop func(*Node) bool, limit uint32) {
-	if src.isLeaf() || src.flags&fSide != 0 {
+// not read: they were appended after the copy began. base is src's base URI,
+// which c has too: passing it down keeps the copy linear in depth, where
+// asking each node for its base walks up to the nearest one stored.
+func fillCopy(c, src *Node, drop func(*Node) bool, limit uint32, base string) {
+	if src.isLeaf() || src.flags&(fSide|fShallow) != 0 {
+		if src.flags&fShallow != 0 {
+			shallowFault(src, "copy")
+		}
 		return
 	}
 	for prefix, uri := range src.DeclaredNamespaces() {
@@ -197,8 +208,12 @@ func fillCopy(c, src *Node, drop func(*Node) bool, limit uint32) {
 		ch := t.rec(i)
 		next := t.endOf(ch)
 		if drop == nil || !drop(ch) {
-			cc := c.AppendShallowCopy(ch)
-			fillCopy(cc, ch, drop, limit)
+			cc := c.appendShallow(ch)
+			chBase := ch.baseUnder(base)
+			if cc.flags&fSide == 0 && chBase != cc.baseUnder(base) {
+				cc.setOwnBase(chBase)
+			}
+			fillCopy(cc, ch, drop, limit, chBase)
 		}
 		i = next
 	}
@@ -248,8 +263,8 @@ func CopyTypeEnvs(dst, src *Node) {
 // index, not through the records, which a burst's tree may have taken over
 // (see cloneMoving).
 func (t *Tree) truncate(i uint32) {
-	for len(t.open) > 0 && t.open[len(t.open)-1] >= i {
-		t.open = t.open[:len(t.open)-1]
+	for k := t.open.len(); k > 0 && t.open.at(k-1) >= uint64(i); k-- {
+		t.open.truncate(k - 1)
 	}
 	for j := i; j < t.n; j++ {
 		r := t.rec(j)
@@ -271,6 +286,7 @@ func (t *Tree) truncate(i uint32) {
 				s.offsets[k][off] = 0
 			}
 			delete(s.foreignPos, j)
+			delete(s.nsAdded, j)
 		}
 	}
 	t.sideTruncate(i) // locks: the sweep cleanup writes t.side

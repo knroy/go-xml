@@ -8,6 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/fileuri"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 func TestHTTPResolverHostPolicy(t *testing.T) {
@@ -97,4 +101,77 @@ func TestHTTPResolverFallsBackToFiles(t *testing.T) {
 		t.Fatalf("a local location should still resolve: %v", err)
 	}
 	rc.Close()
+}
+
+func TestHTTPResolverRefusesLocalUnderRemoteBase(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "secret.xsd")
+	if err := os.WriteFile(p, []byte(`<a/>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &HTTPResolver{}
+	rc, _, err := r.Resolve("", fileuri.Of(p), "http://remote.example/a.xsd")
+	if err == nil {
+		rc.Close()
+		t.Fatal("a file: location under a remote base was opened")
+	}
+	if !strings.Contains(err.Error(), "is not permitted") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// The policy xsd.InstanceLocationPolicy recommends for untrusted instances is
+// an HTTPResolver with AllowHost. Files is nil there, so local locations went
+// to an unrooted FileResolver, and every instance location resolves against an
+// empty base, which the local-under-remote-base refusal never sees: an
+// instance named a schema outside the schema directory and it was loaded.
+func TestInstanceLocationsUnderHTTPResolverStayRooted(t *testing.T) {
+	top := t.TempDir()
+	dir, outside := filepath.Join(top, "schemas"), filepath.Join(top, "outside")
+	for _, d := range []string{dir, outside} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	main := filepath.Join(dir, "main.xsd")
+	evil := filepath.Join(outside, "evil.xsd")
+	for p, src := range map[string]string{
+		main: `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">` +
+			`<xs:element name="doc"><xs:complexType><xs:sequence>` +
+			`<xs:any namespace="##any" processContents="strict"/>` +
+			`</xs:sequence></xs:complexType></xs:element></xs:schema>`,
+		evil: `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">` +
+			`<xs:element name="x" type="xs:string"/></xs:schema>`,
+	} {
+		if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := xsd.LoadFiles([]string{main}, xsd.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The file: scheme is case-insensitive, and an upper-case spelling was
+	// checked as a relative path and opened as the absolute one.
+	u := fileuri.Of(evil)
+	for _, loc := range []string{evil, "../outside/evil.xsd", u, "FILE" + u[4:], "fIlE" + u[4:]} {
+		tree, err := xdm.ParseString(`<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`+
+			` xsi:noNamespaceSchemaLocation="`+loc+`"><x>1</x></doc>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ext, err := s.WithInstanceLocations(tree.Root, xsd.InstanceLocationPolicy{
+			AllowNoNamespace: true,
+			Resolver:         &HTTPResolver{AllowHost: func(string) bool { return false }},
+		}, xsd.Options{})
+		// The location is a hint (§4.3.2): one outside is declined, not an
+		// error, and nothing from it is loaded.
+		if err != nil {
+			t.Errorf("%s: a declined location failed the call: %v", loc, err)
+			continue
+		}
+		if ext.Validate(tree.Root, xsd.ValidateOptions{}) == nil {
+			t.Errorf("%s: a schema outside the schema directory was loaded", loc)
+		}
+	}
 }

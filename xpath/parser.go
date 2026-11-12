@@ -37,6 +37,10 @@ type Parser struct {
 	// depth counts nested expressions, so that a deeply nested one is a
 	// static error rather than a crash. See maxParseDepth.
 	depth int
+	// spine is the height, in chained operator nodes, of the subtree most
+	// recently parsed, merged by max with its earlier siblings. See
+	// maxChainLength.
+	spine int
 	// version is the language version being parsed. It gates the constructs
 	// 3.0 adds to the grammar, which a 2.0 processor must not accept.
 	version Version
@@ -57,6 +61,10 @@ type Parser struct {
 	// SequenceType. It is set only while the target of "cast as" or
 	// "castable as" is being parsed. See parseSingleType.
 	singleType bool
+	// xpath10 parses "=" and "!=" over "<", "<=", ">" and ">=" as two
+	// left-associative levels, the XPath 1.0 EqualityExpr and RelationalExpr
+	// (1.0 section 3.4), where 2.0 has one non-associative ComparisonExpr.
+	xpath10 bool
 }
 
 // maxParseDepth bounds expression nesting.
@@ -78,7 +86,8 @@ type Parser struct {
 // whatever its intent.
 const maxParseDepth = 1000
 
-// maxChainLength bounds the length of a flat infix operator chain.
+// maxChainLength bounds how many chained operator nodes may stack on one path
+// of the tree.
 //
 // maxParseDepth counts how deeply an expression NESTS, and that is blind to
 // how LONG one is. Every infix level here — "or", "and", "+", "*", "|",
@@ -94,6 +103,15 @@ const maxParseDepth = 1000
 // attribute value should not be able to take a service down, and a Go stack
 // overflow is fatal — recover() does not catch it.
 //
+// The count is a height, not a per-loop length. A parenthesised chain is
+// returned as the bare inner Expr, so "(1+1+...)+1+1+..." makes the inner
+// chain the leftmost operand of the outer one and the two spines join. Counted
+// per loop, a thousand nested 10,000-term chains were each legal and composed
+// into a spine of ten million: a fatal stack overflow in isClosed under
+// Compile. The postfix chain "$f()[1]()[1]..." and the lookup chain "?a?a..."
+// are spines of the same kind and are charged the same way. The count is
+// still local to one path, so many separate short chains are not refused.
+//
 // The bound is charged in the parser rather than only in the optimiser
 // because the parser is the one place that protects all three walkers: an
 // over-long chain refused here never becomes an AST for any of them to walk.
@@ -108,14 +126,28 @@ const maxParseDepth = 1000
 // stylesheet would be the worse bug of the two.
 const maxChainLength = 10000
 
-// chainTooLong reports whether an infix loop has built a spine longer than
+// spineDepth is how many terms of an inline function body's operator chain
+// count as one level of recursion depth, on top of the level the call itself
+// costs.
+//
+// maxChainLength bounds one expression's spine and MaxDepth bounds call
+// nesting, but evaluation descends a left spine by recursion, so a function
+// whose recursive call sits at the bottom of a 10,000-term chain pushes
+// 10,000 operator frames per level: 499 levels overflowed the default 1 GB Go
+// stack, which is fatal. Charging spine/spineDepth extra levels per call
+// composes the two bounds: the frames held at once are at most about
+// MaxDepth * spineDepth whatever the chains, and a body below spineDepth --
+// every real chain measured, see maxChainLength -- costs nothing extra.
+const spineDepth = 200
+
+// chainTooLong reports whether a chain has reached a height of more than
 // maxChainLength, and yields the error to return when it has.
 //
-// The count is local to each loop rather than cumulative over the parse: a
-// stylesheet holding a thousand separate ten-term predicates has a thousand
-// short spines and no deep recursion, and refusing it would be the false
-// rejection this bound exists to avoid. Only one chain's own length matters,
-// because only one chain's length becomes stack depth.
+// The height is a path's, not the parse's: a stylesheet holding a thousand
+// separate ten-term predicates has a thousand short spines and no deep
+// recursion, and refusing it would be the false rejection this bound exists
+// to avoid. Only the tallest path matters, because only it becomes stack
+// depth.
 //
 // XPDY0130 is the code XPath 3.1 §2.3.1 names for an implementation-
 // dependent limit being exceeded, and the chain is well-formed, so a syntax
@@ -127,6 +159,19 @@ func chainTooLong(n int, op string) error {
 	}
 	return fmt.Errorf("XPDY0130: %q operator chain exceeds %d terms: %w",
 		op, maxChainLength, xdm.ErrResourceLimit)
+}
+
+// grow adds one chained node over an operand of height h and the operand just
+// parsed, whose height is p.spine, and checks the result.
+//
+// The chain loops follow one pattern. Each saves p.spine, the height of the
+// siblings parsed before it, and zeroes it before parsing each operand, so the
+// operand's height is read alone and an earlier sibling's chain is not charged
+// to it. On return the loop leaves max(saved, h) in p.spine, so an enclosing
+// node that is not a chain still passes its tallest child up.
+func (p *Parser) grow(h int, op string) (int, error) {
+	h = max(h, p.spine) + 1
+	return h, chainTooLong(h, op)
 }
 
 // Parse compiles an XPath 2.0 expression.
@@ -175,7 +220,13 @@ func ParseVersionRefFloor(src string, ns NamespaceResolver, v, refFloor Version)
 // xgc:leading-lone-slash consults to decide whether a "/" is a whole
 // expression or the head of a path. See Parser.xquery and startsStep.
 func ParseXQuery(src string, ns NamespaceResolver, v Version) (Expr, error) {
-	return parseHost(src, ns, false, v, 0, true)
+	return parseHost(src, ns, false, v, 0, true, false)
+}
+
+// parseXPath10 is ParseVersion with the XPath 1.0 lexical rules for numbers
+// and the 1.0 comparison grammar; see CompileOptions.XPath10.
+func parseXPath10(src string, ns NamespaceResolver, v Version) (Expr, error) {
+	return parseHost(src, ns, false, v, 0, false, true)
 }
 
 func parse(src string, ns NamespaceResolver, extended bool, v Version) (Expr, error) {
@@ -183,10 +234,10 @@ func parse(src string, ns NamespaceResolver, extended bool, v Version) (Expr, er
 }
 
 func parseWith(src string, ns NamespaceResolver, extended bool, v, refFloor Version) (Expr, error) {
-	return parseHost(src, ns, extended, v, refFloor, false)
+	return parseHost(src, ns, extended, v, refFloor, false, false)
 }
 
-func parseHost(src string, ns NamespaceResolver, extended bool, v, refFloor Version, xquery bool) (Expr, error) {
+func parseHost(src string, ns NamespaceResolver, extended bool, v, refFloor Version, xquery, xpath10 bool) (Expr, error) {
 	if ns == nil {
 		ns = defaultResolver{}
 	}
@@ -195,6 +246,7 @@ func parseHost(src string, ns NamespaceResolver, extended bool, v, refFloor Vers
 		lex = newExtendedLexer(src)
 	}
 	lex.version = v
+	lex.xpath10 = xpath10
 	toks, err := lex.Tokens()
 	if err != nil {
 		return nil, fmt.Errorf("%w in %q", err, src)
@@ -203,7 +255,7 @@ func parseHost(src string, ns NamespaceResolver, extended bool, v, refFloor Vers
 		ns = wrapBraced(ns, lex.bracedURIs)
 	}
 	p := &Parser{toks: toks, src: src, ns: ns, version: v, refFloor: refFloor,
-		xquery: xquery}
+		xquery: xquery, xpath10: xpath10}
 	e, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -287,6 +339,10 @@ func (b bracedSchemaResolver) LookupSchemaType(name xdm.QName) (xdm.TypeCode, bo
 		return v.LookupSchemaType(name)
 	}
 	return 0, false, false
+}
+
+func (b bracedSchemaResolver) SchemaTypeEnv() *xdm.TypeEnvironment {
+	return schemaTypeEnvOf(b.inner)
 }
 
 func (b bracedSchemaResolver) ValidateSchemaValue(name xdm.QName, value string) (bool, error) {
@@ -752,50 +808,58 @@ func (p *Parser) parseIf() (Expr, error) {
 }
 
 func (p *Parser) parseOr() (Expr, error) {
+	outer := p.spine
+	p.spine = 0
 	left, err := p.parseAnd()
 	if err != nil {
 		return nil, err
 	}
-	n := 0
+	h := p.spine
 	for p.peekIs(TokOp, "or") {
 		p.pos++
-		n++
-		if err := chainTooLong(n, "or"); err != nil {
-			return nil, err
-		}
+		p.spine = 0
 		right, err := p.parseAnd()
 		if err != nil {
 			return nil, err
 		}
+		if h, err = p.grow(h, "or"); err != nil {
+			return nil, err
+		}
 		left = &BinaryOp{Op: "or", Left: left, Right: right}
 	}
+	p.spine = max(outer, h)
 	return left, nil
 }
 
 func (p *Parser) parseAnd() (Expr, error) {
+	outer := p.spine
+	p.spine = 0
 	left, err := p.parseComparison()
 	if err != nil {
 		return nil, err
 	}
-	n := 0
+	h := p.spine
 	for p.peekIs(TokOp, "and") {
 		p.pos++
-		n++
-		if err := chainTooLong(n, "and"); err != nil {
-			return nil, err
-		}
+		p.spine = 0
 		right, err := p.parseComparison()
 		if err != nil {
 			return nil, err
 		}
+		if h, err = p.grow(h, "and"); err != nil {
+			return nil, err
+		}
 		left = &BinaryOp{Op: "and", Left: left, Right: right}
 	}
+	p.spine = max(outer, h)
 	return left, nil
 }
 
 // comparisonOps covers all three families: general (=, !=, <, ...), value
 // (eq, ne, lt, ...) and node (is, <<, >>). They share a precedence level and
 // are non-associative, so this parses at most one.
+// comparisonOps is ordered: the 1.0 equality operators, the 1.0 relational
+// operators, then the ones 2.0 adds. parseComparison slices it by that order.
 var comparisonOps = []string{
 	"=", "!=", "<", "<=", ">", ">=",
 	"eq", "ne", "lt", "le", "gt", "ge",
@@ -803,11 +867,57 @@ var comparisonOps = []string{
 }
 
 func (p *Parser) parseComparison() (Expr, error) {
+	if p.xpath10 {
+		return p.parseComparisonChain(comparisonOps[:2], func() (Expr, error) {
+			return p.parseComparisonChain(comparisonOps[2:6], p.parseComparison20)
+		})
+	}
+	return p.parseComparison20()
+}
+
+// parseComparisonChain parses operand (op operand)* left-associatively, the
+// shape of XPath 1.0's EqualityExpr and RelationalExpr, charging the chain
+// like every other infix loop (see maxChainLength).
+func (p *Parser) parseComparisonChain(ops []string, operand func() (Expr, error)) (Expr, error) {
+	outer := p.spine
+	p.spine = 0
+	left, err := operand()
+	if err != nil {
+		return nil, err
+	}
+	h := p.spine
+	for {
+		op, ok := p.acceptOp(ops...)
+		if !ok {
+			p.spine = max(outer, h)
+			return left, nil
+		}
+		p.spine = 0
+		right, err := operand()
+		if err != nil {
+			return nil, err
+		}
+		if h, err = p.grow(h, op); err != nil {
+			return nil, err
+		}
+		left = &BinaryOp{Op: op, Left: left, Right: right,
+			ResolveQName: p.qnameResolver()}
+	}
+}
+
+// parseComparison20 is the XPath 2.0 ComparisonExpr: at most one operator.
+// Under xpath10 it is reached for the operands of the 1.0 levels, and then
+// takes only the operators 1.0 lacks.
+func (p *Parser) parseComparison20() (Expr, error) {
+	ops := comparisonOps
+	if p.xpath10 {
+		ops = comparisonOps[6:]
+	}
 	left, err := p.parseStringConcat()
 	if err != nil {
 		return nil, err
 	}
-	if op, ok := p.acceptOp(comparisonOps...); ok {
+	if op, ok := p.acceptOp(ops...); ok {
 		right, err := p.parseStringConcat()
 		if err != nil {
 			return nil, err
@@ -849,21 +959,24 @@ func (p *Parser) qnameResolver() func(string) (string, bool) {
 // zero-length string. It compiles to a *StringConcat node, whose Eval gives
 // that call's result, rather than to a general BinaryOp.
 func (p *Parser) parseStringConcat() (Expr, error) {
+	outer := p.spine
+	p.spine = 0
 	left, err := p.parseRange()
 	if err != nil {
 		return nil, err
 	}
-	n := 0
+	h := p.spine
 	for {
 		if _, ok := p.acceptOp("||"); !ok {
+			p.spine = max(outer, h)
 			return left, nil
 		}
-		n++
-		if err := chainTooLong(n, "||"); err != nil {
-			return nil, err
-		}
+		p.spine = 0
 		right, err := p.parseRange()
 		if err != nil {
+			return nil, err
+		}
+		if h, err = p.grow(h, "||"); err != nil {
 			return nil, err
 		}
 		left = &StringConcat{Left: left, Right: right}
@@ -887,22 +1000,25 @@ func (p *Parser) parseRange() (Expr, error) {
 }
 
 func (p *Parser) parseAdditive() (Expr, error) {
+	outer := p.spine
+	p.spine = 0
 	left, err := p.parseMultiplicative()
 	if err != nil {
 		return nil, err
 	}
-	n := 0
+	h := p.spine
 	for {
 		op, ok := p.acceptOp("+", "-")
 		if !ok {
+			p.spine = max(outer, h)
 			return left, nil
 		}
-		n++
-		if err := chainTooLong(n, op); err != nil {
-			return nil, err
-		}
+		p.spine = 0
 		right, err := p.parseMultiplicative()
 		if err != nil {
+			return nil, err
+		}
+		if h, err = p.grow(h, op); err != nil {
 			return nil, err
 		}
 		left = &BinaryOp{Op: op, Left: left, Right: right}
@@ -910,11 +1026,13 @@ func (p *Parser) parseAdditive() (Expr, error) {
 }
 
 func (p *Parser) parseMultiplicative() (Expr, error) {
+	outer := p.spine
+	p.spine = 0
 	left, err := p.parseUnion()
 	if err != nil {
 		return nil, err
 	}
-	n := 0
+	h := p.spine
 	for {
 		op, ok := p.acceptOp("*", "div", "idiv", "mod")
 		if !ok {
@@ -933,17 +1051,18 @@ func (p *Parser) parseMultiplicative() (Expr, error) {
 			// spelling is ambiguous in its own position; only the lexer,
 			// which sees no positions, cannot tell them apart.
 			if p.cur().Kind != TokWildcard || p.cur().Val != "*" {
+				p.spine = max(outer, h)
 				return left, nil
 			}
 			p.pos++
 			op = "*"
 		}
-		n++
-		if err := chainTooLong(n, op); err != nil {
-			return nil, err
-		}
+		p.spine = 0
 		right, err := p.parseUnion()
 		if err != nil {
+			return nil, err
+		}
+		if h, err = p.grow(h, op); err != nil {
 			return nil, err
 		}
 		left = &BinaryOp{Op: op, Left: left, Right: right}
@@ -951,22 +1070,25 @@ func (p *Parser) parseMultiplicative() (Expr, error) {
 }
 
 func (p *Parser) parseUnion() (Expr, error) {
+	outer := p.spine
+	p.spine = 0
 	left, err := p.parseIntersectExcept()
 	if err != nil {
 		return nil, err
 	}
-	n := 0
+	h := p.spine
 	for {
 		// "union" and "|" are synonyms, so both normalise to one Op.
 		if _, ok := p.acceptOp("union", "|"); !ok {
+			p.spine = max(outer, h)
 			return left, nil
 		}
-		n++
-		if err := chainTooLong(n, "union"); err != nil {
-			return nil, err
-		}
+		p.spine = 0
 		right, err := p.parseIntersectExcept()
 		if err != nil {
+			return nil, err
+		}
+		if h, err = p.grow(h, "union"); err != nil {
 			return nil, err
 		}
 		left = &BinaryOp{Op: "union", Left: left, Right: right}
@@ -974,22 +1096,25 @@ func (p *Parser) parseUnion() (Expr, error) {
 }
 
 func (p *Parser) parseIntersectExcept() (Expr, error) {
+	outer := p.spine
+	p.spine = 0
 	left, err := p.parseInstanceOf()
 	if err != nil {
 		return nil, err
 	}
-	n := 0
+	h := p.spine
 	for {
 		op, ok := p.acceptOp("intersect", "except")
 		if !ok {
+			p.spine = max(outer, h)
 			return left, nil
 		}
-		n++
-		if err := chainTooLong(n, op); err != nil {
-			return nil, err
-		}
+		p.spine = 0
 		right, err := p.parseInstanceOf()
 		if err != nil {
+			return nil, err
+		}
+		if h, err = p.grow(h, op); err != nil {
 			return nil, err
 		}
 		left = &BinaryOp{Op: op, Left: left, Right: right}
@@ -1118,10 +1243,17 @@ func (p *Parser) parseUnary() (Expr, error) {
 			return nil, err
 		}
 	}
+	outer := p.spine
+	p.spine = 0
 	e, err := p.parseSimpleMap()
 	if err != nil {
 		return nil, err
 	}
+	h := p.spine + len(ops)
+	if err := chainTooLong(h, "-"); err != nil {
+		return nil, err
+	}
+	p.spine = max(outer, h)
 	// Applied right to left, so the innermost sign is nearest the operand and
 	// the tree is the one the recursion built.
 	for i := len(ops) - 1; i >= 0; i-- {
@@ -1148,19 +1280,21 @@ func (p *Parser) parseUnary() (Expr, error) {
 // was accepted before, so every "$x => $f()" in the suite was rejected as a
 // syntax error when the spec makes it a type error at worst.
 func (p *Parser) parseArrow() (Expr, error) {
+	outer := p.spine
+	p.spine = 0
 	left, err := p.parseUnary()
 	if err != nil {
 		return nil, err
 	}
-	n := 0
+	h := p.spine
 	for {
 		if _, ok := p.acceptOp("=>"); !ok {
+			p.spine = max(outer, h)
 			return left, nil
 		}
-		n++
-		if err := chainTooLong(n, "=>"); err != nil {
-			return nil, err
-		}
+		// The arguments are the operand here, and the left operand is
+		// already counted in h.
+		p.spine = 0
 		switch {
 		case p.cur().Kind == TokName:
 			left, err = p.parseFunctionCallWith(left)
@@ -1182,6 +1316,9 @@ func (p *Parser) parseArrow() (Expr, error) {
 		default:
 			return nil, p.errorf(
 				"expected a function name, variable or parenthesized expression after \"=>\"")
+		}
+		if h, err = p.grow(h, "=>"); err != nil {
+			return nil, err
 		}
 	}
 }
@@ -1225,21 +1362,24 @@ func (p *Parser) parseArrowTarget() (Expr, error) {
 // parseSimpleMap parses the XPath 3.0 simple map operator, which sits between
 // arrow and path in the grammar: SimpleMapExpr ::= PathExpr ("!" PathExpr)*.
 func (p *Parser) parseSimpleMap() (Expr, error) {
+	outer := p.spine
+	p.spine = 0
 	left, err := p.parsePath()
 	if err != nil {
 		return nil, err
 	}
-	n := 0
+	h := p.spine
 	for {
 		if _, ok := p.acceptOp("!"); !ok {
+			p.spine = max(outer, h)
 			return left, nil
 		}
-		n++
-		if err := chainTooLong(n, "!"); err != nil {
-			return nil, err
-		}
+		p.spine = 0
 		right, err := p.parsePath()
 		if err != nil {
+			return nil, err
+		}
+		if h, err = p.grow(h, "!"); err != nil {
 			return nil, err
 		}
 		left = &SimpleMap{Left: left, Right: right}
@@ -1264,6 +1404,7 @@ func (e *SimpleMap) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, err
 	}
 	var out xdm.Sequence
+	charged := 0
 	for i, it := range in {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1273,11 +1414,13 @@ func (e *SimpleMap) Eval(ctx *Context) (xdm.Sequence, error) {
 			return nil, err
 		}
 		out = append(out, v...)
-	}
-	// One result per input is covered by the input's own charge; more than
-	// that is copying, which a doubling right-hand side compounds.
-	if err := ctx.chargeCopies(len(out) - len(in)); err != nil {
-		return nil, err
+		// One result per input is covered by the input's own charge; more
+		// than that is copying, which a doubling right-hand side compounds.
+		// It is charged as it accumulates, so an oversized map is refused
+		// while it is built rather than after.
+		if err := ctx.chargeGrowth(&charged, len(out)-(i+1)); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }

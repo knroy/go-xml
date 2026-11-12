@@ -77,18 +77,12 @@ func groupAdjacentCompositeKey(rt *runtime, seq xdm.Sequence, key *xpath.Compile
 	var prev string
 	first := true
 	for idx, it := range seq {
-		sub := rt.withFocus(it, idx+1, len(seq))
-		vals, err := key.Eval(sub.ctx)
-		if err != nil {
-			return nil, err
-		}
-		atoms := atomizeGroupingKey(vals)
-		k, err := compositeKey(rt, atoms, coll)
+		kv, k, err := adjacentKeyOf(rt, it, idx+1, len(seq), key, coll, true)
 		if err != nil {
 			return nil, err
 		}
 		if first || k != prev {
-			groups = append(groups, group{key: xdm.Sequence(atoms)})
+			groups = append(groups, group{key: kv})
 			first, prev = false, k
 		}
 		groups[len(groups)-1].items = append(groups[len(groups)-1].items, it)

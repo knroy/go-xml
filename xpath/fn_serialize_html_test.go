@@ -110,3 +110,70 @@ func TestSerializeKeepsNestedMeta(t *testing.T) {
 		t.Errorf("want %s in %s", want, got)
 	}
 }
+
+// TestSerializeHTML4XHTMLHeadMetaIsClosed: below HTML5 an XHTML-namespace head
+// is an XML island to the html method (Serialization 3.1 §7.1), so the meta
+// added to it is closed, as xsl:result-document writes it
+// (TestHTML4XHTMLHeadMetaIsClosed in xslt). fn:serialize wrote a bare start
+// tag; result-document-1402 reaches it through nested JSON output.
+func TestSerializeHTML4XHTMLHeadMetaIsClosed(t *testing.T) {
+	const doc = `parse-xml('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head></html>')`
+	for _, c := range []struct{ version, want string }{
+		{"4.0", `<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"></meta><title>`},
+		{"5.0", `<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><title>`},
+	} {
+		got, err := evalSerialize(t, `serialize(`+doc+`, map{'method':'html','html-version':`+c.version+`})`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(got, c.want) {
+			t.Errorf("html-version %s: want %s in %s", c.version, c.want, got)
+		}
+	}
+}
+
+// An empty element in an XML island self-closes under the html method, as
+// xsl:result-document writes it (htmlser.Island; Serialization-html-3, -5,
+// -6): a foreign namespace always, XHTML's under HTML 4 only. Native HTML
+// keeps its explicit end tag.
+func TestSerializeHTMLIslandSelfCloses(t *testing.T) {
+	const doc = `parse-xml('<html><p/><m:magic xmlns:m="urn:m"/><x:p xmlns:x="http://www.w3.org/1999/xhtml"/></html>')`
+	for _, c := range []struct{ version, want string }{
+		{"4.0", `<p></p><m:magic xmlns:m="urn:m"/><x:p xmlns:x="http://www.w3.org/1999/xhtml"/>`},
+		{"5.0", `<p></p><m:magic xmlns:m="urn:m"/><x:p xmlns:x="http://www.w3.org/1999/xhtml"></x:p>`},
+	} {
+		got, err := evalSerialize(t, `serialize(`+doc+`, map{'method':'html','html-version':`+c.version+`})`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(got, c.want) {
+			t.Errorf("html-version %s: want %s in %s", c.version, c.want, got)
+		}
+	}
+}
+
+// TestSerializeHTMLRefusesGTInPI: the html method ends a processing
+// instruction at the first ">", so one in the content is SERE0015
+// (Serialization 3.1 §7.3) rather than text that a browser reads as markup.
+// fn:serialize wrote it, where the xsl:output html serializer refused it.
+// XHTML is XML, and keeps it.
+func TestSerializeHTMLRefusesGTInPI(t *testing.T) {
+	const doc = `parse-xml('<p><?pi x><img src=x onerror=alert(1)>?></p>')`
+	for _, params := range []string{
+		`map{'method': 'html'}`,
+		`map{'method': 'json', 'json-node-output-method': 'html'}`,
+	} {
+		_, err := evalSerialize(t, `serialize(`+doc+`, `+params+`)`)
+		if err == nil || !strings.HasPrefix(err.Error(), "SERE0015") {
+			t.Errorf("%s: got %v, want SERE0015", params, err)
+		}
+	}
+	got, err := evalSerialize(t, `serialize(`+doc+`, map{'method': 'xhtml'})`)
+	if err != nil || !strings.Contains(got, "<?pi x><img src=x onerror=alert(1)>?>") {
+		t.Errorf("xhtml: got %q, %v", got, err)
+	}
+	if got, err := evalSerialize(t, `serialize(parse-xml('<p><?pi x?></p>'), map{'method': 'html'})`); err != nil ||
+		!strings.Contains(got, "<?pi x") {
+		t.Errorf("html PI without '>': got %q, %v", got, err)
+	}
+}

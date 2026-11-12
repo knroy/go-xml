@@ -346,6 +346,9 @@ type budgetLimits struct {
 	// refusal a builder latched after a refund has brought the counter back
 	// under the bound.
 	nodesHit atomic.Bool
+	// entities are the entity limits fn:parse-xml parses with
+	// (xpathleaf.Limits.Entities); nil is the xdm defaults.
+	entities *xdm.ParseOptions
 }
 
 // nodeLimit and byteLimit are the bounds in force.
@@ -432,6 +435,9 @@ type staticContext struct {
 	// It defaults to false and is set only by a Compiled that was given it, so
 	// ordinary 2.0 evaluation never sees it.
 	compat bool
+	// xpath10 is the XPath 1.0 number model, set only by a Compiled
+	// compiled with CompileOptions.XPath10. It implies compat.
+	xpath10 bool
 }
 
 // zeroEnv and zeroStatic are what a Context with no environment or static
@@ -512,6 +518,9 @@ func (c *Context) StaticNamespaces() NamespaceResolver { return c.st().ns }
 
 // Compat reports XPath 1.0 compatibility mode; see Compiled.WithCompatMode.
 func (c *Context) Compat() bool { return c.st().compat }
+
+// xpath10 reports the XPath 1.0 number model; see CompileOptions.XPath10.
+func (c *Context) xpath10() bool { return c.st().xpath10 }
 
 // WithVersion returns a copy of c whose expressions evaluate as version v
 // until a compiled expression installs its own. It is for a caller evaluating
@@ -1016,51 +1025,71 @@ type varBinding struct {
 // local bindings on its chain replaced by a copy of what is visible now, so
 // that the stack moving on does not change what the closure sees.
 func frozenLocals(c *Context) *Context {
-	if c == nil {
-		return nil
+	var buf [16]*Context
+	chain, p := scopeChain(c, buf[:0], func(b *varBinding) *varBinding {
+		return &varBinding{locals: b.locals.Frozen()}
+	})
+	for i := len(chain) - 1; i >= 0; i-- {
+		p = withParent(chain[i], p)
 	}
-	if b := c.bind; b != nil && b.locals != nil {
-		n := *c
-		n.bind = &varBinding{locals: b.locals.Frozen()}
-		return &n
-	}
-	p := frozenLocals(c.Parent)
-	if p == c.Parent {
-		return c
-	}
-	n := *c
-	n.Parent = p
-	return &n
+	return p
 }
 
 // capturedFor is frozenLocals for a closure that reads only the variables keep
 // accepts: a scope that binds one name and is not accepted is left out of the
 // chain, and a host stack of locals is cut down to the accepted names. Scopes
 // binding several names, lazily or by the Vars map stay whole.
+//
+// Both walk the Parent chain in a loop. A let with many bindings makes the
+// chain that long, and recursing once per scope let it overflow the stack.
 func capturedFor(c *Context, keep func(uri, local string) bool, leaf bool) *Context {
-	if c == nil {
-		return nil
-	}
-	if b := c.bind; b != nil && b.locals != nil {
-		n := *c
-		n.bind = &varBinding{locals: b.locals.FrozenOnly(keep)}
-		return &n
-	}
-	p := capturedFor(c.Parent, keep, false)
-	if b := c.bind; b != nil && b.names == nil && b.lazy == nil && b.local != "" &&
-		len(c.Vars) == 0 && !keep(b.uri, b.local) {
-		if !leaf {
-			return p
+	var buf [16]*Context
+	chain, p := scopeChain(c, buf[:0], func(b *varBinding) *varBinding {
+		return &varBinding{locals: b.locals.FrozenOnly(keep)}
+	})
+	// Outermost first, which is the order keep was asked in when this
+	// recursed.
+	for i := len(chain) - 1; i >= 0; i-- {
+		s := chain[i]
+		if b := s.bind; b != nil && b.names == nil && b.lazy == nil && b.local != "" &&
+			len(s.Vars) == 0 && !keep(b.uri, b.local) {
+			if i > 0 || !leaf {
+				continue
+			}
+			// The innermost scope also carries the environment the body runs in.
+			n := *s
+			n.bind, n.Parent = nil, p
+			p = &n
+			continue
 		}
-		// The innermost scope also carries the environment the body runs in.
-		n := *c
-		n.bind, n.Parent = nil, p
-		return &n
+		p = withParent(s, p)
 	}
-	if p == c.Parent {
-		return c
+	return p
+}
+
+// scopeChain collects c's Parent chain, innermost first, onto chain, stopping
+// at the first scope holding a host stack of locals. That scope is not
+// collected: it is returned copied, its binding replaced by freeze's, as the
+// base the collected scopes are rebuilt on. With no such scope the base is
+// nil.
+func scopeChain(c *Context, chain []*Context, freeze func(*varBinding) *varBinding) ([]*Context, *Context) {
+	for s := c; s != nil; s = s.Parent {
+		if b := s.bind; b != nil && b.locals != nil {
+			n := *s
+			n.bind = freeze(b)
+			return chain, &n
+		}
+		chain = append(chain, s)
 	}
-	n := *c
+	return chain, nil
+}
+
+// withParent is s with p as its Parent: s itself when that is already so.
+func withParent(s, p *Context) *Context {
+	if p == s.Parent {
+		return s
+	}
+	n := *s
 	n.Parent = p
 	return &n
 }
@@ -1430,16 +1459,21 @@ func (c *Context) Descend() (*Context, error) {
 // FuncCall.Eval uses for a leaf builtin.
 func (c *Context) checkDepth() error {
 	if lim := c.depthLimit(); int(c.Depth) >= lim {
-		// XPDY0001 is kept because callers and the conformance suites read
-		// it, but it properly means "no context item is defined" and this
-		// is nothing of the sort: the expression is well-formed and has a
-		// context, it is merely deeper than this processor will evaluate.
-		// The sentinel is added alongside so a caller can tell a refusal
-		// from a fault. See xdm.ErrResourceLimit.
-		return fmt.Errorf("XPDY0001: recursion exceeded %d levels: %w",
-			lim, xdm.ErrResourceLimit)
+		return depthRefusal(lim)
 	}
 	return nil
+}
+
+// depthRefusal is the error for recursion deeper than lim.
+//
+// XPDY0001 is kept because callers and the conformance suites read it, but it
+// properly means "no context item is defined" and this is nothing of the
+// sort: the expression is well-formed and has a context, it is merely deeper
+// than this processor will evaluate. The sentinel is added alongside so a
+// caller can tell a refusal from a fault. See xdm.ErrResourceLimit.
+func depthRefusal(lim int) error {
+	return fmt.Errorf("XPDY0001: recursion exceeded %d levels: %w",
+		lim, xdm.ErrResourceLimit)
 }
 
 // checkValueDepth bounds the nesting of a map or array value that deep-equal
@@ -1468,6 +1502,46 @@ func (c *Context) countItems(n int) error {
 		return itemsRefusal(lim)
 	}
 	return nil
+}
+
+// flattenCharged flattens the arrays in seq under the evaluation's context
+// and charges the items flattening adds beyond seq to the item budget.
+//
+// An array keeps its members by reference, so k charged doublings ("[$a, $a]"
+// in a fold) describe 2^k leaves. Every implicit atomization in this package
+// goes through here, by way of atomize and atomizeChecked, so the host's
+// MaxItems and deadline bound that expansion wherever it happens, as they do
+// for fn:data and array:flatten; and the refusal comes back as an error, never
+// as the panic xdm.Atomize raises, which no Expr.Eval caller would recover.
+// A sequence holding no array costs one scan and is returned as it stands.
+func (c *Context) flattenCharged(seq xdm.Sequence) (xdm.Sequence, error) {
+	flat, err := xdm.FlattenContext(c.ev().Ctx, seq)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.countItems(len(flat) - len(seq)); err != nil {
+		return nil, err
+	}
+	return flat, nil
+}
+
+// atomize is xdm.Atomize with the arrays flattened by flattenCharged.
+func (c *Context) atomize(seq xdm.Sequence) (xdm.Sequence, error) {
+	flat, err := c.flattenCharged(seq)
+	if err != nil {
+		return nil, err
+	}
+	return xdm.Atomize(flat), nil
+}
+
+// atomizeChecked is xdm.AtomizeChecked with the arrays flattened by
+// flattenCharged.
+func (c *Context) atomizeChecked(seq xdm.Sequence) (xdm.Sequence, error) {
+	flat, err := c.flattenCharged(seq)
+	if err != nil {
+		return nil, err
+	}
+	return xdm.AtomizeChecked(flat)
 }
 
 // itemsRefusal is the XPDY0130 the item budget raises.
@@ -1509,11 +1583,20 @@ func (c *Context) digitLimit() int {
 	return c.ev().MaxDigits
 }
 
-// checkCastDigits refuses a string cast to xs:integer or xs:decimal whose text
-// is longer than the digit bound, before it is parsed.
+// checkCastDigits refuses a string cast whose text is longer than the digit
+// bound, before it is parsed, when the target parses a digit run through
+// big.Rat: xs:integer and xs:decimal, a duration's components, and the
+// fractional seconds of xs:time and xs:dateTime. That parse is quadratic in
+// the run's length, so the text is the thing to bound.
 func (c *Context) checkCastDigits(a *xdm.Atomic, target xdm.TypeCode) error {
-	if target != xdm.TypeInteger && target != xdm.TypeDecimal ||
-		a.Type != xdm.TypeString && a.Type != xdm.TypeUntypedAtomic {
+	switch target {
+	case xdm.TypeInteger, xdm.TypeDecimal, xdm.TypeDuration,
+		xdm.TypeYearMonthDuration, xdm.TypeDayTimeDuration,
+		xdm.TypeTime, xdm.TypeDateTime:
+	default:
+		return nil
+	}
+	if a.Type != xdm.TypeString && a.Type != xdm.TypeUntypedAtomic {
 		return nil
 	}
 	if lim := c.digitLimit(); lim >= 0 && len(a.Str()) > lim {
@@ -1840,7 +1923,8 @@ func (c *Context) HoldByteBudget() *Context {
 // already follows is that a budget is monotonic: a nested evaluation may spend
 // the parent's remaining allowance, never reset it.
 //
-// Each counter is carried WITH its held flag, never without. The flag is what
+// The item counter is carried WITH its held flag, never without, and the
+// byte counter is always held (below). The flag is what
 // says where the budget's boundary is, and a counter forwarded without it
 // would be reset by Compiled.Eval once per expression in the nested
 // evaluation -- which would clear the CALLER's accumulated charges through the
@@ -1867,8 +1951,14 @@ func (c *Context) AdoptBudget(src *Context) *Context {
 		// The bound travels with the counter it is checked against.
 		env.items, n.heldItems, env.MaxItems = from.items, src.heldItems, from.MaxItems
 	}
+	// The byte counter is held whatever the caller's flag. The caller's
+	// charges are already in it, and a nested evaluation that arms its own
+	// construction -- newRuntime's HoldByteBudget -- would reset an unheld
+	// one, erasing them through the shared pointer at every fn:transform.
+	// Held, it continues the count and never resets it; the caller's own
+	// Compiled.Eval still draws its per-expression boundary around the call.
 	if from.bytes != nil {
-		env.bytes, n.heldBytes = from.bytes, src.heldBytes
+		env.bytes, n.heldBytes = from.bytes, true
 	}
 	// The entity allowance is inherited on the same house rule as the other
 	// two: a nested evaluation may spend the parent's remainder, never reset

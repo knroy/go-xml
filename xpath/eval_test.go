@@ -18,9 +18,11 @@ const testDoc = `<?xml version="1.0"?>
   <!-- a comment -->
 </catalog>`
 
+// mustParse parses doc, honouring an internal DTD subset so a test can
+// declare ID and IDREF attributes.
 func mustParse(t *testing.T, doc string) *xdm.Node {
 	t.Helper()
-	tree, err := xdm.ParseString(doc, xdm.ParseOptions{})
+	tree, err := xdm.ParseString(doc, xdm.ParseOptions{AllowDOCTYPE: true})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

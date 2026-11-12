@@ -147,6 +147,10 @@ type Source struct {
 	// environment's schema, which is what makes "instance of my:type"
 	// answer true for a value read out of it.
 	Validation string `xml:"validation,attr"`
+	// Streaming is "true" when the source is to be supplied as a stream,
+	// which for the principal input asks for an initial mode run streamed
+	// (TransformReader).
+	Streaming string `xml:"streaming,attr"`
 }
 
 type Param struct {
@@ -183,6 +187,9 @@ type Collection struct {
 type Schema struct {
 	URI  string `xml:"uri,attr"`
 	File string `xml:"file,attr"`
+	// XSDVersion is the XSD version the schema is written for, "1.1" or
+	// absent (1.0).
+	XSDVersion string `xml:"xsd-version,attr"`
 }
 
 // Dependencies is the set of conditions a test needs.

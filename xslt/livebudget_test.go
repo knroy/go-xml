@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -150,6 +151,11 @@ func TestLiveGrowingRefused(t *testing.T) {
 // what it holds reaches it; negative lifts that, and a positive value bounds
 // the total instead.
 func TestLiveNodesBuilt(t *testing.T) {
+	if raceEnabled {
+		// Each run builds millions of nodes on one goroutine: over a minute
+		// under -race, with nothing shared for the detector to see.
+		t.Skip("volume only; the plain run checks it")
+	}
 	const n = 1800 // holds 10,800 nodes at the end, builds about 9.7 million
 	if _, err := liveRun(t, liveG8, n, true, TransformOptions{}); !refused(err, "more than 2000000 result-tree nodes") {
 		t.Errorf("default: want the node refusal, got %v", err)
@@ -241,4 +247,59 @@ func liveRunGlobal(t *testing.T, body, decl string, opts TransformOptions) (stri
 		return "", err
 	}
 	return res.String(), nil
+}
+
+// TestSignatureIsConstant: the output signature a streamed loop takes twice
+// per item does not count the open element's children, or a loop writing
+// under one element costs the square of its items (50x tree mode at 20,000
+// records). An element of 100,000 children must cost what one of 10 does.
+func TestSignatureIsConstant(t *testing.T) {
+	per := func(kids int) time.Duration {
+		out := newOutputBuilder(nil)
+		el := out.StartElement(xdm.QName{Local: "out"})
+		for range kids {
+			el.AppendText("x")
+			el.StartElement(xdm.QName{Local: "r"})
+		}
+		const n = 2000
+		start := time.Now()
+		for range n {
+			signature(el)
+		}
+		return time.Since(start) / n
+	}
+	small, large := per(10), per(100000)
+	if large > 50*small+time.Microsecond {
+		t.Errorf("signature over 100,000 children takes %v, over 10 %v", large, small)
+	}
+}
+
+// A streamed xsl:iterate measures what it carries after every item. Walking
+// each carried tree in full every time made a loop carrying a large tree
+// quadratic (audit A4-F1); a tree is walked once while it stays carried.
+func TestLiveCarriedTreeMeasuredOnce(t *testing.T) {
+	doc, err := xdm.ParseString("<e>"+strings.Repeat("<x/>", 1000)+"</e>", xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := doc.Root.FirstChild()
+	var l liveLoop
+	want, _, _ := l.measure([]xdm.Sequence{{e}})
+	if want != 1002 {
+		t.Fatalf("measured %d nodes, want 1002", want)
+	}
+	for range 100 {
+		// A new slice each time, a node of the same tree.
+		if n, _, ok := l.measure([]xdm.Sequence{{e.FirstChild()}, {xdm.NewString("s")}}); !ok || n != want {
+			t.Fatalf("measured %d, %v; want %d", n, ok, want)
+		}
+	}
+	if l.walked != want {
+		t.Errorf("walked %d nodes over 101 items, want %d: the carried tree was walked again", l.walked, want)
+	}
+	// A tree no longer carried is forgotten; a new one is walked.
+	other, _ := xdm.ParseString("<f/>", xdm.ParseOptions{})
+	if n, _, _ := l.measure([]xdm.Sequence{{other.Root}}); n != 2 || len(l.sizes) != 1 {
+		t.Errorf("new tree: %d nodes, %d trees kept; want 2, 1", n, len(l.sizes))
+	}
 }

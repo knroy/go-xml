@@ -72,3 +72,21 @@ func TestResolvePathConfinesADrivePathAnyway(t *testing.T) {
 		}
 	}
 }
+
+// TestResolvePathRefusesUNCBeforeFilesystem pins that a UNC path is refused
+// before EvalExisting stats it -- on Windows that stat alone connects to the
+// host -- rather than by the containment check after it. The host is .invalid
+// so that a regression on Windows CI cannot reach a real machine.
+func TestResolvePathRefusesUNCBeforeFilesystem(t *testing.T) {
+	r := &FileResolver{Root: t.TempDir()}
+	for _, id := range []string{
+		"//unc-host.invalid/share/x.dtd",
+		"file:////unc-host.invalid/share/x.dtd",
+		"file://localhost//unc-host.invalid/share/x.dtd",
+	} {
+		_, _, err := r.resolvePath(id, "")
+		if err == nil || !strings.Contains(err.Error(), "names a network path") {
+			t.Errorf("resolvePath(%q) = %v, want the network-path refusal", id, err)
+		}
+	}
+}

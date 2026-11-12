@@ -5,8 +5,12 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
+	"sort"
 	"strings"
 	"unicode/utf8"
+
+	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
 
 // External entity resolution.
@@ -112,10 +116,10 @@ func (t *entityTable) fetchExternal(systemID, publicID, base string) (string, st
 				"never resolved (set ParseOptions.ExternalEntities to permit)",
 			systemID)
 	}
-	if t.fetches >= maxExternalFetches {
+	if t.fetches >= t.lim.fetches {
 		return "", "", fmt.Errorf(
 			"document fetches more than %d external entities: %w",
-			maxExternalFetches, ErrResourceLimit)
+			t.lim.fetches, ErrResourceLimit)
 	}
 	t.fetches++
 	rc, resolved, err := t.resolver.ResolveEntity(systemID, publicID, base)
@@ -129,14 +133,16 @@ func (t *entityTable) fetchExternal(systemID, publicID, base string) (string, st
 	// at the limit is distinguishable from one over it — without it a file
 	// of precisely the remaining budget would be truncated silently, which
 	// is worse than refusing it.
-	room := maxTotalEntityBytes - t.total()
-	if room > maxExternalFetchBytes {
-		room = maxExternalFetchBytes
+	room := t.lim.total - t.total()
+	if room > t.lim.fetchBytes {
+		room = t.lim.fetchBytes
 	}
 	if room < 0 {
 		room = 0
 	}
-	data, err := io.ReadAll(io.LimitReader(rc, int64(room)+1))
+	// room is math.MaxInt only when both byte limits are off, and +1 would
+	// overflow to a negative bound that reads nothing.
+	data, err := io.ReadAll(io.LimitReader(rc, int64(min(room, math.MaxInt-1))+1))
 	if err != nil {
 		return "", "", fmt.Errorf("reading external entity %q: %w", systemID, err)
 	}
@@ -186,10 +192,10 @@ func (t *entityTable) resolveExternalText(name string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("entity %q is not declared", name)
 	}
-	if t.externalDepth >= maxExternalDepth {
+	if t.externalDepth >= t.lim.extDepth {
 		return "", fmt.Errorf(
 			"external entities nested more than %d deep: %w",
-			maxExternalDepth, ErrResourceLimit)
+			t.lim.extDepth, ErrResourceLimit)
 	}
 	// A placeholder guards a cycle the same way resolve does for internal
 	// entities: an external entity whose text references itself would
@@ -219,7 +225,10 @@ func (t *entityTable) resolveExternalText(name string) (string, error) {
 	// document entity, and this text never passes through Parse's reader.
 	folded, _ := foldLineEnds([]byte(text), true)
 	text = string(folded)
-	text, version := stripTextDecl(text)
+	text, version, err := stripTextDecl(text)
+	if err != nil {
+		return "", fmt.Errorf("external entity %s: %w", name, err)
+	}
 	if err := t.checkEntityVersion(name, version); err != nil {
 		return "", err
 	}
@@ -239,27 +248,41 @@ func (t *entityTable) resolveExternalText(name string) (string, error) {
 // It is only a text declaration if it is at the very start and is an XML
 // declaration — "<?xml" followed by whitespace or the closing "?>". A
 // processing instruction whose target merely begins with "xml", such as
-// <?xml-stylesheet?>, is content and stays.
+// <?xml-stylesheet?>, is content and stays. One preceded by white space is
+// left in place too, where the reserved target makes it an error (§2.6 [17]).
+//
+// A text declaration is not an XML declaration: §4.3.1 "[77] TextDecl ::=
+// '<?xml' VersionInfo? EncodingDecl S? '?>'" — the encoding is required, the
+// version optional, and a standalone declaration has no place in one. A
+// declaration that does not match is an error.
 //
 // The version is returned rather than discarded because XML §4.3.4 makes it
 // load-bearing: an entity that declares 1.1 may not be included by a 1.0
 // document. An entity with no text declaration, or one that omits the version,
 // returns "" and is 1.0 by default — §4.3.4 says an entity without a
 // declaration is treated as 1.0.
-func stripTextDecl(s string) (text, version string) {
-	rest := strings.TrimLeft(s, " \t\r\n")
-	if !strings.HasPrefix(rest, "<?xml") {
-		return s, ""
+func stripTextDecl(s string) (text, version string, err error) {
+	if !strings.HasPrefix(s, "<?xml") {
+		return s, "", nil
 	}
-	after := rest[len("<?xml"):]
+	after := s[len("<?xml"):]
 	if after != "" && !isXMLSpaceByte(after[0]) && !strings.HasPrefix(after, "?>") {
-		return s, ""
+		return s, "", nil
 	}
-	end := strings.Index(rest, "?>")
+	end := strings.Index(after, "?>")
 	if end < 0 {
-		return s, ""
+		return s, "", nil
 	}
-	return rest[end+len("?>"):], declVersion(rest[:end])
+	body := strings.Trim(after[:end], " \t\r\n")
+	v, enc, sa, ok := xml.ParseXMLDecl(body)
+	if !ok {
+		v = ""
+		_, enc, sa, ok = xml.ParseXMLDecl(`version="1.0" ` + body)
+	}
+	if !ok || enc == "" || sa != "" {
+		return "", "", fmt.Errorf("malformed text declaration <?xml %s?> (XML 1.0 §4.3.1 [77] TextDecl)", body)
+	}
+	return after[end+len("?>"):], v, nil
 }
 
 // checkEntityVersion enforces XML §4.3.4 on a fetched external entity.
@@ -286,37 +309,6 @@ func (t *entityTable) checkEntityVersion(name, version string) error {
 	default:
 		return fmt.Errorf("external entity %s declares unsupported XML version %q", name, version)
 	}
-}
-
-// declVersion reads the version pseudo-attribute out of a text declaration.
-//
-// It scans for the keyword rather than the position, since VersionInfo is
-// first in [77] TextDecl but the same function reads declarations that have
-// only an encoding. A malformed declaration yields "", which the caller treats
-// as undeclared rather than as an error: rejecting the entity here would turn
-// a lax text declaration into a parse failure that no version rule asked for.
-func declVersion(decl string) string {
-	i := strings.Index(decl, "version")
-	if i < 0 {
-		return ""
-	}
-	rest := strings.TrimLeft(decl[i+len("version"):], " \t\r\n")
-	if !strings.HasPrefix(rest, "=") {
-		return ""
-	}
-	rest = strings.TrimLeft(rest[1:], " \t\r\n")
-	if rest == "" {
-		return ""
-	}
-	quote := rest[0]
-	if quote != '\'' && quote != '"' {
-		return ""
-	}
-	end := strings.IndexByte(rest[1:], quote)
-	if end < 0 {
-		return ""
-	}
-	return rest[1 : 1+end]
 }
 
 func isXMLSpaceByte(c byte) bool {
@@ -435,7 +427,10 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 	// document entity, and this text never passes through Parse's reader.
 	folded, _ := foldLineEnds([]byte(text), true)
 	text = string(folded)
-	text, version := stripTextDecl(text)
+	text, version, err := stripTextDecl(text)
+	if err != nil {
+		return fmt.Errorf("external DTD subset %s: %w", resolved, err)
+	}
 	if err := t.checkEntityVersion("(external subset)", version); err != nil {
 		return err
 	}
@@ -445,6 +440,13 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 	if err != nil {
 		return err
 	}
+	if err := checkExtSubsetGrammar(text); err != nil {
+		return fmt.Errorf("external DTD subset %s: %w", resolved, err)
+	}
+	// XML 1.0 §3.4 (from memory): the contents of an IGNORE section are not
+	// declarations. Resolved after substitution, which is what decides a
+	// "<![%draft;[" keyword, and before anything reads declarations out.
+	text = resolveConditionals(text)
 	// Retained for the attribute defaults and declared types the caller
 	// reads out of it: those only exist once parameter entities have been
 	// substituted, which is what the text above now is.
@@ -453,7 +455,7 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 	// reached through an external subset are still this document's expansion,
 	// and a fresh budget here would be the same per-parse reset that XInclude
 	// had.
-	sub := parseEntityDecls(text, resolved, t.budget)
+	sub := parseEntityDecls(text, resolved, t.budget, t.lim)
 	if sub == nil {
 		return nil
 	}
@@ -471,14 +473,19 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 //
 // That is XML section 4.2's first-declaration-wins rule applied across the two
 // subsets, and the direction matters — the internal subset is read first and
-// therefore wins over the external one.
+// therefore wins over the external one. Each name sub adds is marked outside,
+// for WFC: Entity Declared under standalone="yes".
 func (t *entityTable) mergeUnder(sub *entityTable) {
+	if t.outside == nil {
+		t.outside = map[string]bool{}
+	}
 	for name, raw := range sub.raw {
 		if t.external[name] {
 			continue
 		}
 		if _, dup := t.raw[name]; !dup {
 			t.raw[name] = raw
+			t.outside[name] = true
 		}
 	}
 	for name := range sub.external {
@@ -487,6 +494,7 @@ func (t *entityTable) mergeUnder(sub *entityTable) {
 		}
 		if !t.external[name] {
 			t.external[name] = true
+			t.outside[name] = true
 		}
 	}
 	for name, d := range sub.externalDecl {
@@ -510,6 +518,37 @@ func (t *entityTable) mergeUnder(sub *entityTable) {
 	}
 }
 
+// markPEDeclared marks outside each general entity whose binding (first)
+// declaration in the expanded internal subset came in through a parameter
+// entity (peSpans), as mergeUnder marks the external subset's. XML 1.0 §4.1
+// WFC: Entity Declared counts both alike: a standalone document's reference
+// must match "an entity declaration that does not occur within the external
+// subset or a parameter entity".
+func (t *entityTable) markPEDeclared(subset string) {
+	if len(t.peSpans) == 0 {
+		return
+	}
+	seen := map[string]bool{}
+	scanMarkupDecls(subset, func(at int, kw, body string) bool {
+		body = strings.TrimSpace(body)
+		if kw != "ENTITY" || strings.HasPrefix(body, "%") {
+			return true
+		}
+		f := attListFields(body)
+		if len(f) == 0 || seen[f[0]] {
+			return true
+		}
+		seen[f[0]] = true
+		if inSpans(t.peSpans, at) {
+			if t.outside == nil {
+				t.outside = map[string]bool{}
+			}
+			t.outside[f[0]] = true
+		}
+		return true
+	})
+}
+
 // expandParameterEntities substitutes parameter-entity references in a DTD
 // subset, so that the declarations a referenced module makes become visible.
 //
@@ -522,10 +561,10 @@ func (t *entityTable) mergeUnder(sub *entityTable) {
 // internal parameter entity, which costs no fetch, is bounded by the byte
 // budget alone, charged here at substitution time for exactly that reason.
 func (t *entityTable) expandParameterEntities(subset, base string, depth int) (string, error) {
-	if depth > maxExternalDepth {
+	if depth > t.lim.extDepth {
 		return "", fmt.Errorf(
 			"parameter entities nested more than %d deep: %w",
-			maxExternalDepth, ErrResourceLimit)
+			t.lim.extDepth, ErrResourceLimit)
 	}
 	params, err := t.parseParameterDecls(subset, base)
 	if err != nil {
@@ -535,6 +574,7 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 		return subset, nil
 	}
 	var sb strings.Builder
+	semis := semiFinder{s: subset, at: -1}
 	for i := 0; i < len(subset); {
 		// A declaration is copied across whole. The "%" that marks a
 		// parameter-entity DECLARATION is not a reference, and scanning it as
@@ -548,12 +588,27 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 			i = skip
 			continue
 		}
+		// XML 1.0 §3.4 [63]: the contents of an IGNORE section are ignored
+		// but for nested section starts and ends, so a "%" in one is not a
+		// reference and is neither substituted nor fetched.
+		if kw, body, end := ignoredSection(subset, i, params); end > i {
+			sb.WriteString("<![" + kw + subset[body:end])
+			i = end
+			continue
+		} else if end < 0 {
+			// An IGNORE section that never closes runs to the end of the
+			// text, so nothing after it is a reference; the grammar check
+			// refuses it. Stopping here keeps the pass linear: rescanning
+			// the tail from every later "<![" cost O(k*n).
+			sb.WriteString(subset[i:])
+			break
+		}
 		if subset[i] != '%' {
 			sb.WriteByte(subset[i])
 			i++
 			continue
 		}
-		j := strings.IndexByte(subset[i:], ';')
+		j := semis.from(i)
 		if j < 0 {
 			sb.WriteByte(subset[i])
 			i++
@@ -578,7 +633,9 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 				return "", err
 			}
 			var version string
-			text, version = stripTextDecl(text)
+			if text, version, err = stripTextDecl(text); err != nil {
+				return "", fmt.Errorf("external parameter entity %%%s: %w", name, err)
+			}
 			if err := t.checkEntityVersion("%"+name, version); err != nil {
 				return "", err
 			}
@@ -597,15 +654,87 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 		if err != nil {
 			return "", err
 		}
+		// Declarations are copied whole above, so a reference reaching here
+		// is between declarations — [28a] DeclSep — unless it is the keyword
+		// of a conditional section. WFC: PE Between Declarations (XML 1.0
+		// §2.8): "The replacement text of a parameter entity reference in a
+		// DeclSep MUST match the production extSubsetDecl." A reference
+		// inside a declaration is only a validity matter, and is never here.
+		if !strings.HasSuffix(strings.TrimRight(sb.String(), " \t\r\n"), "<![") {
+			if err := checkExtSubsetGrammar(text); err != nil {
+				return "", fmt.Errorf("parameter entity %%%s between declarations "+
+					"(WFC: PE Between Declarations): %w", name, err)
+			}
+		}
+		if depth == 0 && t.externalDepth == 0 {
+			t.peSpans = append(t.peSpans, [2]int{sb.Len(), sb.Len() + len(text)})
+		}
 		sb.WriteString(text)
-		if sb.Len() > maxTotalEntityBytes {
+		if sb.Len() > t.lim.total {
 			return "", fmt.Errorf(
 				"entity expansion exceeds %d bytes in total: %w",
-				maxTotalEntityBytes, ErrResourceLimit)
+				t.lim.total, ErrResourceLimit)
 		}
 		i += j + 1
 	}
 	return sb.String(), nil
+}
+
+// ignoredSection recognises an IGNORE conditional section starting at s[i]:
+// "<![", its keyword written as IGNORE or as a reference to an internal
+// parameter entity whose replacement text is IGNORE, and "[". It returns the
+// keyword as substituted, the offset of the "[", and the offset just past the
+// section's "]]>", counting nested sections as §3.4 [64] does; end is i when
+// s[i:] is no such section, and -1 when it is one that is unterminated, which
+// the grammar check refuses.
+func ignoredSection(s string, i int, params map[string]paramEntity) (kw string, body, end int) {
+	if !strings.HasPrefix(s[i:], "<![") {
+		return "", i, i
+	}
+	j := i + len("<![")
+	for j < len(s) && isXMLSpaceByte(s[j]) {
+		j++
+	}
+	kw = s[i+len("<![") : j]
+	switch rest := s[j:]; {
+	case strings.HasPrefix(rest, "IGNORE"):
+		kw += "IGNORE"
+		j += len("IGNORE")
+	case strings.HasPrefix(rest, "%"):
+		k := strings.IndexByte(rest, ';')
+		if k < 0 {
+			return "", i, i
+		}
+		p, ok := params[rest[1:k]]
+		if !ok || p.external || strings.TrimSpace(p.text) != "IGNORE" {
+			return "", i, i
+		}
+		kw += p.text
+		j += k + 1
+	default:
+		return "", i, i
+	}
+	for j < len(s) && isXMLSpaceByte(s[j]) {
+		j++
+	}
+	if j >= len(s) || s[j] != '[' {
+		return "", i, i
+	}
+	body = j
+	for depth := 0; j < len(s); j++ {
+		switch {
+		case strings.HasPrefix(s[j:], "<!["):
+			depth++
+			j += 2
+		case strings.HasPrefix(s[j:], "]]>"):
+			if depth == 0 {
+				return kw, body, j + len("]]>")
+			}
+			depth--
+			j += 2
+		}
+	}
+	return "", i, -1
 }
 
 // paramEntity is a parameter-entity declaration: internal replacement text, or
@@ -638,7 +767,7 @@ func (t *entityTable) parseParameterDecls(subset, base string) (map[string]param
 		if kw != "ENTITY" {
 			continue
 		}
-		if len(out) >= maxEntityCount {
+		if len(out) >= t.lim.count {
 			break
 		}
 		body = strings.TrimSpace(body)
@@ -687,9 +816,16 @@ func (t *entityTable) parseParameterDecls(subset, base string) (map[string]param
 //
 // Only whole constructs are skipped, so a parameter-entity reference between
 // two declarations — the position where DTD modularisation puts one — is
-// still seen.
+// still seen. A conditional section's "<![" is not a construct: its keyword
+// is usually a reference ("<![%draft;[") and an INCLUDE's contents are
+// declarations whose references must be substituted, so both are scanned;
+// resolveConditionals then drops what an IGNORE held. dtd's loader does the
+// same (endOfConstruct).
 func endOfDTDConstruct(s string, i int) int {
 	rest := s[i:]
+	if strings.HasPrefix(rest, "<![") {
+		return i
+	}
 	if strings.HasPrefix(rest, "<!--") {
 		end := strings.Index(rest[len("<!--"):], "-->")
 		if end < 0 {
@@ -697,7 +833,17 @@ func endOfDTDConstruct(s string, i int) int {
 		}
 		return i + len("<!--") + end + len("-->")
 	}
-	if !strings.HasPrefix(rest, "<!") && !strings.HasPrefix(rest, "<?") {
+	if strings.HasPrefix(rest, "<?") {
+		// A PI ends at "?>" (§2.6), as the tokenizer and the grammar read it,
+		// not at its first ">": its body is opaque, not scanned for
+		// references or section starts.
+		end := strings.Index(rest[len("<?"):], "?>")
+		if end < 0 {
+			return len(s)
+		}
+		return i + len("<?") + end + len("?>")
+	}
+	if !strings.HasPrefix(rest, "<!") {
 		return i
 	}
 	end := endOfDeclaration(rest)
@@ -718,23 +864,47 @@ func endOfDTDConstruct(s string, i int) int {
 // a byte came from is its position — hence a span.
 //
 // Spans nest: an external entity may itself reference another. They are
-// recorded outermost first, so the LAST span containing an offset is the
-// innermost entity, and that is the one whose URI applies.
+// recorded in order of start, outermost first, and each links to the
+// innermost span enclosing it, so the innermost entity at an offset, the one
+// whose URI applies, is found without scanning the list.
 type entityBaseSpan struct {
 	start, end int
 	base       string
+	parent     int // index of the innermost enclosing span, or -1
+}
+
+// addBaseSpans appends spans, given relative to a replacement text, for that
+// text landing at offset at. A span that holds no byte can hold no node and is
+// dropped, so the list grows with the text substituted rather than with the
+// references made. Each span's parent is found by walking up from the last
+// span appended; a span passed over ends before this one starts and so
+// before any later one, which keeps the walk amortised O(1).
+func (t *entityTable) addBaseSpans(rel []entityBaseSpan, at int) {
+	for _, r := range rel {
+		if r.end <= r.start {
+			continue
+		}
+		s := entityBaseSpan{start: at + r.start, end: at + r.end, base: r.base, parent: len(t.baseSpans) - 1}
+		for s.parent >= 0 && t.baseSpans[s.parent].end < s.end {
+			s.parent = t.baseSpans[s.parent].parent
+		}
+		t.baseSpans = append(t.baseSpans, s)
+	}
 }
 
 // baseAt returns the base URI in force at a byte offset of the substituted
-// source, or "" when the offset is in the document's own text.
+// source, or "" when the offset is in the document's own text: a binary
+// search for the last span starting at or before off, then up its enclosing
+// spans to the first that still contains off.
 func baseAt(spans []entityBaseSpan, off int) string {
-	base := ""
-	for _, s := range spans {
-		if off >= s.start && off < s.end {
-			base = s.base
-		}
+	k := sort.Search(len(spans), func(i int) bool { return spans[i].start > off }) - 1
+	for k >= 0 && off >= spans[k].end {
+		k = spans[k].parent
 	}
-	return base
+	if k < 0 {
+		return ""
+	}
+	return spans[k].base
 }
 
 // externalSpansIn locates the external entity references inside already
@@ -745,18 +915,19 @@ func baseAt(spans []entityBaseSpan, off int) string {
 // memoised: the same entity expanded twice must produce spans at both places,
 // which a cache on the string cannot express.
 func (t *entityTable) externalSpansIn(raw string, at int, depth int) []entityBaseSpan {
-	if depth > maxEntityDepth {
+	if depth > t.lim.depth {
 		return nil
 	}
 	var out []entityBaseSpan
 	pos := at
+	semis := semiFinder{s: raw, at: -1}
 	for i := 0; i < len(raw); {
 		if raw[i] != '&' {
 			pos++
 			i++
 			continue
 		}
-		j := strings.IndexByte(raw[i:], ';')
+		j := semis.from(i)
 		if j < 0 {
 			pos++
 			i++
@@ -806,4 +977,56 @@ func (t *entityTable) externalSpansIn(raw string, at int, depth int) []entityBas
 		i += j + 1
 	}
 	return out
+}
+
+// resolveConditionals unwraps the INCLUDE sections of an expanded external
+// subset and drops its IGNORE sections, counting nested "<![" and "]]>" as
+// §3.4 requires. checkExtSubsetGrammar has already held the text to [61]-[65];
+// a "<![" whose keyword is not INCLUDE or IGNORE (an undeclared "%kw;") is
+// copied through with its "]]>", as dtd's loader does.
+//
+// One forward pass: each open section is a stack entry, so the text is read
+// and copied once however many sections it holds or how deep they nest.
+func resolveConditionals(s string) string {
+	var sb strings.Builder
+	sb.Grow(len(s))
+	var open []bool // per open section: true for an INCLUDE, whose "]]>" is dropped
+	from := 0       // s[from:i] is text not yet copied
+	for i := 0; i < len(s); {
+		switch {
+		case strings.HasPrefix(s[i:], "<!["):
+			rest := strings.TrimLeft(s[i+len("<!["):], " \t\r\n")
+			include := strings.HasPrefix(rest, "INCLUDE")
+			if !include && !strings.HasPrefix(rest, "IGNORE") {
+				open = append(open, false)
+				i += len("<![")
+				continue
+			}
+			rest = strings.TrimLeft(strings.TrimPrefix(strings.TrimPrefix(rest, "INCLUDE"), "IGNORE"), " \t\r\n")
+			body := len(s) - len(strings.TrimPrefix(rest, "["))
+			sb.WriteString(s[from:i])
+			if include {
+				open = append(open, true)
+				i, from = body, body
+				continue
+			}
+			end := ignoreSectEnd(s, body)
+			if end < 0 { // unclosed: the grammar check refuses this first
+				i, from = len(s), i
+				break
+			}
+			i, from = end, end
+		case len(open) > 0 && strings.HasPrefix(s[i:], "]]>"):
+			if open[len(open)-1] {
+				sb.WriteString(s[from:i])
+				from = i + len("]]>")
+			}
+			open = open[:len(open)-1]
+			i += len("]]>")
+		default:
+			i++
+		}
+	}
+	sb.WriteString(s[from:])
+	return sb.String()
 }

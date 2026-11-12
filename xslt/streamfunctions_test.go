@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -431,6 +432,14 @@ func TestTypeDeterminedUsageAtomizes(t *testing.T) {
 	if got := typeDeterminedUsage("node()*"); got != usageNavigation {
 		t.Errorf("type-determined usage of node()* = %v, want navigation", got)
 	}
+	// "function(*) or a subtype thereof, then inspection": maps and arrays
+	// are function items too.
+	for _, as := range []string{"function(*)", "function(xs:string) as xs:string?", "map(*)",
+		"map(xs:string, item()*)*", "array(xs:integer)", "(function() as item())?"} {
+		if got := typeDeterminedUsage(as); got != usageInspection {
+			t.Errorf("type-determined usage of %s = %v, want inspection", as, got)
+		}
+	}
 }
 
 // TestNavigationFromStreamingParamIsFreeRanging checks the rule that makes
@@ -653,4 +662,26 @@ func TestStreamingParameterSignatureRule(t *testing.T) {
 				"and the conformance-gaps entry must both be revisited")
 		}
 	})
+
+	// A body that is not one xsl:sequence is the sequence constructor
+	// §19.8.5 names, under the instruction rules. su-absorbing-205's shape:
+	// the parameter read by an xsl:copy's select and again in its content,
+	// a higher-order operand (§19.8.4.12's note), is refused; -204's, an
+	// LRE reading only attributes beside one consuming instruction, is not.
+	for _, c := range []struct {
+		body   string
+		refuse bool
+	}{
+		{`<xsl:function name="f:n" as="element()?" streamability="absorbing"><xsl:param name="e" as="element()*"/>` +
+			`<xsl:copy select="head($e)"><xsl:attribute name="t">d</xsl:attribute><xsl:sequence select="f:n(tail($e))"/></xsl:copy></xsl:function>`, true},
+		{`<xsl:function name="f:c" streamability="absorbing"><xsl:param name="i" as="node()"/>` +
+			`<in x="{$i!node-name()}" y="{$i!@name}"/><xsl:text>&#10;</xsl:text><xsl:sequence select="$i!*!f:c(.)"/></xsl:function>`, false},
+		{`<xsl:function name="f:d" streamability="absorbing"><xsl:param name="i" as="node()"/>` +
+			`<a><xsl:copy-of select="$i/*"/></a><b><xsl:copy-of select="$i/*"/></b></xsl:function>`, true},
+	} {
+		err := mk(t, c.body)
+		if got := err != nil && strings.Contains(err.Error(), "XTSE3430"); got != c.refuse {
+			t.Errorf("%s: refused %v, want %v (%v)", c.body, got, c.refuse, err)
+		}
+	}
 }

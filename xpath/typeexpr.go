@@ -304,7 +304,26 @@ func (e *InstanceOfExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 }
 
 // Eval implements Expr for "cast as" and "castable as".
+//
+// Every value the cast annotates with a schema type is given that schema's
+// type environment here, once for all of evalCast's result shapes.
 func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
+	out, err := e.evalCast(ctx)
+	if err != nil || e.Type.schemaEnv == nil {
+		return out, err
+	}
+	// A fresh slice: the result may share the operand's backing array.
+	res := make(xdm.Sequence, len(out))
+	for i, it := range out {
+		if a, ok := it.(*xdm.Atomic); ok {
+			it = withSchemaEnv(a, e.Type.schemaEnv)
+		}
+		res[i] = it
+	}
+	return res, nil
+}
+
+func (e *CastExpr) evalCast(ctx *Context) (xdm.Sequence, error) {
 	v, err := e.Operand.Eval(ctx)
 	if err != nil {
 		if e.Castable {
@@ -329,7 +348,10 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			"a value cannot be cast to xs:error, which has no instances")
 	}
 
-	atoms := xdm.Atomize(v)
+	atoms, err := ctx.atomize(v)
+	if err != nil {
+		return nil, err
+	}
 	switch len(atoms) {
 	case 0:
 		// Only "type?" permits an empty operand.
@@ -389,10 +411,10 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			}
 			return nil, err
 		}
-		out, err := castToListType(a, e.Type.ListItemFacet)
 		if e.Castable {
-			return xdm.One(boolItem(err == nil)), nil
+			return xdm.One(boolItem(listTypeCastable(a, e.Type.ListItemFacet))), nil
 		}
+		out, err := castToListType(ctx, a, e.Type.ListItemFacet)
 		if err != nil {
 			return nil, err
 		}
@@ -596,10 +618,7 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		src.Type == xdm.TypeUntypedAtomic {
 		src = xdm.NewString(src.String())
 	}
-	if err := ctx.checkCastDigits(src, e.Type.AtomicType); err != nil {
-		return nil, err
-	}
-	out, err := CastToDerived(src, e.Type.AtomicType, e.Type.FacetName)
+	out, err := ctx.castToDerived(src, e.Type.AtomicType, e.Type.FacetName)
 	if err == nil && e.Type.SchemaValueValid != nil {
 		// The built-in cast succeeded, which settles the lexical form. The
 		// schema type's own facets — a range, a pattern, an enumeration —
@@ -830,9 +849,16 @@ func schemaTypeNameMatches(env *xdm.TypeEnvironment, annotation, want string) bo
 // known, which is all that can be said about it without the schema's own
 // value constructor.
 func castListTokens(ctx *Context, a *xdm.Atomic, list SequenceType) (xdm.Sequence, error) {
-	toks := collapseXMLSpaceFields(a.String())
-	out := make(xdm.Sequence, 0, len(toks))
-	for _, tok := range toks {
+	s := a.String()
+	n := 0
+	for range xmlSpaceFields(s) {
+		n++
+	}
+	out, err := makeSequence(ctx, n)
+	if err != nil {
+		return nil, err
+	}
+	for tok := range xmlSpaceFields(s) {
 		switch {
 		case list.SchemaListItem != nil:
 			item := &CastExpr{Operand: newLiteral(xdm.NewString(tok)),
@@ -871,7 +897,7 @@ func castToListMember(ctx *Context, a *xdm.Atomic, members []SequenceType) (xdm.
 		var out xdm.Sequence
 		var err error
 		if m.ListItemFacet != "" {
-			out, err = castToListType(a, m.ListItemFacet)
+			out, err = castToListType(ctx, a, m.ListItemFacet)
 		} else {
 			if m.SchemaValueValid != nil {
 				err = m.SchemaValueValid(a.String())

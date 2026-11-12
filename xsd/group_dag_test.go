@@ -3,6 +3,7 @@ package xsd
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -154,5 +155,94 @@ func TestGroupCyclesStillDetected(t *testing.T) {
 		if _, err := Load(st.Root, "", Options{}); err == nil {
 			t.Errorf("%s: circular group accepted, want mg-props-correct.2", tc.name)
 		}
+	}
+}
+
+// restrictedDAGSchema is dagSchema with a type R restricting a base B whose
+// content is the same group DAG, so Particle Valid (Restriction) walks it.
+func restrictedDAGSchema(n int) string {
+	return strings.Replace(dagSchema(n), `<xs:element name="root"`,
+		`<xs:complexType name="B"><xs:sequence><xs:group ref="t:g0"/></xs:sequence></xs:complexType>`+
+			`<xs:complexType name="R"><xs:complexContent><xs:restriction base="t:B">`+
+			`<xs:sequence><xs:group ref="t:g0"/></xs:sequence></xs:restriction></xs:complexContent></xs:complexType>`+
+			`<xs:element name="root"`, 1)
+}
+
+// The restriction check flattens nested same-compositor groups, and on a
+// group DAG the flattened list has one member per path: 1.19 GB for the
+// 2.8 KB schema at n=22, allocated before the position budget refused it.
+// It must now be refused, as a resource limit, before that allocation.
+func TestRestrictedGroupDAGRefusedBeforeFlattening(t *testing.T) {
+	st, err := xdm.ParseString(restrictedDAGSchema(8), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(st.Root, "", Options{}); err != nil {
+		t.Fatalf("n=8 restricts its base within the position budget and must load: %v", err)
+	}
+	st, err = xdm.ParseString(restrictedDAGSchema(22), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, lerr := Load(st.Root, "", Options{})
+	runtime.ReadMemStats(&after)
+	if !errors.Is(lerr, xdm.ErrResourceLimit) {
+		t.Fatalf("n=22: Load = %v, want a refusal wrapping ErrResourceLimit", lerr)
+	}
+	if got := after.TotalAlloc - before.TotalAlloc; got > 32<<20 {
+		t.Errorf("n=22: refusing the restriction allocated %d MB, want under 32 MB: "+
+			"the group DAG was flattened before the budget applied", got>>20)
+	}
+}
+
+// emptyBaseDAGSchema is dagSchema with a type R restricting an empty base B
+// by the group DAG, which Particle Emptiable decides through Effective Total
+// Range before any size gate applies.
+func emptyBaseDAGSchema(n int) string {
+	return strings.Replace(dagSchema(n), `<xs:element name="root"`,
+		`<xs:complexType name="B"/>`+
+			`<xs:complexType name="R"><xs:complexContent><xs:restriction base="t:B">`+
+			`<xs:sequence><xs:group ref="t:g0"/></xs:sequence></xs:restriction></xs:complexContent></xs:complexType>`+
+			`<xs:element name="root"`, 1)
+}
+
+// Effective Total Range is computed once per group. It walked every path,
+// so the empty-base restriction over n=26 groups took 1.9 s to load and n=40
+// would take hours; each load ended only in the expected
+// derivation-ok-restriction error, which it must still give.
+func TestEmptyBaseRestrictionOfGroupDAGInGraphTime(t *testing.T) {
+	st, err := xdm.ParseString(emptyBaseDAGSchema(40), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lerr error
+	stats := withStats(func() { _, lerr = Load(st.Root, "", Options{}) })
+	if lerr == nil || !strings.Contains(lerr.Error(), "derivation-ok-restriction") {
+		t.Errorf("Load = %v, want derivation-ok-restriction: R requires content its empty base has none of", lerr)
+	}
+	if got := stats.RangeSteps.Load(); got > 2*41 {
+		t.Errorf("Effective Total Range expanded %d groups, want at most %d: it is walking paths", got, 2*41)
+	}
+}
+
+// particleIgnorable decides each group once. Over a DAG of n groups each
+// holding the next twice, ending in an empty sequence, every path is
+// ignorable, so a path walk visits all 2^n of them.
+func TestParticleIgnorableInGraphTime(t *testing.T) {
+	const n = 40
+	g := &ModelGroup{Compositor: CompositorSequence}
+	for i := 1; i < n; i++ {
+		ref := &Particle{MinOccurs: 1, MaxOccurs: 1, Term: g}
+		g = &ModelGroup{Compositor: CompositorSequence, Particles: []*Particle{ref, ref}}
+	}
+	var ok bool
+	stats := withStats(func() { ok = particleIgnorable(&Particle{MinOccurs: 1, MaxOccurs: 1, Term: g}) })
+	if !ok {
+		t.Error("a DAG of empty sequences is ignorable")
+	}
+	if got := stats.RangeSteps.Load(); got > n {
+		t.Errorf("particleIgnorable expanded %d groups, want at most %d", got, n)
 	}
 }

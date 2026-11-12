@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -188,5 +189,96 @@ func TestRedefineTerminates(t *testing.T) {
 	case <-done:
 	case <-timeoutAfterSecond():
 		t.Fatal("a self-referential redefined group did not terminate")
+	}
+}
+
+// redefineBase is a base document with a group g holding <age type="xs:int"/>
+// and an attribute group ag holding one xs:int attribute and no wildcard.
+const redefineBase = `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:t">
+  <xs:group name="g"><xs:sequence>
+    <xs:element name="age" type="xs:int"/>
+  </xs:sequence></xs:group>
+  <xs:attributeGroup name="ag">
+    <xs:attribute name="id" type="xs:int"/>
+  </xs:attributeGroup>
+</xs:schema>`
+
+// redefineMain redefines g or ag, without a self-reference, as body.
+func redefineMain(body string) string {
+	return `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:t="urn:t" targetNamespace="urn:t">
+  <xs:redefine schemaLocation="base.xsd">` + body + `</xs:redefine>
+  <xs:element name="r"><xs:complexType>
+    <xs:group ref="t:g"/><xs:attributeGroup ref="t:ag"/>
+  </xs:complexType></xs:element>
+</xs:schema>`
+}
+
+// src-redefine 6.2.2 and 7.2.2: a group or attribute group redefined without
+// a self-reference must restrict the original. The group check ran before
+// the original's element types were bound, so a retyped element passed; the
+// attribute-group check never compared the attribute wildcard.
+func TestRedefineWithoutSelfReferenceMustRestrict(t *testing.T) {
+	for _, c := range []struct {
+		name, body string
+		ok         bool
+	}{
+		{"group retyped to string", `<xs:group name="g"><xs:sequence>
+		  <xs:element name="age" type="xs:string"/></xs:sequence></xs:group>`, false},
+		{"group narrowed", `<xs:group name="g"><xs:sequence>
+		  <xs:element name="age" type="xs:short"/></xs:sequence></xs:group>`, true},
+		{"attribute group adds a wildcard", `<xs:attributeGroup name="ag">
+		  <xs:attribute name="id" type="xs:int"/>
+		  <xs:anyAttribute processContents="skip"/></xs:attributeGroup>`, false},
+		{"attribute group unchanged", `<xs:attributeGroup name="ag">
+		  <xs:attribute name="id" type="xs:int"/></xs:attributeGroup>`, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := loadFromMap(t, "main.xsd", map[string]string{
+				"main.xsd": redefineMain(c.body), "base.xsd": redefineBase,
+			})
+			if c.ok && err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if !c.ok && (err == nil || !strings.Contains(err.Error(), "src-redefine")) {
+				t.Fatalf("Load = %v, want a src-redefine error", err)
+			}
+		})
+	}
+}
+
+// The wildcard of a redefined attribute group restricts the original's as a
+// complex type's restricts its base's (derivation-ok-restriction clause 4):
+// a subset, and no weaker.
+func TestRedefinedAttributeGroupWildcardRestricts(t *testing.T) {
+	base := `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:t">
+  <xs:group name="g"><xs:sequence/></xs:group>
+  <xs:attributeGroup name="ag"><xs:anyAttribute namespace="##other" processContents="lax"/></xs:attributeGroup>
+</xs:schema>`
+	for _, c := range []struct {
+		name, wild string
+		ok         bool
+	}{
+		{"same", `<xs:anyAttribute namespace="##other" processContents="lax"/>`, true},
+		{"stronger", `<xs:anyAttribute namespace="##other" processContents="strict"/>`, true},
+		{"weaker", `<xs:anyAttribute namespace="##other" processContents="skip"/>`, false},
+		{"wider", `<xs:anyAttribute namespace="##any" processContents="lax"/>`, false},
+		{"dropped", ``, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := loadFromMap(t, "main.xsd", map[string]string{
+				"main.xsd": redefineMain(`<xs:attributeGroup name="ag">` + c.wild + `</xs:attributeGroup>`),
+				"base.xsd": base,
+			})
+			if c.ok && err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if !c.ok && (err == nil || !strings.Contains(err.Error(), "src-redefine.7.2.2")) {
+				t.Fatalf("Load = %v, want src-redefine.7.2.2", err)
+			}
+		})
 	}
 }

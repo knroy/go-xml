@@ -3,8 +3,11 @@ package dtd
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/dtdnote"
+	"github.com/knroy/go-xml/v2/internal/xmlname"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xsd"
 )
@@ -43,8 +46,8 @@ type Options struct {
 	// element, which helps nobody and costs memory proportional to the input.
 	MaxErrors int
 
-	// AllowUndeclared skips elements the DTD says nothing about instead of
-	// reporting them.
+	// AllowUndeclared skips elements and attributes the DTD says nothing
+	// about instead of reporting them.
 	//
 	// Strictly, an undeclared element is a validity error: a DTD is a closed
 	// description, unlike a schema where a wildcard may admit the unknown.
@@ -59,6 +62,26 @@ type Options struct {
 	// ask otherwise. Turn it on when the DTD is known to be partial;
 	// HasExternalSubset is how to detect that case.
 	AllowUndeclared bool
+
+	// MaxContentModelPositions, MaxContentModelEdges and MaxMatchStates
+	// bound each element content model Validate compiles and matches, as
+	// the fields of the same meaning in xsd.SequenceMatcherOptions do. Zero
+	// means the default — 8192 positions (xsd.DefaultMaxContentModelPositions),
+	// 1<<20 follow entries, 4096 simultaneous states
+	// (xsd.DefaultMaxMatchStates) — and a negative value means no limit, for
+	// a DTD the caller produced itself.
+	//
+	// They bound what one declaration can cost, and since Validate holds
+	// one compiled model at a time, what one call holds: a model past the
+	// first two is reported as a validity error on every element that uses it, and an
+	// element whose children need more states than MaxMatchStates is
+	// reported as not matching. Raising them admits denser models at the
+	// cost of memory and time that grow with the model (quadratically in
+	// positions for a dense (a?,a?,...)); lowering them can turn a valid
+	// document into a reported failure.
+	MaxContentModelPositions int
+	MaxContentModelEdges     int
+	MaxMatchStates           int
 }
 
 // DefaultMaxErrors bounds how many failures are reported.
@@ -74,7 +97,9 @@ const DefaultMaxErrors = 100
 // since without it the parse fails before this is reachable.
 //
 // What is checked: element content models, attribute presence (#REQUIRED and
-// #FIXED), enumerated attribute values, ID/IDREF, and the two §3.3.1 rules
+// #FIXED), enumerated attribute values, the lexical form of tokenized values,
+// ID/IDREF, the validity constraints on the declarations themselves (recorded
+// as the DTD was read; see declarationsInto), and the two §3.3.1 rules
 // that tie an attribute to a declaration elsewhere in the DTD — every name in
 // a NOTATION attribute's enumeration must be declared by a <!NOTATION>, and
 // the value of an ENTITY or ENTITIES attribute must name an entity declared
@@ -86,6 +111,16 @@ const DefaultMaxErrors = 100
 // only LoadOptions.InternalSubsetOnly or Parse produces) may be missing the
 // very declarations they look for, and reporting them would reject a valid
 // document.
+//
+// Also reported are the faults xdm.Parse saw and the tree cannot show, which
+// it records as it reads: a CDATA section or character reference where
+// element content admits only white space, an entity reference in an EMPTY
+// element (§3, VC: Element Valid), a reference to an entity declared nowhere
+// (§4.1, VC: Entity Declared), and under standalone="yes" an external markup
+// declaration that defaulted or normalized an attribute or declared element
+// content holding white space (§2.9, VC: Standalone Document Declaration).
+// The external ones are seen only when the parse read the external subset
+// (ParseOptions.ExternalEntities).
 //
 // An attribute whose declared type or default declaration is outside the sets
 // XML 1.0 §3.3 closes is reported here rather than skipped. Such a declaration
@@ -114,8 +149,13 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 		dtd:        d,
 		max:        max,
 		allowUndec: opts.AllowUndeclared,
-		matchers:   map[string]*xsd.SequenceMatcher{},
-		ids:        map[string]bool{},
+		attrIdx:    map[string]*attrIndex{},
+		matcherOpts: xsd.SequenceMatcherOptions{
+			MaxPositions:   opts.MaxContentModelPositions,
+			MaxEdges:       opts.MaxContentModelEdges,
+			MaxMatchStates: opts.MaxMatchStates,
+		},
+		ids: map[string]bool{},
 
 		// A DTD assembled by a caller rather than by Parse or Load may have
 		// nil name sets — the maps are exported and the zero value is a
@@ -135,7 +175,68 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 		}
 	}
 	v.root = root
+	// XML 1.0 §2.8 VC Root Element Type: the document's root is the element
+	// the DOCTYPE names. Without it a document could send any other declared
+	// element as its root and escape the named one's attributes and model.
+	// Only a whole document has a root to hold to; a subtree passed in is
+	// validated as itself.
+	if doc.Kind() == xdm.KindDocument && root != doc && d.name != "" &&
+		root.Name().Lexical() != d.name {
+		v.fail(root, "root element %s is not the DOCTYPE's %s",
+			root.Name().Lexical(), d.name)
+	}
+	// XML 1.1 §4.3.4: a document takes its version from the document
+	// entity, one with no declaration is 1.0, and a 1.0 document may not
+	// include a 1.1 entity. Load read the external entities but never saw
+	// the document; this is where the two meet.
+	if d.v11 != "" {
+		ver := ""
+		if t := doc.Tree(); t != nil {
+			ver = t.XMLVersion
+		}
+		if ver != "1.1" {
+			v.fail(root, "the DTD's external resource %s declares XML 1.1 but the document is XML 1.0 (XML §4.3.4)", d.v11)
+		}
+	}
+	// The faults in the declarations themselves, found as they were read.
+	for _, m := range d.declErrs {
+		v.fail(root, "%s", m)
+	}
+	// XML 1.0 §4.2.2 VC Notation Declared: "The Name MUST match the
+	// declared name of a notation." Like the other absence checks it is
+	// unsound on half a DTD.
+	if !v.partial {
+		for _, e := range d.ndata {
+			if !d.Notations[e[1]] {
+				v.fail(root, "unparsed entity %s names the notation %s, which no <!NOTATION> declares", e[0], e[1])
+			}
+		}
+	}
+	for _, msg := range d.nesting {
+		v.fail(root, "%s", msg)
+	}
+	// The faults the parser saw that the tree cannot show (internal/dtdnote):
+	// white space written as a reference where only white space may be, and
+	// under standalone="yes" what external declarations defaulted or
+	// normalized. A fault about the document is one about its root; those
+	// outside the subtree being validated are not this call's.
+	for n, msg := range dtdnote.Notes(doc) {
+		el := n.(*xdm.Node)
+		if el.Kind() == xdm.KindDocument {
+			if doc.Kind() != xdm.KindDocument {
+				continue
+			}
+			el = root
+		}
+		for a := el; a != nil; a = a.Parent() {
+			if a == root {
+				v.fail(el, "%s", msg)
+				break
+			}
+		}
+	}
 	v.walk(root)
+	v.matchContent()
 	v.checkIDRefs()
 	if len(v.errs) == 0 {
 		return nil
@@ -148,8 +249,15 @@ type validator struct {
 	max        int
 	allowUndec bool
 	errs       []*Error
-	matchers   map[string]*xsd.SequenceMatcher
-	names      []xdm.QName // child-name buffer reused across elements
+	// pending are the elements whose element-only content model is still
+	// to be matched; see matchContent.
+	pending []contentCheck
+	// attrIdx holds, per element name, what checkAttributes looks up in
+	// that element's ATTLIST; see attrIndexFor.
+	attrIdx map[string]*attrIndex
+	// matcherOpts bounds every matcher matchContent compiles.
+	matcherOpts xsd.SequenceMatcherOptions
+	names       []xdm.QName // child-name buffer reused across elements
 	// ids are every ID value seen, for uniqueness and for resolving IDREF.
 	ids map[string]bool
 	// partial records that the DTD was read from the internal subset alone
@@ -173,10 +281,20 @@ type idref struct {
 	el    *xdm.Node
 }
 
+// full reports that MaxErrors failures are recorded, so nothing more can be.
+func (v *validator) full() bool {
+	return v.max > 0 && len(v.errs) >= v.max
+}
+
 func (v *validator) fail(el *xdm.Node, format string, args ...any) {
-	if v.max > 0 && len(v.errs) >= v.max {
+	if v.full() {
 		return
 	}
+	v.errs = append(v.errs, v.newError(el, format, args...))
+}
+
+// newError builds the failure fail records.
+func (v *validator) newError(el *xdm.Node, format string, args ...any) *Error {
 	// A #FIXED or enumerated value comes from the DTD or the document and
 	// may be megabytes; 200 mismatches against a 1 MB #FIXED value kept
 	// 105 MB. Arguments are clipped before formatting, the message after.
@@ -188,7 +306,7 @@ func (v *validator) fail(el *xdm.Node, format string, args ...any) {
 			args[i] = clip(x.Error())
 		}
 	}
-	v.errs = append(v.errs, &Error{Path: v.pathOf(el), Message: clip(fmt.Sprintf(format, args...))})
+	return &Error{Path: v.pathOf(el), Message: clip(fmt.Sprintf(format, args...))}
 }
 
 // clip shortens s to 1 KB, marking the cut with "..." as the xsd package
@@ -217,6 +335,11 @@ func (v *validator) pathOf(el *xdm.Node) string {
 }
 
 func (v *validator) walk(el *xdm.Node) {
+	// Past MaxErrors nothing more can be reported, and walking on cost
+	// every remaining element its full #REQUIRED list.
+	if v.full() {
+		return
+	}
 	v.checkContent(el)
 	v.checkAttributes(el)
 	for c := range el.Children() {
@@ -227,14 +350,19 @@ func (v *validator) walk(el *xdm.Node) {
 }
 
 // checkContent applies the element's content model.
+//
+// Names are matched as written, prefix:local, because a DTD predates
+// namespaces and declares "o:order" as that string; matching on the local
+// name alone validated <o:order> as <order>.
 func (v *validator) checkContent(el *xdm.Node) {
-	decl, ok := v.dtd.Elements[el.Name().Local]
+	name := el.Name().Lexical()
+	decl, ok := v.dtd.Elements[name]
 	if !ok {
 		// An undeclared element is a validity error in a DTD-validated
 		// document — unlike XSD, where a wildcard may admit it. A caller
 		// working with a deliberately partial internal subset can say so.
 		if !v.allowUndec {
-			v.fail(el, "element %s is not declared", el.Name().Local)
+			v.fail(el, "element %s is not declared", name)
 		}
 		return
 	}
@@ -242,18 +370,19 @@ func (v *validator) checkContent(el *xdm.Node) {
 	case ContentAny:
 		return
 	case ContentEmpty:
-		for c := range el.Children() {
-			if c.Kind() == xdm.KindElement || (c.Kind() == xdm.KindText && strings.TrimSpace(c.Value()) != "") {
-				v.fail(el, "element %s is declared EMPTY but has content",
-					el.Name().Local)
-				return
-			}
+		// XML 1.0 §3 VC Element Valid: "The declaration matches EMPTY and
+		// the element has no content (not even entity references,
+		// comments, PIs or white space)." Any child at all is content.
+		for range el.Children() {
+			v.fail(el, "element %s is declared EMPTY but has content",
+				name)
+			return
 		}
 	case ContentMixed:
 		for c := range el.Children() {
-			if c.Kind() == xdm.KindElement && !decl.Mixed[c.Name().Local] {
+			if c.Kind() == xdm.KindElement && !decl.Mixed[c.Name().Lexical()] {
 				v.fail(el, "element %s is not permitted in the mixed "+
-					"content of %s", c.Name().Local, el.Name().Local)
+					"content of %s", c.Name().Lexical(), name)
 			}
 		}
 	case ContentChildren:
@@ -262,64 +391,175 @@ func (v *validator) checkContent(el *xdm.Node) {
 		for c := range el.Children() {
 			if c.Kind() == xdm.KindText && strings.TrimSpace(c.Value()) != "" {
 				v.fail(el, "element %s has element-only content but "+
-					"contains character data", el.Name().Local)
+					"contains character data", name)
 				break
 			}
 		}
-		m, err := v.matcherFor(decl)
+		if !v.full() {
+			v.pending = append(v.pending, contentCheck{el, decl, len(v.errs)})
+		}
+	}
+}
+
+// contentCheck is an element whose content model matchContent applies.
+type contentCheck struct {
+	el   *xdm.Node
+	decl *Element
+	// at is len(errs) when the walk reached el: where its failure belongs
+	// among the others, so the order is the document's.
+	at int
+}
+
+// contentFault is a failed contentCheck, kept small until it is known to
+// fall within MaxErrors.
+type contentFault struct {
+	i     int    // index in pending
+	err   error  // the model did not compile
+	child string // the first child not permitted; "" when content ended early
+}
+
+// matchContent applies the element-only content models checkContent
+// deferred, one declaration at a time, and slots each failure in where the
+// walk reached its element.
+//
+// Holding every compiled model for the whole call let a 4 KB declaration
+// keep 54 MB live, with nothing bounding the sum across declarations. Grouped
+// by declaration, each model is still compiled once, and only one is live at
+// a time, so the per-model budgets bound the call.
+func (v *validator) matchContent() {
+	if len(v.pending) == 0 {
+		return
+	}
+	order := make([]int, len(v.pending))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortStableFunc(order, func(a, b int) int {
+		return strings.Compare(v.pending[a].decl.Name, v.pending[b].decl.Name)
+	})
+	var faults []contentFault
+	var m *xsd.SequenceMatcher
+	var err error
+	for k, i := range order {
+		decl := v.pending[i].decl
+		if k == 0 || decl != v.pending[order[k-1]].decl {
+			m, err = xsd.NewSequenceMatcherWith(decl.Particle, v.matcherOpts)
+		}
 		if err != nil {
-			v.fail(el, "content model of %s: %v", el.Name().Local, err)
-			return
+			faults = append(faults, contentFault{i: i, err: err})
+			continue
 		}
 		names := v.names[:0]
-		for c := range el.Children() {
+		for c := range v.pending[i].el.Children() {
 			if c.Kind() == xdm.KindElement {
-				names = append(names, xdm.QName{Local: c.Name().Local})
+				names = append(names, xdm.QName{Local: c.Name().Lexical()})
 			}
 		}
 		v.names = names
 		if ok, at := m.Match(names); !ok {
+			f := contentFault{i: i}
 			if at < len(names) {
-				v.fail(el, "element %s is not permitted here in the "+
-					"content of %s", names[at].Local, el.Name().Local)
-			} else {
-				v.fail(el, "the content of %s is incomplete", el.Name().Local)
+				f.child = names[at].Local
+			}
+			faults = append(faults, f)
+		}
+	}
+	if len(faults) == 0 {
+		v.pending = nil
+		return
+	}
+	slices.SortFunc(faults, func(a, b contentFault) int { return a.i - b.i })
+	errs := v.errs
+	v.errs = make([]*Error, 0, len(errs))
+	j := 0
+	for e := 0; e <= len(errs) && !v.full(); e++ {
+		for ; j < len(faults) && v.pending[faults[j].i].at == e && !v.full(); j++ {
+			f, c := faults[j], v.pending[faults[j].i]
+			switch {
+			case f.err != nil:
+				v.fail(c.el, "content model of %s: %v", c.decl.Name, f.err)
+			case f.child != "":
+				v.fail(c.el, "element %s is not permitted here in the "+
+					"content of %s", f.child, c.decl.Name)
+			default:
+				v.fail(c.el, "the content of %s is incomplete", c.decl.Name)
+			}
+		}
+		if e < len(errs) && !v.full() {
+			v.errs = append(v.errs, errs[e])
+		}
+	}
+	v.pending = nil
+}
+
+// checkAttributes applies the ATTLIST declarations for an element, and
+// reports an attribute the ATTLIST does not declare (XML 1.0 §3.3.1, VC
+// Attribute Value Type). Names are matched as written, so a declared xml:lang
+// or o:x is checked like any other.
+//
+// The element's namespace declarations are checked as the attributes xmlns
+// and xmlns:p that XML 1.0 sees them as. A DTD predates namespaces, so a
+// valid document declares them in an ATTLIST like any other attribute, and
+// libxml2 reports one that is not declared ("No declaration for attribute
+// xmlns"). The tree holds them apart from the attributes, so they are added
+// back here.
+func (v *validator) checkAttributes(el *xdm.Node) {
+	decls := v.dtd.Attributes[el.Name().Lexical()]
+	idx := v.attrIndexFor(el.Name().Lexical(), decls)
+	type attr struct{ name, value string }
+	var attrs []attr
+	for p, uri := range el.DeclaredNamespaces() {
+		name := "xmlns"
+		if p != "" {
+			name += ":" + p
+		}
+		attrs = append(attrs, attr{name, uri})
+	}
+	for a := range el.Attrs() {
+		attrs = append(attrs, attr{a.Name().Lexical(), a.Value()})
+	}
+	if !v.allowUndec {
+		for _, a := range attrs {
+			if _, ok := idx.pos[a.name]; !ok {
+				v.fail(el, "attribute %s is not declared", a.name)
 			}
 		}
 	}
-}
-
-func (v *validator) matcherFor(decl *Element) (*xsd.SequenceMatcher, error) {
-	if m, ok := v.matchers[decl.Name]; ok {
-		return m, nil
-	}
-	m, err := xsd.NewSequenceMatcher(decl.Particle)
-	if err != nil {
-		return nil, err
-	}
-	v.matchers[decl.Name] = m
-	return m, nil
-}
-
-// checkAttributes applies the ATTLIST declarations for an element.
-func (v *validator) checkAttributes(el *xdm.Node) {
-	decls := v.dtd.Attributes[el.Name().Local]
 	if len(decls) == 0 {
 		return
 	}
-	present := map[string]string{}
-	for a := range el.Attrs() {
-		name := a.Name().Local
-		if a.Name().URI != "" || strings.HasPrefix(name, "xmlns") {
-			// A DTD predates namespaces and declares "xmlns" as an ordinary
-			// attribute when it declares it at all. Skipping namespace
-			// declarations avoids reporting every one as undeclared.
-			continue
+	present := make(map[string]string, len(attrs))
+	// The declarations to visit, in declaration order: those present, and
+	// those that report when absent. Walking every declaration for every
+	// element cost elements times declarations; so did walking idx.always
+	// when every one of them is present, which is the only case that can
+	// skip it, since an absent one is a failure.
+	var visit []int
+	for _, a := range attrs {
+		present[a.name] = a.value
+		if i, ok := idx.pos[a.name]; ok {
+			visit = append(visit, i)
 		}
-		present[name] = a.Value()
+	}
+	slices.Sort(visit)
+	visit = slices.Compact(visit)
+	held := 0
+	for _, i := range visit {
+		if decls[i].Default == AttrRequired {
+			held++
+		}
+	}
+	if held < len(idx.always) {
+		visit = append(visit, idx.always...)
+		slices.Sort(visit)
+		visit = slices.Compact(visit)
 	}
 
-	for _, d := range decls {
+	for _, i := range visit {
+		if v.full() {
+			return
+		}
+		d, c := decls[i], &idx.attrs[i]
 		val, have := present[d.Name]
 		switch d.Default {
 		case AttrRequired:
@@ -328,7 +568,7 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 				continue
 			}
 		case AttrFixed:
-			if have && val != d.Value {
+			if have && val != c.fixed {
 				v.fail(el, "attribute %s is #FIXED %q but is %q",
 					d.Name, d.Value, val)
 			}
@@ -340,9 +580,12 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 		if !have {
 			continue
 		}
-		if len(d.Enum) > 0 && !containsString(d.Enum, val) {
+		if _, ok := c.enum[val]; len(d.Enum) > 0 && !ok {
 			v.fail(el, "attribute %s = %q is not one of %s",
-				d.Name, val, strings.Join(d.Enum, ", "))
+				d.Name, val, c.enumText)
+		}
+		if f := lexicalFault(d.Type, val); f != "" {
+			v.fail(el, "attribute %s = %q %s", d.Name, val, f)
 		}
 		switch d.Type {
 		case "NOTATION":
@@ -360,15 +603,9 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 			// entity's name is as wrong here as an undeclared one.
 			v.checkEntityValue(el, d.Name, val)
 		case "ENTITIES":
-			// The same rule over a whitespace-separated list. An empty list
-			// is not a Names, so it fails the type as surely as an unknown
-			// name would.
-			names := strings.Fields(val)
-			if len(names) == 0 {
-				v.fail(el, "attribute %s is ENTITIES but is empty, which "+
-					"names no unparsed entity", d.Name)
-			}
-			for _, n := range names {
+			// The same rule over the list. An empty list is not a Names,
+			// which lexicalFault has already reported.
+			for _, n := range tokens(val) {
 				v.checkEntityValue(el, d.Name, n)
 			}
 		case "ID":
@@ -379,14 +616,12 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 		case "IDREF":
 			v.refs = append(v.refs, idref{val, el})
 		case "IDREFS":
-			for _, r := range strings.Fields(val) {
+			for _, r := range tokens(val) {
 				v.refs = append(v.refs, idref{r, el})
 			}
 		case "CDATA", "NMTOKEN", "NMTOKENS", "ENUMERATION":
-			// Declared, and either unconstrained (CDATA) or constrained by
-			// something this package does not yet check. Silence here is a
-			// deliberate gap in coverage, not a failure to recognise the
-			// declaration.
+			// Unconstrained (CDATA), or constrained only lexically or by
+			// the enumeration, both checked above.
 		default:
 			// XML 1.0 §3.3.1 closes the type position to the names above.
 			// Without this branch an unrecognised type — "IDREFF" for
@@ -396,6 +631,108 @@ func (v *validator) checkAttributes(el *xdm.Node) {
 				"type %s, so its value was not checked", d.Name, d.Type)
 		}
 	}
+}
+
+// attrIndex is an element's ATTLIST prepared for lookup, built once per
+// element name per Validate.
+type attrIndex struct {
+	// pos maps an attribute name to its declaration's index. Duplicates
+	// were dropped when the DTD was read; for one assembled by a caller
+	// the first still binds, as a scan would have found it.
+	pos map[string]int
+	// always lists, in order, the declarations checked even when the
+	// attribute is absent: #REQUIRED and an unrecognised default.
+	always []int
+	// attrs parallels the declarations.
+	attrs []attrPrep
+}
+
+// attrPrep is what one declaration is compared against, computed once
+// rather than once per element carrying it.
+type attrPrep struct {
+	fixed    string              // normalizedDefault(Value), for #FIXED
+	enum     map[string]struct{} // the set of Enum
+	enumText string              // Enum joined for a message, clipped
+}
+
+func (v *validator) attrIndexFor(name string, decls []*Attribute) *attrIndex {
+	if idx, ok := v.attrIdx[name]; ok {
+		return idx
+	}
+	idx := &attrIndex{pos: make(map[string]int, len(decls)), attrs: make([]attrPrep, len(decls))}
+	for i, d := range decls {
+		if _, dup := idx.pos[d.Name]; !dup {
+			idx.pos[d.Name] = i
+		}
+		if d.Default == AttrRequired || d.Default == AttrInvalid {
+			idx.always = append(idx.always, i)
+		}
+		c := &idx.attrs[i]
+		if d.Default == AttrFixed {
+			c.fixed = normalizedDefault(d.Value)
+		}
+		if len(d.Enum) > 0 {
+			c.enum = make(map[string]struct{}, len(d.Enum))
+			for _, t := range d.Enum {
+				c.enum[t] = struct{}{}
+			}
+			c.enumText = clip(strings.Join(d.Enum, ", "))
+		}
+	}
+	v.attrIdx[name] = idx
+	return idx
+}
+
+// lexicalFault applies the lexical half of XML 1.0 §3.3.1's VCs ID, IDREF,
+// Entity Name and Name Token to a normalized value of a tokenized type, and
+// says what is wrong, or returns "" for a value that matches. Types without a
+// production of their own (CDATA, the enumerations) always match.
+//
+// The list types are split on #x20 alone: Names and Nmtokens are tokens
+// separated by single spaces, and a TAB that reached the value through a
+// character reference survives normalization as a TAB (rmt-e2e-20).
+func lexicalFault(typ, val string) string {
+	var ok func(string) bool
+	switch typ {
+	case "ID", "IDREF", "ENTITY", "IDREFS", "ENTITIES":
+		// NCName rather than Name, because xdm parses with namespaces:
+		// Namespaces in XML 1.0 §7 makes a namespace-valid document one in
+		// which every token XML 1.0 requires to match Name matches NCName.
+		ok = xdm.IsNCName
+	case "NMTOKEN", "NMTOKENS":
+		ok = isNmtoken
+	default:
+		return ""
+	}
+	toks := []string{val}
+	if strings.HasSuffix(typ, "S") {
+		if toks = tokens(val); len(toks) == 0 {
+			return "is " + typ + " but is empty, and a list needs one or more tokens"
+		}
+	}
+	for _, t := range toks {
+		if !ok(t) {
+			if typ == "NMTOKEN" || typ == "NMTOKENS" {
+				return "does not match the Nmtoken production"
+			}
+			return "does not match the NCName production"
+		}
+	}
+	return ""
+}
+
+// tokens splits a normalized list value on #x20.
+func tokens(val string) []string {
+	return strings.FieldsFunc(val, func(r rune) bool { return r == ' ' })
+}
+
+func isNmtoken(s string) bool {
+	for _, r := range s {
+		if !xmlname.IsNameRune(r) {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // checkNotationDecl applies the half of §3.3.1's Notation Attributes
@@ -454,4 +791,72 @@ func containsString(set []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// normalizedDefault applies XML 1.0 §3.3.3 attribute-value normalization to a
+// declared default (from memory: §3.3.2 says it "is applied to the default
+// value"), so that a #FIXED default is compared as the parser reports the
+// attribute: character references and the predefined entities are replaced,
+// and white space characters become spaces. A reference to any other entity
+// is left as written, which can only make the comparison stricter than the
+// parser's, never looser.
+func normalizedDefault(v string) string {
+	if !strings.ContainsAny(v, "&\t\n\r") {
+		return v
+	}
+	var sb strings.Builder
+	// semi is the first ';' at or after the last search, len(v) when there
+	// is none. Searching afresh at every byte, or at every '&', cost the
+	// square of the default; reusing it until it is passed keeps the
+	// searches disjoint, so the whole loop is linear.
+	semi := -1
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c == '\t' || c == '\n' || c == '\r' {
+			sb.WriteByte(' ')
+			continue
+		}
+		if c == '&' && semi < i {
+			if semi = strings.IndexByte(v[i:], ';'); semi < 0 {
+				semi = len(v)
+			} else {
+				semi += i
+			}
+		}
+		j := semi - i
+		if c != '&' || semi == len(v) {
+			sb.WriteByte(c)
+			continue
+		}
+		name := v[i+1 : i+j]
+		r, ok := rune(0), true
+		switch name {
+		case "lt":
+			r = '<'
+		case "gt":
+			r = '>'
+		case "amp":
+			r = '&'
+		case "apos":
+			r = '\''
+		case "quot":
+			r = '"'
+		default:
+			var n uint64
+			var err error = strconv.ErrSyntax
+			if strings.HasPrefix(name, "#x") {
+				n, err = strconv.ParseUint(name[2:], 16, 32)
+			} else if strings.HasPrefix(name, "#") {
+				n, err = strconv.ParseUint(name[1:], 10, 32)
+			}
+			r, ok = rune(n), err == nil
+		}
+		if !ok {
+			sb.WriteByte(c)
+			continue
+		}
+		sb.WriteRune(r)
+		i += j
+	}
+	return sb.String()
 }

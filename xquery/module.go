@@ -237,6 +237,10 @@ type moduleLoader struct {
 	// count and bytes are the budget spent so far.
 	count int
 	bytes int64
+	// schemaBytes is the compilation's MaxSchemaBytes spend, handed to every
+	// library module's parser so that their schema imports draw on the main
+	// module's allowance rather than each starting a fresh one.
+	schemaBytes *int64
 	// registered is Options.Modules grouped by namespace, for the store lookup
 	// that happens before the resolver is consulted. Several modules may share
 	// one namespace, so this is a slice rather than a single Module -- see
@@ -463,7 +467,8 @@ func (l *moduleLoader) compile(ns, src, baseURI string, importerVer XQVersion) (
 
 	src = normalizeLineEndings(src)
 	p := &parser{src: src, sc: sc, version: sc.xqVersion.xpathVersion(),
-		declaredNS: map[string]bool{}, inLibrary: true, opts: l.opts}
+		declaredNS: map[string]bool{}, inLibrary: true, opts: l.opts,
+		schemaBytes: l.schemaBytes}
 	if err := p.parseVersionDecl(); err != nil {
 		return nil, err
 	}
@@ -702,8 +707,10 @@ func (r MapModuleResolver) Resolve(namespace string, hints []string, base string
 // The importing module's own static context supplies the base URI that a
 // location hint resolves against, and its declared version decides whether a
 // cycle is XQST0093 — see load, and the finding at the top of this file.
-func loadModules(imports []moduleImport, opts Options, sc *staticContext) (
-	[]*libModule, error) {
+//
+// schemaBytes is the main module's schema spend, nil when it imported none.
+func loadModules(imports []moduleImport, opts Options, sc *staticContext,
+	schemaBytes *int64) ([]*libModule, error) {
 	if len(imports) == 0 {
 		// The common case costs nothing: a query with no import never builds
 		// a loader and never consults a resolver, so the bounds and the
@@ -711,6 +718,10 @@ func loadModules(imports []moduleImport, opts Options, sc *staticContext) (
 		return nil, nil
 	}
 	l := newModuleLoader(opts)
+	if schemaBytes == nil {
+		schemaBytes = new(int64)
+	}
+	l.schemaBytes = schemaBytes
 	for _, imp := range imports {
 		if _, err := l.load(imp, sc.baseURI, sc.xqVersion); err != nil {
 			return nil, err

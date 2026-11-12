@@ -184,3 +184,48 @@ func (f ctxFunc) Deadline() (time.Time, bool) { return time.Time{}, false }
 func (f ctxFunc) Done() <-chan struct{}       { return nil }
 func (f ctxFunc) Err() error                  { return f() }
 func (f ctxFunc) Value(any) any               { return nil }
+
+// XPath10 is the XPath 1.0 number model and comparison grammar (1.0 sections
+// 3.4, 3.7, 4.2, 4.4); plain compatibility mode keeps its XPath 2.0 answers,
+// which XSLT 1.0-compatible stylesheets depend on.
+func TestCompileWithXPath10(t *testing.T) {
+	for _, tc := range []struct{ src, x10, compat string }{
+		{`string(number("+1"))`, "NaN", "1"},
+		{`string(number(" 1e3"))`, "NaN", "1000"},
+		{`string(number("INF"))`, "NaN", "INF"},
+		{`string(number(" -1.5 "))`, "-1.5", "-1.5"},
+		{`string(10000 * 1000)`, "10000000", "1.0E7"},
+		{`string(1 div 0)`, "Infinity", "INF"},
+		{`string(0 * -1)`, "0", "-0"},
+		{`string(0.1 + 0.2)`, "0.30000000000000004", "0.30000000000000004"},
+		{`string(sum(("1", "x")))`, "NaN", ""},
+		{`string(1 < 2 < 3)`, "true", ""},
+		{`string(0 = 1 < 2)`, "false", ""},
+		{`string(10div 2)`, "5", ""},
+		{`string(count(1 to 3))`, "3", "3"}, // a 2.0 construct keeps working
+	} {
+		c, err := CompileWith(tc.src, CompileOptions{XPath10: true})
+		if err != nil {
+			t.Errorf("XPath10 %s: %v", tc.src, err)
+			continue
+		}
+		if !c.CompatMode() {
+			t.Errorf("XPath10 %s: CompatMode() is false", tc.src)
+		}
+		got, err := c.EvalString(NewContext(nil, Builtins()))
+		if err != nil || got != tc.x10 {
+			t.Errorf("XPath10 %s = %q, %v; want %q", tc.src, got, err, tc.x10)
+		}
+		if tc.compat == "" {
+			continue
+		}
+		c2, err := Compile(tc.src, testResolver{}) // non-nil, or nothing re-parses
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err = c2.WithCompatMode(true).EvalString(NewContext(nil, Builtins()))
+		if err != nil || got != tc.compat {
+			t.Errorf("compat %s = %q, %v; want %q", tc.src, got, err, tc.compat)
+		}
+	}
+}

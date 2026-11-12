@@ -90,7 +90,7 @@ func (p *parser) scanExprSingle(stops ...string) (node, error) {
 		return nil, p.errorAt(start, "XPST0003: expected an expression")
 	}
 	if needsXQueryParser(src) {
-		c, err := p.parseFromSource(src)
+		c, err := p.parseFromSource(src, start+leadingSpace(p.src[start:]))
 		if err != nil {
 			return nil, err
 		}
@@ -423,12 +423,17 @@ func (p *parser) parseBracedExprSingle() (*enclosed, error) {
 		return nil, err
 	}
 	body := p.src[p.pos+1 : end]
+	m, base := p.memoAt(p.pos + 1)
 	p.pos = end + 1
 	if strings.TrimSpace(body) == "" {
 		return &enclosed{}, nil
 	}
-	inner := &parser{src: body, sc: p.sc, version: p.version}
-	items, err := inner.parseQueryBody()
+	inner, err := p.nestedParser(body)
+	if err != nil {
+		return nil, err
+	}
+	inner.memo, inner.base = m, base
+	items, err := inner.parseMemoBody(false)
 	if err != nil {
 		return nil, err
 	}

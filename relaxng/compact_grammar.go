@@ -269,6 +269,15 @@ func (p *compactParser) parseDatatypesDecl() error {
 // tokPunct "}" for one written with braces. Passing it in rather than having
 // two loops keeps the set of things a grammar may hold in one place.
 func (p *compactParser) parseGrammarBody(g *cnode, end tokenKind) error {
+	// div and include bodies recurse through here, so the depth bound is
+	// charged here rather than in each of them.
+	p.depth++
+	if p.depth > maxCompactDepth {
+		p.depth--
+		return p.errorf("grammar contents nest more than %d deep", maxCompactDepth)
+	}
+	defer func() { p.depth-- }()
+
 	for {
 		if err := p.readDoc(); err != nil {
 			return err

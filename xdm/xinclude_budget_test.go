@@ -1,10 +1,12 @@
 package xdm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // bombDoc is a document whose entity expansion is large but stays UNDER the
@@ -62,9 +64,12 @@ func TestXIncludeSharesTheEntityBudget(t *testing.T) {
 	tree := parseWithBase(t, "mem:/root.xml", src)
 	_, err := ProcessXInclude(tree, XIncludeOptions{
 		Resolver: &mapResolver{files: files},
-		// The knobs a caller would reach for are set as tightly as the
-		// documents allow, to pin that they are NOT what refuses this.
-		Parse: ParseOptions{AllowDOCTYPE: true, MaxBytes: 8192, MaxNodes: 50},
+		// The node knob is set as tightly as the documents allow, to pin
+		// that it is NOT what refuses this. The byte knob is lifted: the
+		// pass now charges an included document's expanded bytes before
+		// recursing into it, so a tight MaxBytes would refuse first, and
+		// this test is about the entity budget.
+		Parse: ParseOptions{AllowDOCTYPE: true, MaxBytes: -1, MaxNodes: 50},
 	})
 	if err == nil {
 		t.Fatalf("a chain of %d included documents expanded to %d bytes "+
@@ -167,5 +172,205 @@ func TestXIncludeBudgetRefusalIsNotRecoverable(t *testing.T) {
 	}
 	if !errors.Is(err, ErrResourceLimit) {
 		t.Fatalf("refused, but not as a resource limit: %v", err)
+	}
+}
+
+// An href-less xpointer inclusion copies an element as already expanded, so
+// a level of two includes of the level before doubles the result: 30 levels,
+// about 2.5 KB, asked for 2^31 copies, with no resolver and inside every
+// fetch and depth bound. The inclusions now share the pass's node budget,
+// opts.Parse.MaxNodes.
+func TestXIncludeLocalInclusionsShareTheNodeBudget(t *testing.T) {
+	doc := func(levels int) string {
+		var b strings.Builder
+		b.WriteString(`<r xmlns:xi="http://www.w3.org/2001/XInclude"><l0>x</l0>`)
+		for i := 1; i <= levels; i++ {
+			fmt.Fprintf(&b, `<l%d><xi:include xpointer="element(/1/%d)"/><xi:include xpointer="element(/1/%d)"/></l%d>`, i, i, i, i)
+		}
+		b.WriteString(`</r>`)
+		return b.String()
+	}
+	po := ParseOptions{BaseURI: "file:///t/doc.xml", MaxNodes: 1000}
+	tree, err := ParseString(doc(30), po)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ProcessXInclude(tree, XIncludeOptions{Parse: po})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrResourceLimit) || !strings.Contains(err.Error(), "inclusions exceed 1000 nodes") {
+			t.Fatalf("30 doubling levels under MaxNodes 1000: err = %v, want the node budget", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("30 doubling levels did not finish in 5s")
+	}
+
+	// Four levels under the default budget are expanded as before.
+	tree, err = ParseString(doc(4), ParseOptions{BaseURI: "file:///t/doc.xml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := ProcessXInclude(tree, XIncludeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l0 := 0
+	for n := range out.Root.Descendants() {
+		if n.Kind() == KindElement && n.Name().Local == "l0" {
+			l0++
+		}
+	}
+	if l0 != 31 {
+		t.Errorf("four levels: %d copies of l0, want 31", l0)
+	}
+}
+
+// The node budget cannot see text: one text node of 8000 bytes, doubled per
+// level by href-less inclusions, held 65 MB under MaxBytes 16384 in about
+// 25,000 nodes. The inclusions now share a byte budget, opts.Parse.MaxBytes.
+func TestXIncludeLocalInclusionsShareTheByteBudget(t *testing.T) {
+	doc := func(levels int) string {
+		var b strings.Builder
+		b.WriteString(`<r xmlns:xi="http://www.w3.org/2001/XInclude"><a xml:id="l0">` + strings.Repeat("x", 8000) + `</a>`)
+		for i := 1; i <= levels; i++ {
+			fmt.Fprintf(&b, `<a xml:id="l%d"><xi:include xpointer="l%d"/><xi:include xpointer="l%d"/></a>`, i, i-1, i-1)
+		}
+		b.WriteString(`</r>`)
+		return b.String()
+	}
+	po := ParseOptions{MaxBytes: 16384}
+	tree, err := ParseString(doc(12), po)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ProcessXInclude(tree, XIncludeOptions{Parse: po})
+	if !errors.Is(err, ErrResourceLimit) || !strings.Contains(err.Error(), "16384 bytes") {
+		t.Fatalf("12 doubling levels of 8000 bytes under MaxBytes 16384: err = %v, want the byte budget", err)
+	}
+	// One level, 16,000 bytes copied, fits under the default.
+	tree, err = ParseString(doc(1), ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ProcessXInclude(tree, XIncludeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A shorthand xpointer is resolved by walking the document from its root, so
+// N includes naming an element after them cost N^2/2 visits for a node charge
+// of 2 each. The walks now share the pass's node budget as a visit count.
+func TestXIncludeLocalSearchesShareTheNodeBudget(t *testing.T) {
+	doc := func(n int) string {
+		return `<r xmlns:xi="http://www.w3.org/2001/XInclude">` +
+			strings.Repeat(`<xi:include xpointer="z"/>`, n) + `<t xml:id="z"/></r>`
+	}
+	po := ParseOptions{MaxNodes: 10000}
+	tree, err := ParseString(doc(400), po)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ProcessXInclude(tree, XIncludeOptions{Parse: po})
+	if !errors.Is(err, ErrResourceLimit) || !strings.Contains(err.Error(), "searches") {
+		t.Fatalf("400 searches of a 400-node document under MaxNodes 10000: err = %v, want the visit budget", err)
+	}
+	tree, err = ParseString(doc(20), po)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := ProcessXInclude(tree, XIncludeOptions{Parse: po})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := out.Root.FirstChild(); n == nil {
+		t.Fatal("no result")
+	}
+}
+
+// errAfter is a context whose Err is nil for its first n calls and
+// context.Canceled from then on: it cancels the pass at a chosen check, with
+// no clock involved.
+type errAfter struct {
+	context.Context
+	n int
+}
+
+func (c *errAfter) Err() error {
+	if c.n > 0 {
+		c.n--
+		return nil
+	}
+	return context.Canceled
+}
+
+// XIncludeOptions.Context stops the pass between inclusions, inside a local
+// xpointer search, and before a fetch, and no xi:fallback recovers from it.
+func TestXIncludeContextCancels(t *testing.T) {
+	const xi = `<r xmlns:xi="http://www.w3.org/2001/XInclude">`
+	parse := func(src string) *Tree {
+		tree, err := ParseString(src, ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tree
+	}
+	wantCancelled := func(what string, out *Tree, err error) {
+		t.Helper()
+		if !errors.Is(err, context.Canceled) || out != nil {
+			t.Fatalf("%s: out=%v err=%v, want context.Canceled and no tree", what, out != nil, err)
+		}
+	}
+
+	// Between inclusions: many href-less includes, a pre-cancelled context.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	in := parse(xi + strings.Repeat(`<xi:include xpointer="z"><xi:fallback/></xi:include>`, 500) +
+		`<t xml:id="z"/></r>`)
+	out, err := ProcessXInclude(in, XIncludeOptions{Context: ctx})
+	wantCancelled("pre-cancelled", out, err)
+	if n := in.Root.FirstChild().NumChildren(); n != 501 {
+		t.Fatalf("the input tree changed: %d children, want 501", n)
+	}
+
+	// Inside the search walk: one include, 3000 elements to walk past, a
+	// context that is first done at the walk's first check.
+	in = parse(xi + `<xi:include xpointer="z"/>` + strings.Repeat(`<a/>`, 3000) + `<t xml:id="z"/></r>`)
+	out, err = ProcessXInclude(in, XIncludeOptions{Context: &errAfter{context.Background(), 1}})
+	wantCancelled("mid-search", out, err)
+
+	// Before a fetch: the resolver is never asked once the context is done
+	// at the fetch check.
+	res := &mapResolver{files: map[string]string{"mem:x.xml": `<x/>`}}
+	in = parse(xi + `<xi:include href="mem:x.xml"/></r>`)
+	out, err = ProcessXInclude(in, XIncludeOptions{Resolver: res, Context: &errAfter{context.Background(), 1}})
+	wantCancelled("before fetch", out, err)
+	if len(res.reads) != 0 {
+		t.Fatalf("the resolver read %v after cancellation", res.reads)
+	}
+}
+
+// parse="text" read the resource and appended it uncharged, so 50 text
+// includes of a 1 MiB resource added 52 MB under MaxBytes 2 MiB where the
+// same includes as parse="xml" were refused. Text now shares the byte budget.
+func TestXIncludeTextInclusionsShareTheByteBudget(t *testing.T) {
+	files := map[string]string{"mem:/t": strings.Repeat("x", 4000)}
+	src := `<r xmlns:xi="http://www.w3.org/2001/XInclude">` +
+		strings.Repeat(`<a><xi:include href="t" parse="text"/></a>`, 5) + `</r>`
+	po := ParseOptions{MaxBytes: 16384}
+	tree := parseWithBase(t, "mem:/r.xml", src)
+	_, err := ProcessXInclude(tree, XIncludeOptions{Resolver: &mapResolver{files: files}, Parse: po})
+	if !errors.Is(err, ErrResourceLimit) || !strings.Contains(err.Error(), "16384 bytes") {
+		t.Fatalf("5 text includes of 4000 bytes under MaxBytes 16384: err = %v, want the byte budget", err)
+	}
+	// Three fit.
+	src = `<r xmlns:xi="http://www.w3.org/2001/XInclude">` +
+		strings.Repeat(`<a><xi:include href="t" parse="text"/></a>`, 3) + `</r>`
+	tree = parseWithBase(t, "mem:/r.xml", src)
+	if _, err := ProcessXInclude(tree, XIncludeOptions{Resolver: &mapResolver{files: files}, Parse: po}); err != nil {
+		t.Fatal(err)
 	}
 }

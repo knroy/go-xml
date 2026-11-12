@@ -1,6 +1,9 @@
 package xdm
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 // TypeEnvironment owns the type derivation facts a single schema assembly
 // established: which built-in each of its named types erases to, which of them
@@ -28,15 +31,93 @@ import "sync"
 // atomisation reads on every typed value, so each table is guarded by its own
 // RWMutex: a reader on the derivation table is never blocked by a writer on
 // the union table.
+//
+// Names are held split, as a typeName, with the "{namespace}" part interned
+// per environment. The global environment is never evicted, so storing each
+// "{namespace}local" whole would retain the namespace once per type: 49 MB
+// for 10,000 types under one 4 KB namespace. Split, it is retained once.
 type TypeEnvironment struct {
 	derivedMu sync.RWMutex
-	derived   map[string]string
+	derived   map[typeName]typeName
 
 	listMu sync.RWMutex
-	list   map[string]string
+	list   map[typeName]typeName
 
 	unionMu sync.RWMutex
-	union   map[string][]string
+	union   map[typeName][]typeName
+	// memberLists interns the stored member lists, keyed by the member
+	// names joined with NUL, so every union with the same members shares
+	// one slice. A restriction of a union inherits its base's whole list,
+	// and the xsd package registers that list for each restriction; stored
+	// once per type, N restrictions of a K-member union kept N*K names in a
+	// table that is never evicted. Interned, they keep K plus N.
+	// Guarded by unionMu. A stored list is never modified.
+	memberLists map[string][]typeName
+
+	nsMu sync.Mutex
+	ns   map[string]string
+}
+
+// typeName is an annotation name cut after its closing brace: ns is
+// "{uri}" (braces kept, so ns+local is the original name byte for byte) and
+// is "" for a bare name.
+type typeName struct{ ns, local string }
+
+// splitTypeName cuts name without copying it, which is what a lookup wants.
+func splitTypeName(name string) typeName {
+	if strings.HasPrefix(name, "{") {
+		if i := strings.IndexByte(name, '}'); i >= 0 {
+			return typeName{name[:i+1], name[i+1:]}
+		}
+	}
+	return typeName{local: name}
+}
+
+// String rebuilds the annotation name. A bare name comes back as stored; a
+// qualified one is concatenated on demand, which is the price of not keeping
+// the namespace once per type.
+func (t typeName) String() string {
+	if t.ns == "" {
+		return t.local
+	}
+	return t.ns + t.local
+}
+
+// stored returns name in the form an entry keeps: the namespace this
+// environment's canonical copy, the local part a copy of its own. Both are
+// copies because a substring would pin the caller's whole string, namespace
+// and all, which is the retention this layout exists to avoid.
+func (e *TypeEnvironment) stored(name string) typeName {
+	t := splitTypeName(name)
+	t.local = strings.Clone(t.local)
+	if t.ns != "" {
+		e.nsMu.Lock()
+		c, ok := e.ns[t.ns]
+		if !ok {
+			c = strings.Clone(t.ns)
+			e.ns[c] = c
+		}
+		e.nsMu.Unlock()
+		t.ns = c
+	}
+	return t
+}
+
+// restored re-homes a name another environment stored, so this one keeps
+// its own single copy of each namespace.
+func (e *TypeEnvironment) restored(t typeName) typeName {
+	if t.ns == "" {
+		return t
+	}
+	e.nsMu.Lock()
+	c, ok := e.ns[t.ns]
+	if !ok {
+		c = t.ns
+		e.ns[c] = c
+	}
+	e.nsMu.Unlock()
+	t.ns = c
+	return t
 }
 
 // NewTypeEnvironment returns an empty environment.
@@ -46,9 +127,12 @@ type TypeEnvironment struct {
 // user-defined type's base, item type or member list.
 func NewTypeEnvironment() *TypeEnvironment {
 	return &TypeEnvironment{
-		derived: map[string]string{},
-		list:    map[string]string{},
-		union:   map[string][]string{},
+		derived: map[typeName]typeName{},
+		list:    map[typeName]typeName{},
+		union:   map[typeName][]typeName{},
+		ns:      map[string]string{},
+
+		memberLists: map[string][]typeName{},
 	}
 }
 
@@ -85,8 +169,9 @@ func (e *TypeEnvironment) RegisterDerived(name, primitive string) {
 	if e == nil || name == "" || primitive == "" || name == primitive {
 		return
 	}
+	k, v := e.stored(name), e.stored(primitive)
 	e.derivedMu.Lock()
-	e.derived[name] = primitive
+	e.derived[k] = v
 	e.derivedMu.Unlock()
 }
 
@@ -101,9 +186,12 @@ func (e *TypeEnvironment) DerivedBase(name string) string {
 		return ""
 	}
 	e.derivedMu.RLock()
-	base := e.derived[name]
+	base, ok := e.derived[splitTypeName(name)]
 	e.derivedMu.RUnlock()
-	return base
+	if !ok {
+		return ""
+	}
+	return base.String()
 }
 
 // RegisterList records that a schema type is a list, and what its items are.
@@ -115,8 +203,9 @@ func (e *TypeEnvironment) RegisterList(name, itemType string) {
 	if e == nil || name == "" || itemType == "" || name == itemType {
 		return
 	}
+	k, v := e.stored(name), e.stored(itemType)
 	e.listMu.Lock()
-	e.list[name] = itemType
+	e.list[k] = v
 	e.listMu.Unlock()
 }
 
@@ -127,9 +216,12 @@ func (e *TypeEnvironment) ListItemOf(name string) string {
 		return ""
 	}
 	e.listMu.RLock()
-	item := e.list[name]
+	item, ok := e.list[splitTypeName(name)]
 	e.listMu.RUnlock()
-	return item
+	if !ok {
+		return ""
+	}
+	return item.String()
 }
 
 // RegisterUnion records that a schema type is a union, and what its declared
@@ -143,33 +235,71 @@ func (e *TypeEnvironment) RegisterUnion(name string, members []string) {
 	if e == nil || name == "" || len(members) == 0 {
 		return
 	}
-	cp := make([]string, 0, len(members))
+	// A member listed twice is tried twice to no effect, so only its first
+	// occurrence is kept: memberTypes="t:a t:a ..." would otherwise retain
+	// one name per reference in a table that is never evicted.
+	kept := make([]string, 0, len(members))
+	seen := make(map[string]bool, len(members))
 	for _, m := range members {
-		if m != "" && m != name {
-			cp = append(cp, m)
+		if m != "" && m != name && !seen[m] {
+			seen[m] = true
+			kept = append(kept, m)
 		}
 	}
-	if len(cp) == 0 {
+	if len(kept) == 0 {
 		return
 	}
+	cp := e.internMembers(kept)
+	k := e.stored(name)
 	e.unionMu.Lock()
-	e.union[name] = cp
+	e.union[k] = cp
 	e.unionMu.Unlock()
+}
+
+// internMembers returns the stored form of a member list, shared with every
+// union this environment already holds with the same members in the same
+// order. The caller must not hold unionMu.
+func (e *TypeEnvironment) internMembers(members []string) []typeName {
+	key := strings.Join(members, "\x00")
+	e.unionMu.RLock()
+	cp, ok := e.memberLists[key]
+	e.unionMu.RUnlock()
+	if ok {
+		return cp
+	}
+	cp = make([]typeName, len(members))
+	for i, m := range members {
+		cp[i] = e.stored(m)
+	}
+	e.unionMu.Lock()
+	if prev, ok := e.memberLists[key]; ok {
+		cp = prev
+	} else {
+		e.memberLists[key] = cp
+	}
+	e.unionMu.Unlock()
+	return cp
 }
 
 // UnionMembersOf returns the declared member types of a union type, or nil
 // when the name does not denote one in this environment.
 //
-// The result must not be modified: it is the stored slice, shared with every
-// other caller.
+// The result is built per call from the stored names, so the caller owns it.
 func (e *TypeEnvironment) UnionMembersOf(name string) []string {
 	if e == nil {
 		return nil
 	}
 	e.unionMu.RLock()
-	m := e.union[name]
+	m := e.union[splitTypeName(name)]
 	e.unionMu.RUnlock()
-	return m
+	if m == nil {
+		return nil
+	}
+	out := make([]string, len(m))
+	for i, t := range m {
+		out[i] = t.String()
+	}
+	return out
 }
 
 // Len reports how many derivation, list and union entries the environment
@@ -209,7 +339,7 @@ func (e *TypeEnvironment) Merge(src *TypeEnvironment) {
 		return
 	}
 	src.derivedMu.RLock()
-	derived := make(map[string]string, len(src.derived))
+	derived := make(map[typeName]typeName, len(src.derived))
 	for k, v := range src.derived {
 		derived[k] = v
 	}
@@ -217,13 +347,13 @@ func (e *TypeEnvironment) Merge(src *TypeEnvironment) {
 	e.derivedMu.Lock()
 	for k, v := range derived {
 		if _, ok := e.derived[k]; !ok {
-			e.derived[k] = v
+			e.derived[e.restored(k)] = e.restored(v)
 		}
 	}
 	e.derivedMu.Unlock()
 
 	src.listMu.RLock()
-	lists := make(map[string]string, len(src.list))
+	lists := make(map[typeName]typeName, len(src.list))
 	for k, v := range src.list {
 		lists[k] = v
 	}
@@ -231,24 +361,37 @@ func (e *TypeEnvironment) Merge(src *TypeEnvironment) {
 	e.listMu.Lock()
 	for k, v := range lists {
 		if _, ok := e.list[k]; !ok {
-			e.list[k] = v
+			e.list[e.restored(k)] = e.restored(v)
 		}
 	}
 	e.listMu.Unlock()
 
 	src.unionMu.RLock()
-	unions := make(map[string][]string, len(src.union))
+	unions := make(map[typeName][]typeName, len(src.union))
 	for k, v := range src.union {
 		unions[k] = v
 	}
 	src.unionMu.RUnlock()
-	e.unionMu.Lock()
 	for k, v := range unions {
-		if _, ok := e.union[k]; !ok {
-			e.union[k] = v
+		e.unionMu.RLock()
+		_, ok := e.union[k]
+		e.unionMu.RUnlock()
+		if ok {
+			continue
 		}
+		// Interned here too, so the aggregate schema an import merges into
+		// keeps one list per distinct member list rather than one per type.
+		names := make([]string, len(v))
+		for i, m := range v {
+			names[i] = m.String()
+		}
+		members := e.internMembers(names)
+		e.unionMu.Lock()
+		if _, ok := e.union[k]; !ok {
+			e.union[e.restored(k)] = members
+		}
+		e.unionMu.Unlock()
 	}
-	e.unionMu.Unlock()
 }
 
 // typeEnvOf returns the environment to consult for a node: the one the schema

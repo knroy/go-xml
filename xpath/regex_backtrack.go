@@ -2,6 +2,7 @@ package xpath
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -69,6 +70,70 @@ func SetBacktrackingRegex(on bool) { backtrackingRegex.Store(on) }
 // BacktrackingRegexEnabled reports the current setting.
 func BacktrackingRegexEnabled() bool { return backtrackingRegex.Load() }
 
+// backtrackStepLimit and backtrackDepthLimit hold what SetBacktrackBudget and
+// SetBacktrackMaxDepth were given, zero when never called. They are read once
+// per match, in newMachine.
+var backtrackStepLimit, backtrackDepthLimit atomic.Int64
+
+// SetBacktrackBudget sets the match steps one call of the backtracking matcher
+// may take before it fails with XPDY0130 (wrapping xdm.ErrResourceLimit).
+//
+// Zero restores the default, backtrackBudget: 40,000,000 steps, about a fifth
+// of a second of work on the pathological "(a*)*\1b". A positive value is the
+// new budget. A negative value removes the step bound. That is for trusted
+// patterns only: an exponential pattern then runs until it finishes, which on
+// sixty characters is never, and the matcher has no cancellation, so nothing
+// stops it. The depth bound (SetBacktrackMaxDepth) still applies.
+//
+// Like SetBacktrackingRegex it is process-wide and safe to call at any time;
+// a match already in flight keeps the budget it started with. Nothing is
+// cached on it, so the next match uses the new value.
+func SetBacktrackBudget(steps int) { backtrackStepLimit.Store(int64(steps)) }
+
+// SetBacktrackMaxDepth sets how many matcher levels may be active at once
+// before the backtracking matcher fails with XPDY0130 (wrapping
+// xdm.ErrResourceLimit). It is what bounds the subject length: the default,
+// backtrackMaxDepth (50,000), is about 25,000 characters consumed under ".*"
+// and 12,500 under a repeated group.
+//
+// Zero or a negative value restores the default; there is no unlimited
+// setting, because each level is real Go stack and a stack overflow is fatal,
+// not recoverable. A positive value is the new bound, clamped to
+// backtrackDepthCeiling (500,000). Raising it trades a refusal for stack: a
+// level costs up to about 512 bytes, and at the ceiling the deepest shapes
+// measured ("(a*)b(c|d)*\1", "(a*)b.*\1", "(a*)b(c+)*\1" on 400,000
+// characters) ran and refused within a 256 MB maximum stack and overflowed a
+// 128 MB one: a quarter of Go's default 1 GB maximum. A host that lowers
+// runtime/debug.SetMaxStack must keep this below that maximum divided by 512
+// bytes (the default is measured safe under a 32 MB maximum).
+//
+// It is process-wide like SetBacktrackBudget, with the same concurrency.
+func SetBacktrackMaxDepth(depth int) { backtrackDepthLimit.Store(int64(depth)) }
+
+// backtrackDepthCeiling is the most SetBacktrackMaxDepth admits: measured to
+// need between 128 and 256 MB of stack, a quarter of Go's default 1 GB maximum
+// at most (see SetBacktrackMaxDepth).
+const backtrackDepthCeiling = 500_000
+
+// backtrackLimits resolves the two settings to the values one match uses.
+func backtrackLimits() (steps, depth int) {
+	switch s := backtrackStepLimit.Load(); {
+	case s == 0:
+		steps = backtrackBudget
+	case s < 0:
+		steps = math.MaxInt
+	default:
+		steps = int(min(s, math.MaxInt))
+	}
+	switch d := backtrackDepthLimit.Load(); {
+	case d <= 0:
+		depth = backtrackMaxDepth
+	default:
+		depth = int(min(d, backtrackDepthCeiling))
+	}
+	return steps, depth
+}
+
 // backtrackBudget is the number of match steps a single MatchString,
 // ReplaceAllString or FindAll call may take before it gives up with an error.
 //
@@ -93,22 +158,40 @@ func BacktrackingRegexEnabled() bool { return backtrackingRegex.Load() }
 // anywhere near it.
 const backtrackBudget = 40_000_000
 
+// backtrackMaxDepth bounds how many match and matchRepeat calls may be active
+// at once.
+//
+// The matcher recurses through continuations, so each character a repeat
+// consumes nests about four Go frames, some 512 bytes of stack, and the step
+// budget does not bound that: "(a*)b.*\1" against 400,000 characters stays
+// well under backtrackBudget and died with a fatal "stack overflow" at a
+// 64 MB stack limit, about 131,000 characters in. recover() cannot catch a
+// stack overflow, so the whole process exits. Exceeding this bound sets
+// overrun, exactly as the step budget does, so the caller gets
+// errBacktrackBudget rather than a false.
+//
+// The value is measured against a 32 MB goroutine stack limit, which is a
+// plausible server setting: 100,000 overflowed it for "(a*)b(c|d)*\1", and
+// 50,000 stayed under it for every repeat shape tried, plain, grouped, nested,
+// alternated and lazy. That is 25,000 consumed characters under ".*" and
+// about 12,500 under a repeated group. The longest input in either conformance
+// suite is a few hundred characters.
+const backtrackMaxDepth = 50_000
+
 // errBacktrackBudget is returned when a match exhausts the budget.
 //
 // It is deliberately not a false: the pattern may well match, and reporting
-// that it does not would be an answer this engine did not compute. FORX0002 is
-// the code the rest of the regex layer uses for "this pattern cannot be
-// evaluated here", and that is exactly what has happened.
+// that it does not would be an answer this engine did not compute.
 //
-// The code is nonetheless a poor description of the condition -- FORX0002 is
-// "invalid regular expression", and the pattern here is perfectly valid; what
-// ran out was this processor's budget. The specs give no code for that, so the
-// code is kept (callers and the conformance suites read it) and
-// xdm.ErrResourceLimit wrapped in alongside, which is the thing a caller
-// should branch on to tell "your pattern is wrong" from "retry with a shorter
-// input or a raised budget".
+// The code is XPDY0130, not FORX0002. F&O defines FORX0002 only for a pattern
+// that "is syntactically invalid", and this one is valid; what ran out was
+// this processor's budget, which is XPath 3.1 §2.3.1's case: "limitations may
+// exist on the maximum numbers or sizes of various objects. An error must be
+// raised if such a limitation is exceeded [err:XPDY0130]". Both the step
+// budget and backtrackMaxDepth raise it. xdm.ErrResourceLimit is wrapped in
+// alongside, as for every other limit.
 var errBacktrackBudget = fmt.Errorf(
-	"FORX0002: regular expression exceeded the backtracking step budget; "+
+	"XPDY0130: regular expression exceeded the backtracking step budget; "+
 		"the pattern may be exponential in the length of the input: %w",
 	xdm.ErrResourceLimit)
 
@@ -204,6 +287,12 @@ type btParser struct {
 	src    string
 	pos    int
 	groups int
+	// depth is the number of groups, capturing or not, now open. Each
+	// recurses parseAlternation -> ... -> parseGroup once, and only
+	// capturing groups are counted by groups, so "(?:" nested deep enough
+	// overflowed the goroutine stack: fatal, not an error. RE2, which never
+	// sees a pattern routed here, refuses past the same 1000 levels.
+	depth int
 	// closed is the set of capturing groups whose ")" has already been read.
 	// It is what a backreference may name, and the reason the resolution
 	// happens during the parse rather than after it: Appendix F's backReference
@@ -447,7 +536,13 @@ func (p *btParser) parseGroup() (btNode, error) {
 			return nil, p.errf("too many capturing groups")
 		}
 	}
+	p.depth++
+	if p.depth > maxSchemaRegexpDepth {
+		return nil, p.errf("group nesting exceeds %d levels: %w",
+			maxSchemaRegexpDepth, xdm.ErrResourceLimit)
+	}
 	inner, err := p.parseAlternation()
+	p.depth--
 	if err != nil {
 		return nil, err
 	}
@@ -638,7 +733,7 @@ func buildCharAtom(src string, dotAll, fold bool) (*regexp.Regexp, error) {
 	// foul of RE2's line handling.
 	re, err := CompileBounded(prefix + `\A(?:` + translated + `)\z`)
 	if err != nil {
-		return nil, fmt.Errorf("FORX0002: invalid regular expression %q: %w", src, err)
+		return nil, regexCompileError(src, err)
 	}
 	return re, nil
 }
@@ -696,6 +791,9 @@ type btMachine struct {
 	caps   []int
 	steps  int
 	budget int
+	// depth is the number of match and matchRepeat calls active, and
+	// maxDepth the most allowed. See backtrackMaxDepth.
+	depth, maxDepth int
 	// multiline is the "m" flag: ^ and $ also match at line boundaries.
 	multiline bool
 	// overrun records that the budget ran out, so the caller can tell a
@@ -707,76 +805,92 @@ type btMachine struct {
 // left. Every entry to match() charges, so the count measures the work the
 // engine did rather than the input it consumed — which is the quantity that
 // blows up.
+//
+// It also enters one level of recursion, which the caller leaves through
+// leave once step has succeeded, and refuses a level past maxDepth (backtrackMaxDepth unless raised).
 func (m *btMachine) step() bool {
 	m.steps++
-	if m.steps > m.budget {
+	if m.steps > m.budget || m.depth >= m.maxDepth {
 		m.overrun = true
 		return false
 	}
+	m.depth++
 	return true
+}
+
+// leave exits the level step entered and passes ok through, so that every
+// return of match and matchRepeat is written "return m.leave(...)".
+func (m *btMachine) leave(ok bool) bool {
+	m.depth--
+	return ok
 }
 
 // btCont is a continuation: given the position after a node matched, decide
 // whether the rest of the pattern can match from there.
 type btCont func(pos int) bool
 
+// match tries n at pos, then k. It holds one level of m.depth for the
+// duration and releases it on every return through m.leave, not by defer:
+// this runs up to backtrackBudget times a match, and a deferred closure made
+// the engine about 2.8 times slower. A panic leaves depth raised, which is
+// harmless: the machine belongs to one call and is dropped with it.
 func (m *btMachine) match(n btNode, pos int, k btCont) bool {
 	if m.overrun || !m.step() {
 		return false
 	}
 	switch t := n.(type) {
 	case *btEmpty:
-		return k(pos)
+		return m.leave(k(pos))
 
 	case *btAnchor:
 		if t.end {
 			if pos == len(m.in) || (m.multiline && m.in[pos] == '\n') {
-				return k(pos)
+				return m.leave(k(pos))
 			}
-			return false
+			return m.leave(false)
 		}
 		if pos == 0 || (m.multiline && m.in[pos-1] == '\n') {
-			return k(pos)
+			return m.leave(k(pos))
 		}
-		return false
+		return m.leave(false)
 
 	case *btLiteral:
 		if pos+len(t.text) > len(m.in) {
-			return false
+			return m.leave(false)
 		}
 		for i, r := range t.text {
 			if !runeEq(m.in[pos+i], r, t.fold) {
-				return false
+				return m.leave(false)
 			}
 		}
-		return k(pos + len(t.text))
+		return m.leave(k(pos + len(t.text)))
 
 	case *btChar:
 		if pos >= len(m.in) {
-			return false
+			return m.leave(false)
 		}
 		if !t.re.MatchString(string(m.in[pos])) {
-			return false
+			return m.leave(false)
 		}
-		return k(pos + 1)
+		return m.leave(k(pos + 1))
 
 	case *btSeq:
-		return m.matchSeq(t.items, pos, k)
+		return m.leave(m.matchSeq(t.items, pos, k))
 
 	case *btAlt:
 		for _, b := range t.branches {
 			if m.match(b, pos, k) {
-				return true
+				return m.leave(true)
 			}
 			if m.overrun {
-				return false
+				return m.leave(false)
 			}
 		}
-		return false
+		return m.leave(false)
 
 	case *btGroup:
 		if t.index == 0 {
-			return m.match(t.node, pos, k)
+			return m.leave(m.match(t.node, pos, k))
 		}
 		gs, ge := 2*t.index, 2*t.index+1
 		oldS, oldE := m.caps[gs], m.caps[ge]
@@ -796,7 +910,7 @@ func (m *btMachine) match(n btNode, pos int, k btCont) bool {
 		if !ok {
 			m.caps[gs], m.caps[ge] = oldS, oldE
 		}
-		return ok
+		return m.leave(ok)
 
 	case *btBackref:
 		gs, ge := 2*t.group, 2*t.group+1
@@ -809,11 +923,11 @@ func (m *btMachine) match(n btNode, pos int, k btCont) bool {
 		}
 		n := e - s
 		if pos+n > len(m.in) {
-			return false
+			return m.leave(false)
 		}
 		for i := 0; i < n; i++ {
 			if !runeEq(m.in[pos+i], m.in[s+i], t.fold) {
-				return false
+				return m.leave(false)
 			}
 		}
 		pos += n
@@ -821,21 +935,21 @@ func (m *btMachine) match(n btNode, pos int, k btCont) bool {
 		// text following the reference.
 		if len(t.literal) > 0 {
 			if pos+len(t.literal) > len(m.in) {
-				return false
+				return m.leave(false)
 			}
 			for i, r := range t.literal {
 				if !runeEq(m.in[pos+i], r, t.fold) {
-					return false
+					return m.leave(false)
 				}
 			}
 			pos += len(t.literal)
 		}
-		return k(pos)
+		return m.leave(k(pos))
 
 	case *btRepeat:
-		return m.matchRepeat(t, pos, 0, k)
+		return m.leave(m.matchRepeat(t, pos, 0, k))
 	}
-	return false
+	return m.leave(false)
 }
 
 func (m *btMachine) matchSeq(items []btNode, pos int, k btCont) bool {
@@ -885,20 +999,20 @@ func (m *btMachine) matchRepeat(t *btRepeat, pos, count int, k btCont) bool {
 		// regex-019 needs — "(.*?)" must stop at the first quote the
 		// backreference can match, not run to the last.
 		if canStop && k(pos) {
-			return true
+			return m.leave(true)
 		}
 		if m.overrun {
-			return false
+			return m.leave(false)
 		}
-		return more()
+		return m.leave(more())
 	}
 	if more() {
-		return true
+		return m.leave(true)
 	}
 	if m.overrun {
-		return false
+		return m.leave(false)
 	}
-	return canStop && k(pos)
+	return m.leave(canStop && k(pos))
 }
 
 func runeEq(a, b rune, fold bool) bool {
@@ -949,10 +1063,12 @@ func (b *btRegexp) Err() error { return b.err }
 
 // newMachine builds a fresh machine with a fresh budget.
 func (b *btRegexp) newMachine(s []rune) *btMachine {
+	steps, depth := backtrackLimits()
 	return &btMachine{
 		in:        s,
 		caps:      newCaps(b.groups),
-		budget:    backtrackBudget,
+		budget:    steps,
+		maxDepth:  depth,
 		multiline: b.multiline,
 	}
 }

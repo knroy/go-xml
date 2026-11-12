@@ -173,7 +173,8 @@ func TestFormatDateTimeRejectsUnknownComponent(t *testing.T) {
 }
 
 func TestIDLookup(t *testing.T) {
-	doc := `<r><a xml:id="one"/><b id="two"/><c idref="one"/></r>`
+	doc := `<!DOCTYPE r [<!ATTLIST b id ID #IMPLIED><!ATTLIST c idref IDREF #IMPLIED>]>` +
+		`<r><a xml:id="one"/><b id="two"/><c idref="one"/></r>`
 	if got := evalStr(t, doc, `local-name(id('one', /r))`); got != "a" {
 		t.Errorf("id('one') = %q, want a", got)
 	}
@@ -189,6 +190,17 @@ func TestIDLookup(t *testing.T) {
 	}
 	if got := evalStr(t, doc, `count(id('missing', /r))`); got != "0" {
 		t.Errorf("id of a missing name = %q, want 0", got)
+	}
+
+	// is-id and is-idrefs come from a DTD, a schema or xml:id (F&O §14.5.1-
+	// §14.5.3), never from the attribute's name alone.
+	undeclared := `<r><b id="two"/><c idref="two"/><d idrefs="two"/></r>`
+	for _, expr := range []string{
+		`count(id('two', /r))`, `count(element-with-id('two', /r))`, `count(idref('two', /r))`,
+	} {
+		if got := evalStr(t, undeclared, expr); got != "0" {
+			t.Errorf("%s on undeclared attributes = %q, want 0", expr, got)
+		}
 	}
 }
 
@@ -1075,5 +1087,26 @@ func BenchmarkDistinctValuesIntegers(b *testing.B) {
 				benchEvalXSLT(b, expr)
 			}
 		})
+	}
+}
+
+// fn:data over atomics with no array among them copies the sequence once, in
+// Atomize, and not a second time in FlattenContext.
+func TestDataWithoutArraysCopiesOnce(t *testing.T) {
+	seq := make(xdm.Sequence, 10000)
+	for i := range seq {
+		seq[i] = xdm.NewInteger(int64(i))
+	}
+	ctx := NewContext(nil, Builtins())
+	n := testing.AllocsPerRun(10, func() {
+		if _, err := callFn(t, ctx, "data", seq); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Logf("fn:data of 10k atomics: %v allocations", n)
+	// 4 before FlattenContext returned an array-free input as it stands: its
+	// copy and its walk stack, beside Atomize's copy and the result slice.
+	if n > 2 {
+		t.Errorf("fn:data of 10k atomics allocated %v times, want 2", n)
 	}
 }

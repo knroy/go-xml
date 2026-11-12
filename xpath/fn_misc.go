@@ -4,12 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // registerMiscFuncs adds the remaining F&O functions.
@@ -38,10 +40,10 @@ func registerMiscFuncs(l *Library) {
 	})
 
 	l.registerFn("id", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		return lookupByID(ctx, args, true)
+		return lookupByID(ctx, args, lookupID)
 	})
 	l.registerFn("idref", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		return lookupByID(ctx, args, false)
+		return lookupByID(ctx, args, lookupIDREF)
 	})
 
 	l.registerFn("dateTime", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -180,9 +182,20 @@ func registerUnparsedText(l *Library, since Version) {
 				return nil, err
 			}
 		}
-		if _, err := unparsedText(ctx, args); err != nil {
+		text, err := unparsedText(ctx, args)
+		if err != nil {
+			// A budget refusal is not an answer about the resource. It is
+			// raised exactly when unparsed-text itself would raise it, which
+			// §2.3.1's XPDY0130 permits.
+			if errors.Is(err, xdm.ErrResourceLimit) {
+				return nil, err
+			}
 			return boolSeq(false), nil
 		}
+		// The probe keeps nothing, so its charge is handed back: charged,
+		// "if (available(A)) then unparsed-text(A)" paid for A twice and was
+		// refused with room for the one copy it holds.
+		ctx.refundBytes(len(text))
 		return boolSeq(true), nil
 	})
 
@@ -209,7 +222,7 @@ func unparsedText(ctx *Context, args []xdm.Sequence) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	text, err := readText(ctx, s, enc)
+	text, err := fetchText(ctx, s, enc)
 	if err != nil {
 		return "", err
 	}
@@ -242,13 +255,33 @@ func unparsedText(ctx *Context, args []xdm.Sequence) (string, error) {
 				code, s, c)
 		}
 	}
+	// Charged last, so a call that fails above has charged nothing and
+	// fn:unparsed-text-available, which refunds a success, nets to zero.
+	if err := ctx.countBytes(len(text)); err != nil {
+		return "", err
+	}
 	return text, nil
 }
 
 // readText retrieves one resource as text, with no restriction on the
-// characters it may hold. fn:unparsed-text layers its own on top; fn:json-doc
-// takes the text as it stands and lets the JSON parser judge it.
+// characters it may hold, and charges it to the byte budget. fn:unparsed-text
+// layers its own restriction on top of fetchText; fn:json-doc takes the text
+// as it stands and lets the JSON parser judge it.
 func readText(ctx *Context, s, enc string) (string, error) {
+	text, err := fetchText(ctx, s, enc)
+	if err != nil {
+		return "", err
+	}
+	// The resolver caps one read, not their sum, and caches nothing, so
+	// every call is a fresh string the evaluation may retain.
+	if err := ctx.countBytes(len(text)); err != nil {
+		return "", err
+	}
+	return text, nil
+}
+
+// fetchText is readText without the charge.
+func fetchText(ctx *Context, s, enc string) (string, error) {
 	// A fragment identifier names a part of a resource, and these functions
 	// retrieve whole resources: F&O 3.0 14.8.5 makes it a dynamic error
 	// rather than something to ignore -- "[err:FOUT1170] if $href contains a
@@ -340,14 +373,28 @@ func unparsedTextArgs(args []xdm.Sequence) (href, encoding string, err error) {
 	return href, encoding, nil
 }
 
-// lookupByID implements fn:id and fn:idref.
+// idLookup selects which of the three ID functions lookupByID answers.
+type idLookup int
+
+const (
+	lookupID            idLookup = iota // fn:id
+	lookupElementWithID                 // fn:element-with-id
+	lookupIDREF                         // fn:idref
+)
+
+// lookupByID implements fn:id, fn:element-with-id and fn:idref.
 //
-// Without a DTD or schema this engine cannot know which attributes are of type
-// ID, so it uses the conventional xml:id and an unprefixed "id" attribute.
-// That is a documented approximation rather than a silent one: a stylesheet
-// relying on DTD-declared ID attributes gets nothing back, which shows up as
-// an empty result rather than a wrong one.
-func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, error) {
+// Both are defined over the is-id and is-idrefs properties (F&O §14.5.1-
+// §14.5.3): a node counts only if a DTD or schema typed it as ID or
+// IDREF(S), or it is a valid xml:id. An attribute merely named "id",
+// "idref" or "idrefs" is not one, declared nothing.
+//
+// fn:id and fn:element-with-id return one element per ID value: "If several
+// elements have the same ID value, then E is the one that is first in
+// document order" (F&O §14.5.1, §14.5.2). fn:idref has no such rule and
+// returns every node that refers to a value (§14.5.3).
+func lookupByID(ctx *Context, args []xdm.Sequence, mode idLookup) (xdm.Sequence, error) {
+	wantID := mode != lookupIDREF
 	var root *xdm.Node
 	if len(args) > 1 {
 		n, err := singleNodeArg(args, 1)
@@ -381,14 +428,24 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 	// valid xs:IDREF and therefore matches nothing, where id('a c') looks for
 	// "a" and "c". Splitting both made idref find the union of the tokens.
 	want := map[string]bool{}
-	for _, it := range xdm.Atomize(args[0]) {
+	atoms, err := ctx.atomize(args[0])
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range atoms {
 		v := it.(*xdm.Atomic).String()
 		if !wantID {
 			want[v] = true
 			continue
 		}
+		// F&O §14.5.2: "If any of the tokens is not a lexically valid
+		// IDREF (that is, if it is not lexically an xs:NCName), it is
+		// ignored." So no ID value that is not an NCName can be found,
+		// whatever typed it ID.
 		for _, f := range splitXMLSpace(v) {
-			want[f] = true
+			if isNCName(f) {
+				want[f] = true
+			}
 		}
 	}
 	if len(want) == 0 {
@@ -396,6 +453,19 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 	}
 
 	var out xdm.Sequence
+	// first holds, per ID value, the earliest element in document order that
+	// carries it. The walk is in document order, but for element-with-id an
+	// ID element names its parent, which precedes it, so the earliest is
+	// kept by comparison rather than by arrival.
+	first := map[string]*xdm.Node{}
+	claim := func(v string, e *xdm.Node) {
+		if e == nil || !want[v] {
+			return
+		}
+		if cur, ok := first[v]; !ok || e.Compare(cur) < 0 {
+			first[v] = e
+		}
+	}
 	var walk func(*xdm.Node)
 	walk = func(n *xdm.Node) {
 		if n.Kind() == xdm.KindElement {
@@ -414,9 +484,17 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 			// the annotation. Testing only the annotation made both
 			// functions find nothing in a stripped document.
 			if wantID && (n.IsID() || isIDAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation())) {
-				if want[trimXMLSpace(n.StringValue())] {
-					out = append(out, n)
+				// fn:element-with-id returns the element the identifier
+				// names, which is the ID element's parent; a parentless ID
+				// element identifies nothing containing it.
+				e := n
+				if mode == lookupElementWithID {
+					e = nil
+					if p := n.Parent(); p != nil && p.Kind() == xdm.KindElement {
+						e = p
+					}
 				}
+				claim(trimXMLSpace(n.StringValue()), e)
 			}
 			if !wantID && (n.IsIDREFS() || isIDREFAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation())) {
 				for _, v := range splitXMLSpace(n.StringValue()) {
@@ -429,41 +507,27 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 			for a := range n.Attrs() {
 				// A validated document says which attributes are of type
 				// xs:ID, and that is what the specification asks for. The
-				// name-based test below is the fallback for a document that
-				// was never validated, not a substitute: an attribute
-				// annotated ID counts however it is spelled, and one merely
-				// called "id" in a validated document does not.
-				// An xml:id whose value is not an NCName is not an ID.
-				//
-				// xml:id §4 normalises the value and §5 makes a value that is
-				// not an NCName an xml:id error, whose consequence is that the
-				// attribute's is-id property is false -- so fn:id must not
-				// find it. XQuery permits reporting XQDY0091 instead, which is
-				// why fn-id-25 accepts either; answering with the element is
-				// the one thing neither allows.
-				//
-				// The check applies only to the name-based fallback for
-				// xml:id. An attribute the data model has already marked IsID,
-				// or one a schema annotated as xs:ID, was validated by
-				// whatever produced it and is taken at its word.
-				if a.Name().URI == xdm.NSXML && a.Name().Local == "id" &&
-					!isNCName(trimXMLSpace(a.Value())) {
-					continue
-				}
+				// name-based test below covers xml:id only, which is an ID
+				// with no declaration (xml:id §4): an attribute annotated ID
+				// counts however it is spelled, and one merely called "id"
+				// does not.
+				// An xml:id whose value is not an NCName is still an ID:
+				// xml:id §4 assigns the type whatever the value, and XQuery
+				// 3.1's computed attribute constructor rule (its section
+				// 3.9.3.2) sets is-id true for every xml:id. It is never
+				// found because fn:id ignores a candidate that is not an
+				// NCName (above), which is what fn-id-25 expects.
 				isIDAttr := a.IsID() || isIDAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation()) ||
-					(a.Name().URI == xdm.NSXML && a.Name().Local == "id") ||
-					(a.Name().URI == "" && a.Name().Local == "id")
-				isRefAttr := a.IsIDREFS() || isIDREFAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation()) ||
-					(a.Name().URI == "" &&
-						(a.Name().Local == "idref" || a.Name().Local == "idrefs"))
+					(a.Name().URI == xdm.NSXML && a.Name().Local == "id")
+				isRefAttr := a.IsIDREFS() || isIDREFAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation())
 
 				// The value of an ID attribute is of a type derived from
 				// xs:NCName, so its whitespace is collapsed before it is
 				// compared: key241.xml writes xml:id="id3 " and the
 				// stylesheet asks for id(' id3'). The search terms were
 				// already split on whitespace above; this is the other half.
-				if wantID && isIDAttr && want[trimXMLSpace(a.Value())] {
-					out = append(out, n)
+				if wantID && isIDAttr {
+					claim(trimXMLSpace(a.Value()), n)
 				}
 				if !wantID && isRefAttr {
 					for _, v := range splitXMLSpace(a.Value()) {
@@ -487,6 +551,9 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 		}
 	}
 	walk(root)
+	for _, e := range first {
+		out = append(out, e)
+	}
 	return xdm.SortDocumentOrder(out), nil
 }
 
@@ -498,16 +565,80 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 // instructions are ignored when comparing element content, which is why this
 // cannot simply compare serialised forms.
 func deepEqual(ctx *Context, a, b xdm.Sequence) (bool, error) {
-	return deepEqualAt(ctx, a, b, 0)
+	return deepEqualAt(ctx, &deepWalk{}, a, b, 0)
+}
+
+// deepWalk is what one fn:deep-equal call carries down its recursion.
+//
+// An array or map keeps its members by reference, so k charged doublings
+// ("[$a, $a]" in a fold) describe 2^k leaves, and a walk that compares every
+// leaf pair is exponential in what the value cost to build. equal remembers
+// the pairs of member sequences already found deep-equal, by the identity of
+// their backing arrays, so a pair met again is answered without walking it:
+// the comparison is a pure function of the two values under the call's one
+// collation, and a pair that raised or compared unequal ended the walk. The
+// walk is then linear in the distinct structure. visits counts member pairs
+// compared, so the evaluation's context is checked every
+// deepEqualCheckEvery of them and a host deadline stops what remains.
+type deepWalk struct {
+	equal  map[deepPair]bool
+	visits int
+}
+
+// deepPair identifies a pair of non-empty member sequences by their first
+// elements' addresses and their lengths.
+type deepPair struct {
+	a, b   *xdm.Item
+	na, nb int
+}
+
+// deepEqualCheckEvery is how many member pairs a deepWalk compares between
+// two checks of the evaluation's context, as xdm.FlattenContext checks its.
+const deepEqualCheckEvery = 1024
+
+// members compares two member sequences of maps or arrays being compared.
+func (w *deepWalk) members(ctx *Context, a, b xdm.Sequence, depth int) (bool, error) {
+	w.visits++
+	if w.visits%deepEqualCheckEvery == 0 {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+	}
+	// Only a member holding a map or an array can describe more than it
+	// holds; any other is compared in time linear in its length, and
+	// remembering it would cost more than comparing it again.
+	if len(a) == 0 || len(a) != len(b) || !slices.ContainsFunc(a, isMapOrArray) {
+		return deepEqualAt(ctx, w, a, b, depth)
+	}
+	k := deepPair{&a[0], &b[0], len(a), len(b)}
+	if w.equal[k] {
+		return true, nil
+	}
+	eq, err := deepEqualAt(ctx, w, a, b, depth)
+	if eq && err == nil {
+		if w.equal == nil {
+			w.equal = map[deepPair]bool{}
+		}
+		w.equal[k] = true
+	}
+	return eq, err
+}
+
+func isMapOrArray(it xdm.Item) bool {
+	switch it.(type) {
+	case *xdm.MapItem, *xdm.ArrayItem:
+		return true
+	}
+	return false
 }
 
 // deepEqualAt is deepEqual for values nested depth maps or arrays down.
-func deepEqualAt(ctx *Context, a, b xdm.Sequence, depth int) (bool, error) {
+func deepEqualAt(ctx *Context, w *deepWalk, a, b xdm.Sequence, depth int) (bool, error) {
 	if len(a) != len(b) {
 		return false, nil
 	}
 	for i := range a {
-		eq, err := deepEqualItem(ctx, a[i], b[i], depth)
+		eq, err := deepEqualItem(ctx, w, a[i], b[i], depth)
 		if err != nil || !eq {
 			return false, err
 		}
@@ -515,7 +646,7 @@ func deepEqualAt(ctx *Context, a, b xdm.Sequence, depth int) (bool, error) {
 	return true, nil
 }
 
-func deepEqualItem(ctx *Context, x, y xdm.Item, depth int) (bool, error) {
+func deepEqualItem(ctx *Context, w *deepWalk, x, y xdm.Item, depth int) (bool, error) {
 	// An Opaque is engine-internal state, not a value the data model defines
 	// equality over. A stylesheet naming the internal namespace can put one
 	// here, so it is compared by identity rather than asserted to be atomic.
@@ -541,7 +672,7 @@ func deepEqualItem(ctx *Context, x, y xdm.Item, depth int) (bool, error) {
 	// before the node and atomic branches because neither is either one: the
 	// fallback below compares unrecognised items by identity, so two equal
 	// arrays built separately were answering false.
-	if eq, handled, err := deepEqualMapArray(ctx, x, y, depth); handled {
+	if eq, handled, err := deepEqualMapArray(ctx, w, x, y, depth); handled {
 		return eq, err
 	}
 
@@ -1553,13 +1684,14 @@ func weekOfYear(dt *xdm.DateTime) int {
 	// of the year.
 	iso := (weekdayIndex(dt) + 6) % 7 // Monday = 0
 	days := daysFromCivilLocal(dt.Year, dt.Month, dt.Day) - int64(iso) + 3
-	// Recover the calendar year of that Thursday by walking from the value's
-	// own year, which is at most one out in either direction.
+	// Recover the calendar year of that Thursday from the value's own year,
+	// which is at most one out in either direction. Only those neighbours are
+	// tested: walking until the day counts agreed never ended once a day count
+	// had overflowed.
 	y := dt.Year
-	for daysFromCivilLocal(y+1, 1, 1) <= days {
+	if daysFromCivilLocal(y+1, 1, 1) <= days {
 		y++
-	}
-	for daysFromCivilLocal(y, 1, 1) > days {
+	} else if daysFromCivilLocal(y, 1, 1) > days {
 		y--
 	}
 	return int((days-daysFromCivilLocal(y, 1, 1))/7) + 1
@@ -1862,6 +1994,12 @@ func parseFracPattern(pres string) (fracPattern, error) {
 			fp.mandatory++
 		default:
 			// Literal separator text; applyFracPicture writes it back.
+		}
+		// Each digit is a place rendered, so the pattern is bounded as the
+		// width modifier is.
+		if fp.mandatory+fp.optional > maxPictureWidth {
+			return fracPattern{}, fmt.Errorf("FOFD1340: fractional-seconds pattern "+
+				"asks for more than %d digits: %w", maxPictureWidth, xdm.ErrResourceLimit)
 		}
 	}
 	// A bare "1" is the component's default presentation rather than a
@@ -2930,7 +3068,7 @@ func registerParseXML(l *Library, since Version) {
 		// an ordinary function, so an expression calls it once per node, and
 		// sixty bombs that each stayed under the 1 MB ceiling expanded 47 MB
 		// between them and were accepted. See Env.entities.
-		tree, perr := xdm.ParseString(s, xdm.ParseOptions{
+		tree, perr := xdm.ParseString(s, ctx.ev().entityLimits(xdm.ParseOptions{
 			AllowDOCTYPE: true,
 			BaseURI:      ctx.StaticBaseURI(),
 			// A document handed to parse-xml may declare external entities,
@@ -2940,7 +3078,7 @@ func registerParseXML(l *Library, since Version) {
 			// the default of refusing every one, so an expression parsing
 			// untrusted XML cannot be talked into a file read.
 			ExternalEntities: ctx.ev().Entities,
-		}.WithEntityBudget(ctx.EntityBudget()))
+		}).WithEntityBudget(ctx.EntityBudget()))
 		if perr != nil {
 			// A resource refusal is this engine declining to spend more, not a
 			// statement about the argument, so it is reported as the resource
@@ -2957,6 +3095,12 @@ func registerParseXML(l *Library, since Version) {
 				"fn:parse-xml: argument is not a well-formed XML document: %v", perr)
 		}
 		if err := checkNamespaceWellFormed(tree.Root, "fn:parse-xml"); err != nil {
+			return nil, err
+		}
+		// The parsed document is a tree this evaluation now holds, so it is
+		// charged to the node budget like any constructed one; the parse's
+		// own MaxNodes bounds one call, not what the evaluation retains.
+		if err := ctx.countNodes(xdmbuild.CountSubtree(tree.Root)); err != nil {
 			return nil, err
 		}
 		return xdm.One(tree.Root), nil
@@ -2985,8 +3129,28 @@ func registerParseXML(l *Library, since Version) {
 		if err := checkNamespaceWellFormed(frag, "fn:parse-xml-fragment"); err != nil {
 			return nil, err
 		}
+		// Charged as fn:parse-xml's document is. The wrapper tree the copy
+		// was taken from is dropped here, so only the result is retained.
+		if err := ctx.countNodes(xdmbuild.CountSubtree(frag)); err != nil {
+			return nil, err
+		}
 		return xdm.One(frag), nil
 	})
+}
+
+// entityLimits returns o with the entity limits the host set for this
+// evaluation (xpathleaf.Limits.Entities). With none, o is returned as it is
+// and parses under the xdm defaults.
+func (e *Env) entityLimits(o xdm.ParseOptions) xdm.ParseOptions {
+	if e.limits == nil || e.limits.entities == nil {
+		return o
+	}
+	l := e.limits.entities
+	o.MaxEntityDepth, o.MaxEntityBytes = l.MaxEntityDepth, l.MaxEntityBytes
+	o.MaxTotalEntityBytes, o.MaxEntities = l.MaxTotalEntityBytes, l.MaxEntities
+	o.MaxExternalFetches, o.MaxExternalFetchBytes = l.MaxExternalFetches, l.MaxExternalFetchBytes
+	o.MaxExternalDepth = l.MaxExternalDepth
+	return o
 }
 
 // parseXMLFragment parses a string as an external general parsed entity.
@@ -3182,8 +3346,8 @@ func roundHalfToEvenFrac(r *big.Rat, places int) string {
 	digits := q.String()
 	// Left-pad to the requested width so that .05 at two places is "05"
 	// rather than "5", which the caller reads positionally.
-	for len(digits) < places {
-		digits = "0" + digits
+	if len(digits) < places {
+		digits = strings.Repeat("0", places-len(digits)) + digits
 	}
 	return "." + digits
 }

@@ -3,6 +3,7 @@ package xslt
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -29,6 +30,9 @@ import (
 // fn:doc would be a hole in the sandbox rather than a feature, so
 // stylesheet-location and the source it names resolve through the same
 // (possibly nil) resolvers the caller supplied.
+//
+// Its nested compilations spend the calling runtime's compileBudget, which
+// the static phase's runtime takes from the Compile it runs inside.
 func registerTransformFunc(l *xpath.Library) {
 	l.Add(xpath.Function{
 		Name:  xdm.QName{URI: xdm.NSFN, Local: "transform"},
@@ -56,7 +60,7 @@ func registerTransformFunc(l *xpath.Library) {
 // transformCaller is what a nested transform inherits from whoever called
 // fn:transform: the resolvers and settings in opts, the package resolver, the
 // recursion count and its bound, the deadline, and whether the call is made
-// from inside a Compile that holds compileMu. The body of fn:transform reads
+// from inside a Compile that holds compileSlot. The body of fn:transform reads
 // these and nothing else, so a stylesheet and a caller with no stylesheet at
 // all -- an XQuery query, a bare xpath.Eval -- run the one implementation.
 type transformCaller struct {
@@ -68,6 +72,10 @@ type transformCaller struct {
 	// cache is the outer stylesheet's compiled-stylesheet cache, or nil for
 	// a caller with no stylesheet and for the static phase.
 	cache *nestedCache
+	// budget is the module budget its nested compilations share: the
+	// caller's transformState.compileBudget, which for a static-phase caller
+	// is the Compile's. Nil for a caller with no stylesheet.
+	budget *compileBudget
 }
 
 // callerOf is the caller a running (or static-phase) stylesheet makes.
@@ -76,6 +84,7 @@ func callerOf(rt *runtime) transformCaller {
 		opts: *rt.opts, pkgs: rt.sheet.pkgResolver,
 		depth: rt.depth, maxDepth: rt.maxDepth,
 		goCtx: rt.goCtx, static: rt.static,
+		budget: rt.compileBudget,
 	}
 	if !rt.static {
 		c.cache = &rt.sheet.nested
@@ -397,6 +406,9 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 			"XPDY0001: fn:transform nesting exceeded %d levels: %w",
 			rt.maxDepth, xdm.ErrResourceLimit)
 	}
+	// The charged depth also travels into the nested COMPILATION, whose
+	// static phase can call fn:transform again; see compileNested.
+	rt.depth = depth
 
 	// xslt-version selects the processor, and a 2.0 one ignores the options
 	// 3.0 added; see transformXSLTVersion.
@@ -492,6 +504,9 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 	}
 
 	topts := rt.opts
+	// Its result is the call's value, not this transform's output.
+	topts.Output = nil
+	topts.SecondaryOutput = nil
 	// The nested runtime picks up where this one left off instead of
 	// restarting at zero. See TransformOptions.nestedDepth.
 	topts.nestedDepth = depth
@@ -502,6 +517,7 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 	// It shares the calling transform's lock and locals stack. See
 	// TransformOptions.nestedLock.
 	topts.nestedLock, topts.nestedLocals = nil, nil
+	topts.readerInput = false // accumdyn_l4.go: the nested input is not the reader's
 	if prt := runtimeOf(ctx); prt != nil && prt.transformState != nil && prt.evalLock != nil {
 		topts.nestedLock, topts.nestedLocals = prt.evalLock, prt.locals
 	}
@@ -618,14 +634,6 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 			return nil, xdm.ErrType(
 				"fn:transform: global-context-item must be a single item")
 		}
-		// Transform takes the global context item as its source document,
-		// so an atomic or function item has nowhere to go.
-		n, ok := it.(*xdm.Node)
-		if !ok {
-			return nil, xdm.Errorf("FOXT0001",
-				"fn:transform: a global-context-item that is not a node "+
-					"(%s) is not supported", it.TypeName())
-		}
 		if topts.InitialTemplate == "" && topts.InitialFunction.Local == "" &&
 			topts.InitialMatchSelection == nil {
 			if source != nil {
@@ -635,7 +643,14 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 					"initial-template", xdm.NSXSL
 			}
 		}
-		source = n
+		// F&O types the option item(). A node is the source Transform
+		// takes as its global context item; any other item travels beside
+		// a nil source, the selection above keeping source-node's role.
+		if n, ok := it.(*xdm.Node); ok {
+			source = n
+		} else {
+			source, topts.globalItem = nil, it
+		}
 	}
 
 	res, err := sheet.Transform(rt.goCtx, source, topts)
@@ -752,7 +767,13 @@ func nestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem)
 		base = resolveAgainst(ctx.StaticBaseURI(), base)
 	}
 	var named []string
-	for _, k := range []string{"stylesheet-location", "stylesheet-node", "stylesheet-text", "package-name"} {
+	// F&O 3.1 asks for "exactly one of" the stylesheet-* options "Or ...
+	// exactly one of" the package-* ones, so any two of the seven are
+	// "two mutually-exclusive parameters" (FOXT0002). package-location,
+	// -node and -text are otherwise unsupported: alone they reach the
+	// "no stylesheet" FOXT0002 below.
+	for _, k := range []string{"stylesheet-location", "stylesheet-node", "stylesheet-text",
+		"package-name", "package-location", "package-node", "package-text"} {
 		if _, ok := transformOption(opts, k); ok {
 			named = append(named, k)
 		}
@@ -813,7 +834,10 @@ func nestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem)
 	if text, ok, terr := transformString(opts, "stylesheet-text"); terr != nil {
 		return nil, terr
 	} else if ok {
-		tree, perr := xdm.ParseString(text, nestedParseOptions(rt, base))
+		// The evaluation's entity allowance, as stylesheet-location and
+		// fn:parse-xml charge: one per evaluation, not one per call.
+		tree, perr := xdm.ParseString(text,
+			nestedParseOptions(rt, base).WithEntityBudget(ctx.EntityBudget()))
 		if perr != nil {
 			return nil, xdm.Errorf("FOXT0002",
 				"fn:transform: parsing stylesheet-text: %v", perr)
@@ -865,8 +889,20 @@ func nestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem)
 }
 
 // nestedParseOptions are the parse settings a nested stylesheet is read with.
+//
+// When the caller's Documents is a FileResolver they are that resolver's own,
+// so a stylesheet-text is parsed exactly as the same stylesheet given by
+// stylesheet-location is: its DOCTYPE, entity and size limits are the
+// caller's, not a fresh set this path alone would ignore. The text was read
+// from no URI, so it keeps base as its base URI and has no document URI.
 func nestedParseOptions(rt transformCaller, base string) xdm.ParseOptions {
-	return xdm.ParseOptions{BaseURI: base}
+	r, ok := callerDocuments(rt.opts.Documents).(*FileResolver)
+	if !ok {
+		return xdm.ParseOptions{BaseURI: base}
+	}
+	opts := r.parseOptions("", false)
+	opts.BaseURI, opts.DocumentURI = base, ""
+	return opts
 }
 
 // compileNested compiles a stylesheet for fn:transform.
@@ -912,24 +948,53 @@ func compileNested(
 		// xpath.Context.AdoptBudget: a nested operation may spend the parent's
 		// remainder, never reset it.
 		moduleBudget: ctx.EntityBudget(),
+		// The nested static phase continues this call's nesting count under
+		// its bound. Without it each level's static runtime started at zero
+		// with no bound, and a stylesheet passing its own text to
+		// fn:transform from a static variable recursed to a fatal stack
+		// overflow.
+		nestedDepth:    rt.depth,
+		nestedMaxDepth: rt.maxDepth,
+		// And it spends the outer compilation's module budget, so that
+		// breadth is bounded as well as depth: a static variable calling
+		// fn:transform B times on its own stylesheet, K levels deep, used to
+		// run B^K compilations each counting its modules afresh.
+		budget:       rt.budget,
 		StaticParams: static,
 		MaxVersion:   maxVersion,
+		// The nested compilation is cancelled with the transformation, or
+		// the static phase, that asked for it.
+		ctx: rt.goCtx,
 	}
 	// A transform reached from the static phase is running INSIDE a Compile
-	// that holds compileMu, so it must not ask for the lock again. rt.static
+	// that holds compileSlot, so it must not ask for the lock again. rt.static
 	// is set only from the runtime the static phase builds, and is the only
 	// thing that distinguishes the two paths.
-	compile := Compile
+	var sheet *Stylesheet
 	if rt.static {
-		compile = compileNestedLocked
+		sheet, err = compileNestedLocked(root, copts)
+	} else {
+		sheet, err = CompileContext(rt.goCtx, root, copts)
 	}
-	sheet, err := compile(root, copts)
 	if err != nil {
 		if xdm.ErrorCode(err) != "" {
 			return nil, fmt.Errorf("fn:transform: compiling the stylesheet: %w", err)
 		}
-		return nil, xdm.Errorf("FOXT0002",
-			"fn:transform: compiling the stylesheet: %v", err)
+		// Many static errors (the §19.8 XTSE3430 family among them) carry
+		// their code only as a trailing "(XTSE3430)", which xdm.ErrorCode
+		// does not read. It is still the XSLT code, so it is retained; its
+		// shape is checked by handing ErrorCode the prefix form.
+		msg := err.Error()
+		if n := len(msg); n >= 10 && msg[n-10] == '(' && msg[n-1] == ')' {
+			if code := xdm.ErrorCode(errors.New(msg[n-9:n-1] + ":")); code != "" {
+				return nil, &xdm.Error{Code: code, Err: err,
+					Message: "fn:transform: compiling the stylesheet: " + msg}
+			}
+		}
+		// The cause is kept, so that a resource-limit refusal from the nested
+		// compilation still answers errors.Is(err, xdm.ErrResourceLimit).
+		return nil, &xdm.Error{Code: "FOXT0002", Err: err,
+			Message: "fn:transform: compiling the stylesheet: " + msg}
 	}
 	return sheet, nil
 }

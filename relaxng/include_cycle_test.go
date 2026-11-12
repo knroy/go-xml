@@ -1,6 +1,7 @@
 package relaxng
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,7 +27,7 @@ import (
 // much on it.
 func TestIncludeChainOverBoundIsAResourceLimitNotACycle(t *testing.T) {
 	docs := map[string]string{}
-	const chain = maxIncludeDepth + 1
+	const chain = DefaultMaxIncludeDepth + 1
 	for i := 0; i < chain; i++ {
 		docs[fmt.Sprintf("g%d.rng", i)] = fmt.Sprintf(
 			`<grammar`+rngNS+`><include href="g%d.rng"/></grammar>`, i+1)
@@ -52,7 +53,7 @@ func TestIncludeChainOverBoundIsAResourceLimitNotACycle(t *testing.T) {
 // half of the test above: the bound is a ceiling, not a suspicion.
 func TestLegalDeepIncludeChainCompiles(t *testing.T) {
 	docs := map[string]string{}
-	const chain = maxIncludeDepth - 2
+	const chain = DefaultMaxIncludeDepth - 2
 	for i := 0; i < chain; i++ {
 		docs[fmt.Sprintf("g%d.rng", i)] = fmt.Sprintf(
 			`<grammar`+rngNS+`><include href="g%d.rng"/></grammar>`, i+1)
@@ -180,6 +181,63 @@ func TestDiamondIncludeIsLegal(t *testing.T) {
 		t.Errorf("the shared definition should apply: %v", err)
 	}
 }
+
+// Include fan-out is bounded per compilation, not only per chain: L0..L4 each
+// include the next level 8 times, so the leaf is reached by 8^5 routes and the
+// whole set costs 37449 fetches from about a kilobyte of schema. The refusal is
+// a resource limit, and a diamond (above) stays legal.
+func TestIncludeFanOutIsBounded(t *testing.T) {
+	const fan, depth = 8, 5
+	r := &mapResolver{docs: map[string]string{
+		fmt.Sprintf("L%d.rng", depth): `<grammar` + rngNS + `/>`,
+	}}
+	for i := 0; i < depth; i++ {
+		inc := strings.Repeat(fmt.Sprintf(`<include href="L%d.rng"/>`, i+1), fan)
+		r.docs[fmt.Sprintf("L%d.rng", i)] = `<grammar` + rngNS + `>` + inc + `</grammar>`
+	}
+	_, err := compileWith(t, `<grammar`+rngNS+`><include href="L0.rng"/>
+		<start><element name="a"><empty/></element></start></grammar>`,
+		Options{Resolver: r})
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Fatalf("got %v after %d fetches, want a resource limit", err, len(r.seen))
+	}
+	if len(r.seen) > DefaultMaxSchemaFetches {
+		t.Errorf("%d fetches, above the bound of %d", len(r.seen), DefaultMaxSchemaFetches)
+	}
+}
+
+// The fetch count bounds how often a Resolver is asked, not what it returns.
+// Each fetch is parsed afresh and stays reachable until the compile ends, so
+// a 256 KB leaf included 800 times held 207 MB, and the count allowed 2.6 GB.
+// What the fetched documents hold is summed over the compilation against
+// one document's limits; here a 1 MB leaf included 70 times passes 64 MB of
+// text. The resolver hands back one parsed tree each time, so the test parses
+// it once.
+func TestIncludedDocumentsShareOneBudget(t *testing.T) {
+	leaf, err := xdm.ParseString(`<grammar`+rngNS+`><define name="x" combine="choice">`+
+		`<element name="e"><empty/></element></define><f:pad xmlns:f="urn:f">`+
+		strings.Repeat("a", 1<<20)+`</f:pad></grammar>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sameResolver{leaf.Root}
+	top := func(k int) string {
+		return `<grammar` + rngNS + `><start><ref name="x"/></start>` +
+			strings.Repeat(`<include href="leaf.rng"/>`, k) + `</grammar>`
+	}
+	if _, err := compileWith(t, top(2), Options{Resolver: r}); err != nil {
+		t.Fatalf("two includes of one leaf were refused: %v", err)
+	}
+	_, err = compileWith(t, top(70), Options{Resolver: r})
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Fatalf("got %v, want a resource limit", err)
+	}
+}
+
+// sameResolver returns one tree for every href.
+type sameResolver struct{ doc *xdm.Node }
+
+func (r sameResolver) ResolveSchema(string) (*xdm.Node, error) { return r.doc, nil }
 
 // A sibling pair of externalRefs to one schema is the same shape as the
 // diamond, on the path that builds a compiler of its own. It must compile,

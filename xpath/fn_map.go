@@ -105,12 +105,12 @@ func registerMapFuncs(l *Library) {
 	// The second argument is a *sequence* of keys, and a key that is not
 	// present is ignored rather than being an error: map:remove($m, ()) is the
 	// map unchanged, and so is removing a key it never had.
-	l.registerMap("remove", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerMap("remove", []int{2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		m, err := argMap(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		atoms, err := xdm.AtomizeChecked(args[1])
+		atoms, err := ctx.atomizeChecked(args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -235,7 +235,7 @@ func registerMapFuncs(l *Library) {
 // input map. The default is "use-first", so the earliest map wins; the other
 // policies are named by the "duplicates" option, and "reject" makes a
 // duplicate an error rather than a choice.
-func mapMerge(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+func mapMerge(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	const (
 		useFirst = "use-first"
 		useLast  = "use-last"
@@ -273,7 +273,15 @@ func mapMerge(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	}
 
 	b := xdm.NewMapBuilder()
+	// combined holds, per key, the value combine has been growing. It is this
+	// function's own slice, so appending to it in place cannot reach into an
+	// input map's value, and the n-way combine is amortised linear rather
+	// than a fresh copy of everything so far on every duplicate.
+	var combined map[string]xdm.Sequence
 	for _, it := range args[0] {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		m, ok := it.(*xdm.MapItem)
 		if !ok {
 			return nil, xdm.ErrType(
@@ -296,9 +304,24 @@ func mapMerge(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			case useLast:
 				return b.Set(k, v)
 			case combine:
-				joined := make(xdm.Sequence, 0, len(prev)+len(v))
-				joined = append(joined, prev...)
+				// The combined value is a sequence this call materialises,
+				// so what it adds is charged to the item budget.
+				if err := ctx.countItems(len(v)); err != nil {
+					return err
+				}
+				mk, err := xdm.MapKeyOf(k)
+				if err != nil {
+					return err
+				}
+				joined, owned := combined[mk]
+				if !owned {
+					joined = append(make(xdm.Sequence, 0, 2*(len(prev)+len(v))), prev...)
+					if combined == nil {
+						combined = map[string]xdm.Sequence{}
+					}
+				}
 				joined = append(joined, v...)
+				combined[mk] = joined
 				return b.Set(k, joined)
 			}
 			return xdm.Errorf("FOJS0003",

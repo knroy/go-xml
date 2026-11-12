@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xdmbuild"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -142,7 +143,10 @@ type Options struct {
 
 	// MaxSchemaBytes bounds the total schema source text one compilation may
 	// read through SchemaResolver and Schemas, cumulatively rather than per
-	// import. Zero means DefaultMaxSchemaBytes.
+	// import: the documents an imported schema reaches through its own
+	// xs:include, xs:import and xs:redefine, and the schema imports of every
+	// library module the query loads, all draw on the one allowance. Zero
+	// means DefaultMaxSchemaBytes.
 	//
 	// Exceeding it fails the compilation with an error wrapping
 	// xdm.ErrResourceLimit rather than XQST0059: a truncated schema is a
@@ -201,6 +205,11 @@ type Query struct {
 	// modules: its own module store and resolver, installed on the context
 	// by prepare. Nil when the query was given neither.
 	modSrc xpath.ModuleResolver
+
+	// calls is the function-call graph over funcs and, per declared
+	// variable, the variables reachable through the functions it calls,
+	// built once at compile time; see Query.reachableVars.
+	calls *callGraph
 }
 
 // Compile compiles a query.
@@ -225,6 +234,13 @@ type Query struct {
 // "validate" are all judged against it. Nothing is fetched unless a resolver
 // was configured -- see Options.SchemaResolver.
 func Compile(src string, opts Options) (*Query, error) {
+	return compile(src, opts, nil)
+}
+
+// compile is Compile spending schema text against schemaBytes, a running
+// MaxSchemaBytes total shared with earlier compilations, or a fresh one when
+// nil. fn:load-xquery-module shares one across an evaluation's loads.
+func compile(src string, opts Options, schemaBytes *int64) (*Query, error) {
 	sc := newStaticContext()
 	sc.baseURI = opts.BaseURI
 	sc.declBase = opts.DeclarationBaseURI
@@ -252,7 +268,7 @@ func Compile(src string, opts Options) (*Query, error) {
 	// declared XQuery version implies -- the default until parseVersionDecl
 	// says otherwise, which it does before anything else is read.
 	p := &parser{src: src, sc: sc, version: sc.xqVersion.xpathVersion(),
-		declaredNS: map[string]bool{}, opts: opts}
+		declaredNS: map[string]bool{}, opts: opts, schemaBytes: schemaBytes}
 	// The version declaration, the prolog and the body are read in that order
 	// because each changes how the next is read: a version declaration can
 	// refuse the whole query, and every prolog declaration is applied to the
@@ -288,7 +304,7 @@ func Compile(src string, opts Options) (*Query, error) {
 	// are followed here rather than in the parser because the budget is
 	// per-compilation: a module that loaded its own imports could not be
 	// counted against the same allowance. See moduleLoader.
-	mods, err := loadModules(p.moduleImports, opts, sc)
+	mods, err := loadModules(p.moduleImports, opts, sc, p.schemaBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +312,7 @@ func Compile(src string, opts Options) (*Query, error) {
 		contextItem: p.contextItem, formats: p.formats,
 		serialization: p.serialization, modules: mods}
 	if len(opts.Modules) > 0 || opts.ModuleResolver != nil {
-		q.modSrc = queryModules{opts}
+		q.modSrc = queryModules{opts: opts}
 	}
 	// §4.12 adds the imported declarations to this module's static context,
 	// so a clash between an import and this module -- or between two imports
@@ -310,6 +326,7 @@ func Compile(src string, opts Options) (*Query, error) {
 	if err := q.checkStaticCalls(); err != nil {
 		return nil, err
 	}
+	q.calls = q.buildCallGraph()
 	return q, nil
 }
 
@@ -327,14 +344,15 @@ func Eval(src string, ctx *xpath.Context, opts Options) (xdm.Sequence, error) {
 // ctx supplies the context item, the variable bindings and the function
 // library, exactly as it does for an XPath expression. A nil function library
 // is legal and means the query may not call anything.
-func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
+func (q *Query) Eval(ctx *xpath.Context) (_ xdm.Sequence, err error) {
+	defer xdmlimit.Recover(&err) // a node constructed past a tree's text blocks
 	if ctx == nil {
 		ctx = xpath.NewContext(nil, xpath.Builtins())
 	}
 	if err := q.checkBodyVars(ctx); err != nil {
 		return nil, err
 	}
-	ctx, err := q.prepare(ctx)
+	ctx, err = q.prepare(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -365,6 +383,12 @@ func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 	defer ec.joins.release()
 	for _, n := range q.body {
 		if err := n.eval(ref, ec); err != nil {
+			return nil, err
+		}
+		// AppendText, StartElement and the builder calls with no error return
+		// latch a refusal (the node budget, the text-store ceiling) rather than
+		// panic: returned here, so that no result is silently truncated.
+		if err := out.Refused(); err != nil {
 			return nil, err
 		}
 	}
@@ -401,6 +425,10 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 			// unless the caller said otherwise.
 			if e.Modules == nil {
 				e.Modules = q.modSrc
+				if m, ok := q.modSrc.(queryModules); ok {
+					m.cache = &moduleCache{}
+					e.Modules = m
+				}
 			}
 		})
 	}
@@ -708,6 +736,7 @@ func (p *parser) retryAsOperandSubst(start int) (node, bool, error) {
 	}
 	end := p.pos
 	sub := &parser{src: src, sc: p.sc, version: p.version, depth: p.depth}
+	sub.memo, sub.base = p.memoAt(start + leadingSpace(p.src[start:end]))
 	items, ok, err := sub.parseOperandSubst()
 	if err != nil || !ok {
 		p.pos = save
@@ -795,6 +824,7 @@ func (p *parser) parseExprItem() (node, error) {
 			}
 			sub := &parser{src: p.src, pos: p.pos, sc: p.sc,
 				version: p.version, depth: p.depth + 1}
+			sub.memo, sub.base = p.memoAt(0)
 			if _, err := sub.parseConstructorHere(); err != nil {
 				break
 			}
@@ -829,7 +859,7 @@ done:
 		// than at its start: "(<a/>, <b/>)" and "count(for $x in E group by
 		// $k return $x)" are both expressions xpath cannot read whole, and
 		// neither begins with the construct that makes it so.
-		c, err := p.parseFromSource(src)
+		c, err := p.parseFromSource(src, start+leadingSpace(p.src[start:]))
 		if err != nil {
 			return nil, err
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/knroy/go-xml/v2/internal/xdmclone"
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -61,7 +62,8 @@ func (s *Schema) ValidateCopyContext(ctx context.Context, root *xdm.Node,
 // The edits are recorded rather than made because a built tree is never
 // edited: see the defaults, fixups and dropped fields of validator.
 func (s *Schema) typedCopy(ctx context.Context, root *xdm.Node, opts ValidateOptions,
-	check func(*validator, *xdm.Node) error) (*xdm.Node, error) {
+	check func(*validator, *xdm.Node) error) (_ *xdm.Node, err error) {
+	defer xdmlimit.Recover(&err) // a copy past a tree's text blocks
 	whole := root.Kind() == xdm.KindDocument || root.Parent() == nil ||
 		root.Parent().Kind() == xdm.KindDocument
 	v := s.newValidator(ctx, opts)
@@ -76,7 +78,7 @@ func (s *Schema) typedCopy(ctx context.Context, root *xdm.Node, opts ValidateOpt
 	c := copier{root: root, whole: whole, track: true}
 	c.copyTree(topOf(root))
 	v.twins = c.twins
-	err := check(v, c.twin)
+	err = check(v, c.twin)
 	return v.typedResult(c.twin, whole), err
 }
 
@@ -223,14 +225,18 @@ func (c *copier) copyTree(top *xdm.Node) *xdm.Node {
 // those src carries, in the order an in-place edit would have added them.
 func (c *copier) fill(dst, src *xdm.Node) {
 	c.note(dst, src)
+	// One AddNamespaces rather than one AddNamespace per binding, so the
+	// frame is built and interned once.
+	var pairs []string
 	for prefix, uri := range src.DeclaredNamespaces() {
-		dst.AddNamespace(prefix, uri)
+		pairs = append(pairs, prefix, uri)
 	}
 	if c.v != nil {
 		for _, ns := range c.v.fixups[src] {
-			dst.AddNamespace(ns.prefix, ns.uri)
+			pairs = append(pairs, ns.prefix, ns.uri)
 		}
 	}
+	dst.AddNamespaces(pairs...)
 	for a := range src.Attrs() {
 		c.note(dst.AppendAttr(a.Name(), a.Value()), a)
 	}

@@ -20,9 +20,9 @@
 // adds assertions, conditional type assignment with xs:alternative and
 // inheritable attributes, open content, xs:override, the notNamespace and
 // notQName wildcard forms, explicitTimezone, and conditional inclusion through
-// the versioning attributes. The 1.1 constructs are always *parsed* — a schema
-// that uses one is not made valid by pretending it is absent — but they are
-// only honoured under Version11.
+// the versioning attributes. Under Version10 a 1.1 construct is a schema
+// error, as the 1.0 schema for schemas does not declare it, unless
+// vc:minVersion="1.1" excludes it.
 //
 // One constraint is deliberately not checked: Particle Valid (Restriction).
 // See CheckConstraints.
@@ -891,6 +891,97 @@ type Wildcard struct {
 	// reachable from the wildcard, and computing it per element would
 	// re-walk the particle tree for every item validated.
 	siblingNames map[xdm.QName]bool
+
+	// index holds a *wildcardIndex: hash sets over Namespace and
+	// DisallowedNames, built on first use once a list is long enough for a
+	// linear scan to matter. Without it every match, and every wildcard set
+	// operation (which tests each member of one list against the other),
+	// cost the length of the list, so the set operations were quadratic in
+	// a list the schema author controls. atomic.Value rather than
+	// atomic.Pointer: the latter is noCopy, and Wildcard is an exported
+	// struct callers may copy.
+	index atomic.Value
+}
+
+// wildcardIndexMin is the list length from which a hash set beats the scan.
+const wildcardIndexMin = 16
+
+// wildcardIndex is the hash-set form of a wildcard's two lists, tagged with
+// the slices it was built from so a list replaced after the build is noticed
+// and the index rebuilt rather than answered from stale data.
+type wildcardIndex struct {
+	nsFirst   *string
+	nsLen     int
+	ns        map[string]struct{}
+	nameFirst *xdm.QName
+	nameLen   int
+	names     map[xdm.QName]struct{}
+}
+
+// lookupIndex returns the current index, building it when there is none or
+// the lists have changed since. Concurrent builders race benignly: each
+// stores an equivalent index.
+func (w *Wildcard) lookupIndex() *wildcardIndex {
+	if ix, _ := w.index.Load().(*wildcardIndex); ix != nil && ix.matches(w) {
+		return ix
+	}
+	ix := &wildcardIndex{nsLen: len(w.Namespace), nameLen: len(w.DisallowedNames)}
+	if len(w.Namespace) >= wildcardIndexMin {
+		ix.nsFirst = &w.Namespace[0]
+		ix.ns = make(map[string]struct{}, len(w.Namespace))
+		for _, n := range w.Namespace {
+			ix.ns[n] = struct{}{}
+		}
+	}
+	if len(w.DisallowedNames) >= wildcardIndexMin {
+		ix.nameFirst = &w.DisallowedNames[0]
+		ix.names = make(map[xdm.QName]struct{}, len(w.DisallowedNames))
+		for _, n := range w.DisallowedNames {
+			ix.names[n] = struct{}{}
+		}
+	}
+	w.index.Store(ix)
+	return ix
+}
+
+func (ix *wildcardIndex) matches(w *Wildcard) bool {
+	if ix.nsLen != len(w.Namespace) || ix.nameLen != len(w.DisallowedNames) {
+		return false
+	}
+	if ix.ns != nil && ix.nsFirst != &w.Namespace[0] {
+		return false
+	}
+	return ix.names == nil || ix.nameFirst == &w.DisallowedNames[0]
+}
+
+// listsNamespace reports whether ns is in w.Namespace.
+func (w *Wildcard) listsNamespace(ns string) bool {
+	if len(w.Namespace) >= wildcardIndexMin {
+		_, ok := w.lookupIndex().ns[ns]
+		return ok
+	}
+	for _, n := range w.Namespace {
+		if n == ns {
+			return true
+		}
+	}
+	return false
+}
+
+// withSiblingNames returns a copy of w carrying names as its sibling set.
+// The fields are copied one by one so the copy does not read index, which
+// another goroutine may be storing into.
+func (w *Wildcard) withSiblingNames(names map[xdm.QName]bool) *Wildcard {
+	return &Wildcard{
+		Kind:                   w.Kind,
+		ProcessContents:        w.ProcessContents,
+		Namespace:              w.Namespace,
+		ExcludesAbsent:         w.ExcludesAbsent,
+		DisallowedNames:        w.DisallowedNames,
+		DisallowDefined:        w.DisallowDefined,
+		DisallowDefinedSibling: w.DisallowDefinedSibling,
+		siblingNames:           names,
+	}
 }
 
 // ComponentKind implements Component.
@@ -901,9 +992,15 @@ func (*Wildcard) ComponentKind() string { return "wildcard" }
 // The definedNames callback answers ##defined, which needs the schema and so
 // cannot be decided by the wildcard alone.
 func (w *Wildcard) Disallows(name xdm.QName, defined func(xdm.QName) bool) bool {
-	for _, n := range w.DisallowedNames {
-		if n == name {
+	if len(w.DisallowedNames) >= wildcardIndexMin {
+		if _, ok := w.lookupIndex().names[name]; ok {
 			return true
+		}
+	} else {
+		for _, n := range w.DisallowedNames {
+			if n == name {
+				return true
+			}
 		}
 	}
 	if w.DisallowDefined && defined != nil && defined(name) {
@@ -935,19 +1032,9 @@ func (w *Wildcard) Allows(ns string) bool {
 		if ns == "" {
 			return !w.ExcludesAbsent
 		}
-		for _, n := range w.Namespace {
-			if n == ns {
-				return false
-			}
-		}
-		return true
+		return !w.listsNamespace(ns)
 	case NSEnumerated:
-		for _, n := range w.Namespace {
-			if n == ns {
-				return true
-			}
-		}
-		return false
+		return w.listsNamespace(ns)
 	}
 	return false
 }

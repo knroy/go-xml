@@ -1,7 +1,9 @@
 package xquery
 
 import (
+	"fmt"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xpath"
@@ -102,5 +104,21 @@ func TestFLWORResultReserved(t *testing.T) {
 func TestLiftedOperandNoLibrary(t *testing.T) {
 	if b := flworBytes(t, `for $a in 1 to 2000 return $a = <a>5</a>`, 2000); b > 5_400_000 {
 		t.Errorf("%d bytes, want at most 5,400,000", b)
+	}
+}
+
+// TestFLWORLetChainIsNotQuadratic pins that a chain of let clauses over one
+// tuple does not copy every earlier binding at every clause. Each clause
+// copied the names and the values whole, so V clauses allocated O(V^2):
+// measured on the base, 39 MB for V=1000 from 16 KB of query; 0.5 MB now.
+func TestFLWORLetChainIsNotQuadratic(t *testing.T) {
+	const v = 1000
+	var sb strings.Builder
+	for i := 0; i < v; i++ {
+		fmt.Fprintf(&sb, "let $v%d := %d ", i, i)
+	}
+	sb.WriteString("return $v0")
+	if b := flworBytes(t, sb.String(), 1); b > 4_000_000 {
+		t.Errorf("%d bytes for %d let clauses, want at most 4,000,000", b, v)
 	}
 }

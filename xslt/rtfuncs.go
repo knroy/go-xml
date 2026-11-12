@@ -35,9 +35,14 @@ func runtimeFrom(ctx *xpath.Context) (*runtime, bool) {
 	// focus, not the one captured when the transform started. What is known
 	// cleared about ctx rides on it, so a stylesheet function called from
 	// another does not clear the grouping, merge and regex components again.
+	// The template depth is the caller's too, which the context carries
+	// (runTemplateBody): the runtime's is where it was bound, so a template
+	// applied inside a stylesheet function started counting afresh, and a
+	// recursion through one was bounded only by the XPath call depth.
 	n := *rt
 	n.ctx = ctx
 	n.absent = h.Unbound
+	n.depth = max(n.depth, h.Depth)
 	return &n, true
 }
 
@@ -79,6 +84,11 @@ func init() {
 		rt := runtimeOf(c.(*xpath.Context))
 		if rt == nil {
 			return nil
+		}
+		if rt.savesAbsentFocus(c.(*xpath.Context), name.Local) { // accumdyn_l4.go
+			return func(call any) any {
+				return bindRuntime(call.(*xpath.Context), rt).WithFocus(nil, 0, 0)
+			}
 		}
 		return func(call any) any {
 			return bindRuntime(call.(*xpath.Context), rt)
@@ -1236,7 +1246,7 @@ func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]*x
 		// sets the context item but not the current-node variable the
 		// function reads, so the use expression saw whatever current() meant
 		// where the index happened to be built.
-		vals, err := def.use.Eval(withFocusCurrent(ctx, n, 1, 1))
+		vals, err := def.use.Eval(withFocusCurrent(ctx, n, 1, 1, hostDepth(hostOf(ctx))))
 		if err != nil {
 			return nil, err
 		}
@@ -1268,7 +1278,12 @@ func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]*x
 	items := out.Sequence()
 	atoms := xdm.Atomize(items)
 	if len(atoms) == 0 {
-		return []*xdm.Atomic{xdm.NewString(out.ToTree().StringValue())}, nil
+		// ToTree latches a text-store refusal instead of panicking; report it.
+		root := out.ToTree()
+		if err := out.Refused(); err != nil {
+			return nil, err
+		}
+		return []*xdm.Atomic{xdm.NewString(root.StringValue())}, nil
 	}
 	vals := make([]*xdm.Atomic, 0, len(atoms))
 	for _, it := range atoms {
@@ -1323,11 +1338,13 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 	// Every key entry is retained until the transform ends, and Eval resets
 	// the item counter per expression, so the running total is kept here
 	// and checked against the item bound. use="1 to 1000" over 100,000 nodes
-	// was a hundred million entries and 3.2 GB.
+	// was a hundred million entries and 3.2 GB. The bound covers every index
+	// the transform holds, not each one: an index per temporary tree each
+	// just under it kept 1.8 million entries under a bound of 100,000.
 	var held int64
 	addKeys := func(ks []string, n *xdm.Node) error {
 		held += int64(len(ks))
-		if err := ctx.ItemsRefused(held); err != nil {
+		if err := ctx.ItemsRefused(rt.keyItems + held); err != nil {
 			return err
 		}
 		for _, k := range ks {
@@ -1450,6 +1467,7 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 	}
 
 	rt.keyIndex[ck] = idx
+	rt.keyItems += held
 	return idx, nil
 }
 
@@ -1468,6 +1486,7 @@ func registerGroupingFuncs(l *xpath.Library) {
 				return nil, errNoGrouping(ctx, "XTDE1061", "current-group")
 			}
 			seq, _ := ctx.LookupVar(currentGroupVar)
+			streamGroupFault(seq)
 			return seq, nil
 		},
 	})

@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,6 +214,124 @@ func TestDocumentLimitIsEnforced(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "MaxDocuments") {
 		t.Errorf("error %q does not mention the limit", err)
+	}
+}
+
+// countingResolver counts the fetches it is asked for, and how many of the
+// documents it returned were read.
+type countingResolver struct {
+	Resolver
+	fetches int
+	reads   int
+	read    map[string]bool // locations read at least once
+}
+
+func (r *countingResolver) Resolve(namespace, location, base string) (io.ReadCloser, string, error) {
+	r.fetches++
+	rc, resolved, err := r.Resolver.Resolve(namespace, location, base)
+	if rc != nil {
+		rc = &readCounter{ReadCloser: rc, r: r, location: location}
+	}
+	return rc, resolved, err
+}
+
+// readCounter counts a document as read on its first Read.
+type readCounter struct {
+	io.ReadCloser
+	r        *countingResolver
+	location string
+	done     bool
+}
+
+func (c *readCounter) Read(p []byte) (int, error) {
+	if !c.done {
+		c.done = true
+		c.r.reads++
+		if c.r.read == nil {
+			c.r.read = map[string]bool{}
+		}
+		c.r.read[c.location] = true
+	}
+	return c.ReadCloser.Read(p)
+}
+
+// The limit is checked before a fetch, not when the fetched document is
+// dequeued: the latter let the last document's references, and every path
+// given to LoadFiles, be fetched and parsed past it.
+func TestDocumentLimitRefusesBeforeFetch(t *testing.T) {
+	docs := map[string]string{}
+	var paths []string
+	for i := 0; i < 20; i++ {
+		name := "d" + string(rune('a'+i)) + ".xsd"
+		next := ""
+		if i < 19 {
+			next = `<xs:include schemaLocation="d` + string(rune('a'+i+1)) + `.xsd"/>`
+		}
+		docs[name] = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">` + next + `</xs:schema>`
+		paths = append(paths, name)
+	}
+	tree, err := xdm.ParseString(docs["da.xsd"], xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &countingResolver{Resolver: &MapResolver{ByLocation: docs}}
+	if _, err := Load(tree.Root, "da.xsd", Options{Resolver: r, MaxDocuments: 5}); err == nil ||
+		!strings.Contains(err.Error(), "MaxDocuments") {
+		t.Fatalf("Load = %v, want the document limit", err)
+	}
+	// The root was handed over in memory; four more fill the limit. The
+	// fifth reference is resolved, because only the resolved location says
+	// whether it is a document already read, but it is never read.
+	if r.reads != 4 {
+		t.Errorf("Load read %d documents under a limit of 5, want 4", r.reads)
+	}
+
+	r = &countingResolver{Resolver: &MapResolver{ByLocation: docs}}
+	if _, err := LoadFiles(paths, Options{Resolver: r, MaxDocuments: 3}); err == nil ||
+		!strings.Contains(err.Error(), "MaxDocuments") {
+		t.Fatalf("LoadFiles = %v, want the document limit", err)
+	}
+	if r.fetches != 3 {
+		t.Errorf("LoadFiles fetched %d of 20 paths under a limit of 3, want 3", r.fetches)
+	}
+}
+
+// The limit counts documents read, not references. A reference back to a
+// document already read, a second include of one, and an import naming no
+// location fetch nothing new, so a schema set of exactly MaxDocuments
+// documents that does all three still loads.
+func TestDocumentLimitChargesOnlyNewDocuments(t *testing.T) {
+	const n = 5
+	docs := map[string]string{}
+	for i := 0; i < n; i++ {
+		refs := `<xs:include schemaLocation="d` + string(rune('a'+(i+1)%n)) + `.xsd"/>`
+		if i == n-1 {
+			refs += `<xs:include schemaLocation="db.xsd"/>` +
+				`<xs:import namespace="urn:elsewhere"/>`
+		}
+		docs["d"+string(rune('a'+i))+".xsd"] =
+			`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">` + refs + `</xs:schema>`
+	}
+	tree, err := xdm.ParseString(docs["da.xsd"], xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &countingResolver{Resolver: &MapResolver{ByLocation: docs}}
+	if _, err := Load(tree.Root, "da.xsd", Options{Resolver: r, MaxDocuments: n}); err != nil {
+		t.Fatalf("a set of exactly MaxDocuments documents was refused: %v", err)
+	}
+
+	// One more distinct document is refused, and is never read.
+	docs["de.xsd"] = strings.Replace(docs["de.xsd"], "</xs:schema>",
+		`<xs:include schemaLocation="df.xsd"/></xs:schema>`, 1)
+	docs["df.xsd"] = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>`
+	r = &countingResolver{Resolver: &MapResolver{ByLocation: docs}}
+	if _, err := Load(tree.Root, "da.xsd", Options{Resolver: r, MaxDocuments: n}); err == nil ||
+		!strings.Contains(err.Error(), "MaxDocuments") {
+		t.Fatalf("Load = %v, want the document limit", err)
+	}
+	if r.read["df.xsd"] {
+		t.Error("the document past the limit was read")
 	}
 }
 

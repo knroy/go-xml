@@ -38,6 +38,9 @@ type onEmptyInstr struct {
 }
 
 func (i *onEmptyInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if f := rt.burstsFor(i); f != nil {
+		return f.appendEval(rt, out) // streamonempty.go
+	}
 	return evalConditionalContent(i.sel, i.body, rt, out)
 }
 
@@ -48,6 +51,9 @@ type onNonEmptyInstr struct {
 }
 
 func (i *onNonEmptyInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if f := rt.burstsFor(i); f != nil {
+		return f.appendEval(rt, out) // streamonempty.go
+	}
 	return evalConditionalContent(i.sel, i.body, rt, out)
 }
 
@@ -348,6 +354,13 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 			}
 			r = append(r, it)
 		}
+		// R is materialised here whatever out is, so the item bound is
+		// checked on its running length after each instruction, as the plain
+		// path checks between instructions; waiting for the body to finish
+		// let any number of siblings overshoot it.
+		if err := rt.ctx.ItemsRefused(int64(len(r))); err != nil {
+			return err
+		}
 	}
 
 	if !f && onEmpty != nil {
@@ -438,10 +451,14 @@ func (c *compiler) compileOnEmpty(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 			n.Name().Lexical())
 	}
 
+	var instr Instruction = &onNonEmptyInstr{sel: sel, body: body}
 	if n.Name().Local == "on-empty" {
-		return &onEmptyInstr{sel: sel, body: body}, nil
+		instr = &onEmptyInstr{sel: sel, body: body}
 	}
-	return &onNonEmptyInstr{sel: sel, body: body}, nil
+	if sel != nil {
+		c.noteStreamSelect(n, instr, sel, ns) // a consuming select (streamonempty.go)
+	}
+	return instr, nil
 }
 
 // checkOnEmptyPlacement enforces the two positional rules of 8.4.2.

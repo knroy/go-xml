@@ -196,7 +196,7 @@ func packageComponents(root *xdm.Node) ([]*component, error) {
 			// if the parameter is non-static", so an xsl:override may supply
 			// one. Only a child of xsl:override is read as a component here,
 			// and the used package's matching declaration is found by name;
-			// see usedPackageParam. override-v-015.
+			// see usedPackageParams. override-v-015.
 			if !isXSL(root, "override") {
 				continue
 			}
@@ -621,6 +621,7 @@ func tokenMatchesAny(r *exposeRule, t nameToken, comps []*component) bool {
 type usePackageDecl struct {
 	el        *xdm.Node
 	name      string
+	key       string // packageKey of the resolved package
 	versions  string
 	accepts   []*exposeRule
 	overrides []*xdm.Node
@@ -650,7 +651,7 @@ type usePackageDecl struct {
 	// staticVars are the static variables the used package's own static phase
 	// evaluated. They belong to that package and not to the using one, so
 	// they are reinstated only while it compiles; see compileUsedPackage.
-	staticVars []staticVar
+	staticVars map[string]*staticVar
 	// assignedVis records which of those an xsl:accept actually named, as
 	// against inheriting the used package's own answer. XTSE3080 turns on the
 	// difference; see compileUsePackages.
@@ -889,6 +890,13 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 			return err
 		}
 	}
+	if c.usedPackageDepth == 0 && root == firstElement(c.sheet.source) { // streampkgfn_l7.go
+		roots := make([]*xdm.Node, 0, len(uses))
+		for _, u := range uses {
+			roots = append(roots, u.root)
+		}
+		notePkgFuncs(root, roots)
+	}
 	return nil
 }
 
@@ -935,6 +943,22 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 			"XTSE3000: no package named %s is available (package loading is "+
 				"disabled)", u.name)
 	}
+	// Everything from here on depends on the package alone, not on this
+	// xsl:use-package's accepts and overrides, so it is read once per
+	// Compile however many paths reach the package. comps is clipped so that
+	// acceptComponents appending to it cannot write into the shared array.
+	memo := u.name + "\x00" + u.versions
+	reuse := func(r *usePackageDecl) *usePackageDecl {
+		u.key, u.doc, u.root, u.staticVars = r.key, r.doc, r.root, r.staticVars
+		u.comps, u.inherited = slices.Clip(r.comps), r.inherited
+		return u
+	}
+	if r, ok := c.packageReads[memo]; ok {
+		return reuse(r), nil
+	}
+	if err := c.visitModule(el, u.name); err != nil {
+		return nil, err
+	}
 	doc, err := c.opts.PackageResolver.ResolvePackage(u.name, u.versions)
 	if err != nil {
 		return nil, fmt.Errorf("XTSE3000: no package matches name %q and "+
@@ -945,6 +969,21 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 	if u.root == nil {
 		return nil, fmt.Errorf("XTSE3000: the package named %s is empty", u.name)
 	}
+	u.key = packageKey(u.root, u.name)
+	// A different spelling of the version range can resolve to a package
+	// already read. Reading it again would copy it again through a fresh
+	// static phase, before any of those copies is charged as compiled.
+	// A read is recorded only once it is finished, so a hit here is never
+	// the package still being read: that is the XTSE3005 cycle below.
+	if r, ok := c.packageReadsByKey[u.key]; ok {
+		c.packageReads[memo] = r
+		return reuse(r), nil
+	}
+	leave, err := c.enterPackage(u.key)
+	if err != nil {
+		return nil, err
+	}
+	defer leave()
 	// The used package's own manifest is processed first: its components
 	// include what it in turn accepted from the packages it uses.
 	//
@@ -1007,6 +1046,16 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 	u.inherited = inherited
 	comps = append(comps, inherited...)
 	u.comps = comps
+	if c.packageReads == nil {
+		c.packageReads = map[string]*usePackageDecl{}
+	}
+	r := &usePackageDecl{key: u.key, doc: u.doc, root: u.root,
+		staticVars: u.staticVars, comps: slices.Clip(comps), inherited: inherited}
+	c.packageReads[memo] = r
+	if c.packageReadsByKey == nil {
+		c.packageReadsByKey = map[string]*usePackageDecl{}
+	}
+	c.packageReadsByKey[u.key] = r
 	return u, nil
 }
 
@@ -1031,8 +1080,8 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 // answer for a component the manifest does not mention, which likewise stops
 // here.
 //
-// Recursion is bounded by the package graph, which use-package cycles are
-// already rejected for elsewhere.
+// Recursion is bounded by the package graph: readUsePackage refuses a
+// package already on the path as XTSE3005.
 func (c *compiler) reExportedComponents(root *xdm.Node, own []*component) ([]*component, error) {
 	haveOwn := map[string]bool{}
 	for _, comp := range own {
@@ -1093,6 +1142,7 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 	// xsl:accept lists explicitly *and* an xsl:override declares an error,
 	// so the override's names have to be known before the accepts are read.
 	overridden := map[string]*xdm.Node{}
+	var params map[string]*xdm.Node
 	for _, ov := range u.overrides {
 		comps, err := packageComponents(ov)
 		if err != nil {
@@ -1110,7 +1160,10 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 				// additional property that its value can be supplied by the
 				// caller", and fixes its visibility as "public if the
 				// parameter is non-static". override-v-015 overrides one.
-				if el := usedPackageParam(u.root, oc.sym); el != nil {
+				if oc.sym.kind == kindVariable && params == nil {
+					params = usedPackageParams(u.root)
+				}
+				if el := params[oc.sym.name.Clark()]; oc.sym.kind == kindVariable && el != nil {
 					target = &component{
 						sym: oc.sym, el: el,
 						declared: visPublic, vis: visPublic,
@@ -1232,13 +1285,10 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 	// declaration's visibility attribute as adjusted by its xsl:expose rules
 	// -- which is the visibility 3.6.3.4 judges a call from the using package
 	// against. It is recorded now because the manifest does not survive
-	// composition; see composedVisibility.
-	if composedVisibility == nil {
-		composedVisibility = map[*xdm.Node]visibility{}
-	}
+	// composition; see compileEnv.composedVisibility.
 	for _, comp := range u.comps {
 		if comp.el != nil && !comp.reExported {
-			composedVisibility[comp.el] = comp.vis
+			c.env.composedVisibility[comp.el] = comp.vis
 		}
 	}
 	u.acceptedVis = vis
@@ -1379,14 +1429,12 @@ func checkOverrideSignature(overriding, original *xdm.Node) error {
 }
 
 // functionDeterminism reads xsl:function/@new-each-time, whose default is
-// "maybe": the processor may or may not re-evaluate the body, 10.3. The
+// "yes": "By default, stylesheet functions are proactive" (10.3.7). The
 // boolean spellings the attribute also admits are folded onto "yes" and "no",
 // so new-each-time="false" is the deterministic function "no" declares.
 func functionDeterminism(el *xdm.Node) string {
 	switch v := strings.TrimSpace(el.AttrValue("new-each-time")); v {
-	case "":
-		return "maybe"
-	case "true", "1":
+	case "", "true", "1":
 		return "yes"
 	case "false", "0":
 		return "no"
@@ -1702,7 +1750,14 @@ func contextItemAttr(el *xdm.Node, name string) string {
 // The used package's tree is not edited: the decisions are recorded in e, and
 // the tree compiled is a copy built with them applied.
 func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
+	if err := c.visitModule(u.el, u.name); err != nil {
+		return err
+	}
+	if err := c.compileModuleNodes(u.el, u.name, u.doc); err != nil {
+		return err
+	}
 	e := pkgEdits{}
+	idx := &mentionIndex{root: u.root, e: e}
 	keep := map[*xdm.Node]bool{}
 	for _, comp := range u.comps {
 		if comp.sym.kind == kindMode &&
@@ -1790,15 +1845,16 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		if comp.declared == visAbstract &&
 			u.overriding[comp.sym.key()] == nil &&
 			!(u.hiddenByAccept[comp.sym.key()] &&
-				!referencedWithin(e, u.root, comp)) {
+				!referencedWithin(c.env, idx, comp)) {
 			e.markAbstract(comp.el, comp.sym.String())
+			idx.note(comp.el, comp.sym.String())
 			keep[comp.el] = true
 			continue
 		}
 		if (v == visHidden || v == visAbsent) &&
 			u.overriding[comp.sym.key()] == nil &&
 			(u.hiddenByAccept[comp.sym.key()] ||
-				!referencedWithin(e, u.root, comp)) {
+				!referencedWithin(c.env, idx, comp)) {
 			// A component the using package cannot see is deleted, so that a
 			// reference to it fails as XPST0017 or XTSE0650 rather than
 			// quietly binding -- which is what use-package-003 asks for.
@@ -1839,7 +1895,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		if ov, ok := u.overriding[comp.sym.String()]; ok {
 			noteOverridingDecl(ov, compilePackage)
 			e.setAttr(ov, spliced, "yes")
-			appended = append(appended, e.rewriteOverride(ov, comp.el))
+			appended = append(appended, e.rewriteOverride(c.env, ov, comp.el))
 		}
 	}
 	var kept []*xdm.Node
@@ -1899,7 +1955,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 				// compileDocument, with compilePackage set to the used
 				// package. See overridingPackage.
 				noteOverridingDecl(ov, compilePackage)
-				kept = append(kept, e.rewriteOverride(ov, ch))
+				kept = append(kept, e.rewriteOverride(c.env, ov, ch))
 				if !e.isAbstractDecl(ch) {
 					kept = append(kept, ch)
 				}
@@ -1909,7 +1965,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		kept = append(kept, ch)
 	}
 	kept = append(kept, appended...)
-	u.doc, u.root = e.rebuild(u.doc, u.root, kept)
+	u.doc, u.root = e.rebuild(c.env, u.doc, u.root, kept)
 	// The rebuilt tree has had its static phase: it is the pruned copy, with
 	// composition's changes made.
 	c.staticDone[u.doc] = u.doc
@@ -1956,6 +2012,11 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	// allocates the number and runs every check the module deserves.
 	c.usedPackageDepth++
 	defer func() { c.usedPackageDepth-- }()
+	leave, err := c.enterPackage(u.key)
+	if err != nil {
+		return err
+	}
+	defer leave()
 	// A used package's whitespace declarations are its own, on the same
 	// terms as its schema components below. 4.4: "The effect of
 	// xsl:strip-space and xsl:preserve-space is local to the package in
@@ -1969,10 +2030,12 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	// decremented, because a package used from inside another must not be
 	// mistaken for its user on the way back out.
 	savedPkg := compilePackage
-	packageSerial++
-	packageParent[packageSerial] = savedPkg
-	compilePackage = packageSerial
+	c.env.packageSerial++
+	c.env.packageParent[c.env.packageSerial] = savedPkg
+	compilePackage = c.env.packageSerial
 	defer func() { compilePackage = savedPkg }()
+	defer c.enterPkgFrame(u)() // streampkgframe_l7.go: a frame package's compile state
+	defer c.enterOwnPkg(u)()   // streamtrust_pkguse.go
 	// A used package brings its own in-scope schema components, so the
 	// xsl:import-schema pre-pass runs again for it. 2.5.3 makes the set
 	// package-scoped in as many words: "The schema components that may be
@@ -2002,7 +2065,11 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 // spelling the same name counts -- but it errs towards keeping a declaration,
 // and keeping one the package does not use costs nothing while deleting one
 // it does use breaks the package outright.
-func referencedWithin(e pkgEdits, root *xdm.Node, comp *component) bool {
+//
+// It is answered from idx, which one walk of the tree builds for every
+// component of the package: walking the tree once per component made C
+// components of an N-node package cost C*N.
+func referencedWithin(env *compileEnv, idx *mentionIndex, comp *component) bool {
 	name := comp.el.AttrValue("name")
 	if name == "" {
 		return false
@@ -2023,24 +2090,66 @@ func referencedWithin(e pkgEdits, root *xdm.Node, comp *component) bool {
 	//
 	// Keeping a declaration nothing uses costs nothing, which is the same
 	// trade the lexical scan already makes.
-	if makesDynamicReference(root) {
+	if makesDynamicReference(env, idx.root) {
 		return true
 	}
-	local := name
+	local := strings.TrimSpace(name)
 	if i := strings.IndexByte(local, ':'); i >= 0 {
 		local = local[i+1:]
 	}
-	var walk func(n *xdm.Node) bool
-	walk = func(n *xdm.Node) bool {
-		if n == comp.el {
-			return false
+	for i := 0; i < len(local); i++ {
+		if !ncNameByte(local[i]) {
+			// Not a name the scan can find (an EQName, say): kept, which is
+			// the direction the scan errs in.
+			return true
 		}
-		if n.Kind() == xdm.KindElement {
-			for _, a := range e.attrList(n) {
-				if mentionsComponent(n, a.value, local, comp) {
-					return true
-				}
-			}
+	}
+	sp, ok := idx.spans()[mentionKey{local, comp.sym.name.URI}]
+	if !ok {
+		return false
+	}
+	// Mentions inside the declaration itself do not count. Its subtree is
+	// one interval of the tree's numbering, so a mention outside it exists
+	// exactly when the first or the last one is outside.
+	el := comp.el
+	if el.Tree() != idx.root.Tree() {
+		return true
+	}
+	return sp[0] < el.Index() || sp[1] >= el.SubtreeEnd()
+}
+
+// mentionIndex records, for one used package's tree, every name written in
+// its attribute values and text: by local name and the namespace its prefix
+// (or its absence) resolves to where it is written, the first and the last
+// tree index at which it is. See add for what counts as a mention, and
+// referencedWithin for what it answers.
+type mentionIndex struct {
+	root *xdm.Node
+	e    pkgEdits
+	span map[mentionKey][2]int
+	// uris memoises lookupPrefix by scope element and prefix while the index
+	// is built.
+	uris map[scopedPrefix]string
+}
+
+type mentionKey struct{ local, uri string }
+
+type scopedPrefix struct {
+	scope  *xdm.Node
+	prefix string
+}
+
+// spans builds the index on first use. e is read as composition has left it
+// by then; an attribute it adds later is added with note.
+func (x *mentionIndex) spans() map[mentionKey][2]int {
+	if x.span != nil {
+		return x.span
+	}
+	x.span = map[mentionKey][2]int{}
+	x.uris = map[scopedPrefix]string{}
+	x.root.Walk(func(n *xdm.Node) bool {
+		for _, a := range x.e.attrList(n) {
+			x.add(n, n, a.value)
 		}
 		// Text content counts as much as an attribute value. A text value
 		// template -- xsl:expand-text="yes" and a {...} in element content --
@@ -2051,18 +2160,79 @@ func referencedWithin(e pkgEdits, root *xdm.Node, comp *component) bool {
 		// inside a TVT, and scanning attributes alone judged the function
 		// unreferenced and deleted it, leaving the package's own call to
 		// fail as XPST0017.
-		if n.Kind() == xdm.KindText &&
-			mentionsComponent(n.Parent(), n.Value(), local, comp) {
-			return true
-		}
 		for ch := range n.Children() {
-			if walk(ch) {
-				return true
+			if ch.Kind() == xdm.KindText {
+				x.add(ch, n, ch.Value())
 			}
 		}
-		return false
+		return true
+	})
+	x.uris = nil
+	return x.span
+}
+
+// note records an attribute composition added to el after the index was
+// built.
+func (x *mentionIndex) note(el *xdm.Node, value string) {
+	if x.span == nil || el.Tree() != x.root.Tree() ||
+		el.Index() < x.root.Index() || el.Index() >= x.root.SubtreeEnd() {
+		return
 	}
-	return walk(root)
+	x.uris = map[scopedPrefix]string{}
+	x.add(el, el, value)
+	x.uris = nil
+}
+
+// add records the names text mentions, written at node at and resolved in the
+// scope of the element scope.
+//
+// A mention is a whole NCName, not a substring of a longer one, and the
+// prefix written in front of it -- or the absence of one -- is resolved where
+// it is written. A bare substring test ignored namespaces, and a package that
+// declares p:f2 and q:f2 has two components whose local names are equal and
+// whose symbolic identifiers are not. expose-A is exactly that: q:f2 is
+// exposed private and must be pruned, and the unrelated p:f2 kept it alive,
+// so the using package's call to q:f2() bound instead of failing as XPST0017.
+// That is still lexical, and deliberately so: it errs towards keeping a
+// declaration.
+func (x *mentionIndex) add(at, scope *xdm.Node, text string) {
+	if scope == nil || scope.Kind() != xdm.KindElement {
+		return
+	}
+	pos := at.Index()
+	for i := 0; i < len(text); {
+		if !ncNameByte(text[i]) {
+			i++
+			continue
+		}
+		start := i
+		for i < len(text) && ncNameByte(text[i]) {
+			i++
+		}
+		prefix := ""
+		if start > 0 && text[start-1] == ':' {
+			k := start - 1
+			for k > 0 && ncNameByte(text[k-1]) {
+				k--
+			}
+			prefix = text[k : start-1]
+			if prefix == "" {
+				continue
+			}
+		}
+		sp := scopedPrefix{scope, prefix}
+		uri, ok := x.uris[sp]
+		if !ok {
+			uri = lookupPrefix(scope, prefix)
+			x.uris[sp] = uri
+		}
+		k := mentionKey{text[start:i], uri}
+		if old, seen := x.span[k]; seen {
+			x.span[k] = [2]int{min(old[0], pos), max(old[1], pos)}
+		} else {
+			x.span[k] = [2]int{pos, pos}
+		}
+	}
 }
 
 // makesDynamicReference reports whether a package's tree contains anything
@@ -2072,11 +2242,10 @@ func referencedWithin(e pkgEdits, root *xdm.Node, comp *component) bool {
 // The scan is lexical and deliberately loose -- a string mentioning
 // "function-lookup" counts -- because the only consequence of a false positive
 // is that a declaration nothing uses survives.
-func makesDynamicReference(root *xdm.Node) bool {
+func makesDynamicReference(env *compileEnv, root *xdm.Node) bool {
 	// Memoised on the root: referencedWithin asks once per component, and the
-	// answer is a property of the tree. Guarded by compileMu with the rest of
-	// the package-composition state.
-	if v, ok := dynamicRefCache[root]; ok {
+	// answer is a property of the tree.
+	if v, ok := env.dynamicRefCache[root]; ok {
 		return v
 	}
 	var walk func(n *xdm.Node) bool
@@ -2104,32 +2273,9 @@ func makesDynamicReference(root *xdm.Node) bool {
 		return false
 	}
 	v := walk(root)
-	if dynamicRefCache == nil {
-		dynamicRefCache = map[*xdm.Node]bool{}
-	}
-	dynamicRefCache[root] = v
+	env.dynamicRefCache[root] = v
 	return v
 }
-
-// dynamicRefCache memoises makesDynamicReference per package tree. Cleared
-// with the rest of the compile-scoped package state; see Compile.
-var dynamicRefCache map[*xdm.Node]bool
-
-// composedVisibility is the effective visibility of a used package's component
-// declarations, keyed by the declaration element.
-//
-// It is recorded during composition because that is the only moment the answer
-// is known. A component's visibility comes from its own attribute AND the
-// xsl:expose rules of its package manifest, 3.5.2, and composition consumes
-// the manifest: by the time the declarations are compiled into functions the
-// xsl:expose elements are gone from the tree, so exposedVisibility called then
-// sees no rules and reports the private default for a component the manifest
-// made public. expose-A declares p:f1 with no visibility attribute and exposes
-// it with names="p:*", and reading the attribute at compile time called it
-// private.
-//
-// Cleared with the rest of the compile-scoped package state; see Compile.
-var composedVisibility map[*xdm.Node]visibility
 
 // namesDynamicFunction reports whether text mentions one of the functions that
 // take a component name as a value.
@@ -2220,8 +2366,8 @@ func (c *compiler) compileOverrideRules(root *xdm.Node, precedence int) error {
 // originalNS is the namespace the declaration an xsl:override replaces is
 // renamed into, with a serial number appended per override.
 //
-// It is a URI no stylesheet can write, so a generated name in it cannot
-// collide with one the source declared.
+// A stylesheet can declare a URI under it too, so what marks a namespace as
+// generated is membership of compileEnv.originalNSs, not the prefix.
 const originalNS = "http://go-xml.invalid/xslt/original/"
 
 // overriddenMarkerNS is the namespace of the attribute that carries the name a
@@ -2244,13 +2390,6 @@ func overriddenNameOf(el *xdm.Node) string {
 // reExportedComponents and packageComponents.
 const spliced = "go-xml-spliced-override"
 
-// originalSerial numbers the generated namespaces. Two overrides in one
-// stylesheet each keep a distinct original -- override-t-015 overrides a
-// template in each of two used packages and calls xsl:original from both --
-// so the namespace has to differ per overriding declaration rather than per
-// stylesheet.
-var originalSerial int
-
 // rewriteOverride prepares an overriding declaration to stand in the used
 // package's tree in place of the declaration it overrides.
 //
@@ -2269,7 +2408,13 @@ var originalSerial int
 // so all six land on the generated name without a rewriter each. Element
 // names are not affected: they were resolved when the tree was parsed, and
 // the compiler reads Node.Name rather than re-expanding the prefix.
-func (e pkgEdits) rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
+//
+// The generated namespace is numbered by env.originalSerial. Two overrides in
+// one stylesheet each keep a distinct original -- override-t-015 overrides a
+// template in each of two used packages and calls xsl:original from both --
+// so the namespace has to differ per overriding declaration rather than per
+// stylesheet.
+func (e pkgEdits) rewriteOverride(env *compileEnv, overriding, original *xdm.Node) *xdm.Node {
 	// The overriding declaration is about to be spliced into the used
 	// package's tree, which detaches it from the xsl:override it was written
 	// under. [xsl:]default-mode is resolved by walking ancestors, so a
@@ -2285,8 +2430,9 @@ func (e pkgEdits) rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 			e.setAttr(overriding, "default-mode", clarkToEQName(dm))
 		}
 	}
-	originalSerial++
-	uri := fmt.Sprintf("%s%d", originalNS, originalSerial)
+	env.originalSerial++
+	uri := fmt.Sprintf("%s%d", originalNS, env.originalSerial)
+	env.originalNSs[uri] = true
 	// A mode is not reachable through xsl:original -- there is no syntax for
 	// it -- and renaming it would detach the used package's template rules
 	// from the mode they name.
@@ -2372,11 +2518,6 @@ func (e pkgEdits) rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 	}
 	return overriding
 }
-
-// packageSerial numbers the packages one compilation sees, so that each has
-// an identity its declarations can be filed under. It is guarded by compileMu
-// with the rest of the compile-time package state.
-var packageSerial int
 
 // checkPackageVersionRange applies the PackageVersionRange grammar of 3.5.1
 // to an xsl:use-package/@package-version attribute.
@@ -2597,7 +2738,7 @@ func (c *compiler) snapshotPackageLocalDecls() func() {
 //
 // It is keyed by node because there is nowhere else to put the answer: the
 // nodes are the same trees the parser produced, and the compilation that reads
-// them runs later. Guarded by compileMu along with compilePackage itself.
+// them runs later. Guarded by compileSlot along with compilePackage itself.
 var overridingDecls map[*xdm.Node]int
 
 // noteOverridingDecl records that an overriding declaration belongs to pkg.
@@ -2659,15 +2800,17 @@ func duplicateOverrideError(oc *component, prev *xdm.Node) error {
 		oc.sym)
 }
 
-// usedPackageParam finds the top-level xsl:param a symbolic name refers to.
+// usedPackageParams indexes the top-level xsl:params of a used package by
+// expanded name, the first declaration of a name answering for it.
 //
-// Only a non-static parameter answers. 9.5 fixes a static parameter's
+// Only a non-static parameter is indexed. 9.5 fixes a static parameter's
 // visibility as private, so it is not a component another package can see,
 // let alone override.
-func usedPackageParam(root *xdm.Node, sym symbolicName) *xdm.Node {
-	if sym.kind != kindVariable {
-		return nil
-	}
+//
+// It is built once per xsl:use-package, so that each overridden parameter is a
+// lookup rather than a walk of every top-level declaration.
+func usedPackageParams(root *xdm.Node) map[string]*xdm.Node {
+	out := map[string]*xdm.Node{}
 	for _, el := range root.ChildElements() {
 		if !isXSL(el, "param") || yesAttr(el, "static") {
 			continue
@@ -2676,61 +2819,11 @@ func usedPackageParam(root *xdm.Node, sym symbolicName) *xdm.Node {
 		if err != nil {
 			continue
 		}
-		if qn.Clark() == sym.name.Clark() {
-			return el
+		if _, dup := out[qn.Clark()]; !dup {
+			out[qn.Clark()] = el
 		}
 	}
-	return nil
-}
-
-// mentionsComponent reports whether a piece of stylesheet text names the
-// component, as against merely containing its local name.
-//
-// The bare substring test this replaces ignored namespaces, and a package that
-// declares p:f2 and q:f2 has two components whose local names are equal and
-// whose symbolic identifiers are not. expose-A is exactly that: q:f2 is
-// exposed private and must be pruned, and the unrelated p:f2 kept it alive,
-// so the using package's call to q:f2() bound instead of failing as XPST0017.
-//
-// Every occurrence of the local name is examined, and the prefix written in
-// front of it -- or the absence of one -- is resolved in the scope of the
-// element the text belongs to. Only an occurrence whose namespace is the
-// component's counts. That is still lexical, and deliberately so: it errs
-// towards keeping a declaration, and keeping one the package does not use
-// costs nothing while deleting one it does use breaks the package.
-func mentionsComponent(scope *xdm.Node, text, local string, comp *component) bool {
-	if scope == nil {
-		return false
-	}
-	for i := 0; ; {
-		j := strings.Index(text[i:], local)
-		if j < 0 {
-			return false
-		}
-		at := i + j
-		i = at + len(local)
-		// A longer name that merely ends in this one is not this name.
-		if at > 0 && ncNameByte(text[at-1]) && text[at-1] != ':' {
-			continue
-		}
-		if i < len(text) && ncNameByte(text[i]) {
-			continue
-		}
-		prefix := ""
-		if at > 0 && text[at-1] == ':' {
-			k := at - 1
-			for k > 0 && ncNameByte(text[k-1]) {
-				k--
-			}
-			prefix = text[k : at-1]
-			if prefix == "" {
-				continue
-			}
-		}
-		if lookupPrefix(scope, prefix) == comp.sym.name.URI {
-			return true
-		}
-	}
+	return out
 }
 
 // ncNameByte reports whether a byte may appear inside an NCName -- an
@@ -2746,4 +2839,30 @@ func ncNameByte(b byte) bool {
 		return true
 	}
 	return false
+}
+
+// packageKey names a resolved package for the cycle check: its declared name
+// and version, or the name it was requested by when it declares none.
+func packageKey(root *xdm.Node, requested string) string {
+	name := strings.TrimSpace(root.AttrValue("name"))
+	if name == "" {
+		name = requested
+	}
+	return name + "#" + strings.TrimSpace(root.AttrValue("package-version"))
+}
+
+// enterPackage marks a package as being read or compiled until the returned
+// func runs. 3.5.2, XTSE3005: "It is a static error if a package is
+// dependent on itself." Without the check a package that uses itself,
+// directly or through another, recursed through readUsePackage and
+// reExportedComponents until a fatal stack overflow.
+func (c *compiler) enterPackage(key string) (func(), error) {
+	if c.activePackages[key] {
+		return nil, fmt.Errorf("XTSE3005: package %s is dependent on itself", strings.TrimSuffix(key, "#"))
+	}
+	if c.activePackages == nil {
+		c.activePackages = map[string]bool{}
+	}
+	c.activePackages[key] = true
+	return func() { delete(c.activePackages, key) }, nil
 }

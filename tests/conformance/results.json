@@ -43,10 +43,10 @@
       "component": "xquery",
       "suite": "QT3 — XQuery 3.1",
       "edition": "XQuery 3.1",
-      "passed": 30516,
+      "passed": 30529,
       "disagreements": 1,
-      "total": 30517,
-      "run_date": "2026-10-01",
+      "total": 30530,
+      "run_date": "2026-11-06",
       "command": "tests/check.sh (TestQT3XQuery)",
       "cases": [
         {
@@ -61,13 +61,13 @@
       "component": "xslt",
       "suite": "W3C XSLT 2.0",
       "edition": "XSLT 2.0 (Second Edition)",
-      "passed": 6193,
+      "passed": 6194,
       "disagreements": 8,
-      "total": 6201,
-      "run_date": "2026-09-11",
+      "total": 6202,
+      "run_date": "2026-11-07",
       "command": "tests/check.sh (TestXSLTSuite)",
-      "skipped_out_of_scope": 8332,
-      "skipped_unimplemented": 68,
+      "skipped_out_of_scope": 8333,
+      "skipped_unimplemented": 66,
       "cases": [
         {
           "id": "format-number-070",
@@ -116,13 +116,13 @@
       "component": "xslt",
       "suite": "W3C XSLT 3.0",
       "edition": "XSLT 3.0",
-      "passed": 11495,
-      "disagreements": 23,
-      "total": 11518,
-      "run_date": "2026-10-02",
+      "passed": 11505,
+      "disagreements": 17,
+      "total": 11522,
+      "run_date": "2026-11-06",
       "command": "tests/check.sh (TestXSLT30Suite)",
-      "skipped_out_of_scope": 2949,
-      "skipped_unimplemented": 134,
+      "skipped_out_of_scope": 2951,
+      "skipped_unimplemented": 128,
       "cases": [
         {
           "id": "accept-913",
@@ -133,11 +133,6 @@
           "id": "accumulator-038",
           "verdict": "fixture",
           "note": "Suite defect; only accumulator-039 carries the 2019 public-visibility repair."
-        },
-        {
-          "id": "accumulator-061",
-          "verdict": "deliberate-divergence",
-          "note": "Costs more than it gains; read in §2."
         },
         {
           "id": "accumulator-073",
@@ -200,19 +195,9 @@
           "note": "Same shape as si-copy-117."
         },
         {
-          "id": "streamable-116",
-          "verdict": "implementation-defined",
-          "note": "§3.6.6 permits building the tree; the catalog marks the case _WRONG:wrong-error-code."
-        },
-        {
           "id": "strip-space-009",
           "verdict": "fixture",
-          "note": "§4.4 grants no ancestor-assertion exemption; the case exists to exercise Saxon paths."
-        },
-        {
-          "id": "system-property-012",
-          "verdict": "deliberate-divergence",
-          "note": "§26.5 requires a non-streaming processor to answer \"no\"; answering \"yes\" would lie to stylesheets that branch on it to pick a fallback."
+          "note": "§4.4 grants no ancestor-assertion exemption; the case exists to exercise Saxon paths. Since round SG it runs with its XSD 1.1 schema (xsd-version=\"1.1\"), and still fails on that rule."
         },
         {
           "id": "validation-0006",
@@ -225,17 +210,17 @@
           "note": "Read in §2 and in Corrections."
         }
       ],
-      "unenumerated_note": "The balance want an XTSE3430 refusal: si-fork-902 and si-fork-952 need the || operator modelled, which §19.8.8.4's literal union rule makes cost 18 sx-union cases (measured +2/-18); su-absorbing-205 needs the §19.8.4.12 higher-order reading of xsl:copy, measured +1/-61 against si-copy-A. They are read as a block under \"The §19.8 streamability analysis\". 20 enumerated + 3 in the block = 23. su-ascent-903, the former overlap, passes since the ascent call rule was applied by intent (§19.8.5.7's last clause is otherwise unreachable). merge-097sf is not a disagreement: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
+      "unenumerated_note": "All 17 are enumerated. The XTSE3430 block is closed: si-fork-902 and si-fork-952 (|| modelled per §19.8.8, withheld in a crawling focus for sx-union-C) and su-absorbing-205 (§19.8.5's body rule) now get the refusal, so every W3C case wanting XTSE3430 gets it. su-ascent-903, the former overlap, passes since the ascent call rule was applied by intent (§19.8.5.7's last clause is otherwise unreachable). merge-097sf is not a disagreement: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
     },
     {
       "id": "xsd-1.0",
       "component": "xsd",
       "suite": "W3C xsdtests 1.0",
       "edition": "XML Schema 1.0 (Second Edition)",
-      "passed": 39358,
-      "disagreements": 30,
+      "passed": 39359,
+      "disagreements": 29,
       "total": 39388,
-      "run_date": "2026-09-11",
+      "run_date": "2026-11-06",
       "command": "tests/check.sh (XSD10)",
       "cases": [
         {
@@ -267,11 +252,6 @@
           "id": "MS-DataTypes2006-07-15/gMonth004_2063.v",
           "verdict": "deliberate-divergence",
           "note": "queried bug6901; same withdrawn gMonth forms."
-        },
-        {
-          "id": "MS-IdentityConstraint2006-07-15/idZ015.i",
-          "verdict": "deliberate-divergence",
-          "note": "A field selecting an attribute matched by a lax/skip anyAttribute. Open under bug 4063; left alone until the W3C settles it."
         },
         {
           "id": "MS-SimpleType2006-07-15/ste110",
@@ -389,17 +369,17 @@
           "note": "Open W3C bug 4113; one of the 22 MS-Regex instance cases read as a block in the xsd section."
         }
       ],
-      "unenumerated_note": "All 30 are enumerated. 22 are MS-Regex2006-07-15 instance cases under the same open W3C bug 4113 and carry one shared note rather than 22 arguments; the balance are read case by case in the xsd section. Not one is a genuine implementation gap: 2 are fixture defects and 28 are divergences from an expectation the W3C itself has challenged or from a documented compatibility decision."
+      "unenumerated_note": "All 29 are enumerated. 22 are MS-Regex2006-07-15 instance cases under the same open W3C bug 4113 and carry one shared note rather than 22 arguments; the balance are read case by case in the xsd section. Not one is a genuine implementation gap: 2 are fixture defects and 27 are divergences from an expectation the W3C itself has challenged or from a documented compatibility decision."
     },
     {
       "id": "xsd-1.1",
       "component": "xsd",
       "suite": "W3C xsdtests 1.1",
       "edition": "XML Schema 1.1",
-      "passed": 41567,
-      "disagreements": 31,
+      "passed": 41568,
+      "disagreements": 30,
       "total": 41598,
-      "run_date": "2026-09-11",
+      "run_date": "2026-11-06",
       "command": "tests/check.sh (XSD11)",
       "cases": [
         {
@@ -438,11 +418,6 @@
           "note": "queried bug6901; same withdrawn gMonth forms."
         },
         {
-          "id": "MS-IdentityConstraint2006-07-15/idZ015.i",
-          "verdict": "deliberate-divergence",
-          "note": "A field selecting an attribute matched by a lax/skip anyAttribute. Open under bug 4063; left alone until the W3C settles it."
-        },
-        {
           "id": "MS-SimpleType2006-07-15/ste110",
           "verdict": "deliberate-divergence",
           "note": "queried bug4957, circular unions."
@@ -558,7 +533,7 @@
           "note": "Open W3C bug 4113; one of the 22 MS-Regex instance cases read as a block in the xsd section."
         }
       ],
-      "unenumerated_note": "All 32 are enumerated, on the same basis as 1.0: 22 MS-Regex cases under bug 4113 sharing one note, and 10 read individually. 4 are fixture defects and 28 divergences. The driver runs the conforming defaults -- LaxUPA off (erratum E1-29) and XPathVersion at XPath 2.0, which is what XSD 1.1 requires for assertions -- and no case here is gated behind either: none fails on a UPA complaint and no assertion or CTA case disagrees at all."
+      "unenumerated_note": "All 30 are enumerated, on the same basis as 1.0: 22 MS-Regex cases under bug 4113 sharing one note, and 8 read individually. 2 are fixture defects and 28 divergences. The driver runs the conforming defaults -- LaxUPA off (erratum E1-29) and XPathVersion at XPath 2.0, which is what XSD 1.1 requires for assertions -- and no case here is gated behind either: none fails on a UPA complaint and no assertion or CTA case disagrees at all."
     },
     {
       "id": "relaxng",
@@ -626,14 +601,5 @@
     "xsltng": "a840909a8c82d23458ba72e61e0eed4185be6b74",
     "xspec": "799d52a4239931197f5fa71476e79750b3e1d0ee"
   },
-  "breakdowns": [
-    {
-      "id": "xtse3430",
-      "label": "XSLT 3.0 failures wanting an XTSE3430",
-      "suite": "xslt-3.0",
-      "of": 3,
-      "overlap": 0,
-      "note": "Only more of the §19.8 posture-and-sweep analysis can emit the refusal, and each fix found so far costs more passing cases than it gains: si-fork-902/952 (||, measured +2/-18 against sx-union) and su-absorbing-205 (xsl:copy higher-order operand, +1/-61 against si-copy-A). §19.1 does not require a non-streaming processor to assess guaranteed-streamability."
-    }
-  ]
+  "breakdowns": []
 }

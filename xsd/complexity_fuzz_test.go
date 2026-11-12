@@ -141,16 +141,16 @@ import (
 //	                                                          at all, because checkUPA
 //	                                                          rejects that model first. A
 //	                                                          budget here would be dead code.
-//	follow-set dedup              addFollow, automaton.go     NO BUDGET, AND NONE NEEDED:
-//	                                                          linear dup-scan per edge within
-//	                                                          maxPositions. The densest
-//	                                                          follow relation the shortest
-//	                                                          schema text can produce costs
-//	                                                          495ms at n=2,048, dominated by
-//	                                                          the automaton build rather than
-//	                                                          the dup scan, and checkUPA's
-//	                                                          width gate refuses that model
-//	                                                          at n>=512 regardless.
+//	follow-set dedup              addFollow, automaton.go     maxUPAStateWidth, applied during
+//	                                                          the build: the compile for the
+//	                                                          constraint checks stops at the
+//	                                                          first follow set wider than the
+//	                                                          width checkUPA would refuse, so
+//	                                                          the dup scan is at most 256 per
+//	                                                          edge. Unbounded, n=2,048 cost
+//	                                                          229 MB before the gate refused
+//	                                                          it; see TestDenseModelRefused-
+//	                                                          BeforeFullCompile.
 //	derivation matching           recurseLaxUnordered :1254,  NO BUDGET, no memoisation, no
 //	                              recurseUnordered :1281,     depth limit. Terminates only
 //	                              mapAndSum :1562             because checkGroupCycles

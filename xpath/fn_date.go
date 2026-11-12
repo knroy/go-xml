@@ -41,14 +41,11 @@ func dateAccessorType(name string) xdm.TypeCode {
 // The cast is confined to xs:untypedAtomic. The same clause promotes only
 // numerics and anyURI; an xs:string is neither cast nor promoted to xs:date,
 // so month-from-date("2008-06-01") stays the XPTY0004 the suite expects.
+// A cast that fails is FORG0001, as in untypedArg: the value was bad.
 func dateAccessorArg(a *xdm.Atomic, want xdm.TypeCode, name string) (*xdm.Atomic, error) {
-	if a.Type == xdm.TypeUntypedAtomic {
-		conv, err := CastAtomic(a, want)
-		if err != nil {
-			return nil, xdm.ErrType(
-				"%s(): %q is not a valid %s", name, a.String(), want.String())
-		}
-		a = conv
+	a, err := untypedArg(a, want)
+	if err != nil {
+		return nil, err
 	}
 	if a.DateTimeVal() == nil {
 		return nil, xdm.ErrType(
@@ -93,8 +90,11 @@ func registerDateFuncs(l *Library) {
 	// argument, which is what makes them safe to apply to an optional element.
 	dateComponent := func(name string, get func(*xdm.DateTime) xdm.Item) {
 		want := dateAccessorType(name)
-		l.registerFn(name, []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+		l.registerFn(name, []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
 			}
@@ -129,8 +129,11 @@ func registerDateFuncs(l *Library) {
 	// for one.
 	tzAccessor := func(name string) {
 		want := dateAccessorType(name)
-		l.registerFn(name, []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+		l.registerFn(name, []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
 			}
@@ -160,8 +163,11 @@ func registerDateFuncs(l *Library) {
 
 	// Duration component accessors.
 	durComponent := func(name string, get func(*xdm.Duration) xdm.Item) {
-		l.registerFn(name, []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+		l.registerFn(name, []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
 			}
@@ -248,7 +254,10 @@ func bigMod(n *big.Int, unit int64) int64 {
 func registerTimezoneAdjust(l *Library) {
 	adjust := func(name string, t xdm.TypeCode) {
 		l.registerFn(name, []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+			atoms, err := ctx.atomize(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
 			}
@@ -275,7 +284,10 @@ func registerTimezoneAdjust(l *Library) {
 			targetTZ := ctx.ev().ImplicitTimezone
 			removeTZ := false
 			if len(args) > 1 {
-				tzAtoms := xdm.Atomize(args[1])
+				tzAtoms, err := ctx.atomize(args[1])
+				if err != nil {
+					return nil, err
+				}
 				if len(tzAtoms) == 0 {
 					removeTZ = true
 				} else {

@@ -145,7 +145,7 @@ func TestXML11(t *testing.T) {
 		{name: "1.0 NEL in doctype kept", src: "<!DOCTYPE a [<!ENTITY e \"1\u00852\u20283\r\u00854\r\n5\r6\">]>",
 			want: "<!DOCTYPE a [<!ENTITY e \"1\u00852\u20283\n\u00854\n5\n6\">]>"},
 		{name: "stray decl", src: `<?xml version="1.0"?><a>` + `<?xml version="1.1"?>` + "\x07</a>",
-			wantErr: syntax(1, "illegal character code U+0007")},
+			wantErr: syntax(1, "XML declaration must appear at the start of the document")},
 	})
 	d := NewDecoder(strings.NewReader(v11 + "<a/>"))
 	d.RawToken()
@@ -327,33 +327,56 @@ func TestEncoding(t *testing.T) {
 		render(d)
 	}
 
-	d = NewDecoder(strings.NewReader(`<?xml encoding="latin1"?><a/>`))
+	d = NewDecoder(strings.NewReader(`<?xml version="1.0" encoding="latin1"?><a/>`))
 	if _, err := render(d); err == nil || err.Error() != `xml: encoding "latin1" declared but Decoder.CharsetReader is nil` {
 		t.Errorf("nil CharsetReader: %v", err)
 	}
-	d = NewDecoder(strings.NewReader(`<?xml encoding="ebcdic"?><a/>`))
+	d = NewDecoder(strings.NewReader(`<?xml version="1.0" encoding="ebcdic"?><a/>`))
 	d.CharsetReader = latinOnly
 	if _, err := render(d); err == nil || !strings.HasPrefix(err.Error(), `xml: opening charset "ebcdic": `) {
 		t.Errorf("refused charset: %v", err)
 	}
 }
 
-// TestDeclValue pins the substring reading of the declaration's
-// pseudo-attributes, quirks included.
-func TestDeclValue(t *testing.T) {
-	cases := []struct{ decl, key, want string }{
-		{`version="1.0" encoding='x'`, "encoding", "x"},
-		{`version = "1.0"`, "version", ""},
-		{`myencoding="x"`, "encoding", "x"},
-		{`version=1 version="2"`, "version", "2"},
-		{`version=version="2"`, "version", ""},
-		{`version="1.0`, "version", ""},
-		{`version=`, "version", ""},
-	}
-	for _, c := range cases {
-		if got := declValue(c.decl, c.key); got != c.want {
-			t.Errorf("declValue(%q, %q) = %q, want %q", c.decl, c.key, got, c.want)
+// TestXMLDeclStrict holds the XML declaration to §2.8 [23]-[26] and §2.6
+// [17]: it is read only at the very start of the stream, a PI target that
+// spells xml in any other case is reserved, and the pseudo-attributes are
+// parsed rather than searched for. Each refused input was once accepted, and
+// the spaced version was once read as absent, so a 1.1 document was read as
+// 1.0.
+func TestXMLDeclStrict(t *testing.T) {
+	for _, c := range []struct{ src, err string }{
+		{`<a/><?xml version="1.0"?>`, "XML declaration must appear at the start"},
+		{` <?xml version="1.0"?><a/>`, "XML declaration must appear at the start"},
+		{`<?xml version="1.0"?><?xml version="1.0"?><a/>`, "XML declaration must appear at the start"},
+		{`<?XML version="1.0"?><a/>`, "target XML is reserved"},
+		{`<a><?xMl x?></a>`, "target xMl is reserved"},
+		{`<?xml myversion="1.0"?><a/>`, "malformed XML declaration"},
+		{`<?xml version="1.0" version="1.1"?><a/>`, "malformed XML declaration"},
+		{`<?xml version="1.0" standalone="yes" encoding="UTF-8"?><a/>`, "malformed XML declaration"},
+		{`<?xml encoding="UTF-8"?><a/>`, "malformed XML declaration"},
+		{`<?xml version="2.0"?><a/>`, `unsupported version "2.0"`},
+		{`<?xml version="1.0" encoding="8bit"?><a/>`, "malformed XML declaration"},
+		{`<?xml version="1.0"encoding="UTF-8"?><a/>`, "malformed XML declaration"},
+		{`<?xml?><a/>`, "malformed XML declaration"},
+	} {
+		_, err := render(NewDecoder(strings.NewReader(c.src)))
+		if err == nil || !strings.Contains(err.Error(), c.err) {
+			t.Errorf("%q: %v, want %q", c.src, err, c.err)
 		}
+	}
+	for _, src := range []string{
+		`<?xml version="1.0"?><a/>`,
+		"<?xml version = '1.0' encoding = \"UTF-8\" standalone = 'no' ?><a/>",
+		`<?xml-stylesheet href="s"?><a><?xml-x?><?xmlfoo?></a>`,
+	} {
+		if _, err := render(NewDecoder(strings.NewReader(src))); err != nil {
+			t.Errorf("%q: %v", src, err)
+		}
+	}
+	d := NewDecoder(strings.NewReader(`<?xml version = "1.1"?><a/>`))
+	if _, err := render(d); err != nil || !d.IsVersion11() {
+		t.Errorf("spaced version: IsVersion11 %v, %v", d.IsVersion11(), err)
 	}
 }
 

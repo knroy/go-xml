@@ -269,13 +269,18 @@ func unsupportedSpec(deps []Dependency, target TargetVersion) string {
 			// it. Lifting it is verified by the IN-SCOPE count moving, which
 			// is the rule the note above states.
 			//
+			// moduleImport is NOT on this list either. "import module" is
+			// implemented (xquery/module.go), and a case's <module> elements
+			// reach it through caseModules. The catalog declares it only as
+			// satisfied="true" -- 21 cases, all in CombinedErrorCodes.
+			//
 			// schemaValidation and typedData stay. Both ask for the INPUT
 			// DOCUMENT to arrive already validated and annotated, which is a
 			// different thing from importing a schema, and a source declared
 			// validation="strict" is skipped separately in Run for the same
 			// reason.
 			case "schemaValidation", "typedData",
-				"staticTyping", "moduleImport",
+				"staticTyping",
 				"xpath-1.0-compatibility", "fn-format-integer-CLDR",
 				"non_empty_sequence_collection", "collection-stability",
 				"directory-as-collection-uri", "simple-uca-fallback",
@@ -2789,6 +2794,15 @@ var schemaHintRE = regexp.MustCompile(
 
 var schemaHintFileRE = regexp.MustCompile(`"([^"]*)"`)
 
+// importSchemaOptions is how the harness assembles a schema it registers for
+// "import schema": as XSD 1.1, the version xquery reads an imported schema
+// document at (see xquery/schemaimport.go). The harness stands in for the
+// engine's schema store, so it must not read the same document differently.
+// A <schema> carrying xsd-version="1.0" is read as 1.1 as well; the cases
+// that need a 1.0 reading declare <dependency type="xsd-version" value="1.0"/>
+// and are skipped, since this engine's type system is the 1.1 one.
+var importSchemaOptions = xsd.Options{Version: xsd.Version11}
+
 // hintedSchemas reads the schema documents a query names in an "at" hint.
 //
 // The hints are read HERE, by the harness, from the suite's own directory --
@@ -2823,7 +2837,7 @@ func (r *Runner) hintedSchemas(ts *TestSet, query string) []xquery.Schema {
 		// only an assembly with a base can follow. LoadFiles confines its
 		// resolver to the directories of the files named here, so the query
 		// still cannot reach anything the catalog did not point at.
-		sch, err := xsd.LoadFiles(paths, xsd.Options{})
+		sch, err := xsd.LoadFiles(paths, importSchemaOptions)
 		if err != nil {
 			continue
 		}
@@ -2860,7 +2874,7 @@ func (r *Runner) builtinSchemas(query string) []xquery.Schema {
 			continue
 		}
 		sch, err := xsd.LoadFile(
-			filepath.Join(r.Root, filepath.FromSlash(file)), xsd.Options{})
+			filepath.Join(r.Root, filepath.FromSlash(file)), importSchemaOptions)
 		if err != nil {
 			continue
 		}
@@ -2898,7 +2912,7 @@ func (r *Runner) caseSchemas(env Environment) ([]xquery.Schema, error) {
 		// its resolver to the directory of the file the catalog named, and
 		// Options.SchemaResolver is still nil, so an "at" hint in the query
 		// opens nothing.
-		components, err := xsd.LoadFiles([]string{path}, xsd.Options{})
+		components, err := xsd.LoadFiles([]string{path}, importSchemaOptions)
 		if err != nil {
 			return nil, err
 		}

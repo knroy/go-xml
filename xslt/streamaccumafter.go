@@ -38,6 +38,10 @@ type accumAfterState struct {
 	// consuming. When it is set, the call falls through to "otherwise,
 	// motionless"; when it is not, the call is consuming.
 	precedingConsuming bool
+
+	// rulePhase is the phase ("start" or "end") of the xsl:accumulator-rule
+	// whose select expression holds the call, "" for none: rules 4 and 5.
+	rulePhase string
 }
 
 // accumulatorAfterSweep applies §19.8.9.1 to a call whose enclosing position
@@ -77,6 +81,14 @@ func accumulatorAfterSweep(st accumAfterState, ctx posture, ctxAllowsChildren bo
 	// the pre-descent and post-descent values of a childless node are known
 	// before any user construct sees the node.
 	if !ctxAllowsChildren {
+		return sweepMotionless, true
+	}
+	// Rules 4 and 5: a call in an accumulator rule's select is free-ranging
+	// in a start rule, motionless in an end rule.
+	switch st.rulePhase {
+	case "start":
+		return sweepFreeRanging, true
+	case "end":
 		return sweepMotionless, true
 	}
 	if !st.known {

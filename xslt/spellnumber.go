@@ -36,6 +36,12 @@ var scaleWords = []string{"", " thousand", " million", " billion", " trillion"}
 // "twenty-first", not "twentieth-first". That is why the ordinal conversion is
 // applied to the assembled string rather than to each group.
 func spellNumber(n int64, ordinal bool) string {
+	// Past the bound the format token 1 is used (below). Checking the
+	// negative side here also keeps math.MinInt64, whose negation is itself,
+	// from recursing without end.
+	if n <= -1000000000000000 {
+		return "minus " + strconv.FormatInt(n, 10)[1:]
+	}
 	if n < 0 {
 		return "minus " + spellNumber(-n, ordinal)
 	}
@@ -201,6 +207,9 @@ var germanScales = []struct{ singular, plural string }{
 // the language it would use with lang omitted, so an ordinal request in
 // German is answered in English rather than in a wrong German inflection.
 func spellNumberDE(n int64) string {
+	if n <= -1000000000000000 {
+		return "minus " + strconv.FormatInt(n, 10)[1:]
+	}
 	if n < 0 {
 		return "minus " + spellNumberDE(-n)
 	}

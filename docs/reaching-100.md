@@ -1,6 +1,7 @@
 # What reaching 100% would take
 
-Measured at commit `7798acd`, 2026-10-02. The short answer: **100% is not
+Measured at commit `7798acd`, 2026-10-02; the XSLT 3.0 figures re-measured
+on 2026-11-03, after the §19.8 analysis was completed (M8). The short answer: **100% is not
 reachable on any of these suites**, and the great majority of what remains are
 cases where passing would mean shipping something *less* correct. What follows
 separates the work that exists from the work that does not.
@@ -14,24 +15,23 @@ case by case; this file is about what buying them would cost.
 | XPath 3.1 | 0 | 0 | 0 | 0 |
 | XQuery 3.1 | 1 | 0 | 0 | 1 |
 | XSLT 2.0 | 8 | 0 | 0 | 8 |
-| XSLT 3.0 | 23 | 0 | 0 | 23 |
-| XSD 1.0 | 30 | 0 | 0 | 30 |
-| XSD 1.1 | 31 | 0 | 0 | 31 |
-| **Total** | **93** | **0** | **0** | **93** |
+| XSLT 3.0 | 17 | 0 | 0 | 17 |
+| XSD 1.0 | 29 | 0 | 0 | 29 |
+| XSD 1.1 | 30 | 0 | 0 | 30 |
+| **Total** | **85** | **0** | **0** | **85** |
 
 XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 
-Three of the XSLT 3.0 cases sit in the "cannot fix" column on a weaker claim
-than the rest: they want an `XTSE3430` refusal that the §19.8 streamability
+Three XSLT 3.0 cases used to sit in the "cannot fix" column on a weaker claim
+than the rest: they wanted an `XTSE3430` refusal that the §19.8 streamability
 analysis could emit only through rules measured to cost more cases than they
-gain, and §19.1 says a non-streaming processor "is not required to assess
-whether constructs are guaranteed-streamable". They are not owed, which is not the same as not
-buildable; Part 2 files them under features deliberately not implemented.
+gained. M8 found rules that cost nothing, and all 151 W3C cases that want the
+refusal now get it.
 
 For XSD the fixable/cannot-fix split is not a judgement call: it is the suite's
 own `status` field. A case marked `accepted` is a settled expectation and so is
 real work; one marked `queried` or `stable bugNNNN` is one the W3C has itself
-challenged, and 56 of the 61 XSD disagreements are of that kind — 44 of them
+challenged, and 54 of the 59 XSD disagreements are of that kind — 44 of them
 (22 per version) are the single open bug 4113. The other five are `accepted`,
 and each is adjudicated individually in
 [conformance-gaps.md](conformance-gaps.md): two suite defects, one
@@ -53,7 +53,7 @@ cases in Part 2, not a defect. The two the suite itself declared out of scope
 left the denominator, and the harness scoring defects — chiefly the eight XSD
 `indeterminate` expectations per version that were silently scored as "must be
 invalid" — were fixed in the harness. What stands between here and 100% is
-the 93 in Part 2.
+the 85 in Part 2.
 
 The last four to fall are worth recording, because they are the shape of what
 "fixable" meant:
@@ -100,13 +100,13 @@ A ceiling bounds what the suite asks, not what the code does.
 
 ---
 
-## Part 2 — the 93 that are not work
+## Part 2 — the 85 that are not work
 
 Grouped by what would actually have to change.
 
-### 56 — the W3C disputes its own expected result
+### 54 — the W3C disputes its own expected result
 
-XSD 1.0 (28 of its 30 disagreements) and 1.1 (28 of its 31). Counted from the
+XSD 1.0 (27 of its 29 disagreements) and 1.1 (27 of its 30). Counted from the
 suite's own metadata rather than estimated: every disagreement whose `<current>`
 status is not `accepted`. The remaining 2 and 3 are `accepted` and are the only
 settled XSD expectations this validator disagrees with; they are filed below by
@@ -154,7 +154,7 @@ The policy question for run-time module URIs is answered by not giving the
 function any reach of its own: it reads through the resolver `import module`
 uses, nil by default. See [xquery.md](xquery.md#loading-a-module-at-run-time).
 
-### 3 — the suite contradicts itself
+### 2 — the suite contradicts itself
 
 `strip-space-009` asserts a whitespace-preservation rule §4.4 does not state,
 and its own comment concedes the point.
@@ -165,12 +165,8 @@ containing `<xsd:union memberTypes="xsd:NOTATION"/>` valid, and both are
 `accepted`. Enforcing the rule was measured: 1.1 trades one for the other and
 1.0 loses two outright. Reverted.
 
-`system-property-012` asserts `system-property('xsl:supports-streaming')` is
-`'yes'` from a processor §26.5 requires to answer `'no'`; its twin
-`system-property-013` is the same stylesheet gated on the streaming feature
-being *unsatisfied* and asserts `'no'`. The pair is a dependency-gated fork of
-which exactly one is meant to run, and the suite does not separate the
-streaming dependency from the streaming conformance the property reports on.
+`system-property-012` stood here while `system-property('xsl:supports-streaming')`
+answered `'no'`; it passes since the property reports `'yes'` (2026-11-03).
 
 The three `regex-syntax` ambiguous-dash cases — `-0056`, `-0086`, `-0102` —
 stood here until recently and now **pass**. They were the case where
@@ -296,27 +292,22 @@ part of a resource rather than a different one — and nothing then applied it,
 so the whole document was returned. `xslt/sourcedoc.go` now resolves the
 bare-name fragment against the retrieved document.
 
-### 4 — features deliberately not implemented
+### 1 — a feature deliberately not implemented
 
-Three want an `XTSE3430` refusal that only more of the §19.8 posture-and-sweep
-analysis can emit: `si-fork-902`, `si-fork-952` and `su-absorbing-205`. Each
-fix was measured and costs more than it gains: modelling `||` refuses the two
-`si-fork` cases but loses 18 `sx-union` cases (+2/−18), and the §19.8.4.12
-higher-order reading of `xsl:copy` that `su-absorbing-205` needs loses 61
-`si-copy` cases (+1/−61). Those cases expect stylesheets XSLT 3.0's literal
-rules refuse to be accepted, so closing these three wants the finer rules
-Saxon-EE evidently applies, which the Recommendation does not contain. §19.1
-settles whether the refusal is owed — a processor that does not stream "is not
-required to assess whether constructs are guaranteed-streamable" — so they are
-not defects. Four former members of this list (`su-absorbing-908`,
-`su-ascent-903`, `su-shallow-descent-902`, `sx-square-array-201`) pass since
-2026-10-02.
+Three wanted an `XTSE3430` refusal: `si-fork-902`, `si-fork-952` and
+`su-absorbing-205`. Each known fix cost more than it gained (+2/−18 and
++1/−61); M8 closed all three at no cost, by withholding `||` in a crawling
+focus and applying §19.8.4.12's higher-order note to singularity only. Four
+former members of this list (`su-absorbing-908`, `su-ascent-903`,
+`su-shallow-descent-902`, `sx-square-array-201`) pass since 2026-10-02.
 
-The fourth is `sf-reverse-001`, which wants `reverse(snapshot(/chapter)//section)`
+The one left is `sf-reverse-001`, which wants `reverse(snapshot(/chapter)//section)`
 in reversed order. XPath 3.1 §3.3.1.1 returns a path's nodes in document order
 however the left operand was ordered; the catalog's answer is what a
 *streaming* evaluator produces, since §19.11 says sorting is incompatible with
-streaming. The only route to it is streamed execution proper.
+streaming. Streamed execution does not reach it: the case streams since
+4f870c3c and sorts as the tree does, so the only route is a path out of
+document order.
 
 Three cases used to be on this list and are now **fixed**. `base-uri-052` went
 when XInclude was implemented (`xdm.ProcessXInclude`), and the harness honours
@@ -328,14 +319,11 @@ stated in 19 Streamability", so it never needed the streamability analysis
 this file said it required. A verdict of "needs a feature we have not built"
 is worth re-deriving before it is believed.
 
-### 4 — costs more than it gains
+### 3 — costs more than it gains
 
 - `package-200` — a rule separating it from `use-package-291`–`294` exists but
   rests on quoting, which neither grammar mentions, and would have exactly one
   instance in the suite.
-- `accumulator-061` — §10.3.6 focus capture is implemented; what is missing is
-  that nothing marks the principal input as streamed, and supplying that puts
-  the 2,020 cases in `tests/strm/` at risk to win one.
 - `particlesZ033_g` (XSD 1.1) — enforcing the 1.0 wildcard reading costs
   seventeen valid schemas for the one case.
 - `id017.n01.xml` (XSD 1.1) — a defaulted `xs:ENTITY` in a document with no
@@ -343,7 +331,10 @@ is worth re-deriving before it is believed.
   and the XSLT suite's `as-3401`, `match-208` and `match-209`, which Saxon
   validates.
 
-`use-package-003` was once an entry, and it is now **fixed**. This file said
+`accumulator-061` was an entry, priced as putting the 2,020 cases in
+`tests/strm/` at risk to win one, and it is now **fixed**: round L marks
+`TransformReader`'s input as streamed (be09e991), and the full run lost no
+`tests/strm/` case. `use-package-003` was once an entry, and it is now **fixed**. This file said
 a real fix needed the package threaded through the XPath static context and
 called it "the single largest structural change on this list". The narrow form
 of that turned out to be contained: the declaring package's visibility is
@@ -356,16 +347,18 @@ the wanted code was shown to be unreachable.
 
 ---
 
-### 3 — an implementation-defined difference, and the engine defect that hid behind it (fixed)
+### 2 — an implementation-defined difference, and the engine defect that hid behind it (fixed)
 
-`validation-0201`, on both targets, and `streamable-116`. **Nothing is left to
-do here.**
+`validation-0201`, on both targets. **Nothing is left to do here.**
 
-`streamable-116` wants XPDY0002 because a global variable reads the context
-item while the initial mode streams. §3.6.6 offers two options to the API, one
-of which is "building the corresponding tree in memory and supplying the global
-context item as an unstreamed node" — which is what this engine does — and the
-catalog's own keywords mark the case `_WRONG:wrong-error-code`.
+`streamable-116` was on this list and now **passes**. It wants XPDY0002
+because a global variable reads the context item while the initial mode
+streams. §3.6.6 offers the API "building the corresponding tree in memory and
+supplying the global context item as an unstreamed node", which this engine
+did, and the catalog marks the case `_WRONG:wrong-error-code`. Round L
+(6cc2247f) follows §2.3.2 instead, on the owner's decision: in a streamable
+initial mode `TransformReader` makes the global context item absent, so the
+case gets XPDY0002.
 
 `validation-0201` does assert Saxon's three-space indent byte-for-byte, and
 indentation is implementation-defined by §10 of the serialization spec — the
@@ -398,12 +391,11 @@ lands after all, by a route that had to be walked to be believed. See
 
 ## Part 3 — the honest bottom line
 
-**Reaching 100% is not a goal that survives contact with the suites.** All 93
+**Reaching 100% is not a goal that survives contact with the suites.** All 85
 remaining disagreements would require agreeing with a disputed result,
 contradicting §18.2.2, implementing vendor extensions, freezing a stale Unicode
-table, accepting invalid input, weakening a security default, refining an
-analysis past the rules the Recommendation states, which §19.1 says a
-non-streaming processor need not perform, or reproducing another
+table, accepting invalid input, weakening a security default, returning a
+path out of document order, or reproducing another
 implementation's choice where the spec declines to make one. None is now an
 open question about our own correctness — the last two, `validation-0201` on
 both targets, were settled by fixing the defect behind them, which turned out
@@ -452,7 +444,7 @@ would buy none of it. See
 [conformance-gaps.md](conformance-gaps.md) for the breakdown.
 
 **EXSLT is not on this list.** It is a separate product. XQuery was, and is
-now implemented in [`xquery`](../xquery/) at 30,516 of 30,517; what remains of
+now implemented in [`xquery`](../xquery/) at 30,529 of 30,530; what remains of
 it there is tracked in [xquery.md](xquery.md) rather than here, because this
 file is about the XPath and XSLT figures.
 

@@ -30,6 +30,10 @@ type runtime struct {
 	// bursts; see streamburst.go.
 	bursts *burstFeed
 
+	// depth bounds apply-templates recursion, which the spec does not bound
+	// and which a stylesheet with a cycle would otherwise run forever.
+	depth int
+
 	// absent records which groups of context components clearMergeContext,
 	// withoutGroupingScope, clearRegexGroups and withOutputURI have already
 	// bound to absent in ctx (or that nothing has bound yet), so that the clears every template and function call runs can
@@ -38,10 +42,6 @@ type runtime struct {
 	// variables is rebound, and the zero value claims nothing: code that
 	// gives a runtime a context not derived from its own must zero it.
 	absent uint8
-
-	// depth bounds apply-templates recursion, which the spec does not bound
-	// and which a stylesheet with a cycle would otherwise run forever.
-	depth int
 
 	// temporary marks that the runtime is building a temporary tree — the
 	// content of a variable, a function's body, or a grouping key — rather
@@ -54,6 +54,10 @@ type runtime struct {
 	// calls, however deeply.
 	temporary bool
 
+	// inTry marks the body of an xsl:try, under SecondaryOutput, whose
+	// result-documents are written when they complete (secondaryout.go).
+	inTry bool
+
 	// tunnel holds tunnel parameters, which pass through templates that do
 	// not declare them.
 	tunnel map[string]xdm.Sequence
@@ -65,6 +69,10 @@ type runtime struct {
 	// focus and variable change makes does not carry it; nil is the zero
 	// selection (see selected).
 	sel *selection
+
+	// ns is the innermost result element whose body is running in a deep
+	// result, with what namespace lookups found for it (nsscope.go).
+	ns *nsFrame
 }
 
 // transformState holds the fields of a runtime that are set once, when the
@@ -76,6 +84,34 @@ type runtime struct {
 // that every focus, variable and selection change makes small.
 type transformState struct {
 	sheet *Stylesheet
+	// noGlobal says the global context item is absent (streamglobal_l7.go).
+	noGlobal bool
+
+	// mergeOpen counts the documents streamed merges hold open at once
+	// (streammerge.go), shared with the transform that started this one by
+	// fn:transform: a merge action may run another streamed merge, so
+	// mergeStreamsMax bounds the total, not each merge. Read and written
+	// under the EvalLock, which nested transforms share. Nil counts nothing.
+	mergeOpen *int
+
+	// compileBudget is the module budget (see compileBudget) that every
+	// stylesheet fn:transform compiles during this transform spends, shared
+	// with the transform that started this one by fn:transform, and with the
+	// Compile a static-phase runtime runs inside. One per transform, not one
+	// per call: a fresh budget per nested compile bounded a stylesheet that
+	// transforms B distinct stylesheets per level, MaxDepth levels deep, by
+	// time alone. A cache hit (nestedCache) compiles nothing and spends
+	// nothing. Read and written under the EvalLock, like mergeOpen.
+	compileBudget *compileBudget
+
+	// accumHeld holds the accumulator values of the snapshots of streamed
+	// merge items (streammerge_accum.go) and of copies of streamed nodes
+	// (streamaccum_ground_l4.go), each while the copy lives (copyTable).
+	accumHeld copyTable[*heldAccum]
+
+	// readerRoot is the principal input's document node when it was
+	// supplied to TransformReader (accumdyn_l4.go), else nil.
+	readerRoot *xdm.Node
 
 	// globalsForced counts the global variables evaluated so far, so that a
 	// streamed item that forced one keeps charged what it built (liveItem).
@@ -163,7 +199,7 @@ type transformState struct {
 	// while the outer stylesheet is still COMPILING, which is what the flag
 	// records. Its one consequence is that the nested stylesheet is compiled
 	// through compileNestedLocked rather than Compile, the outer compilation
-	// already holding compileMu. See staticPhase.staticRuntime.
+	// already holding compileSlot. See staticPhase.staticRuntime.
 	static bool
 
 	// funcResults memoises the results of stylesheet functions declared
@@ -173,6 +209,8 @@ type transformState struct {
 	// so the promise is only kept by evaluating once and reusing. Keyed by
 	// functionCallKey; see apply.go.
 	funcResults map[callHash]xdm.Sequence
+	// funcResultItems is the number of items funcResults holds.
+	funcResultItems int64
 
 	// itemIDs numbers the nodes and function items functionCallKey keys by
 	// identity; see identityNumber.
@@ -189,6 +227,8 @@ type transformState struct {
 	// full document scan, so it is done once per (key, document) pair on
 	// first use rather than eagerly for every declared key.
 	keyIndex map[keyCacheKey]map[string]xdm.Sequence
+	// keyItems is the number of entries keyIndex holds.
+	keyItems int64
 
 	// keyBuilding marks the (key, document) pairs whose index is currently
 	// being built. keyIndex is only written once a build has *finished*, so
@@ -215,6 +255,12 @@ type transformState struct {
 	accumValues map[accumCacheKey]*accumulatorValues
 
 	accumBuilding map[accumCacheKey]*accumulatorValues
+	// accumSlots is the number of per-node slots accumValues holds.
+	accumSlots int64
+
+	// numberAny is each level="any" xsl:number's table over the tree it last
+	// numbered (numberInstr.countAnyMemo).
+	numberAny map[*numberInstr]*numberAnyMemo
 
 	// accumOrigin maps a node produced by a copy-accumulators="yes" copy to
 	// the node it was copied from, which is the only thing that can say what
@@ -224,9 +270,9 @@ type transformState struct {
 	//
 	// It is nil when no package of the stylesheet declares an accumulator:
 	// accumulator-before and -after then fail XTDE3340 before they could
-	// consult it, and every entry would pin a copy and its original for the
-	// rest of the transform. See newAccumOrigin.
-	accumOrigin map[*xdm.Node]*xdm.Node
+	// consult it. An entry lives while its copy does (copyTable). See
+	// newAccumOrigin.
+	accumOrigin *copyTable[*xdm.Node]
 
 	// treeAccums records, per document root, which accumulators 18.2.2 makes
 	// applicable to that tree. Only a document read by an
@@ -244,6 +290,10 @@ type transformState struct {
 	// from being read over.
 	streamedTrees map[*xdm.Node]bool
 
+	// streamAccums are the accumulator observers of the streamed runs in
+	// progress, innermost last (streamaccum.go).
+	streamAccums []*streamAccums
+
 	// maxDepth is the ceiling depth may reach, from TransformOptions.
 	maxDepth int
 
@@ -258,6 +308,10 @@ type transformState struct {
 	// a plain slice would leave a result-document written inside a template
 	// appending to a copy that the caller never sees.
 	secondary *[]SecondaryResult
+
+	// secondaryOut is TransformOptions.SecondaryOutput's state, nil when it
+	// is not set (secondaryout.go).
+	secondaryOut *secondaryOutput
 
 	// resultHrefs is the set of @href values, as written, that
 	// xsl:result-document has produced, so that XTDE1490 is a lookup rather
@@ -370,7 +424,7 @@ func (rt *runtime) withFocus(item xdm.Item, pos, size int) *runtime {
 func (rt *runtime) withCurrent(item xdm.Item, pos, size int) *runtime {
 	n := *rt
 	if item != nil {
-		n.ctx = withFocusCurrent(rt.ctx, item, pos, size)
+		n.ctx = withFocusCurrent(rt.ctx, item, pos, size, rt.depth)
 	} else {
 		n.ctx = rt.ctx.WithFocus(item, pos, size)
 	}
@@ -461,7 +515,10 @@ func execSequenceBody(body []Instruction, rt *runtime, out *outputBuilder) error
 	// constructor produced, so it goes to the section 8.4.4 algorithm
 	// instead. See onempty.go.
 	if hasConditionalContent(body) {
-		return execConditionalSequence(body, rt, out)
+		if err := execConditionalSequence(body, rt, out); err != nil {
+			return err
+		}
+		return outputRefused(rt, out)
 	}
 	for _, instr := range body {
 		if err := rt.ctx.Err(); err != nil {
@@ -474,7 +531,7 @@ func execSequenceBody(body []Instruction, rt *runtime, out *outputBuilder) error
 		// every sequence constructor runs through, so a refusal latched by
 		// any of them is returned within one instruction of the node that
 		// crossed the bound. See xdmbuild.Builder.Refused and xpath.MaxNodes.
-		if err := out.Refused(); err != nil {
+		if err := outputRefused(rt, out); err != nil {
 			return err
 		}
 		// A variable declared mid-sequence is in scope for the instructions
@@ -504,7 +561,24 @@ func execSequenceBody(body []Instruction, rt *runtime, out *outputBuilder) error
 			return stampPosition(err, instr)
 		}
 	}
-	return nil
+	// What the last instruction latched is reported here, not lost: no
+	// iteration follows to see it.
+	return outputRefused(rt, out)
+}
+
+// outputRefused reports the result-tree budget latched on out and, for a
+// sequence held at the top level, the item bound (topItemsRefused). Both are
+// checked here, once per instruction, because this loop is where every
+// instruction's output lands. The item bound used to be checked by
+// xsl:sequence, xsl:copy-of and xsl:copy alone, so an instruction that built
+// into a buffer of its own and appended it whole -- xsl:try, an as-typed
+// template, xsl:perform-sort, xsl:evaluate, on-empty -- delivered MaxItems
+// per turn of an enclosing xsl:for-each with nothing counting the total.
+func outputRefused(rt *runtime, out *outputBuilder) error {
+	if err := out.Refused(); err != nil {
+		return err
+	}
+	return topItemsRefused(rt, out)
 }
 
 // evalVariable computes a variable's value from its select expression or its
@@ -522,7 +596,7 @@ func evalVariable(v *Variable, rt *runtime) (xdm.Sequence, error) {
 // evalVariableRaw computes the value before the "as" declaration is applied.
 func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	if v.Select != nil {
-		return v.Select.Eval(rt.ctx)
+		return rt.evalStreamExpr(v.Select)
 	}
 	if len(v.Body) == 0 {
 		// A variable with neither select nor content is the empty string, not
@@ -667,7 +741,14 @@ func stringJoin(seq xdm.Sequence, sep string) string {
 // fourteen call sites — and its switch matched neither arm for a function
 // item, so the item was dropped in silence and select="1, 2, false#0" built
 // a="1 2" instead of failing.
-func constructedTextChecked(seq xdm.Sequence, sep string) (string, error) {
+//
+// The arrays are flattened first under ctx, the transform's context, so that
+// a host deadline stops a large flatten.
+func constructedTextChecked(ctx context.Context, seq xdm.Sequence, sep string) (string, error) {
+	seq, err := xdm.FlattenContext(ctx, seq)
+	if err != nil {
+		return "", err
+	}
 	if _, err := xdm.AtomizeChecked(nonTextItems(seq)); err != nil {
 		return "", err
 	}
@@ -757,6 +838,31 @@ func (rt *runtime) EvalLock() *xpath.EvalLock { return rt.evalLock }
 // Locals implements xpathleaf.LocalsHost.
 func (rt *runtime) Locals() *xpathleaf.Locals { return rt.locals }
 
+// mergeOpenOf is the open merge document count of the transform whose
+// evaluation ctx is, or a fresh one.
+func mergeOpenOf(ctx *xpath.Context) *int {
+	if ctx != nil {
+		if p := runtimeOf(ctx); p != nil && p.mergeOpen != nil {
+			return p.mergeOpen
+		}
+	}
+	return new(int)
+}
+
+// compileBudgetOf is the nested-compile budget of the transform whose
+// evaluation ctx is, or a fresh one under the bounds s was compiled with.
+func compileBudgetOf(ctx *xpath.Context, s *Stylesheet) *compileBudget {
+	if ctx != nil {
+		if p := runtimeOf(ctx); p != nil && p.compileBudget != nil {
+			return p.compileBudget
+		}
+	}
+	if s != nil && s.budgetLimits != nil {
+		return s.budgetLimits.limits()
+	}
+	return newCompileBudget(&CompileOptions{})
+}
+
 // newRuntime builds a runtime for one transform.
 func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts TransformOptions) (*runtime, error) {
 	maxDepth := opts.MaxDepth
@@ -765,12 +871,16 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	}
 	rt := &runtime{
 		transformState: &transformState{
-			sheet:       s,
-			evalLock:    opts.nestedLock,
-			maxDepth:    maxDepth,
-			keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
-			keyBuilding: map[keyCacheKey]bool{},
-			steps:       xpathleaf.NewStepMemo(),
+			sheet:     s,
+			evalLock:  opts.nestedLock,
+			noGlobal:  opts.noGlobalItem,
+			mergeOpen: mergeOpenOf(opts.nestedBudget),
+			// compileBudget is the caller's when fn:transform started this.
+			compileBudget: compileBudgetOf(opts.nestedBudget, s),
+			maxDepth:      maxDepth,
+			keyIndex:      map[keyCacheKey]map[string]xdm.Sequence{},
+			keyBuilding:   map[keyCacheKey]bool{},
+			steps:         xpathleaf.NewStepMemo(),
 
 			accumValues:   map[accumCacheKey]*accumulatorValues{},
 			accumBuilding: map[accumCacheKey]*accumulatorValues{},
@@ -786,6 +896,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 			baseURIUsed:   new(bool),
 			baseOutputURI: opts.BaseOutputURI,
 			opts:          &opts,
+			readerRoot:    readerRootOf(root, opts), // accumdyn_l4.go
 			goCtx:         ctx,
 			blocking:      map[*xdm.Node]bool{},
 		},
@@ -809,6 +920,8 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	var item xdm.Item
 	if root != nil {
 		item = root
+	} else if opts.globalItem != nil {
+		item = opts.globalItem
 	}
 	// xsl:global-context-item use="absent" declares that the transformation
 	// reads no global context item, so the globals are evaluated without one
@@ -896,14 +1009,25 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 			return rt.deferredError(c, name)
 		}
 	})
-	xpathleaf.SetLimits(xctx, xpathleaf.Limits{
+	lim := xpathleaf.Limits{
 		Nodes: int64(opts.MaxNodes), Bytes: opts.MaxBytes,
 		NodesBuilt: opts.MaxNodesBuilt, BytesBuilt: opts.MaxBytesBuilt,
-	})
+	}
+	// fn:parse-xml parses on the stylesheet's behalf as fn:doc does, so a
+	// FileResolver's entity limits bind it too: otherwise a stylesheet
+	// refused a document through doc() would read it with
+	// unparsed-text() and hand it to parse-xml() under the defaults.
+	if fr, ok := callerDocuments(opts.Documents).(*FileResolver); ok {
+		ent := fr.entityOptions()
+		lim.Entities = &ent
+	}
+	xpathleaf.SetLimits(xctx, lim)
 	// A transform started by fn:transform continues its caller's item and byte
 	// allowances rather than restarting on fresh ones, the same policy the
-	// recursion depth above follows. The counters travel with their held flags;
-	// see xpath.Context.AdoptBudget.
+	// recursion depth above follows. The item counter travels with its held
+	// flag, and the byte counter arrives held, so HoldByteBudget below
+	// continues an unheld caller's count instead of resetting it; see
+	// xpath.Context.AdoptBudget.
 	xctx = xctx.AdoptBudget(opts.nestedBudget)
 	// The expression depth continues the count too. rt.depth alone bounds a
 	// stylesheet that calls fn:transform on itself, but not one that leaves
@@ -1468,10 +1592,21 @@ func globalRefs(g *Variable) []string {
 		// available -- see bodyVariableRefs.
 		return g.bodyRefs
 	}
-	// bodyRefs is non-empty here only for a global whose select expression
-	// calls an xsl:function: foldFunctionRefsIntoGlobals put that function's
-	// own references there, and they are dependencies of this global just as
-	// much as the names it writes itself.
+	// The variables named by the xsl:functions it calls are dependencies of
+	// this global just as much as the names it writes itself; see
+	// foldFunctionRefsIntoGlobals.
+	refs := ownGlobalRefs(g)
+	if g.fdeps != nil {
+		refs = g.fdeps.appendRefs(refs, g)
+	}
+	return refs
+}
+
+// ownGlobalRefs is globalRefs without what the functions g calls name.
+func ownGlobalRefs(g *Variable) []string {
+	if g.Select == nil {
+		return g.bodyRefs
+	}
 	return append(variableRefsIn(g.Select.Source(), g.selectNS), g.bodyRefs...)
 }
 
@@ -1613,7 +1748,7 @@ func bodyVariableRefs(el *xdm.Node) []string {
 // with count(//*), which without this took the transform's source document as
 // its focus and quietly returned a number where XPDY0002 was due.
 func globalRuntimeFor(rt *runtime, g *Variable) *runtime {
-	if g.pkg == 0 {
+	if g.pkg == 0 && !rt.noGlobal { // streamglobal_l7.go
 		return rt
 	}
 	// A declaration inside an xsl:override belongs to the package containing
@@ -1719,62 +1854,173 @@ func (rt *runtime) noteUnbound(bits uint8) {
 }
 
 // markGlobalOrder sets Variable.selfRef and Variable.eager. It runs once
-// every module has compiled and foldFunctionRefsIntoGlobals has added the
-// references made through stylesheet functions, since globalRefs reads those
-// too.
+// every module has compiled and foldFunctionRefsIntoGlobals has recorded the
+// functions each global calls, since globalRefs reads through those too.
 //
 // A global is eager when it has effects, names itself, or reaches a cycle of
 // globalRefs dependencies: evaluated at the start, in declaration order and
 // dependencies first, a circularity is reported naming the global it named
 // when every global was evaluated that way.
+//
+// The walk is over globals and xsl:functions together, each function a node
+// of its own, so a function many globals call is followed once rather than
+// once per caller: time and space are linear in the references. globalRefs
+// leaves a global's own name out of what its functions name, and that is the
+// one difference from the globals-only graph: a cycle g -> f -> g through
+// functions alone is not a dependency of g on itself. So a strongly connected
+// component is a cycle of globalRefs exactly when it holds two globals or
+// more, and a global reaches a cycle when its component is one or leads to
+// one.
 func (c *compiler) markGlobalOrder() {
-	byName := make(map[string]*Variable, len(c.sheet.globals))
-	for _, g := range c.sheet.globals {
+	globals := c.sheet.globals
+	byName := make(map[string]int32, len(globals))
+	for i, g := range globals {
 		if _, dup := byName[g.Name.Clark()]; !dup {
-			byName[g.Name.Clark()] = g
+			byName[g.Name.Clark()] = int32(i)
 		}
 	}
-	// A depth-first walk: meeting a variable still on the walk's path is a
-	// cycle, and everything on the path from it reaches that cycle.
-	const (
-		unseen = iota
-		onPath
-		finished
-	)
-	mark := map[*Variable]int{}
-	reaches := map[*Variable]bool{}
-	var walk func(g *Variable) bool
-	walk = func(g *Variable) bool {
-		switch mark[g] {
-		case onPath:
-			return true
-		case finished:
-			return reaches[g]
+	// Nodes 0..len(globals)-1 are the globals; a function gets the next
+	// number the first time an edge reaches it.
+	adj := make([][]int32, len(globals))
+	fnID := map[string]int32{}
+	var fnNames []string
+	fn := func(name string) (int32, bool) {
+		if id, ok := fnID[name]; ok {
+			return id, true
 		}
-		mark[g] = onPath
-		r := false
-		for _, dep := range globalRefs(g) {
+		if len(c.funcRefs[name]) == 0 && len(c.funcCalls[name]) == 0 {
+			return 0, false
+		}
+		id := int32(len(adj))
+		fnID[name] = id
+		fnNames = append(fnNames, name)
+		adj = append(adj, nil)
+		return id, true
+	}
+	for i, g := range globals {
+		for _, dep := range ownGlobalRefs(g) {
 			d, ok := byName[dep]
 			if !ok {
 				continue
 			}
-			if d == g {
+			if d == int32(i) {
 				g.selfRef = true
 				continue
 			}
-			if walk(d) {
-				r = true
+			adj[i] = append(adj[i], d)
+		}
+		if g.fdeps != nil {
+			for _, call := range g.calls {
+				if f, ok := fn(call); ok {
+					adj[i] = append(adj[i], f)
+				}
 			}
 		}
-		mark[g], reaches[g] = finished, r
-		return r
 	}
-	for _, g := range c.sheet.globals {
-		walk(g)
+	for j := 0; j < len(fnNames); j++ {
+		name, id := fnNames[j], int32(len(globals)+j)
+		for _, ref := range c.funcRefs[name] {
+			if d, ok := byName[ref]; ok {
+				adj[id] = append(adj[id], d)
+			}
+		}
+		for _, call := range c.funcCalls[name] {
+			if f, ok := fn(call); ok {
+				adj[id] = append(adj[id], f)
+			}
+		}
 	}
-	for _, g := range c.sheet.globals {
-		g.eager = g.eager || g.selfRef || reaches[g]
+	reaches := globalCycleReach(adj, len(globals))
+	for i, g := range globals {
+		g.eager = g.eager || g.selfRef || reaches[i]
 	}
+}
+
+// globalCycleReach reports, for each of the first nGlobals nodes of adj,
+// whether its strongly connected component holds two globals or more or
+// leads to one that does. It is Tarjan's algorithm with an explicit stack,
+// since the depth is the stylesheet's to choose; a component is complete
+// only after every component it leads to, so each is decided as it closes.
+func globalCycleReach(adj [][]int32, nGlobals int) []bool {
+	n := len(adj)
+	index := make([]int32, n) // 0: not yet visited
+	low := make([]int32, n)
+	comp := make([]int32, n)
+	onStack := make([]bool, n)
+	var compReach []bool
+	var stack []int32
+	type frame struct {
+		v int32
+		e int
+	}
+	var path []frame
+	next := int32(1)
+	visit := func(v int32) {
+		index[v], low[v] = next, next
+		next++
+		stack = append(stack, v)
+		onStack[v] = true
+		path = append(path, frame{v: v})
+	}
+	for root := range n {
+		if index[root] != 0 {
+			continue
+		}
+		visit(int32(root))
+		for len(path) > 0 {
+			f := &path[len(path)-1]
+			if f.e < len(adj[f.v]) {
+				w := adj[f.v][f.e]
+				f.e++
+				if index[w] == 0 {
+					visit(w)
+				} else if onStack[w] {
+					low[f.v] = min(low[f.v], index[w])
+				}
+				continue
+			}
+			v := f.v
+			path = path[:len(path)-1]
+			if len(path) > 0 {
+				p := path[len(path)-1].v
+				low[p] = min(low[p], low[v])
+			}
+			if low[v] != index[v] {
+				continue
+			}
+			id := int32(len(compReach))
+			start := len(stack)
+			for {
+				start--
+				if stack[start] == v {
+					break
+				}
+			}
+			members := stack[start:]
+			nG := 0
+			for _, w := range members {
+				comp[w], onStack[w] = id, false
+				if int(w) < nGlobals {
+					nG++
+				}
+			}
+			reach := nG >= 2
+			for _, w := range members {
+				for _, x := range adj[w] {
+					if comp[x] != id && compReach[comp[x]] {
+						reach = true
+					}
+				}
+			}
+			compReach = append(compReach, reach)
+			stack = stack[:start]
+		}
+	}
+	out := make([]bool, nGlobals)
+	for i := range out {
+		out[i] = compReach[comp[i]]
+	}
+	return out
 }
 
 // hasEffects reports whether a global declaration's own select or content

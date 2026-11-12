@@ -648,14 +648,31 @@ func TestAVTExpressionExtraction(t *testing.T) {
 // --- the known guard --------------------------------------------------------
 
 func TestUnmodelledInstructionIsReportedUnknown(t *testing.T) {
-	// The guard the whole check rests on: an instruction whose §19.8.4 rule
-	// is not written must be reported unmodelled, so that streamcheck.go
-	// stays silent rather than rejecting a valid stylesheet.
-	// xsl:where-populated is one such instruction.
-	_, known := analyzeInstrSource(t, `<xsl:where-populated><a/></xsl:where-populated>`)
+	// The guard the whole check rests on: a construct whose rule is not
+	// written must be reported unmodelled, so that streamcheck.go stays
+	// silent rather than rejecting a valid stylesheet. An extension
+	// function's posture and sweep are implementation-defined (§19.8.8.14),
+	// and this analysis gives none.
+	_, known := analyzeInstrSource(t, `<xsl:copy-of select="Q{urn:x}f('d')"/>`)
 	if known {
-		t.Error("xsl:where-populated was reported as modelled; its §19.8.4 rule is not " +
-			"implemented, so treating it as modelled risks a spurious XTSE3430")
+		t.Error("xsl:copy-of over an extension function was reported as modelled")
+	}
+	// §19.8.4.42, §19.8.4.31, §19.8.4.32: xsl:where-populated is its
+	// content's posture and sweep; xsl:on-empty and xsl:on-non-empty are
+	// xsl:sequence. Each is modelled, and a refusal inside is not hidden.
+	for _, c := range []struct {
+		src  string
+		want props
+	}{
+		{`<xsl:where-populated><a><xsl:copy-of select="b"/></a></xsl:where-populated>`, props{postureGrounded, sweepConsuming}},
+		{`<xsl:where-populated><a><xsl:value-of select="b - c"/></a></xsl:where-populated>`, roamingFreeRanging},
+		{`<xsl:on-empty select="@a"/>`, props{postureStriding, sweepMotionless}},
+		{`<xsl:on-non-empty><a><xsl:copy-of select="b"/></a></xsl:on-non-empty>`, props{postureGrounded, sweepConsuming}},
+	} {
+		p, known := analyzeInstrSource(t, c.src)
+		if !known || p != c.want {
+			t.Errorf("%s: %v/%v known %v, want %v/%v", c.src, p.posture, p.sweep, known, c.want.posture, c.want.sweep)
+		}
 	}
 }
 
@@ -668,12 +685,12 @@ func TestUnmodelledPredicateInAScanningPathIsReportedUnknown(t *testing.T) {
 	// implementation, not about the path, and the roaming verdict that
 	// follows must not be reported as an XTSE3430.
 	//
-	// fn:unparsed-text() has no entry in the §19.8.9 table, so a path
-	// filtered on it must come back unmodelled.
+	// An extension function is not modelled, so a path filtered on it
+	// must come back unmodelled.
 	_, known := analyzeInstrSource(t,
-		`<xsl:value-of select="//transaction[@date = unparsed-text('d.txt')]"/>`)
+		`<xsl:value-of select="//transaction[@date = Q{urn:x}f('d')]"/>`)
 	if known {
-		t.Error("a path whose predicate calls the unmodelled unparsed-text() was reported " +
+		t.Error("a path whose predicate calls an unmodelled extension function was reported " +
 			"as modelled; the roaming verdict would then be raised as a spurious XTSE3430")
 	}
 
@@ -689,7 +706,7 @@ func TestUnmodelledInstructionInABodyPropagates(t *testing.T) {
 	// known must propagate out of a nested sequence constructor, not just
 	// out of the instruction itself.
 	_, known := analyzeInstrSource(t, `<xsl:for-each select="a">
-	 <xsl:where-populated><b/></xsl:where-populated>
+	 <xsl:copy-of select="Q{urn:x}f('d')"/>
 	</xsl:for-each>`)
 	if known {
 		t.Error("an unmodelled instruction inside xsl:for-each did not clear known")
@@ -1393,5 +1410,29 @@ func TestContextItemAbsentIsSpeltAbsent(t *testing.T) {
 		p, known := analyzeFirstInSourceDoc(t, src)
 		wantProps(t, p, known, postureGrounded, sweepMotionless,
 			`xsl:call-template on a template with use="`+use+`"`)
+	}
+}
+
+// TestTextValueTemplateOperands checks §19.8.3: "Any text value templates
+// appearing in text nodes within the sequence constructor, if text value
+// templates are enabled. The operand usage for these operands is
+// absorption", with §19.8.7's operands, the expressions in braces.
+func TestTextValueTemplateOperands(t *testing.T) {
+	for _, c := range []struct {
+		src  string
+		want props
+	}{
+		{`<out xsl:expand-text="yes">{@k}</out>`, groundedMotionless},
+		{`<out xsl:expand-text="yes">{a}</out>`, props{postureGrounded, sweepConsuming}},
+		{`<out xsl:expand-text="yes">{a} and {b}</out>`, roamingFreeRanging},
+		{`<out xsl:expand-text="yes"><xsl:value-of select="a"/>{b}</out>`, roamingFreeRanging},
+		{`<out xsl:expand-text="yes">{following-sibling::x}</out>`, roamingFreeRanging},
+		// Not enabled: literal text.
+		{`<out>{a} and {b}</out>`, groundedMotionless},
+	} {
+		p, known := analyzeInstrSource(t, c.src)
+		if !known || p != c.want {
+			t.Errorf("%s: %v/%v known %v, want %v/%v", c.src, p.posture, p.sweep, known, c.want.posture, c.want.sweep)
+		}
 	}
 }

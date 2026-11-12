@@ -28,15 +28,25 @@ import (
 // XTDE2220 scan below is what keeps the unsorted case an error rather than a
 // silent re-sort.
 //
-// Streaming is not implemented. streamable="yes" is a statement about memory,
-// not about the answer: 19.10 leaves a processor that does not stream free to
-// evaluate conventionally, and the sole visible consequence — that last() is
-// absent inside the action — is honoured.
+// This is the tree's merge (executeTree), and the oracle of the streamed one
+// (streammerge.go), which reads the streamable for-each-source documents
+// each on a cursor and interleaves them by the same keys, ties and errors.
 
 // mergeInstr is a compiled xsl:merge.
 type mergeInstr struct {
 	sources []*mergeSource
 	action  []Instruction
+	// streams says the merge reads its streamable sources each on a cursor
+	// of its own (streammerge.go); textKeys are the key positions whose
+	// data-type, an attribute value template, must resolve to "text".
+	streams  bool
+	textKeys []int
+	// nodeKeys are the {source, key} positions of collected sources whose
+	// key is a path, taken for strings once their values are (streammerge_mm5.go).
+	nodeKeys [][2]int
+	// groupsFirst says the action may ask for last(): the streamed merge
+	// forms every group before the first action runs (streammerge_l4.go).
+	groupsFirst bool
 }
 
 // mergeSource is a compiled xsl:merge-source: one merge source definition.
@@ -83,6 +93,9 @@ type mergeSource struct {
 	// XTDE2210 compatibility check, which compares attributes across sources
 	// and so needs to know which were written at all.
 	keyElems []*xdm.Node
+	// split is the select read off a cursor over each document of a
+	// streamed for-each-source (streammerge.go), nil when it is not.
+	split *streamSplit
 }
 
 // mergeEntry is one item of one input sequence, with its composite key.
@@ -235,6 +248,13 @@ func (c *compiler) compileMerge(n *xdm.Node, ns xpath.NamespaceResolver) (Instru
 		return nil, err
 	}
 	instr.action = action
+	instr.streams, instr.textKeys = mergeStreams(instr, actionElem)
+	if instr.streams && c.streamMayAlias(false) { // streamalias_l7.go
+		instr.streams, instr.textKeys = false, nil
+	}
+	if instr.streams {
+		c.mergeLinks = append(c.mergeLinks, instr) // streammerge_accum.go
+	}
 	return instr, nil
 }
 
@@ -439,6 +459,9 @@ func (c *compiler) compileMergeSource(n *xdm.Node, idx int) (*mergeSource, error
 	if src.sel, err = compileExpr(sel, ns); err != nil {
 		return nil, fmt.Errorf("in xsl:merge-source/@select: %w", err)
 	}
+	if src.streamed && hasSource {
+		src.split = c.mergeSplit(n, src.sel, ns)
+	}
 
 	for _, ch := range n.ChildElements() {
 		if !isXSL(ch, "merge-key") {
@@ -563,12 +586,19 @@ func checkMergeKeyCompatibility(sources []*mergeSource) error {
 // --- Execution --------------------------------------------------------------
 
 func (i *mergeInstr) Execute(rt *runtime, out *outputBuilder) error {
-	// 6.8: the current template rule is cleared within xsl:merge.
-	rt = rt.clearCurrentRule()
-	// The key attributes are resolved per source before anything is selected,
-	// because XTDE2210 is about the *effective* values and a computed one is
-	// only knowable now. Resolving them once here rather than per item also
-	// matches what applySorts does for an ordinary sort.
+	if i.streams {
+		if done, err := i.executeStream(rt, out); done {
+			return err
+		}
+	}
+	return i.executeTree(rt, out)
+}
+
+// resolveKeys resolves the key attributes per source before anything is
+// selected, because XTDE2210 is about the *effective* values and a computed
+// one is only knowable now. Resolving them once here rather than per item
+// also matches what applySorts does for an ordinary sort.
+func (i *mergeInstr) resolveKeys(rt *runtime) ([][]*sortKey, [][]xpath.Collation, error) {
 	resolved := make([][]*sortKey, len(i.sources))
 	colls := make([][]xpath.Collation, len(i.sources))
 	for s, src := range i.sources {
@@ -576,27 +606,53 @@ func (i *mergeInstr) Execute(rt *runtime, out *outputBuilder) error {
 		for k, sk := range src.keys {
 			r, err := sk.resolve(rt)
 			if err != nil {
-				return err
+				return nil, nil, err
 			}
 			ks[k] = r
 		}
 		cs, err := resolveSortCollations(rt, ks)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		resolved[s], colls[s] = ks, cs
 	}
 	if err := checkMergeKeysAtRuntime(resolved); err != nil {
+		return nil, nil, err
+	}
+	return resolved, colls, nil
+}
+
+// executeTree is xsl:merge on trees: every input collected, then merged.
+func (i *mergeInstr) executeTree(rt *runtime, out *outputBuilder) error {
+	// 6.8: the current template rule is cleared within xsl:merge.
+	rt = rt.clearCurrentRule()
+	resolved, colls, err := i.resolveKeys(rt)
+	if err != nil {
 		return err
 	}
 
+	// The sources a streamed run collects (not read on a cursor) are
+	// collected first, then the others, as the streamed merge does
+	// (streammerge.go): their documents and snapshots are then made in the
+	// same order, which is document order across them. XPath 3.1 §2.4.1
+	// leaves "the relative order of nodes in distinct trees" stable but
+	// implementation-dependent, and which of several errors is raised is
+	// implementation-dependent too (§2.3.4), so the order is free. The
+	// entries' order is the sort's tie-break (source, anchor, position),
+	// not the order they are collected in.
 	var entries []mergeEntry
-	for s, src := range i.sources {
-		got, err := src.collect(rt, s, resolved[s], colls[s])
-		if err != nil {
-			return err
+	var held int64 // the entries retained across sources: mergeSource.collect
+	for pass := range 2 {
+		for s, src := range i.sources {
+			if onCursor := src.streamed && src.sourceURIs != nil; onCursor != (pass == 1) {
+				continue
+			}
+			got, err := src.collect(rt, s, resolved[s], colls[s], &held)
+			if err != nil {
+				return err
+			}
+			entries = append(entries, got...)
 		}
-		entries = append(entries, got...)
 	}
 
 	if err := checkMergeKeysComparable(entries, len(i.sources)); err != nil {
@@ -855,8 +911,13 @@ func mergeKeysEqual(a, b []sortValue) bool {
 }
 
 // collect evaluates one merge source into entries carrying their keys.
+//
+// Eval gives each anchor's select a fresh item allowance, so the entries the
+// merge retains across anchors and sources are totalled in *held, which the
+// caller shares across its sources, and checked against the item limit as
+// group-by checks what its groups retain.
 func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
-	colls []xpath.Collation) ([]mergeEntry, error) {
+	colls []xpath.Collation, held *int64) ([]mergeEntry, error) {
 	anchors, err := s.anchorItems(rt)
 	if err != nil {
 		return nil, err
@@ -872,6 +933,10 @@ func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
 		}
 		seq, err := s.sel.Eval(sub.ctx)
 		if err != nil {
+			return nil, err
+		}
+		*held += int64(len(seq))
+		if err := rt.ctx.ItemsRefused(*held); err != nil {
 			return nil, err
 		}
 		// 15.4: with streamable="yes" the select expression "is implicitly
@@ -892,6 +957,11 @@ func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
 		// $g/ancestor::record[1]//temp from the action; a snapshot keeps the
 		// ancestors but none of their other children, so that step is empty.
 		if s.streamed {
+			// The snapshots are copies, charged before they are made as
+			// fn:snapshot charges its own (copyfuncs.go).
+			if err := chargeCopies(rt.ctx, []xdm.Sequence{seq}, true); err != nil {
+				return nil, err
+			}
 			snap := make(xdm.Sequence, len(seq))
 			for j, it := range seq {
 				snap[j] = noteCopy(rt, it, snapshotItem(it))
@@ -900,34 +970,9 @@ func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
 		}
 		entries := make([]mergeEntry, len(seq))
 		for p, it := range seq {
-			// 15.5: the key is evaluated "with a singleton focus based on J",
-			// so position() and last() are both 1 — deliberately unlike an
-			// xsl:sort key, which sees the position in the unsorted sequence.
-			kctx := rt.withCurrent(it, 1, 1)
-			kv := make([]sortValue, len(keys))
-			ka := make([]*xdm.Atomic, len(keys))
-			for k, sk := range keys {
-				v, err := sk.evalKey(kctx)
-				if err != nil {
-					return nil, err
-				}
-				if at := xdm.Atomize(v); len(at) == 1 {
-					if a, ok := at[0].(*xdm.Atomic); ok {
-						ka[k] = a
-					}
-				}
-				sv, err := makeSortValue(v, sk, colls[k],
-					rt.ctx.Env().ImplicitTimezone, rt.sheet.output.Version10Implicit)
-				if err != nil {
-					// XTTE1020 is the sort-key code; for a merge key the
-					// suite accepts either it or XTTE2230, and the message
-					// keeps the sort code so the two paths stay one.
-					return nil, err
-				}
-				kv[k] = sv
+			if entries[p], err = mergeEntryOf(rt, it, keys, colls, idx, a, p); err != nil {
+				return nil, err
 			}
-			entries[p] = mergeEntry{item: it, keys: kv, atoms: ka,
-				src: idx, anchor: a, pos: p}
 		}
 		if s.sortBeforeMerge {
 			// The input was not promised to be sorted, so sort it. Doing it
@@ -948,6 +993,39 @@ func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
 	return out, nil
 }
 
+// mergeEntryOf is it, the item at pos of input sequence (src, anchor), with
+// its composite key.
+func mergeEntryOf(rt *runtime, it xdm.Item, keys []*sortKey, colls []xpath.Collation,
+	src, anchor, pos int) (mergeEntry, error) {
+	// 15.5: the key is evaluated "with a singleton focus based on J",
+	// so position() and last() are both 1 — deliberately unlike an
+	// xsl:sort key, which sees the position in the unsorted sequence.
+	kctx := rt.withCurrent(it, 1, 1)
+	kv := make([]sortValue, len(keys))
+	ka := make([]*xdm.Atomic, len(keys))
+	for k, sk := range keys {
+		v, err := sk.evalKey(kctx)
+		if err != nil {
+			return mergeEntry{}, err
+		}
+		if at := xdm.Atomize(v); len(at) == 1 {
+			if a, ok := at[0].(*xdm.Atomic); ok {
+				ka[k] = a
+			}
+		}
+		sv, err := makeSortValue(v, sk, colls[k],
+			rt.ctx.Env().ImplicitTimezone, rt.sheet.output.Version10Implicit)
+		if err != nil {
+			// XTTE1020 is the sort-key code; for a merge key the
+			// suite accepts either it or XTTE2230, and the message
+			// keeps the sort code so the two paths stay one.
+			return mergeEntry{}, err
+		}
+		kv[k] = sv
+	}
+	return mergeEntry{item: it, keys: kv, atoms: ka, src: src, anchor: anchor, pos: pos}, nil
+}
+
 // anchorItems produces the anchor items of a merge source, or a single nil
 // anchor when the source names none.
 //
@@ -963,31 +1041,13 @@ func (s *mergeSource) anchorItems(rt *runtime) ([]xdm.Item, error) {
 		}
 		return []xdm.Item(seq), nil
 	case s.sourceURIs != nil:
-		seq, err := s.sourceURIs.Eval(rt.ctx)
+		uris, err := s.sourceURIStrings(rt)
 		if err != nil {
 			return nil, err
 		}
-		// 15.3: "The expected type of the expression is xs:string*, and the
-		// actual result of the expression is converted to this type using the
-		// function conversion rules." An integer is not convertible to
-		// xs:string under those rules, which is what makes merge-043's
-		// "1 to 5" XPTY0004 rather than five nonexistent filenames.
 		var items []xdm.Item
-		for _, a := range xdm.Atomize(seq) {
-			at, ok := a.(*xdm.Atomic)
-			if !ok {
-				return nil, fmt.Errorf(
-					"XPTY0004: xsl:merge-source/@for-each-source must return " +
-						"strings")
-			}
-			if at.Type != xdm.TypeUntypedAtomic && at.Type != xdm.TypeString &&
-				at.Type != xdm.TypeAnyURI {
-				return nil, fmt.Errorf(
-					"XPTY0004: xsl:merge-source/@for-each-source returned a "+
-						"%s, which the function conversion rules do not convert "+
-						"to xs:string", at.TypeName())
-			}
-			root, err := s.load(rt, at.String())
+		for _, u := range uris {
+			root, err := s.load(rt, u)
 			if err != nil {
 				return nil, err
 			}
@@ -998,12 +1058,46 @@ func (s *mergeSource) anchorItems(rt *runtime) ([]xdm.Item, error) {
 	return []xdm.Item{nil}, nil
 }
 
+// sourceURIStrings evaluates for-each-source to the URIs it names.
+func (s *mergeSource) sourceURIStrings(rt *runtime) ([]string, error) {
+	seq, err := s.sourceURIs.Eval(rt.ctx)
+	if err != nil {
+		return nil, err
+	}
+	// 15.3: "The expected type of the expression is xs:string*, and the
+	// actual result of the expression is converted to this type using the
+	// function conversion rules." An integer is not convertible to
+	// xs:string under those rules, which is what makes merge-043's
+	// "1 to 5" XPTY0004 rather than five nonexistent filenames.
+	var uris []string
+	for _, a := range xdm.Atomize(seq) {
+		at, ok := a.(*xdm.Atomic)
+		if !ok {
+			return nil, fmt.Errorf(
+				"XPTY0004: xsl:merge-source/@for-each-source must return " +
+					"strings")
+		}
+		if at.Type != xdm.TypeUntypedAtomic && at.Type != xdm.TypeString &&
+			at.Type != xdm.TypeAnyURI {
+			return nil, fmt.Errorf(
+				"XPTY0004: xsl:merge-source/@for-each-source returned a "+
+					"%s, which the function conversion rules do not convert "+
+					"to xs:string", at.TypeName())
+		}
+		uris = append(uris, at.String())
+	}
+	return uris, nil
+}
+
 // load reads one for-each-source document and applies the source's validation.
 //
 // It mirrors xsl:source-document's load for the same reason that one copies:
 // the resolver caches its trees, so validating in place would change what a
 // later fn:doc of the same URI sees.
 func (s *mergeSource) load(rt *runtime, href string) (*xdm.Node, error) {
+	if err := validSourceDocumentURI(href); err != nil {
+		return nil, err // FODC0005, as xsl:source-document reports it
+	}
 	docs := rt.ctx.Env().Docs
 	if docs == nil {
 		return nil, fmt.Errorf(

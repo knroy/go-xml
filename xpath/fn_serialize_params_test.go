@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -127,4 +128,56 @@ func replaceOnce(s, old, new string) string {
 		}
 	}
 	return s
+}
+
+// TestSerializeMapDoctypeIsChecked: the map form stored doctype-system and
+// doctype-public after a type check only, so a system literal holding both
+// quote kinds ended its own quoting and wrote the rest as live DTD markup.
+// The element form refuses the same values with SEPM0017; given directly they
+// are SEPM0016 (Serialization 3.1 §3).
+func TestSerializeMapDoctypeIsChecked(t *testing.T) {
+	for _, params := range []string{
+		`map{'method':'xml','doctype-system':'a"b''><!--'}`,
+		`map{'method':'xml','doctype-system':'s','doctype-public':'p"q'}`,
+	} {
+		got, err := evalSerialize(t, "serialize(parse-xml('<a/>'), "+params+")")
+		if err == nil || xdm.ErrorCode(err) != "SEPM0016" {
+			t.Errorf("serialize with %s = %q, %v; want SEPM0016", params, got, err)
+		}
+	}
+	// The control: one quote kind is a legal system literal.
+	got, err := evalSerialize(t, `serialize(parse-xml('<a/>'), map{'method':'xml','doctype-system':'a"b'})`)
+	if err != nil || !strings.Contains(got, `<!DOCTYPE a SYSTEM 'a"b'>`) {
+		t.Errorf("doctype-system a\"b = %q, %v; want a single-quoted literal", got, err)
+	}
+}
+
+// TestSerializeMapEmptyValueIsDefault pins F&O 3.1 fn:serialize for the map
+// form: "The default value is used when the map contains no entry for the
+// parameter in question, and also when an entry is present, with the empty
+// sequence as its value". Each reader raised XPTY0004 for (), because it
+// demanded exactly one item, so map{'indent':()} was a type error where the
+// spec asks for the indent default.
+func TestSerializeMapEmptyValueIsDefault(t *testing.T) {
+	const arg = `parse-xml('<a><b/></a>')`
+	for _, param := range []string{
+		"method", "indent", "omit-xml-declaration", "encoding",
+		"item-separator", "doctype-system", "cdata-section-elements",
+		"use-character-maps", "include-content-type", "version",
+		"json-node-output-method", "normalization-form",
+	} {
+		t.Run(param, func(t *testing.T) {
+			want, err := evalSerialize(t, `serialize(`+arg+`, map{})`)
+			if err != nil {
+				t.Fatalf("serialize without %s: %v", param, err)
+			}
+			got, err := evalSerialize(t, `serialize(`+arg+`, map{'`+param+`':()})`)
+			if err != nil {
+				t.Fatalf("serialize with %s=(): %v", param, err)
+			}
+			if got != want {
+				t.Errorf("%s=(): got %q, want the default's %q", param, got, want)
+			}
+		})
+	}
 }

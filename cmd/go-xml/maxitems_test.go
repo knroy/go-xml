@@ -55,3 +55,20 @@ func TestMaxItemsAndMaxBytesFlags(t *testing.T) {
 		}
 	}
 }
+
+// The -timeout context is created before the XInclude pass, so the pass is
+// bounded by it too: an already-expired timeout stops it with the pass's own
+// cancellation error, not the transform's.
+func TestTimeoutCoversXInclude(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "in.xml")
+	writeFile(t, in, `<r xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include xpointer="z"/><t xml:id="z"/></r>`)
+	xsl := filepath.Join(dir, "t.xsl")
+	writeFile(t, xsl, `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <xsl:template match="/"><n/></xsl:template>
+</xsl:stylesheet>`)
+	out, err := exec.Command(buildCLI(t), "-xsl", xsl, "-xinclude", "-timeout", "-1ns", in).CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "xi:include processing cancelled") {
+		t.Fatalf("an expired -timeout with -xinclude: %v\n%s\nwant the XInclude pass cancelled", err, out)
+	}
+}

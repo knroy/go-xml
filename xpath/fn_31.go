@@ -273,7 +273,7 @@ func registerContainsToken(l *Library) {
 		// The first argument is xs:string*, so each item is atomised and
 		// compared in turn rather than being joined: the tokens of one item
 		// never run into the next.
-		atoms, err := xdm.AtomizeChecked(args[0])
+		atoms, err := ctx.atomizeChecked(args[0])
 		if err != nil {
 			return nil, err
 		}
@@ -1006,7 +1006,10 @@ func formatIETFSeconds(sec *big.Rat) string {
 	s := sec.FloatString(9)
 	s = strings.TrimRight(s, "0")
 	s = strings.TrimSuffix(s, ".")
-	if len(s) > 0 && s[1] == '.' {
+	// A fraction below the nine places trims away entirely, so "05.0000000001"
+	// can come back as the single digit "5": the length is checked before the
+	// point is looked for, since indexing s[1] there panicked.
+	if len(s) == 1 || s[1] == '.' {
 		s = "0" + s
 	}
 	return s
@@ -1179,7 +1182,7 @@ func permuteWith(state uint64, seq xdm.Sequence) xdm.Sequence {
 // A map or an array compared against anything else is simply unequal rather
 // than an error, which is the same rule the atomic branch follows for values
 // of incomparable types.
-func deepEqualMapArray(ctx *Context, x, y xdm.Item, depth int) (eq, handled bool, err error) {
+func deepEqualMapArray(ctx *Context, w *deepWalk, x, y xdm.Item, depth int) (eq, handled bool, err error) {
 	xm, xIsMap := x.(*xdm.MapItem)
 	ym, yIsMap := y.(*xdm.MapItem)
 	xa, xIsArr := x.(*xdm.ArrayItem)
@@ -1190,10 +1193,10 @@ func deepEqualMapArray(ctx *Context, x, y xdm.Item, depth int) (eq, handled bool
 	}
 	switch {
 	case xIsMap && yIsMap:
-		e, err := deepEqualMaps(ctx, xm, ym, depth)
+		e, err := deepEqualMaps(ctx, w, xm, ym, depth)
 		return e, true, err
 	case xIsArr && yIsArr:
-		e, err := deepEqualArrays(ctx, xa, ya, depth)
+		e, err := deepEqualArrays(ctx, w, xa, ya, depth)
 		return e, true, err
 	}
 	// One of the two is a map or an array and the other is not, so they
@@ -1202,7 +1205,7 @@ func deepEqualMapArray(ctx *Context, x, y xdm.Item, depth int) (eq, handled bool
 	return false, true, nil
 }
 
-func deepEqualArrays(ctx *Context, a, b *xdm.ArrayItem, depth int) (bool, error) {
+func deepEqualArrays(ctx *Context, w *deepWalk, a, b *xdm.ArrayItem, depth int) (bool, error) {
 	// Nested values recurse here; bound them like any other recursion.
 	if err := checkValueDepth(depth); err != nil {
 		return false, err
@@ -1215,7 +1218,7 @@ func deepEqualArrays(ctx *Context, a, b *xdm.ArrayItem, depth int) (bool, error)
 		// Members are sequences, so this is the sequence comparison rather
 		// than the item one: an array of one two-item member is not equal to
 		// an array of two one-item members.
-		eq, err := deepEqualAt(ctx, am[i], bm[i], depth+1)
+		eq, err := w.members(ctx, am[i], bm[i], depth+1)
 		if err != nil || !eq {
 			return false, err
 		}
@@ -1223,7 +1226,7 @@ func deepEqualArrays(ctx *Context, a, b *xdm.ArrayItem, depth int) (bool, error)
 	return true, nil
 }
 
-func deepEqualMaps(ctx *Context, a, b *xdm.MapItem, depth int) (bool, error) {
+func deepEqualMaps(ctx *Context, w *deepWalk, a, b *xdm.MapItem, depth int) (bool, error) {
 	// Nested values recurse here; bound them like any other recursion.
 	if err := checkValueDepth(depth); err != nil {
 		return false, err
@@ -1250,7 +1253,7 @@ func deepEqualMaps(ctx *Context, a, b *xdm.MapItem, depth int) (bool, error) {
 			equal = false
 			return nil
 		}
-		eq, err := deepEqualAt(ctx, value, other, depth+1)
+		eq, err := w.members(ctx, value, other, depth+1)
 		if err != nil {
 			return err
 		}
@@ -1278,13 +1281,13 @@ func registerNumericConstructor(l *Library) {
 		Name:  xdm.QName{URI: xdm.NSXS, Local: "numeric"},
 		Arity: 1,
 		Since: XPath31,
-		Call: func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		Call: func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			// Like every other constructor, an empty argument gives the empty
 			// sequence rather than raising.
 			if len(args) == 0 || len(args[0]) == 0 {
 				return xdm.Empty(), nil
 			}
-			atoms, err := xdm.AtomizeChecked(args[0])
+			atoms, err := ctx.atomizeChecked(args[0])
 			if err != nil {
 				return nil, err
 			}

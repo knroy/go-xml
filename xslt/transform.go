@@ -9,6 +9,8 @@ import (
 	"time"
 	"weak"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -77,6 +79,22 @@ type TransformOptions struct {
 	// bound whatever this says.
 	MaxItems int
 
+	// MaxMergeStreams bounds how many documents streamed xsl:merge reads at
+	// once, counted over every merge open at the time: a merge run from the
+	// action of another, and one in a transform fn:transform starts, share
+	// the count. Each streamed document holds its open resource (a file
+	// descriptor for a FileResolver), its cursor and a coroutine until its
+	// merge ends. Zero means 64; a negative value means no limit.
+	//
+	// It refuses nothing. A merge that would take the count past it reads
+	// its inputs on the tree instead, each document parsed once into memory,
+	// with the same result. Raising it trades that memory for open resources
+	// and goroutines, which a for-each-source naming many URIs can then ask
+	// for in proportion; lowering it trades the other way. A transform
+	// started by fn:transform keeps its caller's bound whatever this says,
+	// and one started from the static phase has the default.
+	MaxMergeStreams int
+
 	// MaxNodes bounds the result-tree and temporary-tree nodes the transform
 	// holds: zero is xpath.MaxNodes (2,000,000), negative is no bound, and
 	// past it the transform fails with XPDY0130 wrapping
@@ -91,7 +109,9 @@ type TransformOptions struct {
 	// correct stream whose state stays flat runs over any input, while one
 	// whose carried state grows is refused once that state crosses the bound.
 	// Only the first 4,096 nodes an item drops are handed back unless
-	// MaxNodesBuilt is set; see there.
+	// MaxNodesBuilt is set; see there. With Output set, the principal
+	// result's nodes are handed back as they are written, so what counts is
+	// the part of the result still held.
 	MaxNodes int
 
 	// MaxBytes bounds the string content the transform holds, in bytes, on
@@ -238,6 +258,85 @@ type TransformOptions struct {
 	// resolves against the stylesheet's own location instead.
 	BaseOutputURI string
 
+	// SourceParseOptions are the options TransformReader parses its reader
+	// with, streamed or not: the document's base URI and document URI, its
+	// DOCTYPE and entity allowances, and its limits (the zero value's
+	// xdm.DefaultMaxBytes refuses a document over 64 MB, so a caller
+	// streaming a larger one sets MaxBytes, and MaxNodes, as it would for
+	// xdm.Parse). They are what a caller of Transform passes to xdm.Parse.
+	// Transform ignores them: its source is already a tree.
+	SourceParseOptions xdm.ParseOptions
+
+	// SourceValidation validates the principal input against the schema the
+	// stylesheet imports (xsl:import-schema) before the transform reads it,
+	// with the document node as the validation root, as an xsd typed copy of
+	// a document is made: the nodes carry their type annotations and typed
+	// values, attributes the schema supplies by default are added, and
+	// whitespace-only text in element-only content is dropped. The
+	// stylesheet's xsl:strip-space applies after the validation.
+	//
+	// SourceStrict requires the document element to have a global
+	// declaration or an xsi:type; SourceLax assesses it only when it has one,
+	// and otherwise leaves the document untyped. An invalid document is an
+	// error coded XTTE1510 (XTTE1515 for lax), the same error whether the
+	// document was streamed or a tree. The zero value validates nothing.
+	//
+	// Transform validates its source, which must then be a document node,
+	// by making a typed copy of it: the caller's tree is not changed.
+	// TransformReader validates the document as it streams it when the
+	// stylesheet streams the principal input and the schema allows it (not
+	// with identity constraints, element default or fixed values, open
+	// content, or a default for an attribute in a namespace); otherwise it
+	// parses the document and validates as Transform does. A strict
+	// validation with no imported schema is the error XTSE1660.
+	SourceValidation SourceValidation
+
+	// Output, when set, receives the principal result serialized with the
+	// stylesheet's xsl:output, as Result.Serialize would write it, byte for
+	// byte; the Result's Nodes are then nil and its Tree is nil. The result
+	// is written as it is produced, so the transform holds only what it has
+	// not yet been able to write, and MaxNodes bounds the result-tree nodes
+	// held rather than all those built. Some results are written only once
+	// the transform has finished, held as they are without Output: those
+	// with a json or adaptive output method, build-tree="no", an
+	// item-separator, a normalization-form, a doctype or standalone
+	// declaration, a parameter-document, HTML5's html or xhtml method, or an
+	// output method chosen from the result before its first element. Output
+	// under an xsl:try that may roll back is held until the try completes,
+	// and under indent="yes" an element whose content is to be indented is
+	// held until it ends (see docs/known-gaps.md).
+	//
+	// The returned error is the one a transform followed by
+	// Result.Serialize would report: the transform's, else the
+	// serialization's. Output written before an error cannot be taken back,
+	// so Output may have received part of the result when an error is
+	// returned. Output is not closed.
+	Output io.Writer
+
+	// SecondaryOutput, when set, is called once for each xsl:result-document
+	// with the absolute URI of its result (its href resolved against the base
+	// output URI, or the href itself when there is no base URI to resolve
+	// it), and the result is serialized to the writer it returns, with the
+	// result-document's own output settings, byte for byte as
+	// SecondaryResult.Serialize would write it; the writer is closed at the
+	// result's end. Such results are not added to Result.Secondary. The result
+	// is written as it is produced, as Output writes the principal result,
+	// except where a written byte could not be taken back: a result-document
+	// inside an xsl:try body is written when it completes, and one inside a
+	// streamed xsl:source-document or xsl:merge when that ends (a failure
+	// re-runs it on the tree). Results whose output settings need the whole
+	// result (those Output lists, validation) are written when they complete,
+	// and so is a result-document nested inside 16 others being written, so
+	// that at most 16 writers are open at once.
+	//
+	// An error the function returns, a serialization error, and an error
+	// from Close are the transform's error. Errors are otherwise those of
+	// the transform without SecondaryOutput (XTDE1490, XTDE1500, ...), and a
+	// writer may have received part of a result when an error is returned;
+	// every writer returned is closed. A nested fn:transform does not
+	// inherit it.
+	SecondaryOutput func(href string) (io.WriteCloser, error)
+
 	// nestedDepth seeds the runtime's recursion depth, so that a transform
 	// started by fn:transform continues its caller's count instead of
 	// starting a fresh one. It is unexported because it is not a caller's
@@ -284,11 +383,25 @@ type TransformOptions struct {
 	nestedLock   *xpath.EvalLock
 	nestedLocals *xpathleaf.Locals
 
+	// readerInput says the principal input was supplied to TransformReader,
+	// in streamable form, whether it streams or falls back to a tree
+	// (accumdyn_l4.go). Unexported because only TransformReader sets it.
+	readerInput bool
+	// noGlobalItem says the global context item is absent although a source
+	// is given: TransformReader's principal input in a streamable initial
+	// mode (streamglobal_l7.go). Unexported because only TransformReader
+	// sets it.
+	noGlobalItem bool
+
 	// disableMessages is fn:transform's enable-messages=false: a
 	// non-terminating xsl:message is not evaluated, and a terminating one
 	// terminates without recording its text. Unexported because only
 	// runNestedTransform sets it.
 	disableMessages bool
+	// globalItem is fn:transform's global-context-item when it is not a
+	// node, given with a nil source. Unexported because only
+	// runNestedTransform sets it.
+	globalItem xdm.Item
 }
 
 // Result is the outcome of a transform.
@@ -303,7 +416,8 @@ type Result struct {
 	// Warnings holds the warnings the transform raised, in the order
 	// produced. They report conditions the spec asks a processor to notice —
 	// currently the two xsl:mode warning attributes — and never affect the
-	// result.
+	// result. At most 100 are kept, then one saying the rest were
+	// suppressed, so a large input cannot flood it.
 	Warnings []string
 	// Secondary holds the documents produced by xsl:result-document, in the
 	// order produced. It is empty for the great majority of stylesheets,
@@ -317,13 +431,112 @@ type Result struct {
 	BaseURI string
 	// output carries the stylesheet's serialisation settings.
 	output OutputSettings
+	// streamed marks a result written to TransformOptions.Output, which
+	// has no tree.
+	streamed bool
 }
 
 // Transform applies the stylesheet to a source document.
 //
 // The Stylesheet is not mutated, so one compiled stylesheet may be used from
 // many goroutines concurrently.
-func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts TransformOptions) (*Result, error) {
+func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts TransformOptions) (_ *Result, err error) {
+	defer xdmlimit.Recover(&err) // a node constructed past a tree's text blocks
+	if opts.SourceValidation != 0 {
+		if source, err = s.validatedSource(source, opts.SourceValidation); err != nil { // streamvalidin.go
+			return nil, err
+		}
+	}
+	return s.transform(ctx, source, opts, nil)
+}
+
+// SourceValidation is how TransformOptions.SourceValidation validates the
+// principal input: xsl:source-document's validation="strict" and "lax",
+// applied to the document a transform starts from.
+type SourceValidation uint8
+
+const (
+	// SourceStrict validates the principal input strictly.
+	SourceStrict SourceValidation = iota + 1
+	// SourceLax validates the principal input laxly.
+	SourceLax
+)
+
+// TransformReader applies the stylesheet to the XML document r reads, which
+// it parses with opts.SourceParseOptions. Its result, its errors and the
+// limits it applies are those of
+//
+//	tree, err := xdm.Parse(r, opts.SourceParseOptions)
+//	if err != nil {
+//		return nil, err
+//	}
+//	return s.Transform(ctx, tree.Root, opts)
+//
+// which is what it does, unless the document can be streamed: then it is
+// read once, as the transform runs, and no tree of it is built. A document
+// that is not well-formed, or is over a limit of SourceParseOptions, is
+// reported as xdm.Parse reports it, whatever the transform did before the
+// parse got there: the rest of the document is read first.
+//
+// The document is streamed (section 6.6.4 of XSLT 3.0: an initial mode
+// declared streamable, with a streamed initial match selection) when the
+// plan made for each mode as the stylesheet compiles (planMainStreams)
+// takes the initial mode, and the invocation allows it. The invocation must
+// apply templates to the document in that mode (no InitialTemplate,
+// InitialFunction or InitialMatchSelection), and SourceValidation must be
+// one the stream can make. The plan refuses a mode:
+//
+//   - for an xsl:global-context-item with a type, or
+//     input-type-annotations="strip" (mainRefusal); a global variable or
+//     parameter is not refused, because the global context item is absent
+//     for a streamable initial mode (section 2.3.2), streamed or not, and
+//     reading it raises XPDY0002;
+//   - for an accumulator applicable in the mode that is not streamable, or
+//     whose rules the stream cannot compute as it reads (mainAccumRefusal;
+//     see docs/known-gaps.md for what that is);
+//   - unless every rule the mode, and every mode it reaches, can apply to the
+//     document's nodes is guaranteed streamable (section 19), verified across
+//     the stylesheet's modules, and planned for the stream; nothing in it
+//     may reach a node of the stream another way (streamMayAlias), or
+//     need the tree a streamed xsl:source-document falls back to: a
+//     select at the document node that may fall back to its tree, or a node
+//     of the document at the top of the principal result or of an
+//     xsl:result-document's body, where Result.Nodes or
+//     SecondaryResult.Nodes would hold the document's own node (linkMain).
+//
+// Otherwise the document is parsed into a tree and Transform runs on it.
+// Streaming, the memory a transform takes is that of its result and of what
+// its rules hold, below Transform's on the tree but for the exceptions
+// docs/known-gaps.md measures (a very deep document, a group-by in
+// xsl:fork). Its CPU is 1.3 to 2 times that of Parse + Transform, measured
+// over a 111 MB document (docs/known-gaps.md).
+//
+// r is read to its end, and not closed. The base URI and document URI of
+// the document are those of SourceParseOptions (BaseURI, DocumentURI), as
+// for xdm.Parse; set them for fn:base-uri, fn:document-uri and relative
+// fn:doc references from the document to answer.
+func (s *Stylesheet) TransformReader(ctx context.Context, r io.Reader, opts TransformOptions) (_ *Result, err error) {
+	defer xdmlimit.Recover(&err) // a node constructed past a tree's text blocks
+	// The input is supplied in streamable form, streamed or not (accumdyn_l4.go).
+	opts.readerInput = true
+	opts.noGlobalItem = s.streamedSourceMode(opts)                                 // streamglobal_l7.go
+	if !s.streamsMain(opts) || !s.sourceValidationStreams(opts.SourceValidation) { // streamvalidin.go
+		tree, err := xdm.Parse(r, opts.SourceParseOptions)
+		if err != nil {
+			return nil, err
+		}
+		return s.Transform(ctx, tree.Root, opts)
+	}
+	return s.transformStream(ctx, r, opts)
+}
+
+// transform is Transform, or, with main set, TransformReader's streamed run:
+// the stand-in for the document node is then the source, and the initial
+// apply-templates dispatches it on the cursor (streammain.go).
+func (s *Stylesheet) transform(ctx context.Context, source *xdm.Node, opts TransformOptions, main *mainInput) (*Result, error) {
+	if main != nil {
+		source = main.root
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -332,8 +545,10 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// variable is evaluated from that item, and a mistyped one must not have
 	// half the globals bound before it is noticed.
 	var globalItem xdm.Item
-	if source != nil {
+	if source != nil && !opts.noGlobalItem {
 		globalItem = source
+	} else if source == nil {
+		globalItem = opts.globalItem
 	}
 	if err := s.checkGlobalContextItem(globalItem); err != nil {
 		return nil, err
@@ -426,7 +641,8 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// left as they parsed it. Stripping in place would surprise a caller that
 	// reuses one parsed document across several stylesheets with different
 	// strip-space declarations.
-	if source != nil && len(s.strip) > 0 {
+	// (A streamed principal input is stripped as the cursor parses it.)
+	if source != nil && len(s.strip) > 0 && main == nil {
 		// Stripping applies to the whole tree the initial context node belongs
 		// to, not to the node itself. When the caller starts the transform at
 		// an inner node -- the suite does this with <source select="..."/> --
@@ -456,7 +672,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// now works from the root: stripTypeAnnotationsFrom copies the children of
 	// what it is handed, so handing it an inner node discarded everything
 	// above and beside it.
-	if source != nil && source.Kind() == xdm.KindDocument && s.stripTypeAnnotations {
+	if source != nil && source.Kind() == xdm.KindDocument && s.stripTypeAnnotations && main == nil {
 		source = s.stripTypeAnnotationsFrom(source)
 	}
 
@@ -516,6 +732,9 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	}
 	rt.readDocs = &readDocs
 	rt.writtenDocs = &writtenDocs
+	if opts.SecondaryOutput != nil {
+		rt.secondaryOut = &secondaryOutput{open: opts.SecondaryOutput, opened: map[string]bool{}}
+	}
 	// Bind the runtime so key(), current() and xsl:function can reach it.
 	rt.ctx = bindRuntime(rt.ctx, rt)
 
@@ -526,6 +745,12 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	rt = rt.withOutputURI(opts.BaseOutputURI)
 
 	out := newOutputBuilder(rt)
+	var so *streamOut
+	if opts.Output != nil {
+		so = newStreamOut(rt, opts.Output, s.output, s.activeCharMap)
+		xdmsink.Attach(out, so)
+		defer so.flush()
+	}
 
 	// rawResult carries the initial function's return value, which is a
 	// sequence rather than a tree. It is kept beside the output builder
@@ -664,82 +889,17 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 			return nil, err
 		}
 	} else {
-		// "#default" and "#unnamed" both name the unnamed mode; a caller
-		// passing either means "start where a stylesheet with no @mode
-		// starts", which is the empty name.
-		initialMode := opts.InitialMode
-		if initialMode == "#unnamed" {
-			initialMode = ""
+		initialMode, err := s.initialModeOf(opts)
+		if err != nil {
+			return nil, err
 		}
-		// An invocation that names no mode at all starts in the module's
-		// default mode, which @default-mode on the root moves off the unnamed
-		// one. The rules written without @mode moved with it, so starting in
-		// the unnamed mode would find none of them; mode-1701 is exactly that
-		// stylesheet. An explicit "#unnamed" is a different request and is
-		// left alone, which is why this reads opts rather than initialMode.
-		// "#default" is not a mode name: it asks for THE DEFAULT MODE, which
-		// is what @default-mode on the top-level package names and only the
-		// unnamed mode in the absence of that attribute. 5.7.1's definition
-		// of the invocation puts it as "if no initial mode is supplied, then
-		// the mode used is that named in the default-mode attribute of the
-		// (explicit or implicit) xsl:package element of the top-level package
-		// or in the absence of such an attribute, the unnamed mode", and
-		// "#default" is how a caller spells "none supplied".
-		//
-		// "#unnamed" is the different request, and is the one the grammar
-		// offers beside an EQName in @default-mode itself; it is normalised
-		// above and left alone here.
-		//
-		// package-001p, -001q and -001r each declare default-mode="start" and
-		// are invoked with initial-mode "#default". Treating that as the
-		// unnamed mode ran the built-in rules and copied the text through
-		// instead of firing the rule in mode "start".
-		if opts.InitialMode == "" || opts.InitialMode == "#default" {
-			initialMode = s.rootDefaultMode
+		params, tunnels := paramsOf(opts.InitialModeParams), paramsOf(opts.InitialModeTunnelParams)
+		if main != nil {
+			err = main.run(rt, initialMode, params, tunnels, out)
+		} else {
+			err = applyInitialSelection(rt, source, opts.InitialMatchSelection, initialMode, params, tunnels, out)
 		}
-		// XTDE0045: "it is a non-recoverable dynamic error if the invocation
-		// of the stylesheet specifies an initial mode (other than the default
-		// mode) that does not match the expanded-QName in the mode attribute
-		// of any template". mode="#all" makes a template apply in every mode
-		// but does not NAME one, so it cannot satisfy the invocation: per
-		// W3C bugzilla 3690 an initial mode matched only by "#all" is still
-		// this error. Only tokens that are real names count as declaring.
-		if initialMode != "" {
-			// The caller's name is lexical, so a prefix in it is resolved
-			// against the stylesheet's declarations before comparison, the
-			// same way InitialTemplate is above.
-			want := initialMode
-			if prefix, local, found := strings.Cut(initialMode, ":"); found {
-				if uri, ok := s.prefixes[prefix]; ok {
-					want = xdm.QName{URI: uri, Local: local}.Clark()
-				}
-			}
-			// The mode named by the module's own @default-mode is an entry
-			// point the module nominated, so it is eligible whether or not a
-			// rule mentions it and whatever its visibility; mode-1803
-			// declares such a mode and no rule uses it. Tested first because
-			// it excuses both of the checks below.
-			if want != s.rootDefaultMode {
-				if !s.declaresMode(want) {
-					return nil, fmt.Errorf(
-						"XTDE0045: the invocation specifies initial mode %q, "+
-							"which no template declares", opts.InitialMode)
-				}
-				// Existing is not the same as invocable: a mode a package
-				// keeps private cannot be entered from outside it. See
-				// modevisibility.go.
-				if !s.eligibleInitialMode(want) {
-					return nil, fmt.Errorf(
-						"XTDE0045: the invocation specifies initial mode %q, "+
-							"which is not an eligible initial mode because "+
-							"the package declares it private", opts.InitialMode)
-				}
-			}
-			initialMode = want
-		}
-		if err := applyInitialSelection(rt, source, opts.InitialMatchSelection,
-			initialMode, paramsOf(opts.InitialModeParams), paramsOf(opts.InitialModeTunnelParams),
-			out); err != nil {
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -751,7 +911,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// here rather than in the instruction because the ordering is not fixed:
 	// the implicit content may be written either side of the instruction, and
 	// only at the end is it known that both happened.
-	if *rt.baseURIUsed && len(out.Sequence()) > 0 {
+	if *rt.baseURIUsed && xdmsink.Items(out) > 0 {
 		return nil, fmt.Errorf(
 			"XTDE1490: two result documents were written to the base output " +
 				"URI: the principal result tree and an xsl:result-document " +
@@ -799,6 +959,20 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	if haveRaw {
 		nodes = rawResult
 	}
+	if rt.secondaryOut != nil {
+		if err := rt.secondaryOut.flush(rt); err != nil {
+			return nil, err
+		}
+	}
+	if so != nil {
+		// The settings the parameter document gave the result, which a
+		// result held to the end is written with.
+		so.opts, so.charMap = output, charMap
+		if err := xdmsink.Finish(out, nodes); err != nil {
+			return nil, err
+		}
+		nodes = nil
+	}
 
 	return &Result{
 		Nodes:     nodes,
@@ -807,7 +981,88 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		Secondary: *rt.secondary,
 		output:    output,
 		charMap:   charMap,
+		streamed:  so != nil,
 	}, nil
+}
+
+// initialModeOf is the mode the initial apply-templates starts in: the mode
+// opts.InitialMode names, resolved against the stylesheet, or the default
+// mode; XTDE0045 when the stylesheet offers no such mode.
+func (s *Stylesheet) initialModeOf(opts TransformOptions) (string, error) {
+	// "#default" and "#unnamed" both name the unnamed mode; a caller
+	// passing either means "start where a stylesheet with no @mode
+	// starts", which is the empty name.
+	initialMode := opts.InitialMode
+	if initialMode == "#unnamed" {
+		initialMode = ""
+	}
+	// An invocation that names no mode at all starts in the module's
+	// default mode, which @default-mode on the root moves off the unnamed
+	// one. The rules written without @mode moved with it, so starting in
+	// the unnamed mode would find none of them; mode-1701 is exactly that
+	// stylesheet. An explicit "#unnamed" is a different request and is
+	// left alone, which is why this reads opts rather than initialMode.
+	// "#default" is not a mode name: it asks for THE DEFAULT MODE, which
+	// is what @default-mode on the top-level package names and only the
+	// unnamed mode in the absence of that attribute. 5.7.1's definition
+	// of the invocation puts it as "if no initial mode is supplied, then
+	// the mode used is that named in the default-mode attribute of the
+	// (explicit or implicit) xsl:package element of the top-level package
+	// or in the absence of such an attribute, the unnamed mode", and
+	// "#default" is how a caller spells "none supplied".
+	//
+	// "#unnamed" is the different request, and is the one the grammar
+	// offers beside an EQName in @default-mode itself; it is normalised
+	// above and left alone here.
+	//
+	// package-001p, -001q and -001r each declare default-mode="start" and
+	// are invoked with initial-mode "#default". Treating that as the
+	// unnamed mode ran the built-in rules and copied the text through
+	// instead of firing the rule in mode "start".
+	if opts.InitialMode == "" || opts.InitialMode == "#default" {
+		initialMode = s.rootDefaultMode
+	}
+	// XTDE0045: "it is a non-recoverable dynamic error if the invocation
+	// of the stylesheet specifies an initial mode (other than the default
+	// mode) that does not match the expanded-QName in the mode attribute
+	// of any template". mode="#all" makes a template apply in every mode
+	// but does not NAME one, so it cannot satisfy the invocation: per
+	// W3C bugzilla 3690 an initial mode matched only by "#all" is still
+	// this error. Only tokens that are real names count as declaring.
+	if initialMode != "" {
+		// The caller's name is lexical, so a prefix in it is resolved
+		// against the stylesheet's declarations before comparison, the
+		// same way InitialTemplate is above.
+		want := initialMode
+		if prefix, local, found := strings.Cut(initialMode, ":"); found {
+			if uri, ok := s.prefixes[prefix]; ok {
+				want = xdm.QName{URI: uri, Local: local}.Clark()
+			}
+		}
+		// The mode named by the module's own @default-mode is an entry
+		// point the module nominated, so it is eligible whether or not a
+		// rule mentions it and whatever its visibility; mode-1803
+		// declares such a mode and no rule uses it. Tested first because
+		// it excuses both of the checks below.
+		if want != s.rootDefaultMode {
+			if !s.declaresMode(want) {
+				return "", fmt.Errorf(
+					"XTDE0045: the invocation specifies initial mode %q, "+
+						"which no template declares", opts.InitialMode)
+			}
+			// Existing is not the same as invocable: a mode a package
+			// keeps private cannot be entered from outside it. See
+			// modevisibility.go.
+			if !s.eligibleInitialMode(want) {
+				return "", fmt.Errorf(
+					"XTDE0045: the invocation specifies initial mode %q, "+
+						"which is not an eligible initial mode because "+
+						"the package declares it private", opts.InitialMode)
+			}
+		}
+		initialMode = want
+	}
+	return initialMode, nil
 }
 
 // stripWhitespace returns a copy of the tree with whitespace-only text nodes
@@ -842,6 +1097,10 @@ func (s *Stylesheet) stripWhitespaceForFrom(pkg int, root, want *xdm.Node) (*xdm
 	var found *xdm.Node
 	tree := xdm.NewTree()
 	tree.Root.SetBaseURI(root.BaseURI())
+	// Stripping is part of building the source tree (§4.4): the stripped
+	// document is still the one fetched by its URI (F&O §2.6), and the
+	// resolvers hand it out for that URI.
+	tree.Root.SetDocumentURI(root.DocumentURI())
 	// The DOCTYPE text is a property of the tree, not of the root node, and
 	// it is where the unparsed-entity declarations live. Building a fresh
 	// tree without it made fn:unparsed-entity-uri answer "" for every
@@ -1353,7 +1612,8 @@ func (r *Result) BuildsTree() bool {
 
 // Tree returns the result as a document node, for callers that want to keep
 // navigating it rather than serialise it — which is what a Schematron driver
-// does with an SVRL report.
+// does with an SVRL report. It is nil for a result written to
+// TransformOptions.Output, which keeps no tree.
 func (r *Result) Tree() *xdm.Node {
 	// Section 24.1 defines what build-tree="yes" means: "a document node is
 	// created, and the result of evaluating the sequence constructor is used
@@ -1365,7 +1625,7 @@ func (r *Result) Tree() *xdm.Node {
 	// the attribute to "the raw principal result or secondary result", so
 	// the principal result is not exempt. Callers distinguish this nil from
 	// an empty result with BuildsTree.
-	if !r.output.buildsTree() {
+	if !r.output.buildsTree() || r.streamed {
 		return nil
 	}
 	tree := xdm.NewTree()

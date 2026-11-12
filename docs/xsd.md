@@ -77,35 +77,54 @@ versioning attributes, and the 1.1 built-in types. `xs:yearMonthDuration` and
 `xs:dayTimeDuration` carry the pattern facets Part 2 defines them by, so `P1D`
 is not a year-month duration, in an instance or in a derived type's facet value.
 
-Of the five 1.1 built-in types, a 1.0 schema cannot name `xs:dateTimeStamp` or
-`xs:error` (in `type=`, `base=`, `itemType=`, `memberTypes=` or `xsi:type`).
-`xs:anyAtomicType`, `xs:yearMonthDuration` and `xs:dayTimeDuration` resolve
-under 1.0 as well: the XPath data model defines them for every XPath 2.0+ host,
-and schemas imported into XQuery, which are read as 1.0, use them. This is a
-deliberate leniency; `vc:typeAvailable` still reports all five unavailable
-under 1.0.
+A 1.0 schema cannot name any of the five 1.1 built-in types --
+`xs:anyAtomicType`, `xs:yearMonthDuration`, `xs:dayTimeDuration`,
+`xs:dateTimeStamp` and `xs:error` -- in `type=`, `base=`, `itemType=`,
+`memberTypes=` or `xsi:type`. The XSD 1.0 schema for schemas defines none of
+them, so under `Version10` such a reference names no type definition and is
+`src-resolve`; under `Version11` all five resolve. `vc:typeAvailable` reports
+the same five unavailable under 1.0. `xs:untypedAtomic` and `xs:untyped` are
+XPath data model types, not schema ones, and resolve under neither version.
 
-The 1.1 constructs are always *parsed*, whichever version is selected — a
-schema that uses one is not rejected for it. Whether it is *honoured* is what
-the version selects, and the distinction matters:
+The hosts read schemas as 1.1: XQuery's `import schema` (its type system is
+XSD 1.1-based, which XQuery 3.1 Appendix D leaves implementation-defined), and
+XSLT 3.0's `xsl:import-schema`. A schema imported into either may therefore
+restrict `xs:dayTimeDuration` or name `xs:dateTimeStamp`. A schema loaded
+directly through `xsd.Load` keeps the 1.0 default.
+
+Under `Version10` the 1.1 constructs are schema errors, because the XSD 1.0
+schema for schemas does not declare them: the elements `xs:assert`,
+`xs:assertion`, `xs:alternative`, `xs:openContent`, `xs:defaultOpenContent`,
+`xs:override` and `xs:explicitTimezone`, and the attributes `defaultAttributes`
+and `xpathDefaultNamespace` on `xs:schema`, `targetNamespace` on a local
+`xs:element` or `xs:attribute`, `inheritable`, `defaultAttributesApply`,
+`xpathDefaultNamespace` on `xs:selector` and `xs:field`, `ref` on an identity
+constraint, and the wildcard forms `notNamespace` and `notQName`. Each error
+says "requires XSD 1.1".
+
+A schema document written for both versions marks its 1.1 parts with
+`vc:minVersion="1.1"`. Conditional inclusion (XSD 1.1 §4.2.1) runs under both
+versions, so a 1.0 load drops a marked element before checking it, and a 1.1
+load reads it:
 
 ```go
-// <xs:assert test="xs:int(a) gt 100"/> on the type of <r>
-schema10.Validate(doc.Root, xsd.ValidateOptions{})   // nil — the assertion is not run
+// <xs:assert test="xs:int(a) gt 100" vc:minVersion="1.1"/> on the type of <r>
+schema10.Validate(doc.Root, xsd.ValidateOptions{})   // nil — excluded under 1.0
 schema11.Validate(doc.Root, xsd.ValidateOptions{})   // cvc-assertion.3
 ```
 
-The same holds for the `xs:assertion` and `xs:explicitTimezone` facets, for
-`xs:alternative`, and for `defaultAttributes` (a dangling group name is still
-reported). So loading a 1.1 schema under the default version gives you a
-working 1.0 validator for it, silently missing the 1.1 constraints. **If a
-schema uses 1.1 features, select `Version11`.** Nothing warns you.
+Without the marker, loading a 1.1 schema under the default version fails.
+**If a schema uses 1.1 features, select `Version11`.**
 
-The exceptions are the wildcard forms `notNamespace` and `notQName`, which are
-errors under 1.0 rather than ignored: the attribute is the wildcard's whole
-namespace constraint, so dropping it would leave a wildcard that admits what
-the schema means to exclude, where ignoring an assertion only fails to add a
-check on top of a declaration that still stands.
+The version also decides one identity-constraint case: a `xs:field` that
+selects an attribute an `xs:anyAttribute` matched without assessing it.
+Such an attribute is matched by `skip`, or by `lax` with no global declaration.
+It has no type, so under 1.0 the field fails §3.11.4 clause 3 ("must have a
+simple type"). The W3C test group ruled this way when it closed bug 4063
+(`idZ015`). XSD 1.1's clause 3 accepts ·skipped· nodes in a field's result
+and gives them no value. So under 1.1 a `skip` match leaves the field
+empty: an `xs:key` fails (4.2.1) and an `xs:unique` holds. A `lax` match is
+not skipped and fails clause 3 under both versions.
 
 ## Checking the schema itself
 
@@ -189,6 +208,11 @@ instead, which sees the IP actually being connected to — loopback, link-local
 RFC1918 ranges are all refused by default. Set `AllowPrivateAddresses: true`
 to re-permit them, which is what a caller fetching from an internal mirror —
 or a test against a server on loopback — needs.
+
+A location that is not remote (a `file:` URI or a path) written in a schema
+that was itself fetched over the network is refused, whatever `Files` is set
+to: the remote author does not get to read the host's filesystem. Locations in
+local schemas still go to `Files` (an unrooted `xsd.FileResolver` when nil).
 
 Network resolution is off by default because turning it on hands control of
 what this process fetches to whoever wrote the schema.
@@ -309,7 +333,10 @@ Three things about that shape are deliberate:
   caller thinks about and folding it in would grant it by accident.
 * **A refused location is ignored, not an error.** §4.3.2 makes the attribute
   a hint, so declining to take it is not a fault in the document. A reference
-  that really needed the components still fails, at the reference.
+  that really needed the components still fails, at the reference. The same
+  goes for a local location outside the directories the schema was loaded
+  from (never opened), one the resolver cannot supply, and a document that
+  does not define the namespace it was named for (never added).
 * **The receiver is not modified.** A `Schema` is immutable and shared, so
   this returns a new one. That means a fresh assembly per instance, which is
   why it is a separate call rather than something `Validate` does — a caller
@@ -346,13 +373,19 @@ like any other:
 |---|---|---|
 | `Options.MaxDocuments` | 512 | documents one assembly may read |
 | `Options.MaxContentModelPositions` | 8192 | positions in one content model, ~3.3 MB |
+| `Options.MaxUPAStateWidth` | 256 | competing positions in one state the UPA check compares pairwise |
+| `Options.MaxUPAPairTests` | 4,194,304 | UPA pair comparisons per content model |
+| `Options.MaxSubsumptionStates` | 4096 | 1.1 restriction inclusion: unrolled states per side (declines to the 1.0 table) |
+| `Options.MaxSubsumptionProduct` | 20000 | 1.1 restriction inclusion: product pairs explored (declines to the 1.0 table) |
+| `Options.MaxRestrictionBranches` | 4096 | 1.1 all-group restriction: branches enumerated (declines to the 1.0 table) |
 | `Options.ParseOptions` | refuses DOCTYPE | entity expansion in schema documents |
 | `ParseOptions.MaxBytes` | 64 MB | the size of one document read |
 | `ParseOptions.MaxNodes` | 10,000,000 | the size of one tree, ~2 GB |
 | `ParseOptions.MaxDepth` | 1000 | nesting, and so parser stack use |
 | `ValidateOptions.MaxErrors` | 100 | failures collected before stopping |
 | `ValidateOptions.MaxDepth` | 1000 | validation recursion, and so its stack use |
-| `DefaultMaxMatchStates` | 4096 | simultaneous content-model readings per element |
+| `ValidateOptions.MaxMatchStates` | 4096 | simultaneous content-model readings per element |
+| *(fixed)* | 1000 | digits in one field of a date, time or duration value: the year, the fractional seconds, a duration field (Part 2 §5.4); a longer field is refused with `xdm.ErrResourceLimit`, not reported invalid |
 
 `MaxContentModelPositions` exists because a content model can be far larger
 than the text describing it. A group DAG in which each of n groups references
@@ -374,11 +407,14 @@ each, which helps nobody and costs memory proportional to the document.
 bounds memory. A node costs a fixed ~200 bytes whatever it holds, so a megabyte
 of `<a/>` elements measures 53 times the heap of a megabyte of text — a byte cap
 says little about what a document will cost. `MaxBytes` bounds the read;
-`MaxNodes` bounds what the read can allocate. Every limit takes `-1` to disable
-it, for input this process produced itself.
+`MaxNodes` bounds what the read can allocate. Both take `-1` to disable them,
+for input this process produced itself. The content-model budgets on `Options`
+(`MaxContentModelPositions`, the UPA and the restriction budgets) do not: they
+read a negative value as the default, because each bounds work exponential or
+quadratic in the schema text, so raising one means naming a number.
 
-`DefaultMaxMatchStates` is a constant rather than an option, because no schema
-anyone has measured comes close to it. Matching an element's children against a
+`ValidateOptions.MaxMatchStates` (default `DefaultMaxMatchStates`) is one no
+schema anyone has measured comes close to. Matching an element's children against a
 content model carries the *set* of readings the content admits — a position and
 a whole vector of occurrence counts each — since nested occurrence bounds cannot
 be decided one reading at a time; `xsd/nfa.go` has the argument. Merging
@@ -682,8 +718,8 @@ Measured against the W3C xsdtests suite:
 
 | | schema-validity | instance |
 |---|---|---|
-| **XSD 1.0** | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| **XSD 1.1** | 15,350 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
+| **XSD 1.0** | 14,385 / 14,388 (99.98%) | 24,974 / 25,000 (99.90%) |
+| **XSD 1.1** | 15,350 / 15,354 (99.97%) | 26,218 / 26,244 (99.90%) |
 
 **Earlier revisions reported 99.56% and "1.1: 100%". Both were measured
 wrongly.** Two bugs in the test driver, both of which flattered the result:

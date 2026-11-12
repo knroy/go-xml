@@ -34,6 +34,11 @@ type analyzer struct {
 	// so "@code[. = 'x']" is motionless rather than consuming (§19.8.1).
 	ctxAllowsChildren bool
 
+	// ctxType is the context item type (§19.2) where it is known: the zero
+	// value, which every analyzer built for a changed focus starts from, is
+	// unknown. Only the §19.8.9.18 root rule and a leading "/" read it.
+	ctxType itemType
+
 	// known is cleared when the analysis meets a construct it does not
 	// model. The properties it returns in that case are roaming and
 	// free-ranging, which is what the rules require, but the caller must
@@ -142,7 +147,11 @@ type analyzer struct {
 	// says and what every reference got before. So the map can only make a
 	// reference LESS grounded, never a construct more streamable, and a
 	// construct whose binding this analysis cannot assess never enters it.
-	vars map[xdm.QName]props
+	//
+	// It is one scope shared by every analyzer of a walk (varScope), not a
+	// map per binding: a binding is added where its scope opens and removed
+	// where it closes, so k bindings cost O(k) rather than k copies.
+	vars *varScope
 
 	// accumAfter describes the position of this expression within its
 	// enclosing sequence constructor, which is what §19.8.9.1 needs to give
@@ -197,8 +206,8 @@ func (a *analyzer) unknown() props {
 	return roamingFreeRanging
 }
 
-// expr dispatches on the kind of expression.
-func (a *analyzer) expr(e xpath.Expr) props {
+// exprRule dispatches on the kind of expression; expr (streamplan.go) wraps it.
+func (a *analyzer) exprRule(e xpath.Expr) props {
 	switch x := e.(type) {
 	case nil:
 		return groundedMotionless
@@ -222,7 +231,7 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		return a.varRef(x)
 
 	case *xpath.Step:
-		return a.step(x, a.ctxPosture)
+		return a.step(x, a.ctxPosture, a.ctxAllowsChildren)
 
 	case *xpath.PathExpr:
 		return a.path(x)
@@ -233,7 +242,7 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		for _, it := range x.Items {
 			ops = append(ops, a.operandOf(it, usageTransmission))
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case *xpath.IfExpr:
 		// §19.8.8.3: the condition is inspected; the two arms transmit and
@@ -243,10 +252,13 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		els := a.operandOf(x.Else, usageTransmission)
 		then.choiceGroup = true
 		els.choiceGroup = true
-		return combine([]operand{cond, then, els}, false)
+		return a.combine([]operand{cond, then, els}, false)
 
 	case *xpath.BinaryOp:
 		return a.binary(x)
+
+	case *xpath.StringConcat:
+		return a.stringConcat(x)
 
 	case *xpath.LookupExpr:
 		// §19.8.8.18: E?K -- E inspection, a parenthesised K absorption;
@@ -259,11 +271,11 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		if x.Expr != nil {
 			ops = append(ops, a.operandOf(x.Expr, usageAbsorption))
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case *xpath.UnaryOp:
 		// Arithmetic negation atomizes its operand.
-		return combine([]operand{a.operandOf(x.Operand, usageAbsorption)}, false)
+		return a.combine([]operand{a.operandOf(x.Operand, usageAbsorption)}, false)
 
 	case *xpath.FilterExpr:
 		return a.filter(x)
@@ -278,7 +290,7 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		if isDocumentNodeWithContent(x.Type) {
 			u = usageAbsorption
 		}
-		return combine([]operand{a.operandOf(x.Operand, u)}, false)
+		return a.combine([]operand{a.operandOf(x.Operand, u)}, false)
 
 	case *xpath.CastExpr, *xpath.TreatExpr:
 		// A cast atomizes. "treat as" transmits, but modelling it as
@@ -286,7 +298,7 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		// both are handled explicitly below.
 		switch y := e.(type) {
 		case *xpath.CastExpr:
-			return combine([]operand{a.operandOf(y.Operand, usageAbsorption)}, false)
+			return a.combine([]operand{a.operandOf(y.Operand, usageAbsorption)}, false)
 		case *xpath.TreatExpr:
 			return a.treatExpr(y)
 		}
@@ -296,9 +308,9 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		return a.funcCall(x)
 
 	case *xpath.SimpleMap:
-		// §19.8.8.7: the posture and sweep of "a!b" are those of the right
-		// operand, assessed with a context posture and type taken from the
-		// left operand.
+		// §19.8.8.7: the posture of "a!b" is the right operand's, assessed
+		// with a context posture and type taken from the left operand; the
+		// sweep is the wider of the two.
 		return a.simpleMap(x)
 
 	case *xpath.MapConstructor:
@@ -354,9 +366,28 @@ func (a *analyzer) expr(e xpath.Expr) props {
 // body, which for the absorbing, shallow-descent and deep-descent categories
 // turns that reference roaming.
 func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
-	inner := &analyzer{
+	inner := a.higherOrderAnalyzer()
+	p := inner.expr(e)
+	a.known = a.known && inner.known
+	a.unverified = a.unverified || inner.unverified
+	return operand{
+		props:          p,
+		usage:          u,
+		allowsChildren: inner.allowsChildren(e),
+		higherOrder:    true,
+		src:            e,
+	}
+}
+
+// higherOrderAnalyzer returns the analyzer a higher-order operand of a is
+// assessed with. It is idempotent: the analyzer for a higher-order operand of
+// a higher-order operand is the same as for the first, which is what lets
+// forExpr and quantifiedExpr walk their clauses with one of them.
+func (a *analyzer) higherOrderAnalyzer() *analyzer {
+	return &analyzer{
 		ctxPosture:            a.ctxPosture,
 		ctxAllowsChildren:     a.ctxAllowsChildren,
+		ctxType:               a.ctxType,
 		known:                 a.known,
 		unverified:            a.unverified,
 		trust:                 a.trust,
@@ -375,15 +406,6 @@ func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
 		vars:                  a.vars,
 		decl:                  a.decl,
 	}
-	p := inner.expr(e)
-	a.known = a.known && inner.known
-	a.unverified = a.unverified || inner.unverified
-	return operand{
-		props:          p,
-		usage:          u,
-		allowsChildren: inner.allowsChildren(e),
-		higherOrder:    true,
-	}
 }
 
 // operandOf assesses a subexpression and packages it as an operand with the
@@ -395,6 +417,7 @@ func (a *analyzer) operandOf(e xpath.Expr, u usage) operand {
 		usage:            u,
 		allowsChildren:   a.allowsChildren(e),
 		streamedGrounded: a.isStreamingParamRef(e),
+		src:              e,
 	}
 }
 
@@ -431,7 +454,7 @@ func (a *analyzer) binary(x *xpath.BinaryOp) props {
 		"to":
 		// Arithmetic and comparison atomize both operands. A general
 		// comparison atomizes too: it compares the atomized values.
-		return combine([]operand{
+		return a.combine([]operand{
 			a.operandOf(x.Left, usageAbsorption),
 			a.operandOf(x.Right, usageAbsorption),
 		}, false)
@@ -443,7 +466,7 @@ func (a *analyzer) binary(x *xpath.BinaryOp) props {
 		// "and" and "or" are not a choice operand group: the spec gives
 		// that status only to constructs whose operands are mutually
 		// exclusive, and both arms of "and" may be evaluated.
-		return combine([]operand{
+		return a.combine([]operand{
 			a.operandOf(x.Left, usageInspection),
 			a.operandOf(x.Right, usageInspection),
 		}, false)
@@ -451,7 +474,7 @@ func (a *analyzer) binary(x *xpath.BinaryOp) props {
 	case "is", "<<", ">>":
 		// Node identity and order compare node identity, which is available
 		// without reading the subtree.
-		return combine([]operand{
+		return a.combine([]operand{
 			a.operandOf(x.Left, usageInspection),
 			a.operandOf(x.Right, usageInspection),
 		}, false)
@@ -465,6 +488,37 @@ func (a *analyzer) binary(x *xpath.BinaryOp) props {
 		// "!" has its own rule in §19.8.8.7.
 		return a.unknown()
 	}
+}
+
+// stringConcat applies §19.8.8's operand-usage table to "A || B"
+// (StringConcatExpr: "A || A"): the general rules, both operands absorbed.
+// si-fork-902's TITLE||PRICE and si-fork-952's current-group()/(AUTHOR||TITLE)
+// are two consuming operands, so roaming and free-ranging.
+//
+// One verdict is withheld: a consuming, not free-ranging, "||" in a crawling
+// focus or over a crawling operand. Its only refusal would come from an
+// enclosing rule meeting that crawling focus,
+// and in the corpus that focus comes from §19.8.8.4 widening two striding
+// operands to crawling, which sx-union-C contradicts in 18 cases asserting
+// output (".+1 || ' '" in a for-each over PRICE union QUANTITY). Withholding
+// is the old answer for every "||"; see docs/conformance-gaps.md, "The ||
+// operator".
+func (a *analyzer) stringConcat(x *xpath.StringConcat) props {
+	ops := []operand{
+		a.operandOf(x.Left, usageAbsorption),
+		a.operandOf(x.Right, usageAbsorption),
+	}
+	p := a.combine(ops, false)
+	if p.streamable() && p.sweep != sweepMotionless {
+		crawls := a.ctxPosture == postureCrawling
+		for _, o := range ops {
+			crawls = crawls || o.props.posture == postureCrawling
+		}
+		if crawls {
+			return a.unknown()
+		}
+	}
+	return p
 }
 
 // filter applies §19.8.8.10 to a filter expression.
@@ -521,9 +575,18 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 
 // step applies §19.8.8.8 to a single axis step evaluated in the given context
 // posture.
-func (a *analyzer) step(s *xpath.Step, ctx posture) props {
+func (a *analyzer) step(s *xpath.Step, ctx posture, ctxChildren bool) props {
 	if ctx == postureRoaming {
 		return roamingFreeRanging
+	}
+	// §19.8.8.9's third rule: "If the statically-inferred context item type
+	// is such that the axis will always be empty (for example, applying the
+	// child axis to a text node or the parent axis to a document node), or
+	// if the NodeTest is one that can never select nodes on the chosen axis
+	// (for example, selecting attribute nodes on the child axis), then the
+	// sweep is motionless and the posture is grounded".
+	if ctx != postureGrounded && axisAlwaysEmpty(s, ctxChildren) {
+		return groundedMotionless
 	}
 	base := postureOfAxisStep(ctx, axisOf(s.Axis), stepSelectsElements(s))
 	if !base.streamable() {
@@ -590,16 +653,37 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 	cur := props{a.ctxPosture, sweepMotionless}
 	if x.Root {
 		// A leading "/" is rewritten to a call on fn:root (§19.8.8.8),
-		// which from a striding posture in a streamed document yields the
-		// document node -- striding and motionless (§19.8.9.18). From any
-		// other context posture the analysis has no opinion.
-		if a.ctxPosture != postureStriding && a.ctxPosture != postureGrounded {
-			return a.unknown()
-		}
-		if a.ctxPosture == postureGrounded {
+		// "(root(self::node()) treat as document-node())", and §19.8.9.18
+		// rewrites root(X) of a striding X as X -- striding and motionless
+		// -- when "the static type of X is U{document-node()}". X is
+		// self::node(), whose static type is the context item type: so
+		// "//a is streamable only if the statically-determined context item
+		// type is document-node()" (§19.8.8.8's note). Where that type is
+		// known not to be U{document-node()} the head() form below applies.
+		// ponytail: where the context item type is not known (a container
+		// whose type this analysis does not establish) the striding answer
+		// is kept, as before static types were inferred; the ceiling is
+		// §19.2's instruction-level focus changes, which do not set ctxType.
+		//
+		// From a crawling or climbing posture the rewrite to X does not
+		// apply, since §19.8.9.18 asks that "its posture is striding", so
+		// root(self::node()) is "rewritten as
+		// head((X)/ancestor-or-self::node())": self from either posture
+		// keeps it, ancestor-or-self is climbing and motionless (the
+		// §19.8.8.9 table), and head transmits that. A roaming context
+		// item roams.
+		switch a.ctxPosture {
+		case postureGrounded:
 			cur = groundedMotionless
-		} else {
+		case postureStriding:
 			cur = props{postureStriding, sweepMotionless}
+			if a.rootRewrite(stepType(&xpath.Step{Axis: xpath.AxisSelf, Test: &xpath.KindTest{Any: true}}, a.ctxType)) == rootAsHead {
+				cur = props{postureClimbing, sweepMotionless}
+			}
+		case postureCrawling, postureClimbing:
+			cur = props{postureClimbing, sweepMotionless}
+		default:
+			return roamingFreeRanging
 		}
 	}
 	// §19.8.8.8 assesses a path in two phases: a provisional posture folded
@@ -620,16 +704,24 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 	// Whether the context item each step sees can have children. It starts as
 	// the analyzer's own context and is narrowed by every axis step, so that
 	// a non-step operand later in the path is assessed against the node the
-	// steps before it actually deliver.
+	// steps before it actually deliver; cit is the context item type each
+	// step sees (§19.2), narrowed the same way (§19.1.1).
+	//
+	// A root that took the head() form is climbing, and a scan never starts
+	// from it: its left operand is not a scanning expression.
+	rootClimbs := x.Root && cur.posture == postureClimbing
 	curAllowsChildren := a.ctxAllowsChildren
+	cit := a.ctxType
 	if x.Root {
 		curAllowsChildren = true
+		cit = docType
 	}
 	for i, e := range x.Steps {
 		var next props
 		if st, ok := e.(*xpath.Step); ok {
-			next = a.step(st, cur.posture)
+			next = a.step(st, cur.posture, curAllowsChildren)
 			curAllowsChildren = stepAllowsChildren(st)
+			cit = stepType(st, cit)
 		} else {
 			// A non-step operand in a path, as in "(a|b)/c". Assessed in
 			// the current posture like any other expression, and with the
@@ -643,6 +735,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 			inner := &analyzer{
 				ctxPosture:            cur.posture,
 				ctxAllowsChildren:     curAllowsChildren,
+				ctxType:               cit,
 				known:                 a.known,
 				unverified:            a.unverified,
 				trust:                 a.trust,
@@ -663,6 +756,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 			}
 			next = inner.expr(e)
 			curAllowsChildren = inner.allowsChildren(e)
+			cit = inner.staticType(e)
 			a.known = a.known && inner.known
 			a.unverified = a.unverified || inner.unverified
 		}
@@ -679,7 +773,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 			// "for-each select='..'" with a "count(*)" body came out
 			// grounded and consuming, accepting streamable-126, while the
 			// same navigation written as "count(../*)" was correctly refused.
-			if !a.scanMayStart(prefix) || !a.isScanningSteps(prefix) {
+			if rootClimbs || !a.scanMayStart(prefix) || !a.isScanningSteps(prefix) {
 				return roamingFreeRanging
 			}
 			// A scanning prefix is crawling if it can select an element,
@@ -738,6 +832,18 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 	case *xpath.ContextItem:
 		// "." is the self axis with no predicate.
 		return true
+	case *xpath.FuncCall:
+		// §19.8.9.18 rewrites root(X) as X when X's static type is
+		// U{document-node()} (rootAsX), before the path rule sees it: so
+		// "root()//b" scans as ".//b" does.
+		if s.Name.URI != fnNS || s.Name.Local != "root" || len(s.Args) > 1 {
+			return false
+		}
+		var x xpath.Expr = &xpath.ContextItem{}
+		if len(s.Args) == 1 {
+			x = s.Args[0]
+		}
+		return a.rootRewrite(a.staticType(x)) == rootAsX && a.isScanningStep(x)
 	case *xpath.VarRef:
 		// A reference to the streaming parameter of a declared-streamable
 		// stylesheet function (§19.8.5) plays the same role at the head of a
@@ -893,7 +999,16 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		// A constructor function is any name in the XML Schema namespace
 		// with one argument, since that namespace holds nothing else that
 		// is callable.
-		return combine([]operand{a.operandOf(x.Args[0], usageAbsorption)}, false)
+		return a.combine([]operand{a.operandOf(x.Args[0], usageAbsorption)}, false)
+	}
+	if us, ok := nsBuiltinOperandUsages(x.Name.URI, x.Name.Local, len(x.Args)); ok {
+		// The map:, array: and math: rows of §19.8.9's table, under the
+		// general rules.
+		ops := make([]operand, len(x.Args))
+		for i, arg := range x.Args {
+			ops[i] = a.operandOf(arg, us[i])
+		}
+		return a.combine(ops, false)
 	}
 	if x.Name.URI != fnNS {
 		// A stylesheet function is assessed under §19.8.5 (streamfunctions.go).
@@ -1000,7 +1115,7 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 	// striding asserts. The exception is a narrowing, so modelling it can
 	// only make a call streamable where abandoning it said nothing.
 	if x.Name.Local == "outermost" && len(x.Args) == 1 {
-		p := combine([]operand{a.operandOf(x.Args[0], usageTransmission)}, false)
+		p := a.combine([]operand{a.operandOf(x.Args[0], usageTransmission)}, false)
 		if p.posture == postureCrawling {
 			p.posture = postureStriding
 		}
@@ -1052,6 +1167,14 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 	if x.Name.Local == "key" && len(x.Args) == 2 {
 		return a.funcCall(&xpath.FuncCall{Name: x.Name, Args: []xpath.Expr{x.Args[0], x.Args[1], &xpath.PathExpr{Root: true}}})
 	}
+	// "fn:unparsed-entity-uri(x) -- Equivalent to
+	// fn:unparsed-entity-uri(x, /)", and the same for -public-id.
+	if (x.Name.Local == "unparsed-entity-uri" || x.Name.Local == "unparsed-entity-public-id") && len(x.Args) == 1 {
+		return a.funcCall(&xpath.FuncCall{Name: x.Name, Args: []xpath.Expr{x.Args[0], &xpath.PathExpr{Root: true}}})
+	}
+	if p, ok := a.l7Builtin(x); ok { // streamability_l7.go
+		return p
+	}
 
 	usages, ok := builtinOperandUsages(x.Name.Local, len(x.Args))
 	if !ok && contextDefaultingBuiltin[x.Name.Local] {
@@ -1085,7 +1208,7 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 			// it costs the same either way. See operand.streamedGrounded.
 			streamedGrounded: a.ctxStreamedGrounded,
 		}
-		return combine([]operand{ci}, false)
+		return a.combine([]operand{ci}, false)
 	}
 	// A function whose last argument defaults to the context item, called
 	// without it. §19.8.9's list gives both forms: "fn:lang(x) -- Equivalent
@@ -1105,7 +1228,7 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 			allowsChildren:   a.ctxAllowsChildren,
 			streamedGrounded: a.ctxStreamedGrounded,
 		})
-		return combine(ops, singletonBuiltin[x.Name.Local])
+		return a.combine(ops, singletonBuiltin[x.Name.Local])
 	}
 	if len(usages) != len(x.Args) {
 		return a.unknown()
@@ -1114,7 +1237,7 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 	for i, arg := range x.Args {
 		ops = append(ops, a.operandOf(arg, usages[i]))
 	}
-	return combine(ops, singletonBuiltin[x.Name.Local])
+	return a.combine(ops, singletonBuiltin[x.Name.Local])
 }
 
 // contextDefaultingBuiltin names the built-in functions whose FINAL argument
@@ -1149,9 +1272,9 @@ var singletonBuiltin = map[string]bool{
 // A function absent from this table is not necessarily unstreamable; it is
 // merely one the analysis has no entry for, and the caller treats it as "no
 // opinion". Functions that §19.8.9 gives their own section -- fn:current,
-// fn:last, fn:position, fn:root, fn:reverse, fn:innermost, fn:outermost,
-// fn:fold-right, fn:function-lookup, and the accumulator and merge functions
-// -- are deliberately absent, because the general rules do not describe them.
+// fn:last, fn:position, fn:root, fn:outermost, and the accumulator and merge
+// functions -- are deliberately absent, because the general rules do not
+// describe them.
 func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 	const (
 		A = usageAbsorption
@@ -1168,19 +1291,24 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 		"string": {1}, "data": {1}, "number": {1},
 		"string-length": {1}, "normalize-space": {1},
 		"string-join": {1, 2}, "string-to-codepoints": {1},
-		"codepoints-to-string": {1}, "concat": {3},
-		"upper-case": {1}, "lower-case": {1},
+		"codepoints-to-string": {1},
+		"upper-case":           {1}, "lower-case": {1},
 		"substring": {2, 3}, "substring-before": {2, 3},
 		"substring-after": {2, 3}, "contains": {2, 3},
 		"starts-with": {2, 3}, "ends-with": {2, 3},
 		"compare": {2, 3}, "codepoint-equal": {2},
-		"translate": {3}, "tokenize": {2}, "matches": {2, 3},
+		"translate": {3}, "tokenize": {1, 2, 3}, "matches": {2, 3},
+		"contains-token": {2, 3}, "parse-ietf-date": {1}, "parse-json": {1},
+		"json-doc": {1}, "xml-to-json": {1}, "load-xquery-module": {1},
+		"random-number-generator": {1}, "type-available": {1}, "trace": {1},
+		"unparsed-text": {1, 2}, "unparsed-text-available": {1, 2},
+		"unparsed-text-lines": {1, 2}, "uri-collection": {1},
 		"replace": {3, 4}, "normalize-unicode": {1, 2},
 		"distinct-values": {1, 2}, "index-of": {2, 3},
 		"deep-equal": {2, 3}, "copy-of": {1}, "snapshot": {1},
 		"doc": {1}, "doc-available": {1}, "document": {1},
 		"parse-xml": {1}, "parse-xml-fragment": {1},
-		"serialize": {1, 2}, "json-to-xml": {1, 2},
+		"serialize": {1, 2}, "json-to-xml": {1},
 		"escape-html-uri": {1}, "encode-for-uri": {1},
 		"iri-to-uri": {1}, "resolve-uri": {1, 2},
 		"format-number": {2, 3}, "format-integer": {2, 3},
@@ -1235,22 +1363,42 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 		// known to be in the result until its descendants have been read.
 		// fn:outermost stays absent: §19.8.9.15 gives it a genuine exception
 		// to the general rules, turning a crawling argument striding.
-		"reverse":                  {1: {N}},
-		"innermost":                {1: {N}},
-		"filter":                   {2: {N, I}},
-		"for-each":                 {2: {N, I}},
-		"for-each-pair":            {3: {N, N, I}},
-		"fold-left":                {3: {N, A, I}},
-		"lang":                     {2: {A, I}},
-		"id":                       {2: {A, N}},
-		"idref":                    {2: {A, N}},
-		"element-with-id":          {2: {A, N}},
-		"key":                      {3: {A, A, N}},
-		"path":                     {1: {N}},
-		"namespace-uri-for-prefix": {2: {A, I}},
-		"resolve-QName":            {2: {A, I}},
-		"document":                 {2: {A, I}},
-		"error":                    {3: {A, A, N}},
+		"reverse":       {1: {N}},
+		"innermost":     {1: {N}},
+		"filter":        {2: {N, I}},
+		"for-each":      {2: {N, I}},
+		"for-each-pair": {3: {N, N, I}},
+		"fold-left":     {3: {N, A, I}},
+		// §19.8.9.9: fold-right "follows the general streamability rules,
+		// with the first argument having operand usage navigation"; the
+		// other two are fold-left's, the same signature.
+		"fold-right": {3: {N, A, I}},
+		// §19.8.9.12: "the function follows the general streamability
+		// rules, for a function with two arguments that both have operand
+		// usage absorption". §10.3.6's caveat is dynamic: the context is
+		// saved with an absent focus.
+		"function-lookup":           {2: {A, A}},
+		"lang":                      {2: {A, I}},
+		"id":                        {2: {A, N}},
+		"idref":                     {2: {A, N}},
+		"element-with-id":           {2: {A, N}},
+		"key":                       {3: {A, A, N}},
+		"path":                      {1: {N}},
+		"namespace-uri-for-prefix":  {2: {A, I}},
+		"resolve-QName":             {2: {A, I}},
+		"document":                  {2: {A, I}},
+		"error":                     {3: {A, A, N}},
+		"trace":                     {2: {T, A}},
+		"apply":                     {2: {A, I}},
+		"transform":                 {1: {I}},
+		"json-to-xml":               {2: {A, I}},
+		"parse-json":                {2: {A, I}},
+		"json-doc":                  {2: {A, I}},
+		"xml-to-json":               {2: {A, I}},
+		"load-xquery-module":        {2: {A, I}},
+		"unparsed-entity-uri":       {2: {A, I}},
+		"unparsed-entity-public-id": {2: {A, I}},
+		"sort":                      {1: {N}, 2: {N, A}, 3: {N, A, I}},
 	}
 	// Functions that take no arguments at all are grounded and motionless
 	// by §19.8.1, having no operands.
@@ -1260,6 +1408,8 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 		"implicit-timezone": true, "default-collation": true,
 		"static-base-uri": true, "current-output-uri": true,
 		"available-environment-variables": true, "collection": true,
+		"random-number-generator": true, "uri-collection": true,
+		"available-system-properties": true, "default-language": true,
 	}
 	if arity == 0 {
 		if noArgs[name] {
@@ -1279,7 +1429,9 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 		}
 		return nil, false
 	}
-	if as, ok := allAbsorption[name]; ok && contains(as, arity) {
+	// "fn:concat(A, A, A)": the proforma's three arguments stand for any
+	// number from two, every one absorbed.
+	if as, ok := allAbsorption[name]; ok && contains(as, arity) || name == "concat" && arity >= 2 {
 		us := make([]usage, arity)
 		for i := range us {
 			us[i] = A
@@ -1299,6 +1451,51 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 		}
 	}
 	return nil, false
+}
+
+// nsBuiltinOperandUsages is §19.8.9's proforma for the functions in the
+// map, array and math namespaces, by name and arity.
+func nsBuiltinOperandUsages(uri, name string, arity int) ([]usage, bool) {
+	const (
+		A = usageAbsorption
+		I = usageInspection
+		N = usageNavigation
+	)
+	var table map[string]map[int][]usage
+	switch uri {
+	case xdm.NSMap:
+		table = map[string]map[int][]usage{
+			"contains": {2: {I, A}}, "entry": {2: {A, N}}, "find": {2: {I, A}},
+			"for-each": {2: {I, I}}, "get": {2: {I, A}}, "keys": {1: {I}},
+			"merge": {1: {I}, 2: {I, I}}, "put": {3: {I, A, N}},
+			"remove": {2: {I, A}}, "size": {1: {I}},
+		}
+	case xdm.NSArray:
+		table = map[string]map[int][]usage{
+			"append": {2: {I, N}}, "filter": {2: {I, I}}, "flatten": {1: {A}},
+			"fold-left": {3: {I, N, I}}, "fold-right": {3: {I, N, I}},
+			"for-each": {2: {I, I}}, "for-each-pair": {3: {I, I, I}},
+			"get": {2: {I, A}}, "head": {1: {I}}, "insert-before": {3: {I, A, N}},
+			"join": {1: {I}}, "put": {3: {I, I, N}}, "remove": {2: {I, A}},
+			"reverse": {1: {I}}, "size": {1: {I}},
+			"sort":     {1: {I}, 2: {I, A}, 3: {I, A, I}},
+			"subarray": {2: {I, A}, 3: {I, A, A}}, "tail": {1: {I}},
+		}
+	case xdm.NSMath:
+		if name == "pi" {
+			return nil, arity == 0
+		}
+		table = map[string]map[int][]usage{
+			"atan2": {2: {A, A}}, "pow": {2: {A, A}},
+		}
+		for _, f := range []string{"acos", "asin", "atan", "cos", "exp", "exp10", "log", "log10", "sin", "sqrt", "tan"} {
+			table[f] = map[int][]usage{1: {A}}
+		}
+	default:
+		return nil, false
+	}
+	us, ok := table[name][arity]
+	return us, ok
 }
 
 func contains(xs []int, x int) bool {
@@ -1364,6 +1561,40 @@ func stepSelectsElements(s *xpath.Step) bool {
 	default:
 		return true
 	}
+}
+
+// axisAlwaysEmpty reports whether §19.8.8.9 knows statically that step s
+// selects nothing. Without static type inference only two facts are used:
+// the node kinds each axis can reach, against a kind test; and a context
+// item that cannot have children (ctxChildren false: an attribute, namespace,
+// text, comment or processing-instruction node), whose child, descendant,
+// attribute and namespace axes are empty.
+func axisAlwaysEmpty(s *xpath.Step, ctxChildren bool) bool {
+	if !ctxChildren {
+		switch s.Axis {
+		case xpath.AxisChild, xpath.AxisDescendant, xpath.AxisAttribute, xpath.AxisNamespace:
+			return true
+		}
+	}
+	kt, ok := s.Test.(*xpath.KindTest)
+	if !ok || kt.Any {
+		return false
+	}
+	switch s.Axis {
+	case xpath.AxisAttribute:
+		return kt.Kind != xdm.KindAttribute
+	case xpath.AxisNamespace:
+		return kt.Kind != xdm.KindNamespace
+	case xpath.AxisChild, xpath.AxisDescendant, xpath.AxisFollowing, xpath.AxisFollowingSibling,
+		xpath.AxisPreceding, xpath.AxisPrecedingSibling:
+		// Children and the other tree axes reach no attribute, namespace
+		// or document node.
+		return kt.Kind == xdm.KindAttribute || kt.Kind == xdm.KindNamespace || kt.Kind == xdm.KindDocument
+	case xpath.AxisParent, xpath.AxisAncestor:
+		// A parent is an element or a document node.
+		return kt.Kind != xdm.KindElement && kt.Kind != xdm.KindDocument
+	}
+	return false
 }
 
 // stepAllowsChildren reports whether the nodes a step selects can have
@@ -1433,6 +1664,13 @@ func (a *analyzer) allowsChildren(e xpath.Expr) bool {
 			return a.allowsChildren(x.Left) || a.allowsChildren(x.Right)
 		}
 		return true
+	case *xpath.SimpleMap:
+		// What "a ! b" returns is what b returns, with a's items as its
+		// context item (§19.8.8.7): "$input ! @name" delivers attributes
+		// (su-absorbing-204's AVT).
+		in := *a
+		in.ctxAllowsChildren = a.allowsChildren(x.Left)
+		return in.allowsChildren(x.Right)
 	default:
 		return true
 	}

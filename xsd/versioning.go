@@ -77,6 +77,7 @@ func DocumentRequiresVersion(root *xdm.Node) (Version, bool) {
 // An element with no versioning attributes is always included, which is every
 // element in a schema that does not use the feature.
 func includeElement(el *xdm.Node, version Version) bool {
+	r := vcResolver{el: el}
 	for a := range el.Attrs() {
 		if a.Name().URI != NSVersioning {
 			continue
@@ -102,7 +103,7 @@ func includeElement(el *xdm.Node, version Version) bool {
 			// definitely available; an unknown name leaves the
 			// condition undecided, and an undecided condition
 			// cannot vouch for the element.
-			if typeListAvailability(el, a.Value(), version) != isAvailable {
+			if listAvailability(&r, a.Value(), version, typeAvailable) != isAvailable {
 				return false
 			}
 		case "typeunavailable":
@@ -114,15 +115,15 @@ func includeElement(el *xdm.Node, version Version) bool {
 			// naming only a known type and so excluding the
 			// element, from vc013, which mixes in an unresolvable
 			// name and keeps it.
-			if typeListAvailability(el, a.Value(), version) == isAvailable {
+			if listAvailability(&r, a.Value(), version, typeAvailable) == isAvailable {
 				return false
 			}
 		case "facetavailable":
-			if facetListAvailability(el, a.Value(), version) != isAvailable {
+			if listAvailability(&r, a.Value(), version, facetAvailable) != isAvailable {
 				return false
 			}
 		case "facetunavailable":
-			if facetListAvailability(el, a.Value(), version) == isAvailable {
+			if listAvailability(&r, a.Value(), version, facetAvailable) == isAvailable {
 				return false
 			}
 		}
@@ -203,8 +204,8 @@ const (
 // typeUnavailable="vc:list-of-QNames xs:integer", which only makes sense if an
 // unresolvable name makes the whole condition indeterminate rather than
 // contributing an answer of its own.
-func typeAvailable(el *xdm.Node, word string, version Version) availability {
-	name, ok := resolveVersioningQName(el, word)
+func typeAvailable(r *vcResolver, word string, version Version) availability {
+	name, ok := r.resolve(word)
 	if !ok || name.URI != NSSchema {
 		return unknownAvailability
 	}
@@ -217,15 +218,17 @@ func typeAvailable(el *xdm.Node, word string, version Version) availability {
 	return isAvailable
 }
 
-// availabilityOf combines a list's answers.
+// listAvailability answers a whole vc:typeAvailable, vc:typeUnavailable,
+// vc:facetAvailable or vc:facetUnavailable list, one names each word.
 //
 // An unknown name anywhere in the list makes the whole list unknown, since the
-// condition cannot be decided without knowing about that name. Otherwise the
-// list is available only if every name is.
-func availabilityOf(list []availability) availability {
+// condition cannot be decided without knowing about that name, so the walk
+// stops there. Otherwise the list is available only if every name is.
+func listAvailability(r *vcResolver, list string, version Version,
+	one func(*vcResolver, string, Version) availability) availability {
 	all := isAvailable
-	for _, a := range list {
-		switch a {
+	for _, word := range splitFields(list) {
+		switch one(r, word, version) {
 		case unknownAvailability:
 			return unknownAvailability
 		case notAvailable:
@@ -233,20 +236,6 @@ func availabilityOf(list []availability) availability {
 		}
 	}
 	return all
-}
-
-// typeListAvailability answers a whole vc:typeAvailable or vc:typeUnavailable
-// list.
-func typeListAvailability(el *xdm.Node, list string, version Version) availability {
-	words := splitFields(list)
-	if len(words) == 0 {
-		return isAvailable
-	}
-	out := make([]availability, 0, len(words))
-	for _, word := range words {
-		out = append(out, typeAvailable(el, word, version))
-	}
-	return availabilityOf(out)
 }
 
 // availableIn10 reports whether a built-in type name existed in XSD 1.0.
@@ -265,12 +254,12 @@ func availableIn10(local string) bool {
 
 // lookupType resolves a type reference in a schema document.
 //
-// Under 1.0 it refuses the two built-ins that exist only in XSD 1.1:
-// xs:dateTimeStamp and xs:error. The other three 1.1 additions --
-// xs:anyAtomicType, xs:yearMonthDuration, xs:dayTimeDuration -- still resolve:
-// the XPath data model defines them in the schema namespace for every
-// XPath 2.0+ host, and a schema imported into XQuery, which is read as 1.0,
-// may name them (QT3 ValidateExpr/xq-e18.xsd derives from both durations).
+// Under 1.0 it refuses the five built-ins XSD 1.1 added -- xs:anyAtomicType,
+// xs:yearMonthDuration, xs:dayTimeDuration, xs:dateTimeStamp and xs:error.
+// The XSD 1.0 schema for schemas defines none of them, so a reference to one
+// names no type definition there and is src-resolve (XSD 1.0 Part 1
+// §3.15.3, from memory). XQuery and XSLT read their imported schemas as 1.1,
+// which is where a schema naming them is at home.
 func (p *parser) lookupType(name xdm.QName) (Type, bool) {
 	if p.schema.Version < Version11 && only11Builtin(name) {
 		return nil, false
@@ -279,16 +268,16 @@ func (p *parser) lookupType(name xdm.QName) (Type, bool) {
 	return t, ok
 }
 
-// only11Builtin reports whether a name is a built-in that neither XSD 1.0 nor
-// the XPath data model defines.
+// only11Builtin reports whether a name is a built-in that XSD 1.0 does not
+// define.
 func only11Builtin(name xdm.QName) bool {
-	return name.URI == NSSchema && (name.Local == "dateTimeStamp" || name.Local == "error")
+	return name.URI == NSSchema && !availableIn10(name.Local)
 }
 
 // facetAvailable answers whether one named facet is one this processor
 // implements, with the same three-way result as typeAvailable.
-func facetAvailable(el *xdm.Node, word string, version Version) availability {
-	name, ok := resolveVersioningQName(el, word)
+func facetAvailable(r *vcResolver, word string, version Version) availability {
+	name, ok := r.resolve(word)
 	if !ok || name.URI != NSSchema {
 		return unknownAvailability
 	}
@@ -299,20 +288,6 @@ func facetAvailable(el *xdm.Node, word string, version Version) availability {
 		return notAvailable
 	}
 	return isAvailable
-}
-
-// facetListAvailability answers a whole vc:facetAvailable or
-// vc:facetUnavailable list.
-func facetListAvailability(el *xdm.Node, list string, version Version) availability {
-	words := splitFields(list)
-	if len(words) == 0 {
-		return isAvailable
-	}
-	out := make([]availability, 0, len(words))
-	for _, word := range words {
-		out = append(out, facetAvailable(el, word, version))
-	}
-	return availabilityOf(out)
 }
 
 // knownFacet reports whether a local name is a constraining facet this
@@ -337,11 +312,23 @@ func facetIn10(local string) bool {
 	return true
 }
 
-// resolveVersioningQName resolves a QName in a versioning attribute.
+// vcResolver resolves the QNames in one element's versioning attributes.
+//
+// The element's in-scope namespaces are gathered once, on the first prefixed
+// name, and every word is then resolved from that map. Looking each word's
+// prefix up afresh walked the element's ancestors and their declarations per
+// word, which made the cost the product of the list length and the namespace
+// context.
+type vcResolver struct {
+	el *xdm.Node
+	ns map[string]string
+}
+
+// resolve resolves a QName in a versioning attribute.
 //
 // An unprefixed name is in the absent namespace, which is no built-in, so such
 // a name never names a type this processor implements.
-func resolveVersioningQName(el *xdm.Node, value string) (xdm.QName, bool) {
+func (r *vcResolver) resolve(value string) (xdm.QName, bool) {
 	prefix, local := "", value
 	if i := strings.IndexByte(value, ':'); i >= 0 {
 		prefix, local = value[:i], value[i+1:]
@@ -352,7 +339,10 @@ func resolveVersioningQName(el *xdm.Node, value string) (xdm.QName, bool) {
 	if prefix == "" {
 		return xdm.QName{Local: local}, true
 	}
-	uri, ok := el.LookupPrefix(prefix)
+	if r.ns == nil {
+		r.ns = r.el.InScopeNamespaces()
+	}
+	uri, ok := r.ns[prefix]
 	if !ok {
 		return xdm.QName{}, false
 	}

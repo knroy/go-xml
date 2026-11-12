@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xdmbuild"
 )
@@ -1048,7 +1049,7 @@ func jsonFallback(ctx *Context, opts jsonOptions) func(string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		atoms, err := xdm.AtomizeChecked(out)
+		atoms, err := ctx.atomizeChecked(out)
 		if err != nil {
 			return "", err
 		}
@@ -1071,6 +1072,12 @@ func jsonFallback(ctx *Context, opts jsonOptions) func(string) (string, error) {
 					"the fallback function returned U+%04X, which no XML document may hold", c)
 			}
 		}
+		// The answer is appended once per escape it replaces, so the same
+		// replacement returned K times builds K copies of it: charged here,
+		// per use, rather than once when the function built it.
+		if err := ctx.countBytes(len(rep)); err != nil {
+			return "", err
+		}
 		return rep, nil
 	}
 }
@@ -1084,6 +1091,9 @@ func jsonFallback(ctx *Context, opts jsonOptions) func(string) (string, error) {
 // the same key, and the escaped/escaped-key attributes have to record whether
 // a value was delivered in escaped form.
 type jsonXMLBuilder struct {
+	// ctx is charged the nodes each element will become, since emit appends
+	// them directly rather than through the budgeted xdmbuild.Builder.
+	ctx     *Context
 	opts    jsonOptions
 	stack   []*jsonXMLNode
 	root    *jsonXMLNode
@@ -1134,6 +1144,22 @@ func (el *jsonXMLNode) emit(p *xdm.Node) *xdm.Node {
 // attach places a finished element under the open container, applying the key
 // attribute and the duplicates option.
 func (b *jsonXMLBuilder) attach(el *jsonXMLNode) error {
+	// Charged as each value is read, before emit appends it outside the
+	// budgeted xdmbuild.Builder: the element, its text node, and its
+	// attributes -- including the key ones set below.
+	n := 1 + len(el.attrs)
+	if el.text != "" {
+		n++
+	}
+	if len(b.stack) > 0 && b.stack[len(b.stack)-1].local == "map" {
+		n++
+		if b.pendingEscaped {
+			n++
+		}
+	}
+	if err := b.ctx.countNodes(n); err != nil {
+		return err
+	}
 	if len(b.stack) == 0 {
 		if b.root != nil {
 			return errFOJS0001("more than one value at the top level")
@@ -1253,8 +1279,9 @@ func (b *jsonXMLBuilder) boolean(v bool) error {
 func (b *jsonXMLBuilder) null() error { return b.attach(jsonElement("null")) }
 
 // jsonToXML builds the document node fn:json-to-xml returns.
-func jsonToXML(ctx *Context, text string, opts jsonOptions) (xdm.Sequence, error) {
-	b := &jsonXMLBuilder{opts: opts}
+func jsonToXML(ctx *Context, text string, opts jsonOptions) (_ xdm.Sequence, err error) {
+	defer xdmlimit.Recover(&err) // a tree past its text store's blocks
+	b := &jsonXMLBuilder{ctx: ctx, opts: opts}
 	if err := scanJSON(text, opts, b, jsonFallback(ctx, opts)); err != nil {
 		return nil, err
 	}
@@ -1313,8 +1340,29 @@ func setBaseURI(n *xdm.Node, base string) {
 
 // --- fn:xml-to-json --------------------------------------------------------
 
+// jsonText is the output xml-to-json writes into, charged to the byte budget
+// as it grows. Indentation writes 2 x depth bytes per member, so the output
+// is not bounded by the input that was charged when it was built.
+type jsonText struct {
+	strings.Builder
+	ctx     *Context
+	charged int
+}
+
+// charge bills the bytes written since the last call and checks for
+// cancellation. writeJSONFrom calls it per element, so a refusal lands within
+// one element's output of the bound.
+func (b *jsonText) charge() error {
+	if err := b.ctx.Err(); err != nil {
+		return err
+	}
+	n := b.Len() - b.charged
+	b.charged = b.Len()
+	return b.ctx.countBytes(n)
+}
+
 // xmlToJSON serialises the XML representation back to JSON text.
-func xmlToJSON(n *xdm.Node, indent bool) (string, error) {
+func xmlToJSON(ctx *Context, n *xdm.Node, indent bool) (string, error) {
 	el := n
 	if el.Kind() == xdm.KindDocument {
 		// A document node stands for its single element child; anything else
@@ -1345,8 +1393,11 @@ func xmlToJSON(n *xdm.Node, indent bool) (string, error) {
 		return "", xdm.ErrType(
 			"fn:xml-to-json expects an element or document node, got %s", el.Kind())
 	}
-	var b strings.Builder
-	if err := writeJSONFrom(&b, el, indent, 0, true); err != nil {
+	b := &jsonText{ctx: ctx}
+	if err := writeJSONFrom(b, el, indent, 0, true); err != nil {
+		return "", err
+	}
+	if err := b.charge(); err != nil {
 		return "", err
 	}
 	return b.String(), nil
@@ -1462,7 +1513,10 @@ func elementText(el *xdm.Node) (string, error) {
 // isRoot distinguishes the outermost element, which may carry a key attribute
 // left over from being selected out of a larger tree: xml-to-json-070 selects
 // a keyed array and expects the key to be dropped rather than to be an error.
-func writeJSONFrom(b *strings.Builder, el *xdm.Node, indent bool, depth int, isRoot bool) error {
+func writeJSONFrom(b *jsonText, el *xdm.Node, indent bool, depth int, isRoot bool) error {
+	if err := b.charge(); err != nil {
+		return err
+	}
 	if el.Name().URI != nsJSON {
 		return xdm.Errorf("FOJS0006",
 			"element %s is not in the XPath functions namespace", el.Name().Local)
@@ -1612,7 +1666,7 @@ func writeJSONFrom(b *strings.Builder, el *xdm.Node, indent bool, depth int, isR
 	return nil
 }
 
-func writeJSONIndent(b *strings.Builder, indent bool, depth int) {
+func writeJSONIndent(b *jsonText, indent bool, depth int) {
 	if !indent {
 		return
 	}
@@ -1886,7 +1940,7 @@ func registerJSONFuncs(l *Library) {
 			return nil, xdm.ErrType("fn:xml-to-json expects a node, got %s",
 				args[0][0].TypeName())
 		}
-		s, err := xmlToJSON(n, indent)
+		s, err := xmlToJSON(ctx, n, indent)
 		if err != nil {
 			return nil, err
 		}

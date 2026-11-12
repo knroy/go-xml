@@ -2,8 +2,11 @@ package xslt
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -79,6 +82,110 @@ func TestFileResolverSymlinkCannotEscape(t *testing.T) {
 	if _, err := r.ResolveDocument(link, ""); err == nil {
 		t.Error("a symlink escaping the root was followed")
 	}
+}
+
+// TestFileResolverOutsideErrorNamesOnlyTheHref: a refusal names the href
+// as written, not the resolved path or the roots, so whether a file outside
+// the roots exists cannot be read off it through a symlink (A4-F3); it is
+// fs.ErrPermission to errors.Is.
+func TestFileResolverOutsideErrorNamesOnlyTheHref(t *testing.T) {
+	base := t.TempDir()
+	root, out := filepath.Join(base, "root"), filepath.Join(base, "outside")
+	for _, d := range []string{root, out} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(out, "secret.xml"), []byte(`<s/>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hrefs := []string{"../outside/secret.xml", "../outside/missing.xml"}
+	for _, name := range []string{"secret.xml", "missing.xml"} {
+		if err := os.Symlink(filepath.Join(out, name), filepath.Join(root, "l-"+name)); err == nil {
+			hrefs = append(hrefs, "l-"+name)
+		}
+	}
+	r, err := NewFileResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stylesheet := fileuri.Of(filepath.Join(root, "s.xsl"))
+	for _, href := range hrefs {
+		_, err := r.ResolveDocument(href, stylesheet)
+		if err == nil {
+			t.Fatalf("%s: read outside the root", href)
+		}
+		if want := strconv.Quote(href) + " is outside the permitted directories"; err.Error() != want {
+			t.Errorf("%s: %q, want %q", href, err, want)
+		}
+		if !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("%s: %v is not fs.ErrPermission", href, err)
+		}
+	}
+}
+
+// TestFileResolverReadErrorsNameOnlyTheHref: a parse error, a byte-limit
+// refusal and an undecodable text name the href as written, not the
+// resolved path, so they do not tell a stylesheet where the roots lie (R5,
+// after A4-F3). The last case is a streamed xsl:source-document, which
+// reports what the tree load of the document reports.
+func TestFileResolverReadErrorsNameOnlyTheHref(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"bad.xml": `<a><b></a>`, "big.xml": `<a>0123456789012345678901234567890</a>`,
+		"bin.txt": "\xff\xfeA",
+	} {
+		if err := os.WriteFile(filepath.Join(root, "sub", name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := NewFileResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.UnparsedText = true
+	base := fileuri.Of(filepath.Join(root, "s.xsl"))
+	check := func(what, href string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: no error", what)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, strconv.Quote(href)) {
+			t.Errorf("%s: %q does not name %q", what, msg, href)
+		}
+		for _, leak := range append([]string{root, filepath.ToSlash(root)}, r.Roots...) {
+			if strings.Contains(msg, leak) {
+				t.Errorf("%s: %q names the root %s", what, msg, leak)
+			}
+		}
+	}
+	_, err = r.ResolveDocument("sub/bad.xml", base)
+	check("parse", "sub/bad.xml", err)
+	_, err = r.ResolveText("sub/bin.txt", base, "")
+	check("text", "sub/bin.txt", err)
+	r.MaxBytes = 20
+	_, err = r.ResolveDocument("sub/big.xml", base)
+	check("doc limit", "sub/big.xml", err)
+	_, _, err = r.ResolveInclude("sub/big.xml", base, "")
+	check("include limit", "sub/big.xml", err)
+
+	sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:template name="xsl:initial-template"><xsl:source-document streamable="yes" href="sub/big.xml"><xsl:value-of select="count(//*)"/></xsl:source-document></xsl:template></xsl:stylesheet>`
+	tree, err := xdm.ParseString(sheet, xdm.ParseOptions{BaseURI: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Compile(tree.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Transform(context.Background(), nil, TransformOptions{
+		InitialTemplate: "{http://www.w3.org/1999/XSL/Transform}initial-template", Documents: r})
+	check("streamed limit", "sub/big.xml", err)
 }
 
 func TestFileResolverCachesForNodeIdentity(t *testing.T) {

@@ -101,7 +101,11 @@ type HTTPResolver struct {
 	AllowPrivateAddresses bool
 
 	// Files handles locations that are not remote. When nil, an
-	// xsd.FileResolver with no root is used.
+	// xsd.FileResolver with no root is used, which reads any path it is
+	// given. A local location referenced from a remotely fetched schema is
+	// refused before Files is consulted, and Schema.WithInstanceLocations
+	// refuses a local location outside the schema's own directories before
+	// this resolver is asked, so neither reaches the unrooted default.
 	Files xsd.Resolver
 }
 
@@ -120,6 +124,15 @@ func (r *HTTPResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 		}
 	}
 	if !isRemote(abs) {
+		// A document fetched over the network names only network locations:
+		// a file: or OS path under a remote base would let the remote author
+		// read the host's filesystem, so it is refused as a browser refuses
+		// file: from an http origin.
+		if isRemote(base) {
+			return nil, "", fmt.Errorf(
+				"schemaLocation %q: a local location in a schema fetched from %q is not permitted",
+				location, base)
+		}
 		files := r.Files
 		if files == nil {
 			files = &xsd.FileResolver{}

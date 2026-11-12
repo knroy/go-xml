@@ -45,6 +45,7 @@ package c14n
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"hash"
@@ -434,16 +435,42 @@ func Func(root *xdm.Node, f func(*xdm.Node) bool) NodeSet { return funcSet{root,
 // as a node set rooted at the top of doc's tree.
 //
 // ns supplies prefix bindings for the expression, which is compiled as
-// XPath 2.0 (an XPath 1.0 transform expression is almost always also valid
-// 2.0). Namespace nodes the expression returns are ignored; see the package
+// XPath 1.0 (xpath.CompileOptions.XPath10), so a 1.0 transform expression
+// yields the 1.0 node set: relational comparisons convert to numbers,
+// number("1e3") is NaN and string(1 div 0) is "Infinity", for instance. Namespace nodes the expression returns are ignored; see the package
 // documentation. ExcludeSubtree is faster and should be preferred where it
 // applies.
+//
+// The evaluation is bounded in what it holds (xpath.MaxItems,
+// xpath.MaxBytes) but not in time, and cannot be cancelled; a caller
+// evaluating an expression it does not trust should use FromXPathContext
+// with a deadline.
 func FromXPath(doc *xdm.Node, expr string, ns map[string]string) (NodeSet, error) {
-	c, err := xpath.Compile(expr, prefixMap(ns))
+	return FromXPathContext(context.Background(), doc, expr, ns)
+}
+
+// FromXPathContext is FromXPath with a context.Context: cancelling ctx stops
+// the evaluation, which then returns an error wrapping ctx.Err().
+func FromXPathContext(ctx context.Context, doc *xdm.Node, expr string, ns map[string]string) (NodeSet, error) {
+	return FromXPathHere(ctx, doc, nil, expr, ns)
+}
+
+// FromXPathHere is FromXPathContext with the XML-DSig here() function
+// (XML-DSig section 6.6.3.3) bound to here, the node that bears expr; see
+// FromXPathFilterHere for how here is interpreted. A nil here leaves here()
+// undefined, as in FromXPathContext.
+func FromXPathHere(ctx context.Context, doc, here *xdm.Node, expr string, ns map[string]string) (NodeSet, error) {
+	here, err := hereNode(doc, here)
 	if err != nil {
 		return nil, err
 	}
-	seq, err := c.Eval(xpath.NewContext(doc, xpath.Builtins()))
+	// XML-DSig transforms are XPath 1.0.
+	c, err := xpath.CompileWith(expr, xpath.CompileOptions{
+		Namespaces: prefixMap(ns), XPath10: true})
+	if err != nil {
+		return nil, err
+	}
+	seq, err := c.Eval(filterContext(ctx, doc, here))
 	if err != nil {
 		return nil, err
 	}
@@ -484,25 +511,67 @@ type NamespaceSet interface {
 // Because namespace nodes are filtered like any other, the result is a
 // NamespaceSet and may keep part of an element's namespace axis. FromXPath,
 // by contrast, takes the nodes an expression returns and lets namespace
-// declarations follow their elements. The filter is compiled as XPath 2.0,
-// with ns supplying its prefix bindings; the XML-DSig here() function is not
-// provided.
+// declarations follow their elements. The filter is compiled as XPath 1.0
+// (xpath.CompileOptions.XPath10), with ns supplying its prefix bindings; the XML-DSig here() function is not provided, and
+// FromXPathFilterHere is the form that provides it.
+//
+// The filter is compiled once, and every per-node evaluation spends one
+// shared item and byte budget (xpath.MaxItems, xpath.MaxBytes), which the
+// input node-set's namespace nodes are charged against too, so a filter that
+// materialises too much in total is refused with an error carrying
+// xdm.ErrResourceLimit. Those budgets bound what is held, not time: a filter
+// that iterates without materialising, such as nested quantified
+// expressions, runs as long as it iterates, and this form cannot be
+// cancelled. A caller applying a filter it does not trust should use
+// FromXPathFilterContext with a deadline.
 func FromXPathFilter(doc *xdm.Node, filter string, ns map[string]string) (NodeSet, error) {
-	c, err := xpath.Compile(filter, prefixMap(ns))
+	return FromXPathFilterContext(context.Background(), doc, filter, ns)
+}
+
+// FromXPathFilterContext is FromXPathFilter with a context.Context: ctx
+// reaches every per-node evaluation, so cancelling it stops the whole filter
+// within one node's evaluation, and the error returned wraps ctx.Err().
+func FromXPathFilterContext(ctx context.Context, doc *xdm.Node, filter string, ns map[string]string) (NodeSet, error) {
+	return FromXPathFilterHere(ctx, doc, nil, filter, ns)
+}
+
+// FromXPathFilterHere is FromXPathFilterContext with the XML-DSig here()
+// function, an unprefixed function of arity 0 in the filter's function
+// library (XML-DSig section 6.6.3.3). here is the node that bears the filter
+// in the signature: the text node of the ds:XPath element, or an attribute
+// or processing instruction. here() returns it, except that a text node is
+// replaced by its parent element, since the section defines here() as "the
+// attribute or processing instruction node or the parent element of the text
+// node that directly bears the XPath expression". here must be in doc's tree;
+// any other node is refused with an error. A nil here leaves here()
+// undefined, as in FromXPathFilterContext.
+func FromXPathFilterHere(ctx context.Context, doc, here *xdm.Node, filter string, ns map[string]string) (NodeSet, error) {
+	here, err := hereNode(doc, here)
+	if err != nil {
+		return nil, err
+	}
+	// XML-DSig transforms are XPath 1.0.
+	c, err := xpath.CompileWith(filter, xpath.CompileOptions{
+		Namespaces: prefixMap(ns), XPath10: true})
 	if err != nil {
 		return nil, err
 	}
 	root := top(doc)
-	seq, err := allNodes.Eval(xpath.NewContext(root, xpath.Builtins()))
-	if err != nil {
-		return nil, err
-	}
+	// One context for the whole filter: the per-node evaluations are focus
+	// changes on it, so they share its cancellation and, held, its item and
+	// byte counters, instead of each minting a fresh allowance.
+	base := filterContext(ctx, root, here).HoldItemBudget().HoldByteBudget()
 	set := filterSet{root: root, nodes: map[*xdm.Node]bool{}, ns: map[nsKey]bool{}}
-	for _, it := range seq {
-		n := it.(*xdm.Node) // a union of path expressions yields only nodes
-		keep, err := c.EvalBool(xpath.NewContext(n, xpath.Builtins()))
+	visit := func(n *xdm.Node) error {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("c14n: XPath filter: %w", err)
+		}
+		if onFilterNode != nil {
+			onFilterNode(n)
+		}
+		keep, err := c.EvalBool(base.WithFocus(n, 1, 1))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		switch {
 		case !keep:
@@ -511,13 +580,111 @@ func FromXPathFilter(doc *xdm.Node, filter string, ns map[string]string) (NodeSe
 		default:
 			set.nodes[n] = true
 		}
+		return nil
+	}
+	if err := walkFilterInput(root, base, visit); err != nil {
+		return nil, err
 	}
 	return set, nil
 }
 
-// allNodes is XML-DSig's input node-set for a same-document XPath Filter:
-// every node of the document, namespace nodes included.
-var allNodes = xpath.MustCompile("//. | //@* | //namespace::*", prefixMap(nil))
+// filterContext is the evaluation context FromXPathHere and
+// FromXPathFilterHere start from, carrying ctx's cancellation. A non-nil here
+// adds here#0 to the builtins, in the default function namespace so that the
+// unprefixed here() of an XML-DSig expression finds it.
+func filterContext(ctx context.Context, item, here *xdm.Node) *xpath.Context {
+	var lib xpath.FunctionLibrary = xpath.Builtins()
+	if here != nil {
+		l := xpath.NewLibrary(lib)
+		l.Add(xpath.Function{
+			Name:  xdm.QName{URI: xdm.NSFN, Local: "here"},
+			Arity: 0,
+			Call: func(*xpath.Context, []xdm.Sequence) (xdm.Sequence, error) {
+				return xdm.Sequence{here}, nil
+			},
+		})
+		lib = l
+	}
+	return xpath.NewContext(item, lib, func(e *xpath.Env) {
+		e.Ctx = ctx
+		if testEnv != nil {
+			testEnv(e)
+		}
+	})
+}
+
+// hereNode checks that here is in doc's tree and maps a text node to its
+// parent element, the node XML-DSig section 6.6.3.3 says here() returns.
+func hereNode(doc, here *xdm.Node) (*xdm.Node, error) {
+	if here == nil {
+		return nil, nil
+	}
+	if top(here) != top(doc) {
+		return nil, errors.New("c14n: here() node is not in the document")
+	}
+	if here.Kind() == xdm.KindText {
+		here = here.Parent()
+	}
+	return here, nil
+}
+
+// Test hooks: testEnv adjusts the filter's environment (a smaller budget),
+// onFilterNode observes each node FromXPathFilterContext evaluates.
+var (
+	testEnv      func(*xpath.Env)
+	onFilterNode func(*xdm.Node)
+)
+
+// walkFilterInput calls visit on XML-DSig's input node-set for a
+// same-document XPath Filter: every node of root's tree, namespace nodes
+// included, in document order (an element, then its namespace nodes, then its
+// attributes, then its children).
+//
+// It walks the tree rather than evaluating "//. | //@* | //namespace::*",
+// which held every (element, in-scope binding) namespace node at once: one
+// node per element per binding, so a few kilobytes declaring many prefixes
+// over many elements made millions of them, none charged. Walking holds one
+// element's namespace nodes at a time, and each is charged one item against
+// base's held budget, so the namespace axis, the one input dimension larger
+// than the document, is bounded by MaxItems like the filter's own work.
+func walkFilterInput(root *xdm.Node, base *xpath.Context, visit func(*xdm.Node) error) error {
+	// "//" is rooted at a document node, so a detached tree has no input
+	// node-set; this is the error evaluating the expression raised.
+	if root.Kind() != xdm.KindDocument {
+		return errors.New("XPDY0050: root of the context node is not a document node")
+	}
+	one := func(n *xdm.Node) error {
+		if err := visit(n); err != nil {
+			return err
+		}
+		if n.Kind() != xdm.KindElement {
+			return nil
+		}
+		for ns := range n.NamespaceNodes() {
+			if err := base.ChargeItems(1); err != nil {
+				return err
+			}
+			if err := visit(ns); err != nil {
+				return err
+			}
+		}
+		for a := range n.Attrs() {
+			if err := visit(a); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := one(root); err != nil {
+		return err
+	}
+	for d := range root.Descendants() {
+		if err := one(d); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type nsKey struct {
 	elem   *xdm.Node

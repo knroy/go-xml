@@ -3,10 +3,13 @@
 package xslt
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -162,6 +165,7 @@ func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
 			if gerr == nil && g != nil &&
 				(patternsAllow30(ns) || variablePatternAllowed(alt) ||
 					predicatePatternAllowed(alt)) {
+				g.step = generalStep(g) // streampattern_setops.go
 				p.general = append(p.general, g)
 				continue
 			}
@@ -435,15 +439,19 @@ func convertStep(s *xpath.Step, allow30 bool) (patternStep, error) {
 //
 // The recovered error is returned alongside a false match rather than instead
 // of it, so a caller that does not ask keeps the recovering behaviour.
-func (p *Pattern) MatchesReporting(node *xdm.Node, ctx *xpath.Context) (bool, error, error) {
-	var recovered error
-	ok, err := p.matches(node, ctx, &recovered)
+//
+// Both are entry points a host calls with its own Context, outside any
+// Transform, so a resource-limit refusal raised as a panic under a predicate
+// (internal/xdmlimit) is recovered here and returned as the error.
+func (p *Pattern) MatchesReporting(node *xdm.Node, ctx *xpath.Context) (ok bool, err, recovered error) {
+	defer xdmlimit.Recover(&err)
+	ok, err = p.matches(node, ctx, &recovered)
 	return ok, err, recovered
 }
 
-func (p *Pattern) Matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
-	ok, err := p.matches(node, ctx, nil)
-	return ok, err
+func (p *Pattern) Matches(node *xdm.Node, ctx *xpath.Context) (ok bool, err error) {
+	defer xdmlimit.Recover(&err)
+	return p.matches(node, ctx, nil)
 }
 
 func (p *Pattern) matches(node *xdm.Node, ctx *xpath.Context, recovered *error) (bool, error) {
@@ -475,7 +483,7 @@ func (p *Pattern) matches(node *xdm.Node, ctx *xpath.Context, recovered *error) 
 		ctx = withoutOutputURI(ctx)
 	}
 	for _, g := range p.general {
-		ok, err := g.matches(node, ctx)
+		ok, err := g.matchNode(node, ctx) // streampattern_setops.go
 		if err != nil {
 			if recoverPatternError(err) {
 				if recovered != nil && *recovered == nil {
@@ -526,6 +534,9 @@ func (p *Pattern) predicateFree() bool {
 	return true
 }
 
+// predicateFreeOrNil is predicateFree, true for an absent pattern too.
+func (p *Pattern) predicateFreeOrNil() bool { return p == nil || p.predicateFree() }
+
 // mayMatch is a necessary condition for a match that evaluates no predicate:
 // some alternative's last step must accept node on its axis and node test.
 // Every path through patternAlt.matches tests exactly that before any
@@ -567,6 +578,14 @@ func (p *Pattern) mayMatch(node *xdm.Node) bool {
 // raise about the stylesheet rather than about this node — XTDE0640's key
 // recursion is a property of the stylesheet and reporting it is the point.
 func recoverPatternError(err error) bool {
+	// A resource-limit refusal or a cancelled context is the processor
+	// declining to go on (XPath 3.1 §2.3.1, XPDY0130), not a fact about this
+	// node: recovering it would let a budget silently turn a match into a
+	// non-match, which a limit must never do.
+	if errors.Is(err, xdm.ErrResourceLimit) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
 	if isGlobalError(err) {
 		// A global's failure belongs to the stylesheet, not to this node;
 		// see globalError.

@@ -1,6 +1,9 @@
 package xsd
 
-import "errors"
+import (
+	"encoding/binary"
+	"errors"
+)
 
 // The content-model runtime: a subset construction over the counter state.
 //
@@ -54,7 +57,24 @@ import "errors"
 // it is reported as an error rather than guessed at: a matcher that silently
 // degraded to an approximation would do so precisely on the inputs where the
 // answer was hardest to get.
+//
+// It applies when ValidateOptions.MaxMatchStates is zero.
 const DefaultMaxMatchStates = 4096
+
+// matchStates is the run's ValidateOptions.MaxMatchStates, zero resolved to
+// DefaultMaxMatchStates; negative means no limit.
+func (v *validator) matchStates() int {
+	if v.opts.MaxMatchStates == 0 {
+		return DefaultMaxMatchStates
+	}
+	return v.opts.MaxMatchStates
+}
+
+// withinMatchStates reports whether n readings are inside matchStates.
+func (v *validator) withinMatchStates(n int) bool {
+	b := v.matchStates()
+	return b < 0 || n <= b
+}
 
 // errMatchStates reports that a content model needed more simultaneous states
 // than the budget allows. It is wrapped with the element's location by the
@@ -306,7 +326,7 @@ func stepCountsWhy(m *contentModel, reach []int, from, to int, cur []int, out *[
 			// the compiler added to make the scope repeatable could
 			// be walked for free, and a repeated group's own
 			// minOccurs and maxOccurs would never be charged at all.
-			if shared > 0 && !m.scopeInner[a[shared-1]][[2]int{from, to}] {
+			if shared > 0 && !m.innerEdge(a[shared-1], from, to) {
 				continue
 			}
 			next := scratchVec(out, cur)
@@ -388,14 +408,17 @@ func accepting(m *contentModel, st matchState, buf []int) bool {
 	return true
 }
 
-// candidates returns the positions reachable from a state, which is the
-// automaton's follow set — the counters are what filters them, and that happens
-// in stepCounts.
-func candidates(m *contentModel, st matchState) []int {
+// candidates returns the positions reachable from a state as runs, which
+// together are the automaton's follow set — the counters are what filters
+// them, and that happens in stepCounts. start is the initial state's one run.
+//
+// The runs are walked rather than joined: a follow set may be as wide as the
+// model, and in a shared model it exists only as pieces.
+func candidates(m *contentModel, st matchState, start []piece) []piece {
 	if st.pos < 0 {
-		return m.first
+		return start
 	}
-	return m.follow[st.pos]
+	return m.pieces[st.pos]
 }
 
 // matchNames is the counter-exact walk, used by SequenceMatcher and by the
@@ -404,7 +427,9 @@ func candidates(m *contentModel, st matchState) []int {
 // The validator does not go through here: it has to report which position
 // matched each child, and it interleaves open content and child validation into
 // the same walk, so it carries its own copy of this loop over in validate.go.
-func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int) (ok bool, at int, err error) {
+//
+// classes is positionClasses(m), or nil to walk every state.
+func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int, classes []int) (ok bool, at int, err error) {
 	if len(m.positions) == 0 {
 		return n == 0, 0, nil
 	}
@@ -413,29 +438,74 @@ func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int) (ok
 	cur := make([]int, len(m.counters))
 	enter := make([]int, len(m.counters))
 	var vecs [][]int
+	start := []piece{{to: m.first, scope: -1}}
 
 	// Two sets, swapped each step: a fresh map per child was three quarters
 	// of the DTD validator's allocation.
 	spare := newStateSet()
+	// A state whose position is of a class another live state's is, with
+	// the same counts, steps exactly as that one does (positionClasses),
+	// so it is walked once per child. Without this the N live states of
+	// (a|a|...|a)* each walked the same N-wide follow run, N² per child.
+	type stepKey struct {
+		class  int
+		counts string
+	}
+	var walked map[stepKey]bool
+	if classes != nil {
+		walked = map[stepKey]bool{}
+	}
+	// With no counters a state is its position alone, so what a run adds
+	// does not depend on the state it is reached from: each run is walked
+	// once per child. The runs are shared slices, so a dense (a?,a?,...)
+	// whose live states hold overlapping suffixes walks each member once,
+	// not once per state holding it.
+	type runKey struct {
+		first *int
+		n     int
+	}
+	var runsWalked map[runKey]bool
+	if len(m.counters) == 0 {
+		runsWalked = map[runKey]bool{}
+	}
 	for i := 0; i < n; i++ {
 		next := spare
 		clear(next.seen)
 		next.order = next.order[:0]
+		clear(walked)
+		clear(runsWalked)
 		for _, st := range states.order {
-			for _, pos := range candidates(m, st) {
-				if !match(i, pos) {
+			if walked != nil && st.pos >= 0 {
+				k := stepKey{classes[st.pos], st.counts}
+				if walked[k] {
 					continue
 				}
-				if st.pos < 0 {
-					enterCounts(m, reach, pos, enter)
-					next.add(matchState{pos: pos, counts: encodeCounts(enter)})
-					continue
+				walked[k] = true
+			}
+			for _, run := range candidates(m, st, start) {
+				if runsWalked != nil && len(run.to) > 0 {
+					k := runKey{&run.to[0], len(run.to)}
+					if runsWalked[k] {
+						continue
+					}
+					runsWalked[k] = true
 				}
-				decodeCounts(st.counts, cur)
-				vecs = vecs[:0]
-				stepCounts(m, reach, st.pos, pos, cur, &vecs)
-				for _, v := range vecs {
-					next.add(matchState{pos: pos, counts: encodeCounts(v)})
+				countMatchStep(len(run.to))
+				for _, pos := range run.to {
+					if !match(i, pos) {
+						continue
+					}
+					if st.pos < 0 {
+						enterCounts(m, reach, pos, enter)
+						next.add(matchState{pos: pos, counts: encodeCounts(enter)})
+						continue
+					}
+					decodeCounts(st.counts, cur)
+					vecs = vecs[:0]
+					stepCounts(m, reach, st.pos, pos, cur, &vecs)
+					for _, v := range vecs {
+						next.add(matchState{pos: pos, counts: encodeCounts(v)})
+					}
 				}
 			}
 		}
@@ -453,6 +523,54 @@ func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int) (ok
 		}
 	}
 	return false, n, nil
+}
+
+// positionClasses numbers m's positions so that two share a number only when
+// stepping from them is the same computation: the same enclosing counters,
+// the same scopeLast membership in each, and the same follow runs (the same
+// stored slices, so the same targets and the same innerEdge answers). Those
+// are everything stepCounts reads of the position it steps from, so two live
+// states of one class with equal counts reach the same next states and only
+// one need be walked. Matching still decides per position: a class is a
+// shortcut through the step, not a merged state, so accepting reads each
+// position's own last membership.
+func positionClasses(m *contentModel) []int {
+	runs := map[*int]int{}
+	ids := map[string]int{}
+	out := make([]int, len(m.positions))
+	var b []byte
+	for p, pos := range m.positions {
+		b = binary.AppendUvarint(b[:0], uint64(len(pos.counters)))
+		for _, c := range pos.counters {
+			b = binary.AppendUvarint(b, uint64(c))
+			if m.scopeLast[c][p] {
+				b = append(b, 1)
+			} else {
+				b = append(b, 0)
+			}
+		}
+		for _, r := range m.pieces[p] {
+			id := -1
+			if len(r.to) > 0 {
+				var ok bool
+				if id, ok = runs[&r.to[0]]; !ok {
+					id = len(runs)
+					runs[&r.to[0]] = id
+				}
+			}
+			b = binary.AppendVarint(b, int64(id))
+			b = binary.AppendUvarint(b, uint64(len(r.to)))
+			b = binary.AppendVarint(b, int64(r.scope))
+		}
+		k := string(b)
+		id, ok := ids[k]
+		if !ok {
+			id = len(ids)
+			ids[k] = id
+		}
+		out[p] = id
+	}
+	return out
 }
 
 // intsEqual compares two count vectors, which are always the same length.

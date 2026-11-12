@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync/atomic"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -50,6 +53,9 @@ type Compiled struct {
 	// expressions written within an element whose effective [xsl:]version is
 	// below 2.0. It is static, so it belongs here rather than on the Context.
 	compat bool
+	// xpath10 is the XPath 1.0 number model and comparison grammar on top of
+	// compat; see CompileOptions.XPath10. It implies compat.
+	xpath10 bool
 	// ns is the namespace resolver src was parsed with, kept so that
 	// WithCompatMode can re-parse. See there for why re-parsing is necessary.
 	ns NamespaceResolver
@@ -173,6 +179,33 @@ type CompileOptions struct {
 	// document data -- xsl:evaluate does exactly that, at transform time --
 	// should set it.
 	MaxBytes int
+
+	// XPath10 compiles src as an XPath 1.0 expression (XPath 1.0
+	// Recommendation, 1999), for a host whose language is defined on 1.0 --
+	// the XML-DSig XPath filters in package c14n. It implies 1.0
+	// compatibility mode (see Compiled.WithCompatMode) and replaces the
+	// places where that mode still differs from 1.0:
+	//
+	//   - a numeric literal has no exponent, one with a "." is an xs:double,
+	//     and a number may be followed directly by an operator name
+	//     ("10div 2", section 3.7); an integer literal stays xs:integer, so
+	//     the 2.0 functions that take one still accept it;
+	//   - "=" and "!=" bind more loosely than "<", "<=", ">" and ">=", and
+	//     both levels are left-associative, so "1 < 2 < 3" is (1 < 2) < 3;
+	//     a relational operator converts both operands to numbers unless one
+	//     is a node-set and the other a boolean (section 3.4);
+	//   - string to number follows the Number production alone: optional
+	//     whitespace and "-", digits with an optional ".", whitespace; "+1",
+	//     "1e3" and "INF" are NaN (section 4.4, number()), and sum() converts
+	//     each item the same way rather than raising FORG0001;
+	//   - number to string has no exponent: an integer is written without a
+	//     decimal point, a non-integer with as many digits as distinguish it,
+	//     NaN, Infinity and -Infinity, and negative zero is "0"; every number
+	//     is written as the double nearest it (section 4.2).
+	//
+	// Version still selects the function library. Constructs 1.0 lacks are
+	// not refused.
+	XPath10 bool
 }
 
 // CompileWith parses src according to opts and optimises the result.
@@ -213,6 +246,8 @@ func CompileWith(src string, opts CompileOptions) (*Compiled, error) {
 		err error
 	)
 	switch {
+	case opts.XPath10:
+		e, err = parseXPath10(src, opts.Namespaces, opts.Version)
 	case opts.XQuery:
 		e, err = ParseXQuery(src, opts.Namespaces, opts.Version)
 	case opts.RefFloor != 0 && opts.RefFloor != opts.Version:
@@ -231,12 +266,19 @@ func CompileWith(src string, opts CompileOptions) (*Compiled, error) {
 			return nil, compileCancelled(err)
 		}
 	}
-	opt, err := optimizeContext(ctx, e)
-	if err != nil {
-		return nil, err
+	// An XPath10 expression is not optimised: the optimiser's one rewrite is
+	// constant folding against a 2.0 context, and the 1.0 number model
+	// reaches closed function calls as well as operators -- number("+1"),
+	// string(1 div 0) -- so no fold of one is safe.
+	opt := e
+	if !opts.XPath10 {
+		if opt, err = optimizeContext(ctx, e); err != nil {
+			return nil, err
+		}
 	}
 	return (&Compiled{
 		expr: opt, src: src, ns: opts.Namespaces, version: opts.Version,
+		compat: opts.XPath10, xpath10: opts.XPath10,
 		nsNeeded:     readsStaticNamespaces(opt),
 		nsComparable: safelyComparable(reflect.TypeOf(opts.Namespaces)),
 	}).withOwn(), nil
@@ -313,7 +355,8 @@ func (c *Compiled) Source() string { return c.src }
 func (c *Compiled) Expr() Expr { return c.expr }
 
 // Eval evaluates the expression in ctx.
-func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
+func (c *Compiled) Eval(ctx *Context) (_ xdm.Sequence, err error) {
+	defer xdmlimit.Recover(&err) // a node constructed past a tree's text blocks
 	// The item budget bounds one expression evaluation, not the transform.
 	// A stylesheet that evaluates a legitimate 500-item range once per node of
 	// a 20,000-node document is doing nothing wrong, and a budget carried
@@ -327,8 +370,24 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	// Unless a host language has taken the boundary over: a FLWOR reaches
 	// this once per tuple, and resetting there would clear the counter under
 	// the loop that is the thing worth bounding. See Context.HoldItemBudget.
+	//
+	// The reset gives a nested evaluation -- an xsl:function body, an
+	// xsl:evaluate target, a key's use expression -- an allowance of its own,
+	// but it must not erase the charges of the expression still running
+	// around it: count(for $a in 1 to 2000, $b in 1 to 1000 return f:id($b))
+	// cleared the outer loop's count on every call and materialised 2,000,000
+	// items under a bound of 100,000. So the enclosing count is put back on
+	// return, and the enclosing construct charges the result itself.
+	//
+	// The fresh allowance is less what the host's local bindings hold live
+	// (liveLocalItems): an XSLT variable's value stays bound for the rest of
+	// its frame, so starting every select at zero let sibling variables and
+	// recursive frames each hold a full MaxItems at once.
 	if ctx == nil || !ctx.heldItems {
-		ctx.resetItems()
+		if p := ctx.ev().items; p != nil {
+			saved := atomic.SwapInt64(p, liveLocalItems(ctx))
+			defer atomic.StoreInt64(p, saved)
+		}
 	}
 	// The byte budget takes the same boundary for the same reason, and is held
 	// separately: a stylesheet that builds a legitimate string once per node
@@ -336,13 +395,35 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	// all of them would refuse it. The two holds are independent because the
 	// natural unit differs -- a FLWOR for items, one constructed value for
 	// bytes -- and a host that holds one does not thereby hold the other.
+	// The enclosing count is restored for the same reason as items.
 	if ctx == nil || !ctx.heldBytes {
-		ctx.resetBytes()
+		if p := ctx.ev().bytes; p != nil {
+			saved := atomic.SwapInt64(p, 0)
+			defer atomic.StoreInt64(p, saved)
+		}
 	}
 	if ctx != nil && ctx.foreign {
 		return c.evalForeign(ctx)
 	}
 	return c.expr.Eval(c.scope(ctx))
+}
+
+// liveLocalItems is the number of items held by the local bindings of the
+// host evaluation ctx runs on (xpathleaf.Locals), or zero. Only the
+// evaluation's own goroutine reads the stack: a foreign context, or one whose
+// stack is off, may be running elsewhere.
+func liveLocalItems(ctx *Context) int64 {
+	if ctx == nil || ctx.foreign || ctx.host == nil {
+		return 0
+	}
+	lh, ok := ctx.host.Runtime.(xpathleaf.LocalsHost)
+	if !ok {
+		return 0
+	}
+	if l := lh.Locals(); l != nil && !l.Off() {
+		return l.Items()
+	}
+	return 0
 }
 
 // evalForeign is Eval with a context handed to host code, which may be
@@ -363,6 +444,7 @@ func (c *Compiled) scope(ctx *Context) *Context {
 	s := ctx.st()
 	if (c.staticBase != "" && c.staticBase != s.baseURI) ||
 		c.staticCollation != nil || c.compat != s.compat ||
+		c.xpath10 != s.xpath10 ||
 		c.version != s.version ||
 		(c.staticHost != nil && c.staticHost != s.host) ||
 		// The expression's own namespaces, not the caller's, where it reads
@@ -419,6 +501,7 @@ func (c *Compiled) staticOver(from *staticContext) *staticContext {
 	// called from a 1.0 template, say -- is a 2.0 expression, so the flag has
 	// to be cleared as well as set.
 	s.compat = c.compat
+	s.xpath10 = c.xpath10
 	return &s
 }
 
@@ -429,6 +512,7 @@ func (c *Compiled) withOwn() *Compiled {
 		version: c.version, baseURI: c.staticBase, host: c.staticHost,
 		ns: c.ns, collation: c.staticCollation,
 		collationURI: c.staticCollationURI, compat: c.compat,
+		xpath10: c.xpath10,
 	}
 	return c
 }
@@ -491,7 +575,9 @@ func Eval(src string, ctx *Context, ns NamespaceResolver) (xdm.Sequence, error) 
 // Compiled that was never given the flag never sets it on the context, so no
 // evaluation outside a 1.0 scope can observe it.
 func (c *Compiled) WithCompatMode(on bool) *Compiled {
-	if c == nil || !on {
+	// An XPath10 expression is already in the mode, and re-parsing it as 2.0
+	// would undo its 1.0 grammar.
+	if c == nil || !on || c.xpath10 {
 		return c
 	}
 	n := *c

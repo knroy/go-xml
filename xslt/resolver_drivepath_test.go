@@ -88,3 +88,26 @@ func TestResolvePathLeavesUnixPathsAlone(t *testing.T) {
 		}
 	}
 }
+
+// uncHrefs are the spellings that become a UNC path on Windows while carrying
+// no file: authority for the remote-host check to see. The host is .invalid so
+// that a regression on Windows CI cannot reach a real machine.
+var uncHrefs = []string{
+	"//unc-host.invalid/share/x.xml",
+	"file:////unc-host.invalid/share/x.xml",
+	"file://localhost//unc-host.invalid/share/x.xml",
+}
+
+// TestResolvePathRefusesUNCBeforeFilesystem pins that a UNC path is refused by
+// the network check, which runs before evalSymlinks, rather than by the
+// containment check after it: on Windows that symlink walk alone connects to
+// the host. The error text is what tells the two apart on every OS.
+func TestResolvePathRefusesUNCBeforeFilesystem(t *testing.T) {
+	r := &FileResolver{Roots: []string{t.TempDir()}}
+	for _, href := range uncHrefs {
+		_, err := r.resolvePath(href, "")
+		if err == nil || !strings.Contains(err.Error(), "names a network path") {
+			t.Errorf("resolvePath(%q) = %v, want the network-path refusal", href, err)
+		}
+	}
+}

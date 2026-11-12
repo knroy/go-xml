@@ -68,7 +68,9 @@ const ruleIndexMain = `<xsl:stylesheet version="3.0"
   <xsl:template match="text()" mode="#all" priority="-2">[all-text <xsl:next-match/>]</xsl:template>
 </xsl:stylesheet>`
 
-const ruleIndexSource = `<?pi x?><!--top--><doc xmlns:p="urn:p" xmlns:q="urn:q">
+// The DTD declares a/@id as ID, so id('i1') has an is-id node to find
+// (F&O §14.5.2): a name alone does not make an attribute an ID.
+const ruleIndexSource = `<?pi x?><!--top--><!DOCTYPE doc [<!ATTLIST a id ID #IMPLIED>]><doc xmlns:p="urn:p" xmlns:q="urn:q">
   <a id="i1">t1</a><a/><b k="x">t2</b><b k="y"/><p:a id="i2"/><q:a/>
   <?pi y?><?other z?><!--c-->
   <c/><c u="1"/><e><a k="z"><b/></a></e>
@@ -92,7 +94,7 @@ func runRuleIndexSheet(t *testing.T, indexed bool, source string) (string, error
 	if !indexed {
 		s.rules = nil
 	}
-	dtree, err := xdm.ParseString(source, xdm.ParseOptions{})
+	dtree, err := xdm.ParseString(source, xdm.ParseOptions{AllowDOCTYPE: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +158,7 @@ func TestRuleIndexCoversEveryCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dtree, _ := xdm.ParseString(ruleIndexSource, xdm.ParseOptions{})
+	dtree, _ := xdm.ParseString(ruleIndexSource, xdm.ParseOptions{AllowDOCTYPE: true})
 	var nodes []*xdm.Node
 	var walk func(n *xdm.Node)
 	walk = func(n *xdm.Node) {
@@ -179,7 +181,7 @@ func TestRuleIndexCoversEveryCandidate(t *testing.T) {
 				t.Fatalf("no index for %v in mode %q", n.Kind(), mode)
 			}
 			in := map[int]bool{}
-			for _, i := range cand {
+			for i, more := cand.next(); more; i, more = cand.next() {
 				in[i] = true
 			}
 			for i, r := range s.templates {

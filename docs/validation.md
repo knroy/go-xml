@@ -63,13 +63,44 @@ err = dtd.Validate(tree.Root, d, dtd.Options{})
 // /r: element b is not permitted here in the content of r
 ```
 
-That checks `<!ELEMENT>` content models, attribute presence (`#REQUIRED` and
-`#FIXED`), enumerated values, `ID`/`IDREF`, and §3.3.1's two cross-referencing
-rules — a `NOTATION` attribute's enumeration must name only declared
-`<!NOTATION>`s, and an `ENTITY`/`ENTITIES` attribute must name entities
-declared with `NDATA`. The content models go through
+That checks `<!ELEMENT>` content models, that every attribute is declared
+(VC Attribute Value Type; namespace declarations count as the attributes
+`xmlns` and `xmlns:p` they are to XML 1.0, so a valid document declares them,
+as libxml2 also requires),
+attribute presence (`#REQUIRED` and `#FIXED`), enumerated values,
+`ID`/`IDREF`, and §3.3.1's two cross-referencing rules — a `NOTATION`
+attribute's enumeration must name only declared `<!NOTATION>`s, and an
+`ENTITY`/`ENTITIES` attribute must name entities declared with `NDATA`.
+Tokenized values are checked lexically too (§3.3.1): `NMTOKEN(S)` against
+Nmtoken, and `ID`, `IDREF(S)` and `ENTITY(IES)` against NCName rather than
+Name, because xdm parses with namespaces (Namespaces in XML §7); a list type
+needs one or more tokens separated by single spaces. An `EMPTY` element admits
+no comment, PI or white space either. The declarations themselves are checked
+as well, and `dtd.Load` still succeeds with the faults recorded for
+`dtd.Validate` to report, used or not: a repeated element type (even across
+subsets), a name repeated in a mixed model or a token in an enumeration, a
+second `ID` attribute for one element, an `ID` with a default, a default that
+does not fit its type (§3.3.2, lexically only), and an `NDATA` notation no
+`<!NOTATION>` declares. A repeated `<!ATTLIST>` for one attribute stays legal.
+Some validity facts are gone by the time the tree exists, so `xdm.Parse`
+records them as it reads (at most 100 per tree) and `dtd.Validate` reports
+them: under `standalone="yes"`, a default applied, a value normalised or white
+space met in element content where the declaration is external markup (§2.9
+VC: Standalone Document Declaration); white space written as a character
+reference, or a CDATA section, in element content, and an empty reference in
+an `EMPTY` element (§3 VC: Element Valid, erratum E15); and, with a resolver
+that read every declaration, a reference to an entity declared in neither
+subset, in content, an attribute value or an ATTLIST default, which is dropped
+from the tree (on both parses of a source rewritten for markup entities) (§4.1 VC: Entity Declared, erratum
+E13).
+Element and attribute names are matched as written, prefix included
+(`xml:lang`, `o:order`), because a DTD declares them that way.
+`Options.AllowUndeclared` skips undeclared attributes as well as elements.
+The content models go through
 the same Glushkov automaton the XSD validator uses — a DTD model is a strict
-subset of what an `xsd.Particle` expresses, so there is no second engine.
+subset of what an `xsd.Particle` expresses, so there is no second engine —
+under `Options.MaxContentModelPositions`, `MaxContentModelEdges` and
+`MaxMatchStates` (see [options.md](options.md#dtdoptions)).
 
 `dtd.Parse` reads the internal subset alone and fetches nothing. To validate
 against a DTD that lives in another file, use `dtd.Load`:
@@ -86,9 +117,16 @@ That reads both halves and applies them together: parameter entities span the
 two subsets with XML 1.0 §2.8's precedence (the internal subset is read first
 and its declarations bind), a `%pe;` in the external subset may expand to whole
 declarations, and conditional sections — `<![INCLUDE[` and `<![IGNORE[`, §3.4 —
-are resolved, including nested ones.
+are resolved, including nested ones. Each fetched resource is decoded by its
+own byte order mark (UTF-8 or UTF-16, §4.3.3), as `xdm.Parse` decodes a
+document.
+A parameter entity's replacement text must nest properly with the markup it
+appears in: a declaration's `<!` and `>` (§2.8), a content model's parentheses
+(§3.2.1), and a conditional section's `<![`, `[` and `]]>` (§3.4). These are
+validity constraints, so a DTD breaking one still loads, and `dtd.Validate`
+reports the violation (libxml2 treats them as fatal errors).
 
-Four things to know before relying on it:
+Five things to know before relying on it:
 
 * **Nothing is fetched without a `Resolver`, and with none the load is
   refused.** `dtd.Load` returns an error wrapping `dtd.ErrNoResolver` rather
@@ -96,6 +134,11 @@ Four things to know before relying on it:
   nothing, and reporting success on it would turn "I could not read the
   constraints" into "the constraints hold". Pass `LoadOptions.InternalSubsetOnly`
   to ask for the partial reading deliberately.
+  A DOCTYPE with no external subset needs no `Resolver`, and its internal
+  parameter entities are expanded (`<!ENTITY % e "<!ELEMENT r EMPTY>"> %e;`
+  declares `r`), but one that references an *external* parameter entity
+  (`<!ENTITY % e SYSTEM "e.ent"> %e;`) is refused with `dtd.ErrNoResolver`
+  for the same reason. `InternalSubsetOnly` leaves such a reference unread.
 * **A resolver hands control of what this process reads to whoever wrote the
   DOCTYPE.** `FileResolver` is confined to one `Root`, refusing `..`, absolute
   paths, symlinks leading out and any non-`file` scheme; `MapResolver` reads
@@ -117,10 +160,26 @@ Four things to know before relying on it:
   be able to tell a validated attribute from an unexamined one. The
   declaration is kept rather than the parse failed, so the rest of the subset
   still applies.
+* **The XML version is checked across both calls.** XML 1.1 §4.3.4 lets a
+  1.1 document include 1.0 entities but not the reverse, and an entity with no
+  version is 1.0. `dtd.Load` takes the DOCTYPE alone and cannot see the
+  document's version, so it records an external subset or parameter-entity
+  module whose text declaration says `version="1.1"`, and `dtd.Validate`
+  reports it for a document whose `Tree.XMLVersion` is not `"1.1"`. A version
+  other than 1.0 or 1.1 is refused by `dtd.Load` itself.
 
-`ID`/`IDREF` are checked as a *validity* constraint, but the attribute types
-are not fed back into the data model, which is why `fn:id` still falls back to
-`xml:id` and a conventional `id` attribute.
+The parser, by contrast, is a well-formedness check of the DOCTYPE: under
+`AllowDOCTYPE`, `xdm.Parse` holds the internal subset, and the external subset
+when `ExternalEntities` lets it read one, to the declaration grammar of XML 1.0
+§2.8–§4.7, so `<!ATTLIST r a CDATA #REQUIRE>` is refused there as not well
+formed. Hand such a directive to `dtd.Parse` or `dtd.Load` directly and the
+report above still applies.
+
+`ID`/`IDREF` are checked as a *validity* constraint, and the parser also feeds
+`ID`, `IDREF` and `IDREFS` declarations back into the data model as the is-id
+and is-idrefs properties (`xdm/dtd_defaults.go`), so `fn:id` and `fn:idref`
+find DTD-declared IDs. Undeclared, only a valid `xml:id` counts; an attribute
+merely named `id` is not an ID.
 
 `NOTATION` and `ENTITY`/`ENTITIES` are checked against the rest of the DTD
 rather than against a value space, so both are skipped when only half the DTD
@@ -219,8 +278,11 @@ s, err := relaxng.CompileWithOptions(schema.Root, relaxng.Options{
 `Compile` supplies no resolver, so every `href` is refused with an error
 naming it. There is no default implementation: where a schema is allowed to
 reach is the caller's decision, not the schema author's. A cycle of includes is
-bounded — with a resolver reading from the network, that is a request loop
-rather than merely a hang.
+refused, and the fetches are bounded — with a resolver reading from the
+network, an unbounded set is a request loop rather than merely a hang. The
+bounds are `Options.MaxIncludeDepth` (40), `MaxSchemaFetches` (10,000) and
+`MaxFetchedNodes`/`MaxFetchedBytes` (xdm's single-document limits); see
+[options.md](options.md#relaxngoptions).
 
 `<parentRef>` needs no resolver, reaching only into the enclosing grammar, and
 always works.
@@ -240,11 +302,15 @@ always works.
   definition gets the same compiled pattern, so compilation is linear in the
   number of definitions: DocBook 5.2's `docbook.rng` (about 1,900
   definitions) compiles in about 0.5 s and 170 MB. A budget of 200,000
-  definition compilations remains as a guard, far above any real schema.
-* **Large schemas can still exceed the derivative bound.** Validation does not
-  intern patterns, so a deeply mixed content model can grow past
-  `ValidateOptions.MaxPatternSize`, which ends validation with an error that
-  says so; a few DocBook documents with nested inlines do.
+  definition compilations (`Options.MaxRefExpansions`) remains as a guard,
+  far above any real schema.
+* **Large schemas can still exceed the derivative bound.** Validation interns
+  patterns and remembers derivatives, but interning merges no more than the
+  simplifying constructors do, so a pattern keeps its size: a deeply mixed
+  content model can grow past `ValidateOptions.MaxPatternSize`, which ends
+  validation with an error that says so; a few DocBook documents with nested
+  inlines do. The bound is also
+  checked between the tokens of a `<list>`.
 
 ## XSD
 
@@ -288,18 +354,17 @@ That brings in `xs:assert`, conditional type assignment with
 `xs:alternative` and inheritable attributes, `xs:openContent` and
 `xs:defaultOpenContent`, `xs:override`, the `notNamespace` and `notQName`
 wildcard forms, `explicitTimezone`, conditional inclusion through the
-versioning attributes, and the 1.1 built-ins. It measures **99.98%** on the
-26,222 instance tests that apply to a 1.1 processor and **99.97%** on the
+versioning attributes, and the 1.1 built-ins. It measures **99.90%** on the
+26,244 instance tests that apply to a 1.1 processor and **99.97%** on the
 15,354 schema-validity tests. An earlier revision claimed 100%; that was
 measured over the explicitly-marked 1.1 groups only, about a sixteenth of the
 tests a 1.1 processor is meant to run. See [xsd.md](xsd.md).
 
 The version is opt-in rather than automatic because 1.1 changes which
 documents are valid, so a 1.0 schema must not acquire its behaviour by
-accident. The 1.1 constructs are always *parsed* — a schema that uses one is
-not made valid by pretending it is absent — but only honoured under
-`Version11`. `notNamespace` and `notQName` are errors under 1.0 instead; see
-[xsd.md](xsd.md#choosing-the-version).
+accident. Under 1.0 a 1.1 construct is a schema error, because the 1.0 schema
+for schemas does not declare it. The exception is a construct that
+`vc:minVersion="1.1"` excludes. See [xsd.md](xsd.md#choosing-the-version).
 
 ### Checking the schema itself
 
@@ -409,6 +474,14 @@ Importing a schema does not validate anything by itself: a source the caller
 did not validate stays untyped, which is correct. From the command line,
 `go-xml -xsl sheet.xsl -validate strict in.xml` validates and annotates the
 source against the stylesheet's imported schema before the transform.
+
+Every schema document `xsl:import-schema` reads through `SchemaResolver`, and
+every document its `xs:include`/`xs:import`/`xs:redefine` closure reaches,
+draws on one `CompileOptions.MaxSchemaBytes` allowance per `Compile` (zero
+means `xslt.DefaultMaxSchemaBytes`, 16 MB), shared by every module, package
+and static-phase `fn:transform` compilation. Going over it fails the compile
+with `xdm.ErrResourceLimit` rather than `XTSE0220`; the stylesheet is never
+compiled against a truncated schema.
 
 An earlier revision of this section said a validated node still atomised as
 untyped. That was never the engine's behaviour once annotation existed; the

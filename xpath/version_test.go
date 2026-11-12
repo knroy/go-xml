@@ -49,13 +49,13 @@ func TestRegexVersionGating(t *testing.T) {
 func TestQFlagVersionGating(t *testing.T) {
 	const pattern = `a.c`
 
-	if _, err := buildRegexp(pattern, "q", XPath20); err == nil {
+	if _, _, err := buildRegexp(pattern, "q", XPath20); err == nil {
 		t.Error("XPath20 accepted the q flag, want FORX0001")
 	} else if !strings.Contains(err.Error(), "FORX0001") {
 		t.Errorf("XPath20 q flag: got %v, want FORX0001", err)
 	}
 
-	re, err := buildRegexp(pattern, "q", XPath30)
+	re, _, err := buildRegexp(pattern, "q", XPath30)
 	if err != nil {
 		t.Fatalf("XPath30 rejected the q flag: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestQFlagVersionGating(t *testing.T) {
 
 // The q flag combines with i, and with nothing else that inspects structure.
 func TestQFlagWithCaseInsensitive(t *testing.T) {
-	re, err := buildRegexp(`A.C`, "qi", XPath30)
+	re, _, err := buildRegexp(`A.C`, "qi", XPath30)
 	if err != nil {
 		t.Fatalf("qi: %v", err)
 	}

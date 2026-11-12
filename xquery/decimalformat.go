@@ -310,7 +310,7 @@ func (sc *staticContext) resolveFormatName(lex string) (xdm.QName, error) {
 	if prefix == "" {
 		return xdm.QName{Local: local}, nil
 	}
-	uri, ok := sc.ns[prefix]
+	uri, ok := sc.ns.lookup(prefix)
 	if !ok {
 		// A prefix the module level does not have may still have been bound
 		// by an xmlns declaration attribute on a direct element constructor,

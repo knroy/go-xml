@@ -287,18 +287,14 @@ type charMapInclusion struct {
 // XTSE1600 rather than followed forever.
 func (c *compiler) resolveCharacterMapIncludes() error {
 	byName := c.charMapIncludesByName()
+	memo := map[string]map[rune]string{}
 	for _, inc := range c.charMapIncludes {
-		own := c.sheet.characterMaps[inc.name]
-		merged := map[rune]string{}
-		// The map being resolved is on the active path from the start, so
-		// that a map reached again through its own includes is recognised as
-		// the cycle it is rather than as a fresh root.
-		active := map[string]bool{inc.name: true}
-		if err := c.mergeCharMaps(merged, inc.includes, byName, active); err != nil {
+		if err := c.goCtx().Err(); err != nil {
 			return err
 		}
-		for k, v := range own {
-			merged[k] = v
+		merged, err := c.resolveCharMap(inc.name, byName, memo, map[string]bool{})
+		if err != nil {
+			return err
 		}
 		c.sheet.characterMaps[inc.name] = merged
 	}
@@ -322,38 +318,47 @@ func (c *compiler) charMapIncludesByName() map[string][]string {
 	return byName
 }
 
-// mergeCharMaps merges the named maps, and everything they transitively
-// include, into dst.
+// resolveCharMap answers the closure of one character map: the maps it
+// includes, each resolved the same way and merged in order, with its own
+// entries applied last so that they win.
 //
-// active holds the names on the path currently being expanded -- the ancestors
-// of the name being visited, not every name ever visited. That distinction is
-// the whole point: re-entering a name that is still being expanded is a cycle,
-// while reaching a name that was already finished is the ordinary diamond of a
-// map included down two different branches, which is legal and whose entries
-// must be merged on each branch for the precedence below to come out right.
-func (c *compiler) mergeCharMaps(
-	dst map[rune]string, names []string, byName map[string][]string,
-	active map[string]bool) error {
-	for _, n := range names {
-		m, ok := c.sheet.characterMaps[n]
-		if !ok {
-			return fmt.Errorf("XTSE1590: no xsl:character-map named %q", n)
+// memo holds every map already resolved, so a map included down several
+// branches -- the legal diamond -- is resolved once and its table reused,
+// rather than re-expanded per path. active holds only the names on the path
+// currently being expanded: re-entering one of those is the XTSE1600 cycle.
+// A finished name is in memo and never on the active path, so the two never
+// disagree.
+func (c *compiler) resolveCharMap(
+	name string, byName map[string][]string,
+	memo map[string]map[rune]string, active map[string]bool) (map[rune]string, error) {
+	if m, ok := memo[name]; ok {
+		return m, nil
+	}
+	active[name] = true
+	merged := map[rune]string{}
+	for _, n := range byName[name] {
+		if _, ok := c.sheet.characterMaps[n]; !ok {
+			return nil, fmt.Errorf("XTSE1590: no xsl:character-map named %q", n)
 		}
 		if active[n] {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"XTSE1600: xsl:character-map %q includes itself, directly or "+
 					"through the maps it uses", n)
 		}
-		active[n] = true
-		if err := c.mergeCharMaps(dst, byName[n], byName, active); err != nil {
-			return err
+		inc, err := c.resolveCharMap(n, byName, memo, active)
+		if err != nil {
+			return nil, err
 		}
-		delete(active, n)
-		for k, v := range m {
-			dst[k] = v
+		for k, v := range inc {
+			merged[k] = v
 		}
 	}
-	return nil
+	delete(active, name)
+	for k, v := range c.sheet.characterMaps[name] {
+		merged[k] = v
+	}
+	memo[name] = merged
+	return merged, nil
 }
 
 // charMapIn answers the character map of one name as the given package sees

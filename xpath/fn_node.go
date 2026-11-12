@@ -26,7 +26,7 @@ func registerNumericFuncs(l *Library) {
 			// FOTY0013 — it is not a leniency fn:number extends to, and
 			// the plain Atomize dropped the item and answered NaN.
 			// higher-order-functions-056 writes number(local:f#1).
-			atoms, err := xdm.AtomizeChecked(args[0])
+			atoms, err := ctx.atomizeChecked(args[0])
 			if err != nil {
 				return nil, err
 			}
@@ -37,6 +37,11 @@ func registerNumericFuncs(l *Library) {
 				return nil, xdm.ErrType("number(): expected at most one item")
 			}
 			a = atoms[0].(*xdm.Atomic)
+		}
+		// XPath 1.0's number() reads a string by the Number production
+		// alone; see number10.
+		if ctx.xpath10() {
+			return xdm.One(compatNumber(a, true)), nil
 		}
 		// fn:number is the one place a failed numeric conversion yields NaN
 		// instead of an error: it exists precisely to be lenient, unlike

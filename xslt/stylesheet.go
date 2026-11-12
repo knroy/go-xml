@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"sort"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 	"github.com/knroy/go-xml/v2/xsd"
@@ -22,6 +24,13 @@ import (
 // runtime context. That is what makes a compiled EN 16931 rule set — tens of
 // megabytes — shareable rather than per-worker.
 type Stylesheet struct {
+	// budgetLimits holds the module and schema bounds this stylesheet was
+	// compiled under (CompileOptions.MaxModuleVisits, MaxModuleNodes,
+	// MaxSchemaBytes, resolved), with nothing spent: the compilations its
+	// transforms start through fn:transform spend a budget under the same
+	// bounds rather than the defaults. Nil means the defaults.
+	budgetLimits *compileBudget
+
 	// rtLib is the runtime function library, built once by runtimeLibrary.
 	rtLib     *xpath.Library
 	rtLibOnce sync.Once
@@ -144,6 +153,9 @@ type Stylesheet struct {
 	// without giving @on-no-match records nothing and the default still
 	// stands.
 	modeNoMatch map[string]string
+	// kidsModes are the streamed modes whose rules read has-children of the
+	// element dispatched, which the stream answers by a Peek (streamkids_l6.go).
+	kidsModes map[string]bool
 	// modeNoMatchPrec records the import precedence of the declaration that
 	// set each modeNoMatch entry, so a later-compiled module of lower
 	// precedence cannot overwrite a higher one.
@@ -166,6 +178,10 @@ type Stylesheet struct {
 	// about the type annotation of every node the mode is applied to.
 	modeTyped       map[string]string
 	modeWarnNoMatch map[string]bool
+	// modeStreamable is xsl:mode/@streamable by Clark mode name, the
+	// declaration of highest precedence winning (streamglobal_l7.go).
+	modeStreamable     map[string]bool
+	modeStreamablePrec map[string]int
 	// accumulators holds xsl:accumulator declarations by Clark name, and
 	// accumOrder keeps the declaration order that fn:accumulator-before
 	// resolves ties by. See accumulator.go.
@@ -245,6 +261,15 @@ type Stylesheet struct {
 	// keeps — reads them through it. Keeping the tree costs one reference
 	// per compiled stylesheet.
 	source *xdm.Node
+	// mainStreams are the modes TransformReader can stream a principal
+	// input in (streammain.go).
+	mainStreams map[string]bool
+	// mainBuilds are those of them whose run builds the document as it is
+	// read (streammain_leaftop.go).
+	mainBuilds map[string]bool
+	// schemaFolds are the element names whose schema types a streamed min
+	// or max below the document node relies on (streamsplit_schema.go).
+	schemaFolds map[xdm.QName]bool
 	// nested caches the stylesheets fn:transform compiles; see nestedCache.
 	nested nestedCache
 	// globalsOnce builds globalsByName, the first declaration of each global
@@ -316,6 +341,9 @@ type Template struct {
 	// so the ambiguity check can skip a candidate that is really the winner
 	// seen through a different branch.
 	unionGroup int
+	// stream is how the rule's body runs when a streamed apply op hands it a
+	// node (streamapply.go); nil when it cannot.
+	stream *rulePlan
 }
 
 // Variable is a compiled xsl:variable, xsl:param or xsl:with-param.
@@ -413,6 +441,12 @@ type Variable struct {
 	// Execute, so recovering them there would mean a type switch over every
 	// instruction kind.
 	bodyRefs []string
+	// calls names the functions a select expression calls, and fdeps what
+	// the stylesheet's xsl:function bodies name, both set by
+	// foldFunctionRefsIntoGlobals: globalRefs follows them on demand rather
+	// than every caller holding a copy of each function's references.
+	calls []string
+	fdeps *funcDeps
 }
 
 // keyDef is a compiled xsl:key.
@@ -497,14 +531,60 @@ func buildPackageUses(parent map[int]int) map[int][]int {
 	return out
 }
 
-// packageParent maps a used package to the package that used it.
-//
-// A component of a used package is visible to the using package, so a
-// reference written there must reach it: template "b" of use-package-175 is
-// declared in package B and refers to $v, which B's copy of D declares. The
-// reference carries B, the binding carries D, and only this chain relates
-// them. Guarded by compileMu with the rest of the package state.
-var packageParent = map[int]int{}
+// compileEnv is the state one compilation keeps outside its compiler, for
+// code reached from it that has no compiler in scope. Each compilation makes
+// its own, a nested one included, so concurrent compilations share none of
+// it and a stylesheet compiles to the same thing whatever compiled before it.
+type compileEnv struct {
+	// packageParent maps a used package to the package that used it.
+	//
+	// A component of a used package is visible to the using package, so a
+	// reference written there must reach it: template "b" of
+	// use-package-175 is declared in package B and refers to $v, which B's
+	// copy of D declares. The reference carries B, the binding carries D,
+	// and only this chain relates them.
+	packageParent map[int]int
+	// packageSerial numbers the packages this compilation sees, so that each
+	// has an identity its declarations can be filed under.
+	packageSerial int
+	// originalSerial numbers the generated namespaces of xsl:original; see
+	// pkgEdits.rewriteOverride.
+	originalSerial int
+	// originalNSs is the set of xsl:original namespaces this compilation
+	// generated, which compileLiteralElement excludes as it excludes the
+	// XSLT namespace. Exact URIs only: a stylesheet may itself declare a URI
+	// under originalNS, and 11.1.3 copies every namespace it does not
+	// exclude.
+	originalNSs map[string]bool
+	// dynamicRefCache memoises makesDynamicReference per package tree.
+	dynamicRefCache map[*xdm.Node]bool
+	// composedVisibility is the effective visibility of a used package's
+	// component declarations, keyed by the declaration element.
+	//
+	// It is recorded during composition because that is the only moment the
+	// answer is known. A component's visibility comes from its own attribute
+	// AND the xsl:expose rules of its package manifest, 3.5.2, and
+	// composition consumes the manifest: by the time the declarations are
+	// compiled into functions the xsl:expose elements are gone from the
+	// tree, so exposedVisibility called then sees no rules and reports the
+	// private default for a component the manifest made public. expose-A
+	// declares p:f1 with no visibility attribute and exposes it with
+	// names="p:*", and reading the attribute at compile time called it
+	// private.
+	composedVisibility map[*xdm.Node]visibility
+	// sheetJudges memoise the judgement of calls on stylesheet functions,
+	// by table (compiler.sheetJudge, streamcall.go).
+	sheetJudges map[sheetJudgeKey]*sheetJudge
+}
+
+func newCompileEnv() *compileEnv {
+	return &compileEnv{
+		packageParent:      map[int]int{},
+		originalNSs:        map[string]bool{},
+		dynamicRefCache:    map[*xdm.Node]bool{},
+		composedVisibility: map[*xdm.Node]visibility{},
+	}
+}
 
 // packageSpace is one package's whitespace declarations.
 //
@@ -681,16 +761,38 @@ func stylesheetBase(doc *xdm.Node, opt string) string {
 	return opt
 }
 
-// Compile compiles a stylesheet from a parsed XSLT document.
-//
-// The lock is taken here and only here. compileLocked holds the body, so that
-// a compilation running *inside* another one -- which fn:transform is, when a
-// static variable calls it during the static phase -- can reach the same code
-// without asking for a mutex the outer call has not let go of. See
-// compileNestedLocked.
+// Compile compiles a stylesheet from a parsed XSLT document. It is
+// CompileContext with context.Background().
 func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
-	compileMu.Lock()
-	defer compileMu.Unlock()
+	return CompileContext(context.Background(), doc, opts)
+}
+
+// CompileContext compiles a stylesheet from a parsed XSLT document, giving up
+// with ctx.Err() if ctx is done before the compilation can start, and
+// stopping the static phase -- use-when, shadow attributes and static
+// variables, including an fn:transform one of them calls -- when ctx is
+// cancelled while it runs.
+//
+// The compile slot is taken here and only here. compileLocked holds the body,
+// so that a compilation running *inside* another one -- which fn:transform is,
+// when a static variable calls it during the static phase -- can reach the
+// same code without asking for a slot the outer call has not let go of. See
+// compileNestedLocked.
+func CompileContext(ctx context.Context, doc *xdm.Node, opts CompileOptions) (_ *Stylesheet, err error) {
+	defer xdmlimit.Recover(&err) // a node constructed past a tree's text blocks
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case compileSlot <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-compileSlot }()
+	opts.ctx = ctx
 	setSharedNS(map[*xdm.Node]map[string]string{})
 	defer setSharedNS(nil)
 	setVersionMemo(true)
@@ -704,8 +806,8 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 // thousands of per-element lookups share a few dozen maps instead of building
 // one each: rebuilding them was a third of DocBook's compile allocation.
 // Outside a compilation m is nil and nothing is cached. It has its own mutex
-// rather than relying on compileMu because a running transform, which does
-// not hold compileMu, can reach inScopeNamespacesShared too.
+// rather than relying on compileSlot because a running transform, which does
+// not hold compileSlot, can reach inScopeNamespacesShared too.
 //
 // byContent and lists intern the maps and the literal elements' binding lists
 // by content as well: SchXslt redeclares one prefix on each of the CEN
@@ -832,7 +934,7 @@ func (s *Stylesheet) globalByName() map[string]*Variable {
 // already running on this goroutine.
 //
 // fn:transform called from a static="yes" variable has to compile a second
-// stylesheet while the first is still being compiled. Taking compileMu again
+// stylesheet while the first is still being compiled. Taking compileSlot again
 // would deadlock against the outer Compile, which still holds it; so this
 // entry point skips the lock, which is sound precisely because the nested
 // compilation is synchronous -- it runs on the goroutine that holds the lock,
@@ -846,8 +948,8 @@ func (s *Stylesheet) globalByName() map[string]*Variable {
 // state in its own prologue and clears it on the way out, so the question is
 // only what the OUTER compilation still needs when the nested one returns.
 // The static phase runs at the very top of compileDocument, before
-// compileSchema, compilePackage, packageParent, overridingDecls,
-// dynamicRefCache and composedVisibility are written at all -- so at the one
+// compileSchema, compilePackage and overridingDecls are written at all --
+// the rest lives in each compilation's own compileEnv -- so at the one
 // point a nested compilation can start, every one of them is still zero, and
 // restoring a zero is what clearing already does. The two version pins are
 // set earlier, in the prologue, but neither is observable: overrideXPathVersion
@@ -863,7 +965,16 @@ func compileNestedLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error
 	return compileLocked(doc, opts)
 }
 
-// compileLocked is Compile's body. The caller holds compileMu.
+// goCtx is the context the compilation runs under: CompileContext's, or for
+// one fn:transform started, the caller's.
+func (c *compiler) goCtx() context.Context {
+	if c.opts.ctx != nil {
+		return c.opts.ctx
+	}
+	return context.Background()
+}
+
+// compileLocked is Compile's body. The caller holds compileSlot.
 func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// See xsd.Schema.Validate: a nil document is a caller's mistake, but a
 	// library that panics on one takes the caller's process with it.
@@ -878,7 +989,15 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	if opts.moduleBudget == nil {
 		opts.moduleBudget = xdm.NewEntityBudget()
 	}
+	// The module budget has the same boundary. A nested compilation spends
+	// the outer one's and is charged for its own principal module too, which
+	// no xsl:import reached; see compileBudget.
+	nested := opts.budget != nil
+	if !nested {
+		opts.budget = newCompileBudget(&opts)
+	}
 	c := &compiler{
+		env:  newCompileEnv(),
 		opts: opts,
 		sheet: &Stylesheet{
 			named:            map[string]*Template{},
@@ -894,6 +1013,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 			compat:           opts.Compat,
 			pkgResolver:      opts.PackageResolver,
 			maxVersion:       opts.MaxVersion,
+			budgetLimits:     opts.budget.limits(),
 			// Method is deliberately left empty. Its default is not "xml"
 			// but a choice made from the result tree — a document whose
 			// first element is <html> defaults to the html or xhtml method
@@ -912,6 +1032,14 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// a schema into the next.
 	compileSchema = nil
 	defer func() { compileSchema = nil }()
+	if root := firstElement(doc); nested && root != nil {
+		if err := c.visitModule(root, opts.BaseURI); err != nil {
+			return nil, err
+		}
+		if err := c.compileModuleNodes(root, opts.BaseURI, doc); err != nil {
+			return nil, err
+		}
+	}
 	compilePackage = 0
 	defer func() { compilePackage = 0 }()
 	// The record of which package wrote each overriding declaration is
@@ -919,18 +1047,6 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// one compilation cannot answer a question about another's nodes.
 	overridingDecls = nil
 	defer func() { overridingDecls = nil }()
-	// So is the memo of which package trees make a dynamic component
-	// reference; see makesDynamicReference.
-	dynamicRefCache = nil
-	defer func() { dynamicRefCache = nil }()
-	// And the visibility composition settled on for each used component; see
-	// composedVisibility.
-	composedVisibility = nil
-	defer func() { composedVisibility = nil }()
-	// Which package used which is package state on the same terms; see
-	// packageParent.
-	packageParent = map[int]int{}
-	defer func() { packageParent = map[int]int{} }()
 	// The XPath version override is package state on the same terms and under
 	// the same lock; see overrideXPathVersion.
 	overrideXPathVersion = opts.XPathVersion
@@ -945,6 +1061,8 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	}
 	c.sheet.sortTemplates()
 	c.sheet.buildRuleIndex()
+	c.linkStreams()
+	c.linkStreamAccums()
 	// A global variable overridden by a higher-precedence declaration is not
 	// evaluated at all, so the overridden bindings are dropped before the
 	// stylesheet is handed back.
@@ -966,7 +1084,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	}
 	c.pruneOverriddenGlobals()
 	c.deferDependentGlobals()
-	c.sheet.packageUses = buildPackageUses(packageParent)
+	c.sheet.packageUses = buildPackageUses(c.env.packageParent)
 	// Character-map inclusion is resolved before the xsl:output tables are
 	// flattened, and both after every module, so that a map may name one
 	// declared later or in a module imported afterwards.
@@ -1035,6 +1153,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	if err := c.sheet.resolveOutputCharacterMaps(c.sheet.output.UseCharacterMaps); err != nil {
 		return nil, err
 	}
+	c.planMainStreams()
 	return c.sheet, nil
 }
 
@@ -1070,11 +1189,13 @@ type Compatibility struct {
 	// fails against a processor that applies the rule.
 	DropAttributesOnDocumentNode bool
 
-	// PrivateFunctionsVisibleToEvaluate is retained for symmetry and is a
-	// no-op: the private-visibility default is already confined to a real
-	// xsl:package, which is where visibility is a meaningful property. It is
-	// named here so that the behaviour is discoverable alongside the other
-	// divergences rather than only in the changelog.
+	// PrivateFunctionsVisibleToEvaluate is a no-op, retained so that code
+	// setting it keeps compiling. Nothing reads it: the target expression of
+	// xsl:evaluate cannot call a private or hidden stylesheet function in any
+	// stylesheet, a plain xsl:stylesheet included, because 3.5 makes such a
+	// stylesheet an implicit package whose functions default to private
+	// (10.4.1, XTDE3160; see Stylesheet.evaluateMayCall). A public function
+	// named in the expression may still call a private one from its body.
 	PrivateFunctionsVisibleToEvaluate bool
 }
 
@@ -1089,6 +1210,19 @@ type CompileOptions struct {
 	// it, and one it could read or reset would not be a bound. A nested
 	// compilation inherits the outer one's -- see compileLocked.
 	moduleBudget *xdm.EntityBudget
+	// nestedDepth and nestedMaxDepth seed the static phase's fn:transform
+	// nesting count and its bound (0 means DefaultMaxDepth) for a
+	// compilation started by fn:transform. Unexported like moduleBudget:
+	// only a nested compilation sets them.
+	nestedDepth, nestedMaxDepth int
+	// ctx is the context CompileContext was given, which the static phase
+	// evaluates under. A compilation fn:transform starts carries the calling
+	// transformation's.
+	ctx context.Context
+	// budget is the module visits and nodes this compilation may still
+	// spend. Unexported and minted by compileLocked like moduleBudget; a
+	// compilation fn:transform starts from the static phase inherits it.
+	budget *compileBudget
 	// BaseURI of the stylesheet, for resolving relative include paths.
 	BaseURI string
 	// StaticParams supplies values for static stylesheet parameters — a
@@ -1115,6 +1249,56 @@ type CompileOptions struct {
 	// declares its entities that way -- sets AllowDOCTYPE here, and thereby
 	// says so deliberately rather than having it decided for it.
 	SchemaParseOptions xdm.ParseOptions
+
+	// MaxSchemaBytes bounds the total schema source text one compilation may
+	// read through SchemaResolver, cumulatively rather than per declaration:
+	// every xsl:import-schema of every module and package, the documents each
+	// schema reaches through its own xs:include, xs:import and xs:redefine,
+	// and the compilations fn:transform starts from the static phase all draw
+	// on the one allowance. Zero means DefaultMaxSchemaBytes. An inline
+	// <xs:schema> is part of the stylesheet module and is not charged; what it
+	// includes is.
+	//
+	// Exceeding it fails the compilation with an error wrapping
+	// xdm.ErrResourceLimit rather than XTSE0220: a truncated schema is a
+	// schema whose components are partly missing, and the stylesheet is never
+	// compiled against one.
+	MaxSchemaBytes int64
+
+	// MaxModuleVisits bounds the xsl:include, xsl:import and xsl:use-package
+	// module visits one compilation makes, counted over every route: a
+	// module reached on several paths is visited once per path, the static
+	// phase and the compile both count, and the compilations fn:transform
+	// starts, from the static phase or from a transform of this stylesheet,
+	// spend the same allowance. Zero means 10,000, about eighty times what
+	// the largest real stylesheets measured need (DocBook XSL, xslTNG,
+	// XSpec: about 120). Exceeding it fails the compilation with an error
+	// wrapping xdm.ErrResourceLimit.
+	//
+	// There is no unlimited setting. The visits are also what bounds how
+	// deep a chain of packages, imports or includes recurses, and a Go stack
+	// overflow ends the process rather than returning an error, so a
+	// negative value, or one above 50,000, is read as 50,000: a chain that
+	// deep needs about 190 MB of stack, a fifth of Go's default 1 GB
+	// maximum (a host that lowers it with debug.SetMaxStack should keep
+	// this bound to match). Raising it lets a
+	// stylesheet that imports one module along many paths cost that many
+	// compilations: each occurrence has its own import precedence, so the
+	// work cannot be shared, and an import diamond doubles it per level.
+	MaxModuleVisits int
+
+	// MaxModuleNodes bounds the tree nodes of the modules one compilation
+	// compiles, counted once per compile of each module, so that a module
+	// imported many times is charged its size each time. The principal
+	// module is the caller's own input and is not charged; the principal
+	// module of a compilation fn:transform starts is. Zero means 500,000,
+	// more than ten times what the largest real stylesheets measured need
+	// (xslTNG: about 40,000). A negative value means no limit, for
+	// stylesheets the caller trusts: compile time and memory then grow with
+	// whatever the modules add up to, MaxModuleVisits still bounding how
+	// many there are. Exceeding it fails the compilation with an error
+	// wrapping xdm.ErrResourceLimit.
+	MaxModuleNodes int
 
 	// PackageResolver loads the packages named by xsl:use-package. Nil
 	// disables package composition, for the same reason a nil Resolver
@@ -1282,13 +1466,13 @@ type nsResolver struct {
 // far more code than the feature is worth. A compiled Stylesheet holds its
 // own schema and never reads this again.
 //
-// compileMu makes that safe. Compile is a public entry point, so nothing stops
-// a caller compiling two stylesheets at once, and package state written
+// compileSlot makes that safe. Compile is a public entry point, so nothing
+// stops a caller compiling two stylesheets at once, and package state written
 // without a lock is a data race whether or not a test happens to exercise it.
-// Compilation is not on any hot path — a stylesheet compiles once and
-// transforms many documents — so serialising it costs nothing that matters.
+// It is a one-slot channel rather than a mutex so that CompileContext can give
+// up waiting for it when its context is done.
 var (
-	compileMu     sync.Mutex
+	compileSlot   = make(chan struct{}, 1)
 	compileSchema *xsd.Schema
 	// compilePackage identifies the package whose module is being compiled,
 	// for the same reason and by the same mechanism as compileSchema. It is
@@ -1407,6 +1591,13 @@ func (r *nsResolver) SchemaDeclarationType(name xdm.QName, attribute bool) (stri
 		return "", false
 	}
 	return local, true
+}
+
+// SchemaTypeEnv is the type environment of the imported schemas, which a
+// value an expression annotates with one of their types carries. See
+// xdm.TypeEnvOfAtomic.
+func (r *nsResolver) SchemaTypeEnv() *xdm.TypeEnvironment {
+	return r.schema.TypeEnv()
 }
 
 // ValidateSchemaValue implements xpath.SchemaTypes.

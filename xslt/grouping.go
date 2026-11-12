@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -48,7 +49,15 @@ type group struct {
 }
 
 func (i *forEachGroupInstr) Execute(rt *runtime, out *outputBuilder) error {
-	seq, err := i.sel.Eval(rt.ctx)
+	if f := rt.burstsFor(i); f != nil && f.group != nil {
+		// Streamed (streamgroup.go): each group as the cursor reaches it.
+		return f.run.group(rt, out, i, f.group)
+	} else if f != nil && f.offBody {
+		return i.executeOff(rt, out, f) // streamgroup_pruned.go
+	}
+	// A grounded population of a streamed container is read off the cursor
+	// (streamgroup.go, groundedGroup).
+	seq, err := rt.evalSelect(i, i.sel)
 	if err != nil {
 		return err
 	}
@@ -376,32 +385,53 @@ func groupAdjacentKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 	first := true
 
 	for idx, it := range seq {
-		sub := rt.withFocus(it, idx+1, len(seq))
-		vals, err := key.Eval(sub.ctx)
-		if err != nil {
-			return nil, err
-		}
-		// XTTE1100: a group-adjacent key must be exactly one item. An empty
-		// sequence leaves the item in no group at all and more than one
-		// leaves it ambiguous, so both are errors rather than something to
-		// silently pick from.
-		atoms := xdm.Atomize(vals)
-		if len(atoms) != 1 {
-			return nil, fmt.Errorf(
-				"XTTE1100: the group-adjacent key produced %d items, want exactly one",
-				len(atoms))
-		}
-		k, err := groupingKey(rt, atoms[0].(*xdm.Atomic), coll)
+		kv, k, err := adjacentKeyOf(rt, it, idx+1, len(seq), key, coll, false)
 		if err != nil {
 			return nil, err
 		}
 		if first || k != prev {
-			groups = append(groups, group{key: xdm.One(atoms[0])})
+			groups = append(groups, group{key: kv})
 			first, prev = false, k
 		}
 		groups[len(groups)-1].items = append(groups[len(groups)-1].items, it)
 	}
 	return groups, nil
+}
+
+// adjacentKeyOf is the group-adjacent key of it, at position pos of size in
+// the population: the key the group keeps (current-grouping-key()) and its
+// collated form, which two items of one group share. composite says
+// composite="yes". The streamed grouping (streamgroup.go) asks it item by
+// item, so that its keys and errors are the tree's.
+func adjacentKeyOf(rt *runtime, it xdm.Item, pos, size int, key *xpath.Compiled,
+	coll xpath.Collation, composite bool) (xdm.Sequence, string, error) {
+
+	vals, err := key.Eval(rt.withFocus(it, pos, size).ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	return adjacentKeyFrom(rt, vals, coll, composite)
+}
+
+// adjacentKeyFrom is adjacentKeyOf for vals, the key expression's value.
+func adjacentKeyFrom(rt *runtime, vals xdm.Sequence, coll xpath.Collation, composite bool) (xdm.Sequence, string, error) {
+	if composite {
+		atoms := atomizeGroupingKey(vals)
+		k, err := compositeKey(rt, atoms, coll)
+		return xdm.Sequence(atoms), k, err
+	}
+	// XTTE1100: a group-adjacent key must be exactly one item. An empty
+	// sequence leaves the item in no group at all and more than one
+	// leaves it ambiguous, so both are errors rather than something to
+	// silently pick from.
+	atoms := xdm.Atomize(vals)
+	if len(atoms) != 1 {
+		return nil, "", fmt.Errorf(
+			"XTTE1100: the group-adjacent key produced %d items, want exactly one",
+			len(atoms))
+	}
+	k, err := groupingKey(rt, atoms[0].(*xdm.Atomic), coll)
+	return xdm.One(atoms[0]), k, err
 }
 
 // groupStartingWith begins a new group at each item matching the pattern.
@@ -564,6 +594,7 @@ func (c *compiler) compileForEachGroup(n *xdm.Node, ns xpath.NamespaceResolver) 
 		return nil, err
 	}
 	instr.body = body
+	c.noteStreamGroup(n, instr, ns)
 	return instr, nil
 }
 
@@ -687,7 +718,13 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// xsl:analyze-string has its own error codes for the two ways the
 		// regex can be rejected, and a caller matching on the code needs
 		// them rather than the function library's FORX0001/FORX0002: an
-		// unusable flag is XTDE1145 and an unusable pattern XTDE1140.
+		// unusable flag is XTDE1145 and an unusable pattern XTDE1140. A valid
+		// pattern refused for a processor limit is neither (§17.1 defines
+		// XTDE1140 for a regex that does not conform to the syntax): it keeps
+		// its XPDY0130.
+		if errors.Is(err, xdm.ErrResourceLimit) {
+			return err
+		}
 		if strings.Contains(err.Error(), "FORX0001") {
 			return fmt.Errorf(
 				"XTDE1145: invalid xsl:analyze-string/@flags %q: %w", flags, err)
@@ -703,6 +740,9 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// the answer was hardest to get — which is the guess this package
 	// declines to make everywhere else. See xpath.RegexpErr.
 	if err := xpath.RegexpErr(re); err != nil {
+		if errors.Is(err, xdm.ErrResourceLimit) {
+			return err
+		}
 		return fmt.Errorf(
 			"XTDE1140: invalid xsl:analyze-string/@regex %q: %w", pattern, err)
 	}
@@ -724,6 +764,9 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// and that is not known until the whole input has been scanned.
 	runs, err := analyzeStringRuns(re, input)
 	if err != nil {
+		if errors.Is(err, xdm.ErrResourceLimit) {
+			return err
+		}
 		return fmt.Errorf(
 			"XTDE1140: invalid xsl:analyze-string/@regex %q: %w", pattern, err)
 	}
@@ -1440,75 +1483,142 @@ func (i *numberInstr) countAny(rt *runtime, node *xdm.Node) (int64, error) {
 		stop, extra = node.Parent(), node
 	}
 
-	// The candidate set in document order: everything from the root up to
-	// and including the node, minus the descendants of the node itself, is
-	// exactly preceding::node() plus ancestor-or-self::node().
-	var candidates []*xdm.Node
-	var reached bool
-	var walk func(cur *xdm.Node)
-	walk = func(cur *xdm.Node) {
-		if reached {
-			return
-		}
-		candidates = append(candidates, cur)
-		if cur == stop {
-			reached = true
-			return
-		}
-		for ch := range cur.Children() {
-			walk(ch)
-			if reached {
-				return
+	// The candidate set is the tree's nodes in document order from the root
+	// up to and including stop: preceding::node() plus ancestor-or-self.
+	// $F is the last of them matching @from (the root always does), and the
+	// answer is the number matching @count from $F on. Patterns that test
+	// only names give the same answer at every execution, so the whole tree
+	// is numbered once per transform and each execution looks it up
+	// (numberAnyMemo); a pattern with predicates may read variables or the
+	// dynamic context, so its walk is made per execution.
+	memo := i.from.predicateFreeOrNil() && i.count.predicateFreeOrNil()
+	var n int64
+	var err error
+	if memo {
+		n, err = i.countAnyMemo(rt, root, stop, node)
+	} else {
+		n, err = i.countAnyWalk(rt, root, stop, node, nil)
+	}
+	if err != nil || extra == nil {
+		return n, err
+	}
+	// The attribute or namespace node is the last candidate.
+	if ok, err := i.matchesFrom(rt, extra); err != nil {
+		return 0, err
+	} else if ok {
+		n = 0
+	}
+	if ok, err := i.matchesCount(rt, extra, node); err != nil {
+		return 0, err
+	} else if ok {
+		n++
+	}
+	return n, nil
+}
+
+// numberAnyMemo is the level="any" count of every node of one tree, for one
+// xsl:number whose patterns test only names: at[k] is the count at the node
+// with index base+k. With no @count the pattern is the numbered node's kind
+// and name, so those are part of what the table answers for.
+type numberAnyMemo struct {
+	root xdm.IdentityKey
+	kind xdm.NodeKind
+	name xdm.QName
+	base int
+	at   []uint32
+}
+
+// countAnyMemo answers countAny from the instruction's table, numbering the
+// tree first when the table is for another tree (or another kind and name).
+// One table is kept per instruction, so a stylesheet numbering many trees
+// holds the latest one only. The stylesheet chooses how many instructions
+// there are, though, so the slots all tables hold are retained items, totalled
+// and checked against the item bound before a table is made. A table the bound
+// will not admit is not an error: the memo is only a speed-up, so that
+// execution walks the tree instead (countAnyWalk), which retains nothing.
+func (i *numberInstr) countAnyMemo(rt *runtime, root, stop, target *xdm.Node) (int64, error) {
+	m := rt.numberAny[i]
+	k := stop.Index() - root.Index()
+	if m == nil || m.root != root.Identity() || k >= len(m.at) ||
+		i.count == nil && (m.kind != target.Kind() || m.name != target.Name()) {
+		size := root.SubtreeEnd() - root.Index()
+		held := int64(size)
+		for j, o := range rt.numberAny {
+			if j != i { // i's own table is replaced, not kept
+				held += int64(len(o.at))
 			}
 		}
+		if rt.ctx.ItemsRefused(held) != nil {
+			delete(rt.numberAny, i)
+			return i.countAnyWalk(rt, root, stop, target, nil)
+		}
+		m = &numberAnyMemo{root: root.Identity(), kind: target.Kind(), name: target.Name(),
+			base: root.Index(), at: make([]uint32, size)}
+		if _, err := i.countAnyWalk(rt, root, nil, target, m); err != nil {
+			return 0, err
+		}
+		if rt.numberAny == nil {
+			rt.numberAny = map[*numberInstr]*numberAnyMemo{}
+		}
+		rt.numberAny[i] = m
 	}
-	walk(root)
-	if !reached {
+	if k < 0 || k >= len(m.at) {
 		return 0, fmt.Errorf(
 			"xsl:number: the context node is not in the tree being walked")
 	}
-	if extra != nil {
-		candidates = append(candidates, extra)
-	}
+	return int64(m.at[k]), nil
+}
 
-	// $F: the last of them matching @from. With no @from every candidate
-	// qualifies, which is the same as starting at the beginning.
-	from := -1
-	if i.from != nil {
-		for k, c := range candidates {
+// countAnyWalk walks root's tree in document order, keeping the count from
+// the last @from match, and returns it at stop; with m it walks the whole
+// tree and records the count at every node instead.
+func (i *numberInstr) countAnyWalk(rt *runtime, root, stop, target *xdm.Node,
+	m *numberAnyMemo) (int64, error) {
+	var count int64
+	step := func(c *xdm.Node) error {
+		if err := rt.ctx.Err(); err != nil {
+			return err
+		}
+		if i.from != nil {
 			ok, err := i.matchesFrom(rt, c)
 			if err != nil {
-				return 0, err
+				return err
 			}
 			if ok {
-				from = k
+				count = 0
 			}
 		}
-		if from < 0 {
-			// No node matches @from at all. Read literally, $F is then empty
-			// and so is $AF, which would make the result the empty sequence.
-			// Both the conformance suite and this package's own tests say
-			// otherwise: counting runs from the start of the document, as if
-			// @from were absent. Taking the literal reading cost five suite
-			// cases and broke a unit test that was right.
-			from = 0
-		}
-	}
-
-	var count int64
-	for k, c := range candidates {
-		if k < from {
-			continue
-		}
-		ok, err := i.matchesCount(rt, c, node)
+		ok, err := i.matchesCount(rt, c, target)
 		if err != nil {
-			return 0, err
+			return err
 		}
 		if ok {
 			count++
 		}
+		if m != nil {
+			m.at[c.Index()-m.base] = uint32(count) // indices are uint32
+		}
+		return nil
 	}
-	return count, nil
+	if err := step(root); err != nil {
+		return 0, err
+	}
+	if root == stop {
+		return count, nil
+	}
+	for c := range root.Descendants() {
+		if err := step(c); err != nil {
+			return 0, err
+		}
+		if c == stop {
+			return count, nil
+		}
+	}
+	if m != nil {
+		return count, nil
+	}
+	return 0, fmt.Errorf(
+		"xsl:number: the context node is not in the tree being walked")
 }
 
 // positionAmongSiblings counts how many preceding siblings the count pattern
@@ -1519,6 +1629,9 @@ func (i *numberInstr) positionAmongSiblings(rt *runtime, n, target *xdm.Node) (i
 	}
 	var count int64
 	for sib := range n.Parent().Children() {
+		if err := rt.ctx.Err(); err != nil {
+			return 0, err
+		}
 		ok, err := i.matchesCount(rt, sib, target)
 		if err != nil {
 			return 0, err

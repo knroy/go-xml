@@ -107,6 +107,31 @@ func TestStreamableModeBodyXTSE3430(t *testing.T) {
 		}
 	})
 
+	// §19.8.9.18 on a template rule's context item, whose type is the match
+	// type of its pattern (§19.2): U{element()} for "book", so root() takes
+	// the head() form, climbing, and "//b" from climbing roams. Under
+	// match="/" the type is U{document-node()}, root() is rewritten as ".",
+	// and the same body streams. A leading "/" is the same rewrite
+	// (§19.8.8.8): "//a is streamable only if the statically-determined
+	// context item type is document-node()".
+	t.Run("root of a typed context item", func(t *testing.T) {
+		for _, c := range []struct {
+			rule   string
+			refuse bool
+		}{
+			{`<xsl:template match="book" mode="s"><xsl:value-of select="count(root()//b)"/></xsl:template>`, true},
+			{`<xsl:template match="book" mode="s"><xsl:value-of select="count(root(.)/*)"/></xsl:template>`, true},
+			{`<xsl:template match="/" mode="s"><xsl:value-of select="count(root()//b)"/></xsl:template>`, false},
+			{`<xsl:template match="document-node()" mode="s"><xsl:value-of select="count(//b)"/></xsl:template>`, false},
+			{`<xsl:template match="book | chapter" mode="s"><xsl:value-of select="count(//b)"/></xsl:template>`, true},
+		} {
+			err := compileModeSheet(t, modeSheet(c.rule))
+			if got := err != nil && strings.Contains(err.Error(), "XTSE3430"); got != c.refuse {
+				t.Errorf("%s: XTSE3430 %v, want %v (err %v)", c.rule, got, c.refuse, err)
+			}
+		}
+	})
+
 	// §19.8.4.5 clause 2: "if there is an xsl:sort child element, then
 	// roaming and free-ranging". Sorting cannot begin until the whole
 	// selection is known, so it cannot be streamed. This is streamable-120.

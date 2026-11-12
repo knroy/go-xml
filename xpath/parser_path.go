@@ -136,11 +136,15 @@ func (p *Parser) parseStepExpr() (Expr, error) {
 	} else if ok {
 		return step, nil
 	}
+	outer := p.spine
+	p.spine = 0
 	base, err := p.parsePrimary()
 	if err != nil {
 		return nil, err
 	}
-	return p.parsePostfix(base)
+	e, err := p.parsePostfix(base)
+	p.spine = max(outer, p.spine)
+	return e, err
 }
 
 // parsePostfix applies the postfix chain of production [48]:
@@ -150,15 +154,26 @@ func (p *Parser) parseStepExpr() (Expr, error) {
 // both legal and mean different things. They are therefore consumed in one
 // loop rather than as two passes; running predicates first would reorder them
 // against the calls.
+//
+// Each predicate list, argument list and lookup nests the base one level
+// deeper, so "$f()[1]()[1]..." is a spine like an operator chain and is
+// charged to maxChainLength the same way. The base's height is p.spine on
+// entry, and the chain's height is left there on return.
 func (p *Parser) parsePostfix(base Expr) (Expr, error) {
+	h := p.spine
 	for {
+		p.spine = 0
 		if p.peekIs(TokOp, "[") {
 			pred, err := p.parsePredicates()
 			if err != nil {
 				return nil, err
 			}
 			if len(pred) == 0 {
+				p.spine = h
 				return base, nil
+			}
+			if h, err = p.grow(h, "["); err != nil {
+				return nil, err
 			}
 			base = &FilterExpr{Base: base, Predicates: pred}
 			continue
@@ -176,6 +191,9 @@ func (p *Parser) parsePostfix(base Expr) (Expr, error) {
 			if err != nil {
 				return nil, err
 			}
+			if h, err = p.grow(h, "("); err != nil {
+				return nil, err
+			}
 			base = &DynamicCall{Target: base, Args: args}
 			continue
 		}
@@ -187,9 +205,13 @@ func (p *Parser) parsePostfix(base Expr) (Expr, error) {
 			if err != nil {
 				return nil, err
 			}
+			if h, err = p.grow(h, "?"); err != nil {
+				return nil, err
+			}
 			base = look
 			continue
 		}
+		p.spine = h
 		return base, nil
 	}
 }
@@ -1006,6 +1028,8 @@ func (p *Parser) parseInlineFunction() (Expr, error) {
 	// checked against it as usual, which is why an empty body under
 	// "as xs:integer" is XPTY0004 rather than an accepted empty sequence.
 	var body Expr
+	outer := p.spine
+	p.spine = 0
 	if p.version.atLeast31() && p.peekIs(TokOp, "}") {
 		body = &SequenceExpr{}
 	} else {
@@ -1014,10 +1038,12 @@ func (p *Parser) parseInlineFunction() (Expr, error) {
 			return nil, err
 		}
 	}
+	spine := p.spine
+	p.spine = max(outer, spine)
 	if err := p.expectOp("}"); err != nil {
 		return nil, err
 	}
-	return &InlineFunctionExpr{Params: params, Result: result, Body: body}, nil
+	return &InlineFunctionExpr{Params: params, Result: result, Body: body, spine: spine}, nil
 }
 
 func (p *Parser) parseFunctionCall() (Expr, error) {
@@ -1175,7 +1201,7 @@ func schemaConstructorCast(name xdm.QName, args []Expr,
 			// matches none of them. Leaving it lexical made the constructor's
 			// own result fail "instance of" against the very type it was
 			// built for.
-			q.Val = q.Val.WithDerived(annotationKeyOf(lex, ns))
+			q.Val = withSchemaEnv(q.Val.WithDerived(annotationKeyOf(lex, ns)), schemaTypeEnvOf(ns))
 			return q, true
 		}
 		// XPath 3.0 admits a computed string here for the same reason it does

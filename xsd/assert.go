@@ -233,11 +233,21 @@ func (p *parser) readAlternative(el *xdm.Node) *TypeAlternative {
 // exactly that confinement, and without it an assertion on a deeply nested
 // element could walk the whole document, making validation quadratic.
 func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
-	if len(t.Assertions) == 0 {
+	// A stopped or cancelled run returns before the copy, not after it:
+	// this runs from a defer as the walk unwinds, so every asserted
+	// ancestor of the element that tripped the stop would otherwise still
+	// copy its whole subtree for a verdict nobody reads.
+	if len(t.Assertions) == 0 || v.stopped || v.checkCancelled() {
 		return
 	}
-	scoped := v.scopeForAssertion(el)
-	annotateForAssertion(scoped, t)
+	scoped, err := v.scopeForAssertion(el)
+	if err != nil {
+		v.failLimit(el,
+			"the assertions could not be evaluated: %v", err)
+		v.stopped = true
+		return
+	}
+	annotateForAssertion(scoped, t, v.schema.typeEnv)
 
 	// $value is in scope in every assertion, not only those on a simple
 	// type (§3.13.4). On a complex type it is the element's simple content
@@ -263,6 +273,10 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 		// error rather than a value that failed the test.
 		ok, err := a.Test.EvalBool(ctx)
 		if err != nil {
+			// An evaluation the run's deadline cut short is no verdict.
+			if v.checkCancelled() {
+				return
+			}
 			// A resource refusal is the one evaluation error that is
 			// not a false result. The rule above is about the
 			// expression being wrong for the value; XPDY0130 says the
@@ -272,7 +286,7 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 			// walk carry on spending against a budget already gone.
 			// Stopping matches what the depth and error limits do.
 			if errors.Is(err, xdm.ErrResourceLimit) {
-				v.failLimit(el, "cvc-assertion.3",
+				v.failLimit(el,
 					"assertion %q could not be evaluated: %v",
 					a.Source, err)
 				v.stopped = true
@@ -328,25 +342,47 @@ func (v *validator) assertionValue(el *xdm.Node, t *ComplexType) xdm.Sequence {
 // attributes its type and its descendants' types supplied by default, without
 // the ignorable whitespace already stripped from it, and with the typing
 // recorded on its descendants.
-func (v *validator) scopeForAssertion(el *xdm.Node) *xdm.Node {
+//
+// Every node copied is charged to the episode's node budget (xpath.MaxNodes).
+// Nested asserted elements each copy their own subtree, so the copying is
+// depth times nodes, and the instance author controls both factors; the
+// charge is what bounds the product. Attributes and namespace bindings travel
+// with every copy too, and are charged one apiece for the same reason. The
+// error is the budget's refusal.
+func (v *validator) scopeForAssertion(el *xdm.Node) (*xdm.Node, error) {
 	clone := xdm.NewNode(xdm.KindElement, el.Name(), el.Value())
 	clone.SetBaseURI(el.BaseURI())
-	clone.ApplyTyping(v.typingOf(el))
-	for ns := range v.namespaceDecls(el) {
-		clone.AddNamespace(ns.prefix, ns.uri)
-	}
+	v.copyTyping(clone, el)
 	// The copy is rooted at the element, so namespace declarations made by
 	// an ancestor are out of scope in it. They still apply to the element
 	// in the real document, and a QName-valued attribute cannot be expanded
 	// without them, so the whole in-scope set is copied onto the root of
-	// the confined tree.
+	// the confined tree. The frame is built in one pass and set once: one
+	// AddNamespace per binding copies and interns the frame built so far,
+	// which is quadratic in the declarations an instance can put on el.
+	var pairs []string
+	declared := map[string]bool{}
+	for ns := range v.namespaceDecls(el) {
+		declared[ns.prefix] = true
+		pairs = append(pairs, ns.prefix, ns.uri)
+	}
 	for prefix, uri := range v.inScopeNamespaces(el) {
-		if _, declared := clone.LookupPrefix(prefix); !declared {
-			clone.AddNamespace(prefix, uri)
+		if !declared[prefix] {
+			pairs = append(pairs, prefix, uri)
 		}
 	}
-	v.fillScopeCopy(clone, el)
-	return clone
+	// Each binding is charged like a node: the set is rebuilt for every
+	// asserted element, so bindings declared once on an ancestor are
+	// copied once per asserted descendant.
+	ctx := v.assertEpisode()
+	if err := ctx.ChargeNodes(1 + len(pairs)/2); err != nil {
+		return nil, err
+	}
+	clone.AddNamespaces(pairs...)
+	if err := v.fillScopeCopy(ctx, clone, el); err != nil {
+		return nil, err
+	}
+	return clone, nil
 }
 
 // fillScopeCopy completes dst, the scope copy of src, with src's attributes
@@ -378,20 +414,47 @@ func (v *validator) scopeForAssertion(el *xdm.Node) *xdm.Node {
 // a LIST: the union's own name carries no item type, so without the member
 // the typed value collapsed from a sequence of tokens to one string
 // holding all of them.
-func (v *validator) fillScopeCopy(dst, src *xdm.Node) {
+func (v *validator) fillScopeCopy(ctx *xpath.Context, dst, src *xdm.Node) error {
 	for a := range v.attrs(src) {
-		dst.AppendAttr(a.Name(), a.Value()).ApplyTyping(v.typingOf(a))
+		if err := ctx.ChargeNodes(1); err != nil {
+			return err
+		}
+		v.copyTyping(dst.AppendAttr(a.Name(), a.Value()), a)
 	}
 	for c := range src.Children() {
 		if isCommentOrPI(c) || v.dropped[c] {
 			continue
 		}
-		cc := dst.AppendShallowCopy(c)
-		cc.ApplyTyping(v.typingOf(c))
-		for ns := range v.namespaceDecls(c) {
-			cc.AddNamespace(ns.prefix, ns.uri)
+		if err := ctx.ChargeNodes(1); err != nil {
+			return err
 		}
-		v.fillScopeCopy(cc, c)
+		cc := dst.AppendShallowCopy(c)
+		v.copyTyping(cc, c)
+		var pairs []string
+		for ns := range v.namespaceDecls(c) {
+			pairs = append(pairs, ns.prefix, ns.uri)
+		}
+		if err := ctx.ChargeNodes(len(pairs) / 2); err != nil {
+			return err
+		}
+		cc.AddNamespaces(pairs...)
+		if err := v.fillScopeCopy(ctx, cc, c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyTyping gives dst, a node of the assertion scope copy, src's PSVI typing
+// and the validating schema's TypeEnvironment. xdm.Typing carries no
+// environment, and a typed node without one atomises against the process-wide
+// fallback, which holds the derivations of whichever schema registered the
+// same type name last: an assertion's "instance of" verdict would then depend
+// on schemas loaded after this one.
+func (v *validator) copyTyping(dst, src *xdm.Node) {
+	dst.ApplyTyping(v.typingOf(src))
+	if dst.TypeAnnotation() != "" {
+		dst.SetTypeEnv(v.schema.typeEnv)
 	}
 }
 
@@ -419,7 +482,13 @@ func isCommentOrPI(n *xdm.Node) bool {
 // Reusing the assertion scope gave the test the element's children and its
 // PSVI annotation, so string() returned the content and the untyped test
 // failed; every alternative then fell through to the xs:error default.
-func (v *validator) scopeForAlternative(el *xdm.Node) *xdm.Node {
+//
+// The copy is charged to the episode's node budget, one for the element and
+// one per attribute and namespace binding, as scopeForAssertion's is: every
+// element with alternatives copies the whole in-scope set, so bindings
+// declared once on an ancestor are copied once per descendant. The error is
+// the budget's refusal.
+func (v *validator) scopeForAlternative(el *xdm.Node) (*xdm.Node, error) {
 	// Built parentless for the reason an assertion's copy is: the element
 	// must be its own root, which is what makes (. is root()) hold and "//"
 	// select nothing.
@@ -437,11 +506,18 @@ func (v *validator) scopeForAlternative(el *xdm.Node) *xdm.Node {
 	// Namespace bindings an ancestor declared are still in scope for the
 	// element, and a QName-valued attribute cannot be expanded without
 	// them, so the whole in-scope set is copied onto the clone.
+	// The clone has no bindings of its own yet and the map's prefixes are
+	// distinct, so the frame is built in one pass and set once rather than
+	// copied and interned per binding (see scopeForAssertion).
+	var pairs []string
 	for prefix, uri := range v.inScopeNamespaces(el) {
-		if _, declared := clone.LookupPrefix(prefix); !declared {
-			clone.AddNamespace(prefix, uri)
-		}
+		pairs = append(pairs, prefix, uri)
 	}
+	if err := v.assertEpisode().ChargeNodes(1 + len(pairs)/2 +
+		el.NumAttrs() + len(v.inherited)); err != nil {
+		return nil, err
+	}
+	clone.AddNamespaces(pairs...)
 	// An inheritable attribute from an ancestor is visible to the test, but
 	// only where the element does not carry one of the same name: the
 	// nearest declaration wins.
@@ -451,7 +527,7 @@ func (v *validator) scopeForAlternative(el *xdm.Node) *xdm.Node {
 		}
 		clone.AppendAttr(a.Name(), a.Value())
 	}
-	return clone
+	return clone, nil
 }
 
 // selectAlternativeType applies conditional type assignment (cvc-type-alt).
@@ -465,7 +541,13 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 	if len(decl.Alternatives) == 0 {
 		return decl.Type
 	}
-	scoped := v.scopeForAlternative(el)
+	scoped, err := v.scopeForAlternative(el)
+	if err != nil {
+		v.failLimit(el,
+			"the type alternatives could not be evaluated: %v", err)
+		v.stopped = true
+		return decl.Type
+	}
 
 	for _, alt := range decl.Alternatives {
 		if alt.Test == nil {
@@ -477,6 +559,20 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 		}
 		ctx := v.assertContext(scoped).WithStaticBaseURI(alt.staticBaseURI)
 		ok, err := alt.Test.EvalBool(ctx)
+		if err != nil && v.checkCancelled() {
+			return decl.Type
+		}
+		// A resource refusal is no verdict, as in checkAssertions: taking
+		// it for a false test would choose a later alternative the schema
+		// gave for elements this test does not hold for, so an instance
+		// could escape an xs:error alternative by exhausting the budget.
+		// The run stops, as the depth and error limits stop it.
+		if errors.Is(err, xdm.ErrResourceLimit) {
+			v.failLimit(el,
+				"alternative %q could not be evaluated: %v", alt.Source, err)
+			v.stopped = true
+			return decl.Type
+		}
 		if err != nil || !ok {
 			continue
 		}
@@ -520,13 +616,15 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 // violated one. "every $x in .//d satisfies $x gt xs:date('1900-01-01')" over
 // a recursive type held at nesting 32 and failed at 33, on documents that
 // differ only in how deep they are.
-func annotateForAssertion(el *xdm.Node, t *ComplexType) {
-	annotateSubtree(el, t, true)
+func annotateForAssertion(el *xdm.Node, t *ComplexType, env *xdm.TypeEnvironment) {
+	annotateSubtree(el, t, true, env)
 }
 
 // annotateSubtree labels el and its descendants. isRoot marks the assertion
-// root, which is the one element that keeps no type of its own.
-func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
+// root, which is the one element that keeps no type of its own. Every label
+// carries env, the validating schema's TypeEnvironment, for the reason given
+// at copyTyping.
+func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool, env *xdm.TypeEnvironment) {
 	if el == nil || t == nil {
 		return
 	}
@@ -537,6 +635,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
 		a := el.Attr(use.Decl.Name.URI, use.Decl.Name.Local)
 		if a != nil && a.TypeAnnotation() == "" {
 			a.SetTypeAnnotation(annotationName(use.Decl.Type))
+			a.SetTypeEnv(env)
 		}
 	}
 
@@ -552,6 +651,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
 		// assertion reaches it.
 		if !isRoot && el.TypeAnnotation() == "" {
 			el.SetTypeAnnotation(annotationName(t.SimpleContent))
+			el.SetTypeEnv(env)
 		}
 		return
 	}
@@ -569,9 +669,10 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
 		case *SimpleType:
 			if c.TypeAnnotation() == "" {
 				c.SetTypeAnnotation(annotationName(dt))
+				c.SetTypeEnv(env)
 			}
 		case *ComplexType:
-			annotateSubtree(c, dt, false)
+			annotateSubtree(c, dt, false, env)
 		}
 	}
 }
@@ -634,8 +735,14 @@ func collectElementDecls(p *Particle, out map[xdm.QName]*ElementDecl, seen map[*
 // charges once per assertion and put the counter back where it started.
 func (v *validator) assertEpisode() *xpath.Context {
 	if v.assertCtx == nil {
-		v.assertCtx = newAssertContext(nil).
-			HoldItemBudget().HoldByteBudget()
+		ctx := newAssertContext(nil)
+		// An assertion is one expression and may be quadratic in the
+		// instance, so the run's deadline has to reach inside it, not
+		// only between steps.
+		if v.ctx != nil {
+			ctx = ctx.WithEnv(func(e *xpath.Env) { e.Ctx = v.ctx })
+		}
+		v.assertCtx = ctx.HoldItemBudget().HoldByteBudget()
 	}
 	return v.assertCtx
 }

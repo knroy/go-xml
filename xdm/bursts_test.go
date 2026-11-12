@@ -3,6 +3,7 @@ package xdm
 import (
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"testing"
 
@@ -129,9 +130,8 @@ func TestParseBurstsSpineStaysSmall(t *testing.T) {
 	b.WriteString("</b></a>")
 	n := 0
 	opts := ParseOptions{bursts: &burster{
-		steps:  []xdmburst.Step{{Local: "a"}, {Local: "b"}, {Local: "r"}},
-		fn:     func(*Node) error { n++; return nil },
-		states: []uint64{1},
+		c:  &patternClient{steps: []xdmburst.Step{{Local: "a"}, {Local: "b"}, {Local: "r"}}, states: []uint64{1}},
+		fn: func(*Node) error { n++; return nil },
 	}}
 	tree, err := parse(strings.NewReader(b.String()), "", opts)
 	if err != nil {
@@ -140,13 +140,41 @@ func TestParseBurstsSpineStaysSmall(t *testing.T) {
 	if n != 20000 {
 		t.Fatalf("%d bursts", n)
 	}
-	// Left behind: the document node, and the bytes of nothing.
+	// Left behind: the document node, the shared whitespace, and what the
+	// block values go on being appended to holds: at most one block.
 	var bytes int
 	for _, blk := range tree.text.blocks {
 		bytes += len(blk)
 	}
-	if tree.n > 2 || bytes > 0 {
+	if tree.n > 2 || bytes > textBlock+spaceHome {
 		t.Fatalf("the spine kept %d records and %d text bytes", tree.n, bytes)
+	}
+}
+
+// An element off the path is checked but dropped as it is parsed
+// (xdmburst.Discard): a large one is never held whole, nor are the
+// elements it holds.
+func TestParseBurstsDropsOffPath(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<a><big>")
+	for i := range 20000 {
+		fmt.Fprintf(&b, "<x i='%d'><y>t</y></x>", i)
+	}
+	b.WriteString("</big><r/></a>")
+	n, held := 0, 0
+	opts := ParseOptions{bursts: &burster{
+		c:     &patternClient{steps: []xdmburst.Step{{Local: "a"}, {Local: "r"}}, states: []uint64{1}},
+		fn:    func(*Node) error { n++; return nil },
+		gens:  ordsOf(0),
+		watch: func(el *Node, _ int, _ bool) { held = max(held, int(el.tree.n)) },
+	}}
+	if _, err := parse(strings.NewReader(b.String()), "", opts); err != nil {
+		t.Fatal(err)
+	}
+	// The open path: a, big, x, y and an attribute or two, against 80,000
+	// records for big whole.
+	if n != 1 || held > 64 {
+		t.Fatalf("%d bursts; the parse held %d records", n, held)
 	}
 }
 
@@ -226,9 +254,8 @@ func TestParseBurstsNamesStaySmall(t *testing.T) {
 	b.WriteString("</a>")
 	var got []*Node
 	opts := ParseOptions{bursts: &burster{
-		steps:  []xdmburst.Step{{Local: "a"}, {Local: "r"}},
-		fn:     func(r *Node) error { got = append(got, r); return nil },
-		states: []uint64{1},
+		c:  &patternClient{steps: []xdmburst.Step{{Local: "a"}, {Local: "r"}}, states: []uint64{1}},
+		fn: func(r *Node) error { got = append(got, r); return nil },
 	}}
 	tree, err := parse(strings.NewReader(b.String()), "", opts)
 	if err != nil {
@@ -377,7 +404,7 @@ func TestParseBurstsSpineCopiedOnce(t *testing.T) {
 		}
 		b.WriteString(strings.Repeat("</w>", depth))
 		got := 0
-		bs := &burster{steps: []xdmburst.Step{{Local: "rec", Descendant: true}}, states: []uint64{1}, gens: []uint64{0},
+		bs := &burster{c: &patternClient{steps: []xdmburst.Step{{Local: "rec", Descendant: true}}, states: []uint64{1}}, gens: ordsOf(0),
 			fn: func(r *Node) error {
 				// Each burst still has its whole ancestry.
 				d := 0
@@ -400,5 +427,62 @@ func TestParseBurstsSpineCopiedOnce(t *testing.T) {
 		if got != n || bs.spineCopies > opened {
 			t.Errorf("wrap %v: %d bursts; %d ancestor records copied for %d elements read", wrap, got, bs.spineCopies, opened)
 		}
+	}
+}
+
+// TestSpineStacks: the spine's per-depth marks, gens and ordinals are held
+// as runs (a deep document cost a word or more per open element besides its
+// record); each must read as the plain slice it replaced, and a deep, evenly
+// nested stretch must take one run.
+func TestSpineStacks(t *testing.T) {
+	rng := rand.New(rand.NewPCG(7, 9))
+	var ost ordStack
+	var ms markStack
+	var oref []uint64
+	var mref []burstMark
+	for i := range 20000 {
+		switch r := rng.IntN(10); {
+		case r < 6 || len(oref) == 0:
+			v := uint64(rng.IntN(4))
+			if len(oref) > 0 && rng.IntN(3) > 0 {
+				v = oref[len(oref)-1] + uint64(rng.IntN(2)) // often a progression
+			}
+			ost.push(v)
+			oref = append(oref, v)
+			m := burstMark{names: rng.IntN(2)}
+			ms.push(m)
+			mref = append(mref, m)
+		case r < 8:
+			ost.truncate(len(oref) - 1)
+			oref = oref[:len(oref)-1]
+			ms.pop()
+			mref = mref[:len(mref)-1]
+		default:
+			n := rng.IntN(len(oref) + 1)
+			ost.truncate(n)
+			oref = oref[:n]
+			for len(mref) > n {
+				ms.pop()
+				mref = mref[:len(mref)-1]
+			}
+		}
+		if ost.len() != len(oref) || ms.len() != len(mref) {
+			t.Fatalf("op %d: lengths %d %d, want %d", i, ost.len(), ms.len(), len(oref))
+		}
+		for k, v := range oref {
+			if got := ost.at(k); got != v {
+				t.Fatalf("op %d: at(%d) = %d, want %d", i, k, got, v)
+			}
+		}
+		if len(mref) > 0 && ms.top() != mref[len(mref)-1] {
+			t.Fatalf("op %d: top mark %v, want %v", i, ms.top(), mref[len(mref)-1])
+		}
+	}
+	var even ordStack
+	for v := range uint64(100000) {
+		even.push(3 * v)
+	}
+	if len(even.runs) != 1 {
+		t.Errorf("an even progression took %d runs", len(even.runs))
 	}
 }

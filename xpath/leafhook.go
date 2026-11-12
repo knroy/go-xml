@@ -38,6 +38,13 @@ func init() {
 	xpathleaf.CallItem = func(c any, fn *xdm.FunctionItem, args []xdm.Sequence) (xdm.Sequence, error) {
 		return callItem(c.(*Context), fn, args)
 	}
+	xpathleaf.LockYield = func(l any) func() {
+		g, _ := l.(*EvalLock)
+		if g == nil || !g.shared.Load() {
+			return func() {}
+		}
+		return g.yield(nil)
+	}
 	xpathleaf.WithExpr = func(c, e any) any {
 		n := *c.(*Compiled)
 		n.expr = optimize(e.(Expr))
@@ -80,6 +87,7 @@ func init() {
 		}
 		b.nodes, b.bytes = limitOr(l.Nodes, MaxNodes), limitOr(l.Bytes, MaxBytes)
 		b.nodesBuilt, b.bytesBuilt = max(l.NodesBuilt, 0), max(l.BytesBuilt, 0)
+		b.entities = l.Entities
 	}
 	xpathleaf.Charged = func(c any) (int64, int64) {
 		e := c.(*Context).ev()

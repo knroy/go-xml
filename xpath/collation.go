@@ -82,17 +82,50 @@ type Collation interface {
 // A collation that offers no MatchRange is one whose equality is codepoint
 // equality as far as this package can tell, so the match is exactly as long as
 // the needle.
-func collationMatchRange(c Collation, s, sub string) (start, end int, ok bool) {
+//
+// ctx's cancellation is threaded into a UCA scan, which keys a span per
+// candidate and so can outlast a host deadline on a long haystack; the other
+// collations search in linear time and are called as they are.
+func collationMatchRange(ctx *Context, c Collation, s, sub string) (start, end int, ok bool, err error) {
+	if u, is := c.(*ucaCollation); is {
+		return u.matchRange(s, sub, ucaPoll(ctx))
+	}
 	if m, is := c.(interface {
 		MatchRange(s, sub string) (int, int, bool)
 	}); is {
-		return m.MatchRange(s, sub)
+		start, end, ok = m.MatchRange(s, sub)
+		return start, end, ok, nil
 	}
 	i := c.IndexOf(s, sub)
 	if i < 0 {
-		return 0, 0, false
+		return 0, 0, false, nil
 	}
-	return i, i + len(sub), true
+	return i, i + len(sub), true, nil
+}
+
+// collationContains, collationStartsWith and collationEndsWith are the
+// Collation methods with ctx's cancellation threaded into a UCA scan, as for
+// collationMatchRange.
+func collationContains(ctx *Context, c Collation, s, sub string) (bool, error) {
+	if u, is := c.(*ucaCollation); is {
+		i, err := u.indexOf(s, sub, ucaPoll(ctx))
+		return i >= 0, err
+	}
+	return c.Contains(s, sub), nil
+}
+
+func collationStartsWith(ctx *Context, c Collation, s, prefix string) (bool, error) {
+	if u, is := c.(*ucaCollation); is {
+		return u.startsWith(s, prefix, ucaPoll(ctx))
+	}
+	return c.StartsWith(s, prefix), nil
+}
+
+func collationEndsWith(ctx *Context, c Collation, s, suffix string) (bool, error) {
+	if u, is := c.(*ucaCollation); is {
+		return u.endsWith(s, suffix, ucaPoll(ctx))
+	}
+	return c.EndsWith(s, suffix), nil
 }
 
 type codepointCollation struct{}
@@ -308,6 +341,11 @@ type ucaCollation struct {
 	// removed before the identity level is reached — and compare-042 asserts
 	// that a blanked space is still significant at identical strength.
 	identical bool
+	// prim is the primary level alone, under the same tailoring and alternate
+	// handling as base. Two strings the collation calls equal have equal
+	// primary keys, so the substring scans compare these first: cheap to
+	// reject on, and their length is what bounds how far a span can grow.
+	prim *collate.Collator
 
 	buf collate.Buffer
 }
@@ -387,6 +425,158 @@ func (u *ucaCollation) Compare(a, b string) int {
 // index by collation rather than compare every pair.
 func (u *ucaCollation) Key(s string) string { return string(u.key(s)) }
 
+func (u *ucaCollation) IndexOf(s, sub string) int {
+	i, _ := u.indexOf(s, sub, nil)
+	return i
+}
+
+func (u *ucaCollation) Contains(s, sub string) bool { return u.IndexOf(s, sub) >= 0 }
+
+func (u *ucaCollation) StartsWith(s, prefix string) bool {
+	ok, _ := u.startsWith(s, prefix, nil)
+	return ok
+}
+
+func (u *ucaCollation) EndsWith(s, suffix string) bool {
+	ok, _ := u.endsWith(s, suffix, nil)
+	return ok
+}
+
+func (u *ucaCollation) MatchRange(s, sub string) (int, int, bool) {
+	start, end, ok, _ := u.matchRange(s, sub, nil)
+	return start, end, ok
+}
+
+// ucaSpanSlack is how far, in primary-key bytes, a candidate span may run past
+// the needle's primary key before the scan gives up extending it.
+//
+// Extending a span on one side can shorten its primary key only where a
+// contraction absorbs the characters at that edge, and a contraction spans a
+// few characters of a few weights each, so 32 bytes (ten or more collation
+// elements) is far beyond what any CLDR table can take back. Once a span is
+// that much longer than the needle, no extension of it can equal the needle,
+// which is what turns the scan from O(n^2) spans into O(n) spans for any
+// needle.
+const ucaSpanSlack = 32
+
+// ucaSearch is one substring search under a UCA collation. The needle's keys
+// are built once rather than per candidate span, and poll, when set, is called
+// with each span's length before it is keyed: it checks the evaluation's
+// cancellation and charges the bytes keyed to its byte budget. A haystack of
+// characters ignorable at the primary level never outgrows the needle, so the
+// scan over it stays quadratic in spans and only those bound it.
+type ucaSearch struct {
+	u          *ucaCollation
+	key, prim  []byte
+	emptyMatch bool
+	poll       func(n int) error
+}
+
+// ucaPoll is the poll an evaluation hands a UCA scan.
+func ucaPoll(ctx *Context) func(int) error {
+	return func(n int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return ctx.countBytes(n)
+	}
+}
+
+func (u *ucaCollation) search(sub string, poll func(int) error) *ucaSearch {
+	q := &ucaSearch{u: u, key: u.key(sub), prim: u.primaryKey(sub), poll: poll}
+	q.emptyMatch = bytes.Equal(q.key, u.key(""))
+	return q
+}
+
+// primaryKey is key's primary level alone, on the same input key sees.
+func (u *ucaCollation) primaryKey(s string) []byte {
+	if u.stripMarks {
+		s = stripCombining(s)
+	}
+	u.mu.Lock()
+	k := append([]byte(nil), u.prim.KeyFromString(&u.buf, s)...)
+	u.buf.Reset()
+	u.mu.Unlock()
+	return k
+}
+
+// equal reports whether span compares equal to the needle, and past whether
+// the span has outgrown it by more than ucaSpanSlack, so that no longer span
+// from the same fixed end can match.
+func (q *ucaSearch) equal(span string) (eq, past bool, err error) {
+	p, err := q.primary(span)
+	if err != nil {
+		return false, false, err
+	}
+	if !bytes.Equal(p, q.prim) {
+		return false, len(p) > len(q.prim)+ucaSpanSlack, nil
+	}
+	return bytes.Equal(q.u.key(span), q.key), false, nil
+}
+
+// primary is primaryKey with the poll applied.
+func (q *ucaSearch) primary(span string) ([]byte, error) {
+	if q.poll != nil {
+		if err := q.poll(len(span)); err != nil {
+			return nil, err
+		}
+	}
+	return q.u.primaryKey(span), nil
+}
+
+// skipShort returns an offset lo such that no span s[start:end] with end <= lo
+// can equal the needle, found in O(log) keyings rather than one per end.
+//
+// It is ucaSpanSlack read the other way: cutting characters off a span's end
+// can lengthen its primary key only by what a contraction at that edge gives
+// back, so a span whose primary key is ucaSpanSlack bytes shorter than the
+// needle's has no shorter prefix that matches. The span is grown by doubling
+// until its key reaches that floor, then the crossing is bisected. Without it
+// each start keyed every span up to the needle's length, O(n*m^2) for a
+// needle of m characters.
+func (q *ucaSearch) skipShort(s string, start int) (int, error) {
+	floor := len(q.prim) - ucaSpanSlack
+	lo := start
+	if floor <= 0 {
+		return lo, nil
+	}
+	hi := -1
+	for k := 1; hi < 0; k *= 2 {
+		e := start
+		for i := 0; i < k && e < len(s); i++ {
+			_, size := utf8.DecodeRuneInString(s[e:])
+			e += size
+		}
+		p, err := q.primary(s[start:e])
+		if err != nil {
+			return 0, err
+		}
+		if len(p) >= floor {
+			hi = e
+		} else if lo = e; e == len(s) {
+			return lo, nil
+		}
+	}
+	for {
+		mid := lo + (hi-lo)/2
+		for mid > lo && !utf8.RuneStart(s[mid]) {
+			mid--
+		}
+		if mid == lo {
+			return lo, nil
+		}
+		p, err := q.primary(s[start:mid])
+		if err != nil {
+			return 0, err
+		}
+		if len(p) < floor {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+}
+
 // The substring operations are defined over collation units. Implementing them
 // properly needs the collation element iterator, which x/text does not expose,
 // so a naive scan over byte offsets would answer questions like
@@ -401,39 +591,47 @@ func (u *ucaCollation) Key(s string) string { return string(u.key(s)) }
 // needle of "--***-*---" has an empty key, so it matches everywhere — which is
 // exactly what contains("Eureka!", "--***-*---") is specified to report — and
 // a scan that skipped the zero-length range would miss it.
-func (u *ucaCollation) matchAt(s string, start int, sub string) (int, bool) {
-	if u.Compare("", sub) == 0 {
-		return start, true
+func (q *ucaSearch) matchAt(s string, start int) (int, bool, error) {
+	if q.emptyMatch {
+		return start, true, nil
 	}
-	for end := start; end <= len(s); end++ {
+	lo, err := q.skipShort(s, start)
+	if err != nil {
+		return 0, false, err
+	}
+	for end := lo + 1; end <= len(s); end++ {
 		if end < len(s) && !utf8.RuneStart(s[end]) {
 			continue
 		}
-		if end == start {
-			continue
+		eq, past, err := q.equal(s[start:end])
+		if err != nil || eq {
+			return end, eq, err
 		}
-		if u.Compare(s[start:end], sub) == 0 {
-			return end, true
+		if past {
+			break
 		}
 	}
-	return 0, false
+	return 0, false, nil
 }
 
-func (u *ucaCollation) IndexOf(s, sub string) int {
+func (u *ucaCollation) indexOf(s, sub string, poll func(int) error) (int, error) {
+	q := u.search(sub, poll)
 	for start := 0; start <= len(s); start++ {
 		if start < len(s) && !utf8.RuneStart(s[start]) {
 			continue
 		}
-		if _, ok := u.matchAt(s, start, sub); ok {
-			return start
+		_, ok, err := q.matchAt(s, start)
+		if err != nil {
+			return -1, err
+		}
+		if ok {
+			return start, nil
 		}
 	}
-	return -1
+	return -1, nil
 }
 
-func (u *ucaCollation) Contains(s, sub string) bool { return u.IndexOf(s, sub) >= 0 }
-
-// MatchRange reports the span of s that equals sub, as the smallest span at
+// matchRange reports the span of s that equals sub, as the smallest span at
 // the earliest position where a match exists.
 //
 // "Smallest" matters at both ends when characters are ignorable. Under
@@ -448,12 +646,16 @@ func (u *ucaCollation) Contains(s, sub string) bool { return u.IndexOf(s, sub) >
 // So the end comes from the shortest match, found by scanning forward, and the
 // start is then advanced as far as it can go while the span still matches,
 // which drops exactly the leading ignorables.
-func (u *ucaCollation) MatchRange(s, sub string) (int, int, bool) {
+func (u *ucaCollation) matchRange(s, sub string, poll func(int) error) (int, int, bool, error) {
+	q := u.search(sub, poll)
 	for start := 0; start <= len(s); start++ {
 		if start < len(s) && !utf8.RuneStart(s[start]) {
 			continue
 		}
-		end, ok := u.matchAt(s, start, sub)
+		end, ok, err := q.matchAt(s, start)
+		if err != nil {
+			return 0, 0, false, err
+		}
 		if !ok {
 			continue
 		}
@@ -462,34 +664,45 @@ func (u *ucaCollation) MatchRange(s, sub string) (int, int, bool) {
 			for next < end && !utf8.RuneStart(s[next]) {
 				next++
 			}
-			if u.Compare(s[next:end], sub) != 0 {
+			eq, _, err := q.equal(s[next:end])
+			if err != nil {
+				return 0, 0, false, err
+			}
+			if !eq {
 				break
 			}
 			start = next
 		}
-		return start, end, true
+		return start, end, true, nil
 	}
-	return 0, 0, false
+	return 0, 0, false, nil
 }
 
-func (u *ucaCollation) StartsWith(s, prefix string) bool {
-	_, ok := u.matchAt(s, 0, prefix)
-	return ok
+func (u *ucaCollation) startsWith(s, prefix string, poll func(int) error) (bool, error) {
+	_, ok, err := u.search(prefix, poll).matchAt(s, 0)
+	return ok, err
 }
 
-func (u *ucaCollation) EndsWith(s, suffix string) bool {
-	if u.Compare("", suffix) == 0 {
-		return true
+// endsWith grows the candidate suffix from the end of s leftwards, so that the
+// same ucaSpanSlack bound that stops matchAt stops it too.
+func (u *ucaCollation) endsWith(s, suffix string, poll func(int) error) (bool, error) {
+	q := u.search(suffix, poll)
+	if q.emptyMatch {
+		return true, nil
 	}
-	for start := 0; start <= len(s); start++ {
-		if start < len(s) && !utf8.RuneStart(s[start]) {
+	for start := len(s) - 1; start >= 0; start-- {
+		if !utf8.RuneStart(s[start]) {
 			continue
 		}
-		if u.Compare(s[start:], suffix) == 0 {
-			return true
+		eq, past, err := q.equal(s[start:])
+		if err != nil || eq {
+			return eq, err
+		}
+		if past {
+			break
 		}
 	}
-	return false
+	return false, nil
 }
 
 // parseUCACollation builds the collation a UCA URI names, or reports why it
@@ -737,6 +950,15 @@ func parseUCACollation(uri string) (Collation, error) {
 		}
 		c.base = base
 	}
+
+	primKeys := cloneKeys(keys)
+	primKeys["ks"] = "level1"
+	delete(primKeys, "kc")
+	prim, err := newUCACollator(tag, primKeys)
+	if err != nil {
+		return nil, err
+	}
+	c.prim = prim
 
 	// See ucaCollation.stripMarks: the workaround is needed only where a case
 	// level is compared at a strength that has already discarded diacritics.

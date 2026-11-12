@@ -292,6 +292,37 @@ declare variable $s:v := 1;`}
 	}
 }
 
+// TestModuleSelfImportSamePrefix is XQST0093a. §4.12 forbids a module import's
+// prefix matching one bound by "a module declaration with a different target
+// namespace" [err:XQST0033], so the module declaration's own prefix, reused
+// for its own namespace, is legal. A namespace declaration is no such
+// exception.
+func TestModuleSelfImportSamePrefix(t *testing.T) {
+	self := xquery.Module{Namespace: "http://x/self",
+		Source: `module namespace s="http://x/self";
+import module namespace s="http://x/self";
+declare variable $s:v := 1;`}
+	got, err := run(t, `import module namespace s="http://x/self"; $s:v`,
+		xquery.Options{Modules: []xquery.Module{self}})
+	if err != nil || got != "1" {
+		t.Errorf("self-import under the declaration's prefix: got %q, %v", got, err)
+	}
+	for _, src := range []string{
+		`module namespace s="http://x/self";
+import module namespace s="http://x/other"; declare variable $s:v := 1;`,
+		`module namespace s="http://x/self"; declare namespace t="http://x/self";
+import module namespace t="http://x/self"; declare variable $s:v := 1;`,
+	} {
+		bad := xquery.Module{Namespace: "http://x/self", Source: src}
+		_, err := run(t, `import module namespace s="http://x/self"; $s:v`,
+			xquery.Options{Modules: []xquery.Module{bad, {Namespace: "http://x/other",
+				Source: `module namespace o="http://x/other"; declare variable $o:w := 2;`}}})
+		if err == nil || !strings.Contains(err.Error(), "XQST0033") {
+			t.Errorf("%s\nwant XQST0033, got %v", src, err)
+		}
+	}
+}
+
 // --- security ---------------------------------------------------------------
 //
 // The three tests below are the ones docs/security.md's claims about this

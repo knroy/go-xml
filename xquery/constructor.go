@@ -1,8 +1,10 @@
 package xquery
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -61,7 +63,7 @@ type element struct {
 	// element's own name or attributes use them, so they are carried here and
 	// applied at evaluation to whichever of them an ancestor does not already
 	// supply.
-	inherited map[string]string
+	inherited *nsScope
 
 	attrs   []attribute
 	content []node
@@ -131,6 +133,155 @@ type namespaceNode struct {
 // context, and only then is anything resolved. BaseX does the same thing by
 // rewinding and re-parsing; the shape here is the same discipline written out.
 func (p *parser) parseDirElement() (node, error) {
+	if p.memo == nil {
+		p.memo = &ctorMemo{}
+	}
+	key := p.base + p.pos
+	if r, ok := p.memo.dir[key]; ok && strings.HasPrefix(p.src[p.pos:], r.text) {
+		p.pos += len(r.text)
+		for k, v := range r.prefixes {
+			if p.ctorPrefixes == nil {
+				p.ctorPrefixes = map[string]string{}
+			}
+			p.ctorPrefixes[k] = v
+		}
+		return r.n, r.err
+	}
+	start := p.pos
+	outer := p.ctorPrefixes
+	p.ctorPrefixes = nil
+	n, err := p.parseDirElementOnce()
+	recorded := p.ctorPrefixes
+	p.ctorPrefixes = outer
+	for k, v := range recorded {
+		if p.ctorPrefixes == nil {
+			p.ctorPrefixes = map[string]string{}
+		}
+		p.ctorPrefixes[k] = v
+	}
+	// A nesting refusal depends on the route that reached this offset, not on
+	// the source, so it is the one answer that is not remembered.
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		if p.memo.dir == nil {
+			p.memo.dir = map[int]ctorResult{}
+		}
+		p.memo.dir[key] = ctorResult{text: p.src[start:p.pos], n: n, err: err,
+			prefixes: recorded}
+	}
+	return n, err
+}
+
+// ctorMemo remembers the parse of every direct element constructor by its
+// absolute offset in the module source, shared by every parser reading a
+// substring of that source.
+//
+// The compiler reads a constructor more than once by design: an item is
+// parsed, then re-read as the operand of an operator after it
+// (retryAsOperandSubst); a clause scan steps over a constructor by parsing it
+// (skipDirConstructor); substituteOperands parses each operand it lifts. Each
+// of those reads parsed the enclosed bodies again through a fresh parser, so
+// a constructor nested d deep was parsed about 3^d times -- 260 bytes of
+// "<a>{<a>{...}</a> = 1}</a> = 1" pinned a core for hours inside Compile.
+// The result at an offset is a pure function of the source there and of the
+// static context, which is itself decided by the enclosing source, so the
+// first answer is the answer and every later read is a lookup.
+//
+// The text check on a hit is what keeps a wrongly computed base from
+// returning another constructor's parse: a parser over a string that is not
+// a substring of the module source -- a rewritten expression -- gets a memo
+// of its own (memoAt), and a mismatch is a miss. When the base is right the
+// two strings share their bytes and the comparison is a pointer test.
+type ctorMemo struct {
+	dir map[int]ctorResult
+	// body remembers the parse of every bracketed body -- a try, catch,
+	// ordered, validate or computed constructor's braces, a switch or if
+	// operand's parentheses, a direct constructor's enclosed expression, a
+	// string constructor's interpolation and an inline function's body --
+	// by the absolute offset of its first byte. A body is delimited by its
+	// own brackets, so its extent and its parse are the same whichever outer
+	// read reached it. The constructor memo alone left every other form to be
+	// parsed again by each of the three reads an item can get (the item, the
+	// operand probe, the lifted operand), 3^d for d levels of nesting.
+	body map[bodyKey]bodyResult
+	// refused latches the first nesting refusal any parser over this source
+	// met; see parser.descend.
+	refused error
+}
+
+// bodyKey is a body's absolute offset, and whether it was read as an inline
+// function's body, whose parse differs from a query body's.
+type bodyKey struct {
+	off int
+	fn  bool
+}
+
+// bodyResult is one remembered body parse, keyed by bodyKey.
+type bodyResult struct {
+	text  string
+	items []node
+	err   error
+}
+
+// parseMemoBody parses p's whole source, a bracketed body whose memo and
+// base p already holds, once per offset: query body, or with fn an inline
+// function's body.
+func (p *parser) parseMemoBody(fn bool) ([]node, error) {
+	if p.memo == nil {
+		p.memo = &ctorMemo{}
+	}
+	key := bodyKey{p.base, fn}
+	if r, ok := p.memo.body[key]; ok && r.text == p.src {
+		return r.items, r.err
+	}
+	var items []node
+	var err error
+	if fn {
+		items, err = p.parseBodyItems()
+	} else {
+		items, err = p.parseQueryBody()
+	}
+	// As for constructors: a nesting refusal depends on the route, not on
+	// the source, and is not remembered.
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		if p.memo.body == nil {
+			p.memo.body = map[bodyKey]bodyResult{}
+		}
+		p.memo.body[key] = bodyResult{text: p.src, items: items, err: err}
+	}
+	return items, err
+}
+
+// ctorResult is one remembered parse: the source it consumed, the result and
+// error, and the prefixes it recorded in parser.ctorPrefixes, replayed on a
+// hit so that the module-wide union is the same however often it is read.
+type ctorResult struct {
+	text     string
+	n        node
+	err      error
+	prefixes map[string]string
+}
+
+// memoAt returns the memo and base for a sub-parser over a string beginning
+// at p.src[off:], or a fresh memo for a string that is not a substring of
+// p.src (off < 0).
+func (p *parser) memoAt(off int) (*ctorMemo, int) {
+	if off < 0 {
+		return &ctorMemo{}, 0
+	}
+	if p.memo == nil {
+		p.memo = &ctorMemo{}
+	}
+	return p.memo, p.base + off
+}
+
+// leadingSpace is the number of bytes strings.TrimSpace removes from the
+// front of s, so that a trimmed substring's offset can be recovered.
+func leadingSpace(s string) int {
+	return len(s) - len(strings.TrimLeftFunc(s, unicode.IsSpace))
+}
+
+// parseDirElementOnce is parseDirElement without the memo.
+func (p *parser) parseDirElementOnce() (node, error) {
 	if !p.consume("<") {
 		return nil, p.errorf("XPST0003: expected %q", "<")
 	}
@@ -147,8 +298,16 @@ func (p *parser) parseDirElement() (node, error) {
 	}
 
 	// Apply the namespace declarations among them to a child context. Only
-	// now can any QName on this element be resolved.
-	inner := p.sc.child()
+	// now can any QName on this element be resolved. An element that
+	// declares nothing reads its parent's context, which nothing changes
+	// after this point.
+	inner := p.sc
+	for _, a := range raw {
+		if isDecl, _ := namespaceDecl(a.prefix, a.local); isDecl {
+			inner = p.sc.child()
+			break
+		}
+	}
 	var bindings []nsBinding
 	seenNS := map[string]bool{}
 	for _, a := range raw {
@@ -200,10 +359,8 @@ func (p *parser) parseDirElement() (node, error) {
 		} else if err := inner.bind(pfx, uri); err != nil {
 			return nil, p.errorAt(startPos, "%v", err)
 		}
-		if uri == "" {
-			delete(inner.ctorNS, pfx)
-		} else {
-			inner.ctorNS[pfx] = uri
+		inner.ctorNS.set(pfx, uri)
+		if uri != "" {
 			// Also recorded module-wide, for the one name resolved after the
 			// constructor's context has gone out of scope. See
 			// parser.ctorPrefixes.
@@ -588,6 +745,7 @@ func (p *parser) parseEnclosed() (node, error) {
 		return nil, err
 	}
 	body := p.src[p.pos+1 : end]
+	m, base := p.memoAt(p.pos + 1)
 	p.pos = end + 1
 	if blankEnclosedBody(body) {
 		// "{}" is an empty sequence, which contributes nothing.
@@ -595,8 +753,9 @@ func (p *parser) parseEnclosed() (node, error) {
 	}
 	// The body is a query body rather than a bare expression: it may itself
 	// hold constructors, as in <a>{<b/>}</a>.
-	inner := &parser{src: body, sc: p.sc, version: p.version}
-	items, err := inner.parseQueryBody()
+	inner := &parser{src: body, sc: p.sc, version: p.version, memo: m,
+		base: base, depth: p.depth}
+	items, err := inner.parseMemoBody(false)
 	if err != nil {
 		return nil, err
 	}

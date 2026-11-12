@@ -1,6 +1,8 @@
 package xslt
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -148,6 +150,29 @@ func TestDynamicCallDeclaredType(t *testing.T) {
 				"first argument type A': xs:string is atomic, so absorption",
 		},
 		{
+			name: "function (xs:string) with a space is a function type",
+			sheet: rule(`<xsl:variable name="f" as="function (xs:string) as xs:integer"
+			                 select="function($s as xs:string) { 1 }"/>
+			             <xsl:value-of select="$f(@class)"/>`),
+			why: "whitespace may separate the keyword from its parenthesis " +
+				"(XPath A.2.2), so the signature is read and the argument absorbed",
+		},
+		{
+			name: "a comma inside a braced URI is not a parameter separator",
+			sheet: modeSheet(`<xsl:import-schema namespace="urn:a,b">
+			      <xs:schema targetNamespace="urn:a,b">
+			        <xs:simpleType name="t"><xs:restriction base="xs:integer"/></xs:simpleType>
+			      </xs:schema>
+			    </xsl:import-schema>
+			    <xsl:template match="item" mode="s">
+			      <xsl:variable name="f" as="function(Q{urn:a,b}t, xs:string) as xs:integer"
+			          select="function($t, $s as xs:string) { 1 }"/>
+			      <xsl:value-of select="$f(1, @class)"/>
+			    </xsl:template>`),
+			why: "the second parameter is xs:string, so @class is absorbed; " +
+				"splitting at the URI's comma read it as 'b}t' and navigated",
+		},
+		{
 			name: "function(node()) navigates from a streamed child",
 			sheet: rule(`<xsl:variable name="f" as="function(node()) as xs:integer"
 			                 select="function($n as node()) { 1 }"/>
@@ -219,4 +244,102 @@ func TestDynamicCallOnAccumulatorValue(t *testing.T) {
 	if err != nil {
 		t.Errorf("a map-typed accumulator's $value(@class) was refused: %v", err)
 	}
+}
+
+// §19.8.8.11 with a base that is not a variable. §19.1 says where the
+// signature it reads is available: "for a NamedFunctionRef, for an
+// InlineFunctionExpr, for a MapConstructor, for a FunctionCall whose static
+// type is U{function(*)}, and for a VarRef [...]". Those bases give their
+// arguments the usage of the signature's parameter types; every other base
+// -- a lookup, a conditional, a dynamic call -- has no signature, and "the
+// usage of each of the argument expressions is navigation".
+func TestDynamicCallBaseSignature(t *testing.T) {
+	const decls = `
+	  <xsl:function name="p:s" as="xs:string"><xsl:param name="v" as="xs:string"/><xsl:sequence select="$v"/></xsl:function>
+	  <xsl:function name="p:n" as="xs:string"><xsl:param name="v" as="node()"/><xsl:sequence select="name($v)"/></xsl:function>
+	  <xsl:function name="p:mk" as="function(xs:string) as xs:string"><xsl:sequence select="upper-case#1"/></xsl:function>
+	  <xsl:function name="p:any" as="function(*)"><xsl:sequence select="upper-case#1"/></xsl:function>
+	  <xsl:variable name="m" as="map(xs:string, function(xs:string) as xs:string)" select="map{'f': upper-case#1}"/>
+	  <xsl:variable name="g" as="function() as function(xs:string) as xs:string" select="function() { upper-case#1 }"/>`
+	sheet := func(sel string) string {
+		return strings.Replace(modeSheet(decls+`<xsl:template match="item" mode="s"><xsl:value-of select="`+sel+`"/></xsl:template>`),
+			`<xsl:stylesheet `, `<xsl:stylesheet xmlns:p="urn:p" `, 1)
+	}
+	for _, tc := range []struct {
+		sel    string
+		refuse bool
+		why    string
+	}{
+		{"(p:s#1)(child::x)", false, "a NamedFunctionRef's signature is the declaration: xs:string absorbs"},
+		{"(p:n#1)(child::x)", true, "the declared node() parameter navigates"},
+		{"(upper-case#1)(child::x)", false, "the F&O signature: xs:string? absorbs"},
+		{"child::x => (upper-case#1)()", false, "the arrow form is the same call"},
+		{"(data#1)(child::x)", true, "data#1 is declared item()*: navigation, whatever a static data() call does"},
+		{"(function($s as xs:string) { $s })(child::x)", false, "an InlineFunctionExpr's declared parameter type"},
+		{"(function($s) { $s })(child::x)", true, "an omitted parameter type is item()*: navigation"},
+		{"map{'a': 1}(child::x)", false, "a MapConstructor: the argument type is xs:anyAtomicType"},
+		{"p:mk()(child::x)", false, "a FunctionCall whose declared result is function(xs:string)"},
+		{"p:any()(child::x)", true, "function(*) declares no parameter types"},
+		{"$m?f(child::x)", true, "a lookup is not in §19.1's list, so no signature"},
+		{"(if (true()) then upper-case#1 else lower-case#1)(child::x)", true,
+			"a conditional is not in §19.1's list, and a union of U-types carries no ancillary information"},
+		{"$g()(child::x)", true, "a dynamic call is not a FunctionCall: no signature"},
+	} {
+		t.Run(tc.sel, func(t *testing.T) {
+			err := compileModeSheet(t, sheet(tc.sel))
+			refused := err != nil && strings.Contains(err.Error(), "XTSE3430")
+			if err != nil && !refused {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if refused != tc.refuse {
+				t.Errorf("refused=%v, want %v (err=%v) — %s", refused, tc.refuse, err, tc.why)
+			}
+		})
+	}
+}
+
+// The calls TestDynamicCallBaseSignature accepts, run streamed and on the
+// tree: the output and error must agree over every document, and each body
+// must run streamed (streamsplit_dyncall.go), where the split refused every
+// dynamic call and the container ran on the tree.
+func TestDynamicCallBaseMatchesTree(t *testing.T) {
+	const decls = `<xsl:function name="p:s" as="xs:string"><xsl:param name="v" as="xs:string"/><xsl:sequence select="concat('[', $v, ']')"/></xsl:function>
+	  <xsl:function name="p:mk" as="function(xs:string) as xs:string"><xsl:sequence select="upper-case#1"/></xsl:function>`
+	bodies := []string{
+		`<o><xsl:value-of select="/doc/rec ! (p:s#1)(@k)"/></o>`,
+		`<o><xsl:value-of select="/doc/rec ! (upper-case#1)(sub[1])" separator="|"/></o>`,
+		`<o><xsl:value-of select="/doc/rec ! (@k => (upper-case#1)())"/></o>`,
+		`<o><xsl:value-of select="/doc/rec ! (function($s as xs:string?) { string-length($s) })(sub[1])"/></o>`,
+		`<o><xsl:value-of select="/doc/rec ! map{'a': 'A'}(@k)"/></o>`,
+		`<o><xsl:value-of select="/doc/rec ! p:mk()(@k)"/></o>`,
+		`<o><xsl:value-of select="/doc/rec ! map{string(@k): count(sub)}(@k)"/></o>`,
+		`<o><xsl:value-of select="/doc/rec ! (xs:integer#1)(@v)"/></o>`,
+	}
+	dir := t.TempDir()
+	streamed := 0
+	byBody := make([]int64, len(bodies))
+	for name, doc := range coreDocs {
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for i, b := range bodies {
+			sheet := coreSheetWith(decls, b)
+			so, se, st := coreRun(sheet, dir, true, TransformOptions{})
+			to, te, _ := coreRun(sheet, dir, false, TransformOptions{})
+			if so != to || se != te {
+				t.Errorf("doc %s, %s:\nstream %q %q\ntree   %q %q", name, b, so, se, to, te)
+			}
+			if st.Guards != 0 {
+				t.Errorf("doc %s, %s: %d guard hits", name, b, st.Guards)
+			}
+			streamed += int(st.Streamed())
+			byBody[i] += st.Streamed()
+		}
+	}
+	for i, n := range byBody {
+		if n == 0 {
+			t.Errorf("%s: never streamed", bodies[i])
+		}
+	}
+	t.Logf("%d runs streamed", streamed)
 }

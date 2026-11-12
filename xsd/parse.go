@@ -48,6 +48,12 @@ type schemaDoc struct {
 	// baseURI locates this document, for resolving include and import.
 	baseURI string
 
+	// fromInstance marks a document an instance named, or one reached from
+	// such a document through its includes and imports. Errors name it and
+	// what it references by the location text as written, never by a
+	// resolved host path; see assembler.shownAs.
+	fromInstance bool
+
 	// ids records the xs:ID-typed id= attributes seen in this document, so
 	// that a repeat can be reported. ID uniqueness is scoped to one XML
 	// document, not to the assembled schema: MS-Additional addA002 and
@@ -271,6 +277,10 @@ type parser struct {
 	// once rather than once per derivation.
 	attrsDone map[*ComplexType]bool
 
+	// groupWild memoises groupWildcard per attribute group. It is reset
+	// whenever a group reference edge is added.
+	groupWild map[*AttributeGroupDef]*Wildcard
+
 	// simpleTypes records every simple type read, with the element it came
 	// from, so that the Part 2 facet schema-component constraints can be
 	// applied once the base chain is resolved. They cannot be checked while
@@ -344,6 +354,10 @@ type Schema struct {
 	// differential budget harness lowers to prove that a declined build
 	// never reads as an accept.
 	maxPositions int
+
+	// budgets are the Options UPA and restriction budgets, retained for the
+	// reason maxPositions is and resolved at use the same way.
+	budgets loadBudgets
 
 	// sourcePaths records the documents this schema was loaded from, so
 	// that WithInstanceLocations can assemble them again alongside the ones
@@ -525,6 +539,19 @@ func (p *parser) finish() error {
 		}
 	}
 
+	// Circular base type definitions and circular unions (st-props-correct.2)
+	// are diagnosed as soon as the drain has bound every base and member slot:
+	// before that point {base type definition} and the member slots are nil
+	// everywhere. They run ahead of every later check because those checks
+	// walk the same graphs; a schema found circular here skips them, since
+	// it is already in error and a walk over a cycle proves nothing. The
+	// value checks queued inside the drain itself go through the memoised
+	// union walk (validateUnionValueMemo), which stays finite on a cycle.
+	nerrs := len(p.errs)
+	p.checkTypeBaseCycles()
+	p.checkUnionMemberCycles()
+	circular := len(p.errs) > nerrs
+
 	// Substitute the referenced component for every ref= placeholder, now
 	// that the fixups above have resolved them. This runs after the whole
 	// fixup drain because a placeholder may name a keyref whose own refer=
@@ -549,7 +576,7 @@ func (p *parser) finish() error {
 	// Checks that need every fixup to have run, including the fixups other
 	// fixups queue: a value constraint is validated against a type whose
 	// own members and base are themselves filled in by fixups.
-	for i := 0; i < len(p.postFixups); i++ {
+	for i := 0; !circular && i < len(p.postFixups); i++ {
 		if err := p.postFixups[i](); err != nil {
 			p.errs = append(p.errs, err)
 		}
@@ -565,17 +592,13 @@ func (p *parser) finish() error {
 	// check is looking for does not exist in the component graph yet.
 	p.checkGroupCycles()
 
-	// Circular base type definitions, once every base reference has been
-	// bound. Same ordering reason as the two cycle checks above: before the
-	// fixups drain, {base type definition} is nil everywhere.
-	p.checkTypeBaseCycles()
-	p.checkUnionMemberCycles()
-
 	// The Part 2 facet constraints run last, once every base reference has
 	// been bound: they compare a facet against the base's primitive and
 	// against the facets the base itself set, neither of which is known
 	// while the restriction is being read.
-	p.checkFacetConstraints()
+	if !circular {
+		p.checkFacetConstraints()
+	}
 
 	if len(p.errs) == 0 {
 		return nil

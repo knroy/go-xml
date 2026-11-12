@@ -1,10 +1,12 @@
 package xdmbuild
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"sort"
 
+	"github.com/knroy/go-xml/v2/internal/xdmlimit"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -43,6 +45,14 @@ type Builder struct {
 	// declShared marks declared as a list NoteDeclaredList lent the builder,
 	// which must be copied before an entry is written in place.
 	declShared bool
+	// hold, fr, doc and released are the streamed output's (sink.go): hold
+	// keeps the element from being opened, fr is the builder's place in the
+	// sink's frames (+1; 0 for none), doc marks a document level, released
+	// that its caller is done with it (xdmsink.Release).
+	hold     bool
+	released bool
+	doc      uint8
+	fr       int32
 
 	// lastAtomic records that the item most recently appended was an atomic
 	// value rather than a node.
@@ -86,6 +96,12 @@ type Builder struct {
 	// refusal inside a deeply nested element is seen by the root: the latch
 	// belongs to the construction, not to one level of it.
 	refused *error
+
+	// sink, when set, streams what this builder builds (sink.go); a builder
+	// StartElement makes shares it.
+	sink *sink
+	// fwd, when set, makes this builder an xsl:try's buffer (tryfwd.go).
+	fwd *tryFwd
 }
 
 // Refused reports the first budget refusal this construction met, or nil.
@@ -117,6 +133,32 @@ func (b *Builder) countNodes(n int) bool {
 		return false
 	}
 	return true
+}
+
+// latch records err, if it is the construction's first, where Refused finds
+// it. AppendNode has no error to return, and an attribute or namespace node
+// it adds after content is XTDE0410 (XSLT 3.0 §5.7.1) or, on a document node,
+// XTDE0420: latched like a budget refusal, it stops the sequence constructor
+// instead of vanishing.
+func (b *Builder) latch(err error) {
+	if err != nil && b.refused != nil && *b.refused == nil {
+		*b.refused = err
+	}
+}
+
+// latchLimit, deferred before xdmlimit.Recover(err), latches the text-store
+// refusal a method with no error return met, so that it reaches the host
+// through Refused and the next error-returning call rather than as a panic
+// out of a supported API. A builder with no latch, which New never makes,
+// raises it again for the entry point to recover.
+func (b *Builder) latchLimit(err *error) {
+	if *err == nil {
+		return
+	}
+	if b.refused == nil {
+		xdmlimit.Refuse(*err)
+	}
+	b.latch(*err)
 }
 
 // SetItemSeparator records the item-separator that applies to the tree this
@@ -157,6 +199,9 @@ func InPlaceDocument(p Policy) (*Builder, *xdm.Node) {
 // xsl:copy-of already copied; xsl:sequence and xsl:perform-sort did not, and
 // the guard belongs here where every caller is covered.
 func (b *Builder) AppendNode(n *xdm.Node) {
+	var lim error
+	defer b.latchLimit(&lim)
+	defer xdmlimit.Recover(&lim)
 	b.lastAtomic = false
 	// A namespace node joins the element's bindings, not its children. Any
 	// instruction may put one in the result sequence — xsl:sequence selecting
@@ -164,7 +209,7 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 	// it and made the element look as if it already had content, so a later
 	// xsl:attribute was rejected with XTDE0410.
 	if n.Kind() == xdm.KindNamespace && b.open != nil {
-		_ = b.AddNamespace(n.Name().Local, n.Value())
+		b.latch(b.AddNamespace(n.Name().Local, n.Value()))
 		return
 	}
 	// An attribute node in a result sequence joins the element's attributes,
@@ -175,7 +220,7 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 	// an element with an attribute node among its children, which no
 	// serialiser can write.
 	if n.Kind() == xdm.KindAttribute && b.open != nil {
-		_ = b.AddAttribute(n.Name(), n.Value())
+		b.latch(b.AddAttribute(n.Name(), n.Value()))
 		return
 	}
 	if n.Kind() == xdm.KindDocument && b.open != nil {
@@ -210,6 +255,7 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 	// the result. xsl:sequence is defined to preserve node identity — a
 	// variable declared as="item()*" holding (doc/one, doc/two) must answer
 	// true to "is" against the source nodes — and copying here answered false.
+	b.note(n.Kind(), "")
 	b.items = append(b.items, n)
 }
 
@@ -222,7 +268,10 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 // It returns the copy, so that a caller can give it the bindings it chooses,
 // or nil when n contributed its value or was merged into the open element (a
 // text, attribute, namespace or document node under an open element).
-func (b *Builder) AppendCopyOf(n *xdm.Node) *xdm.Node {
+func (b *Builder) AppendCopyOf(n *xdm.Node) (_ *xdm.Node) {
+	var lim error
+	defer b.latchLimit(&lim)
+	defer xdmlimit.Recover(&lim)
 	if b.open == nil {
 		c := xdm.Copy(n)
 		b.AppendNode(c)
@@ -234,6 +283,7 @@ func (b *Builder) AppendCopyOf(n *xdm.Node) *xdm.Node {
 		return nil
 	case xdm.KindElement, xdm.KindComment, xdm.KindPI:
 		b.lastAtomic = false
+		b.note(n.Kind(), "")
 		c := b.open.AppendCopy(n)
 		Rebase(c, b.open.BaseURI())
 		return c
@@ -339,9 +389,10 @@ func (b *Builder) appendCopy(n *xdm.Node) {
 	// copy here. Counted before the copy is made, so a refusal allocates
 	// none of it.
 	fresh := n.Tree() == nil && n.Parent() == nil
-	if !fresh && !b.countNodes(CountSubtree(n)) {
+	if !fresh && !b.chargeCopy(n) {
 		return
 	}
+	b.note(n.Kind(), "")
 	c := b.open.AppendCopy(n)
 	if fresh {
 		// An adopted node kept its type environments; the copy does too.
@@ -350,6 +401,60 @@ func (b *Builder) appendCopy(n *xdm.Node) {
 		keepInherited(c, n)
 	}
 	Rebase(c, b.open.BaseURI())
+}
+
+// byteCharger is a Policy that also charges the value bytes a copy
+// duplicates against a byte budget. appendCopy charges through it when the
+// policy has it; AppendCopyOf does not, its host charging the copy itself.
+type byteCharger interface{ ChargeBytes(n int) error }
+
+// chargeCopy charges a copy of n, a node some tree holds: its nodes, and its
+// copied value bytes when the policy is a byteCharger. A refusal is latched.
+func (b *Builder) chargeCopy(n *xdm.Node) bool {
+	if !b.countNodes(CountSubtree(n)) {
+		return false
+	}
+	if bc, ok := b.policy.(byteCharger); ok && b.refused != nil {
+		if err := bc.ChargeBytes(copiedBytes(n)); err != nil {
+			*b.refused = err
+			return false
+		}
+	}
+	return true
+}
+
+// copiedValueBelow is the length below which a copy duplicates a value's
+// bytes into its own tree. It mirrors xdm's textOwnFrom: a value at least that
+// long is kept by reference, so a copy of it costs no bytes. xslt's
+// copiedBytes counts the same way.
+const copiedValueBelow = 8 << 10
+
+// copiedBytes is the value bytes a deep copy of n duplicates.
+func copiedBytes(n *xdm.Node) int {
+	b := ownCopiedBytes(n)
+	for d := range n.Descendants() { // iterative: the depth is the input's
+		b += ownCopiedBytes(d)
+	}
+	return b
+}
+
+// ownCopiedBytes is the value bytes a copy of n alone duplicates: an
+// element's attribute values, or a leaf node's own value.
+func ownCopiedBytes(n *xdm.Node) int {
+	b := 0
+	switch n.Kind() {
+	case xdm.KindElement:
+		for a := range n.Attrs() {
+			if l := len(a.Value()); l < copiedValueBelow {
+				b += l
+			}
+		}
+	case xdm.KindText, xdm.KindComment, xdm.KindPI, xdm.KindAttribute:
+		if l := len(n.Value()); l < copiedValueBelow {
+			b += l
+		}
+	}
+	return b
 }
 
 // keepInherited gives c, a copy of n about to be re-parented, the bindings n
@@ -380,6 +485,9 @@ func keepInherited(c, n *xdm.Node) {
 // AppendText adds text, merging with a preceding text node so that the XDM
 // invariant of no adjacent text nodes holds in constructed trees too.
 func (b *Builder) AppendText(s string) {
+	var lim error
+	defer b.latchLimit(&lim)
+	defer xdmlimit.Recover(&lim)
 	b.lastAtomic = false
 	if s == "" && b.open != nil {
 		// Section 5.7.1 discards zero-length text nodes only while
@@ -411,6 +519,7 @@ func (b *Builder) AppendText(s string) {
 		if !b.countNodes(1) {
 			return
 		}
+		b.note(xdm.KindText, s)
 		b.open.AppendText(s)
 		return
 	}
@@ -424,11 +533,15 @@ func (b *Builder) AppendText(s string) {
 	if !b.countNodes(1) {
 		return
 	}
+	b.note(xdm.KindText, s)
 	b.items = append(b.items, b.newItem(xdm.KindText, xdm.QName{}, s))
 }
 
 // AppendValue adds an atomic value to the output sequence.
 func (b *Builder) AppendValue(a *xdm.Atomic) {
+	var lim error
+	defer b.latchLimit(&lim)
+	defer xdmlimit.Recover(&lim)
 	// Inside an element being built, an atomic value becomes text; at the top
 	// level it stays an atomic item, because xsl:sequence can return one.
 	if b.open != nil {
@@ -440,6 +553,7 @@ func (b *Builder) AppendValue(a *xdm.Atomic) {
 		b.lastAtomic = true
 		return
 	}
+	b.note(0, "")
 	b.items = append(b.items, a)
 	b.lastAtomic = true
 }
@@ -507,8 +621,14 @@ func (b *Builder) AddAttributeTyped(name xdm.QName, value string,
 // Typing's zero value is the unassessed node, so AddAttributeWithTyping with
 // an empty Typing is exactly AddAttribute.
 func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
-	typing xdm.Typing) error {
+	typing xdm.Typing) (err error) {
 
+	// Storing the value can meet the tree's text-store ceiling, raised as an
+	// internal/xdmlimit panic; it is this method's error instead.
+	defer xdmlimit.Recover(&err)
+	if err := b.Refused(); err != nil {
+		return err // a refusal latched by a call with no error to return
+	}
 	if b.open != nil && b.open.Kind() == xdm.KindDocument {
 		return b.policy.Err(FaultAttrOnDocument,
 			fmt.Sprintf("an attribute node (%s) cannot be the content of "+
@@ -534,6 +654,7 @@ func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
 		if !b.countNodes(1) {
 			return b.Refused()
 		}
+		b.note(xdm.KindAttribute, "")
 		n := b.newItem(xdm.KindAttribute, name, value)
 		n.ApplyTyping(typing)
 		fixupOrphanAttrPrefix(n)
@@ -679,6 +800,9 @@ func freshPrefixOn(el *xdm.Node, want string) string {
 // add a binding to the element being built, and a namespace node appended as
 // if it were a child would silently vanish from the result.
 func (b *Builder) AddNamespace(prefix, uri string) error {
+	if err := b.Refused(); err != nil {
+		return err // a refusal latched by a call with no error to return
+	}
 	if b.open != nil && b.open.Kind() == xdm.KindDocument {
 		return b.policy.Err(FaultAttrOnDocument,
 			fmt.Sprintf("a namespace node (%s) cannot be the content of "+
@@ -688,8 +812,24 @@ func (b *Builder) AddNamespace(prefix, uri string) error {
 		if !b.countNodes(1) {
 			return b.Refused()
 		}
+		b.note(xdm.KindNamespace, "")
 		b.items = append(b.items, b.newItem(xdm.KindNamespace, xdm.QName{Local: prefix}, uri))
 		return nil
+	}
+	// XSLT 3.0 §5.7.1: "If the result sequence contains an attribute or
+	// namespace node that is preceded by a node that is neither an attribute
+	// nor a namespace node, a dynamic error is raised [XTDE0410]" (XQuery:
+	// XQTY0024). A streamed element whose start tag is written cannot take
+	// the declaration at all, so there the refusal is also latched like a
+	// budget refusal.
+	if b.open.FirstChild() != nil {
+		err := b.policy.Err(FaultAttrAfterChild,
+			fmt.Sprintf("namespace node %q added after the element %s has children",
+				prefix, b.open.Name().Lexical()))
+		if b.sink != nil && b.fr != 0 && *b.refused == nil {
+			*b.refused = err
+		}
+		return err
 	}
 	// XTDE0440: "the result sequence contains a namespace node with no name
 	// and the element node being constructed has a null namespace URI (that
@@ -861,7 +1001,19 @@ func (b *Builder) unshareDecls() {
 }
 
 // StartElement opens a new element, returning a builder scoped to it.
-func (b *Builder) StartElement(name xdm.QName) *Builder {
+func (b *Builder) StartElement(name xdm.QName) (nb *Builder) {
+	// A text-store refusal is latched; the caller still gets a builder to
+	// run its body into, detached from the tree, as on a budget refusal.
+	var lim error
+	defer func() {
+		if lim != nil {
+			b.latchLimit(&lim)
+			if nb == nil {
+				nb = &Builder{parent: b, policy: b.policy, refused: b.refused}
+			}
+		}
+	}()
+	defer xdmlimit.Recover(&lim)
 	// Charged before the node exists, so a refusal costs no allocation. The
 	// element is still constructed when the budget is spent -- the sub-builder
 	// has to be returned for the caller's body to run into, and returning nil
@@ -870,6 +1022,12 @@ func (b *Builder) StartElement(name xdm.QName) *Builder {
 	// nothing further is appended to it.
 	b.countNodes(1)
 	b.lastAtomic = false
+	b.note(xdm.KindElement, "")
+	if b.fwd != nil {
+		if eb := b.fwd.start(b, name, b.refused, b.policy); eb != nil {
+			return eb // built in place in what the try writes to (tryfwd.go)
+		}
+	}
 	var el *xdm.Node
 	if b.open != nil {
 		// A constructed element's base URI is its parent's until something
@@ -879,8 +1037,15 @@ func (b *Builder) StartElement(name xdm.QName) *Builder {
 		el = b.newItem(xdm.KindElement, name, "")
 		b.items = append(b.items, el)
 	}
-	return &Builder{open: el, parent: b, policy: b.policy,
-		refused: b.refused}
+	if s := b.sink; s != nil && len(s.free) > 0 {
+		k := len(s.free) - 1
+		nb, s.free[k], s.free = s.free[k], nil, s.free[:k]
+	} else {
+		nb = new(Builder)
+	}
+	*nb = Builder{open: el, parent: b, policy: b.policy,
+		refused: b.refused, sink: b.sink}
+	return nb
 }
 
 // ReplaceOpen puts n, a parentless node, in place of the element this builder
@@ -888,7 +1053,10 @@ func (b *Builder) StartElement(name xdm.QName) *Builder {
 // sequence. Nothing may have been added to the parent since the element was
 // started. It exists to swap a constructed element for its validated, typed
 // copy, and returns the node now in that place.
-func (b *Builder) ReplaceOpen(n *xdm.Node) *xdm.Node {
+func (b *Builder) ReplaceOpen(n *xdm.Node) (_ *xdm.Node) {
+	var lim error
+	defer b.latchLimit(&lim)
+	defer xdmlimit.Recover(&lim)
 	p := b.parent
 	if p.open != nil {
 		n = p.open.ReplaceLastChild(n)
@@ -925,7 +1093,14 @@ func (b *Builder) Sequence() xdm.Sequence { return b.items }
 // document. A sequence constructor producing a bare attribute is legitimate —
 // xsl:function as="attribute()" is written that way — and only wrapping the
 // result in a document node makes it wrong.
-func (b *Builder) ToDocument() (*xdm.Node, error) {
+func (b *Builder) ToDocument() (_ *xdm.Node, err error) {
+	defer xdmlimit.Recover(&err) // the copy can meet the text-store ceiling
+	if err := b.Refused(); err != nil {
+		return nil, err // a refusal latched by a call with no error to return
+	}
+	if b.sink != nil && b.doc == docSeq && b.fr != 0 {
+		return b.sink.toDocument(b)
+	}
 	// A policy that answers nil to this fault is saying the node should be
 	// dropped rather than reported -- the same convention
 	// FaultDuplicateAttribute already uses, where 5.7.1 discards the loser
@@ -957,10 +1132,27 @@ func (b *Builder) ToDocument() (*xdm.Node, error) {
 		}
 	}
 	b.items = kept
-	return b.ToTree(), nil
+	doc := b.ToTree()
+	if err := b.Refused(); err != nil {
+		return nil, err
+	}
+	return doc, nil
 }
 
-func (b *Builder) ToTree() *xdm.Node {
+// ToTree builds the document node; see the comment above ToDocument. A copy
+// past the tree's text store is latched, where Refused finds it, and
+// an empty document returned in place of the partial one.
+func (b *Builder) ToTree() (root *xdm.Node) {
+	var lim error
+	defer func() {
+		if lim != nil {
+			b.latchLimit(&lim)
+			t := xdm.NewTree()
+			t.Finalize()
+			root = t.Root
+		}
+	}()
+	defer xdmlimit.Recover(&lim)
 	tree := xdm.NewTree()
 	// Adjacent atomic values become one text node separated by single spaces,
 	// exactly as they do inside a constructed element: a variable holding a
@@ -1149,10 +1341,21 @@ func (b *Builder) Items() xdm.Sequence { return b.items }
 // At the TOP level the array stays an array: that is what lets an
 // xsl:variable declared as="array(*)" be built by a sequence constructor, and
 // what an xsl:function returning an array depends on.
-func (b *Builder) AppendOpaque(it xdm.Item) error {
+//
+// A flattening past xdm's step bound, or members that overrun the tree's text
+// store, are refused with an error matching xdm.ErrResourceLimit.
+func (b *Builder) AppendOpaque(it xdm.Item) (err error) {
+	defer xdmlimit.Recover(&err) // a member's text meeting the store's ceiling
+	if err := b.Refused(); err != nil {
+		return err // a refusal latched by a call with no error to return
+	}
 	if b.open != nil {
 		if arr, ok := it.(*xdm.ArrayItem); ok {
-			for _, m := range xdm.Flatten(xdm.Sequence{arr}) {
+			flat, err := xdm.FlattenContext(context.Background(), xdm.Sequence{arr})
+			if err != nil {
+				return err
+			}
+			for _, m := range flat {
 				switch v := m.(type) {
 				case *xdm.Node:
 					b.AppendNode(v)
@@ -1174,6 +1377,7 @@ func (b *Builder) AppendOpaque(it xdm.Item) error {
 				it.TypeName(), b.open.Name().Lexical()))
 	}
 	b.lastAtomic = false
+	b.note(0, "")
 	b.items = append(b.items, it)
 	return nil
 }

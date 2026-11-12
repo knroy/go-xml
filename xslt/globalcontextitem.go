@@ -60,8 +60,9 @@ func (c *compiler) compileGlobalContextItem(el *xdm.Node) error {
 	}
 	// XTSE3089: streamable="yes" constrains the global variables, which this
 	// engine does not stream. The attribute is accepted and the constraint is
-	// not enforced, which is what a non-streaming processor may do: section
-	// 19 makes streamability a property a processor may decline to analyse.
+	// not enforced here (a principal input streams only when the
+	// declaration has no type and no global reads the context item:
+	// mainRefusal, streammain.go).
 	if prev := c.sheet.globalContextItem; prev != nil {
 		// Two declarations in ONE module are an error however they read:
 		// section 3.10 allows a module at most one, so a second is a fault

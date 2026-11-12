@@ -158,8 +158,13 @@ func readableRoots(sheetPath, allowDirs string) []string {
 	if dir := filepath.Dir(sheetPath); dir != "" {
 		roots = append(roots, dir)
 	}
-	if allowDirs != "" {
-		roots = append(roots, strings.Split(allowDirs, ",")...)
+	// An empty segment (a trailing or doubled comma, an unset variable) names
+	// no directory, and must not reach filepath.Abs, which would turn it into
+	// the working directory.
+	for _, d := range strings.Split(allowDirs, ",") {
+		if strings.TrimSpace(d) != "" {
+			roots = append(roots, d)
+		}
 	}
 	return roots
 }
@@ -422,7 +427,7 @@ func compileStylesheet(path string, resolver *xslt.FileResolver, schemas xsd.Res
 		return nil, err
 	}
 	defer f.Close()
-	abs := fileURI(path)
+	abs := realFileURI(path)
 	tree, err := xdm.Parse(f, xdm.ParseOptions{BaseURI: abs})
 	if err != nil {
 		return nil, fmt.Errorf("parsing stylesheet: %w", err)
@@ -505,6 +510,11 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 	// An empty path is a transform with no source document, which is how a
 	// run that starts at a named template is expressed. Transform takes a nil
 	// source for exactly that case, so the parse is simply skipped.
+	//
+	// The -timeout context starts here, before the parse, so that it covers
+	// the XInclude pass as well as the transform.
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
+	defer cancel()
 	var root *xdm.Node
 	if inPath != "" {
 		// Streamed, as the stylesheet is (see compileStylesheet).
@@ -513,7 +523,7 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 			return err
 		}
 		defer f.Close()
-		abs := fileURI(inPath)
+		abs := realFileURI(inPath)
 		popts := xdm.ParseOptions{
 			BaseURI: abs,
 			// The document URI is what fn:document-uri returns, and it is a
@@ -545,7 +555,8 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 				// including one: an inclusion becomes part of the document,
 				// so it must not be a way around a bound the document itself
 				// was held to.
-				Parse: popts,
+				Parse:   popts,
+				Context: ctx,
 			})
 			if err != nil {
 				return err
@@ -559,9 +570,6 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 			}
 		}
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
-	defer cancel()
 
 	res, err := sheet.Transform(ctx, root, xslt.TransformOptions{
 		Params:           cfg.params,
@@ -922,6 +930,23 @@ func fileURI(path string) string {
 		abs = path
 	}
 	return absPathToFileURI(filepath.ToSlash(abs))
+}
+
+// realFileURI is fileURI of the path with its symlinks resolved, for a file
+// the command line names as input. Every module and document the resolver
+// reads is identified by its resolved path (FileResolver.resolvePath), so a
+// principal spelled through a link was a second identity for one file:
+// XSpec's issue-987 imported its own parent twice under the two URIs. A path
+// with no link in it is unchanged; one that does not resolve is left as given.
+func realFileURI(path string) string {
+	if !strings.HasPrefix(path, "file:") {
+		if abs, err := filepath.Abs(path); err == nil {
+			if r, err := filepath.EvalSymlinks(abs); err == nil {
+				path = r
+			}
+		}
+	}
+	return fileURI(path)
 }
 
 // absPathToFileURI spells an already-absolute, already-slash-separated path as

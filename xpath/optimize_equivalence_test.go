@@ -532,8 +532,9 @@ func TestOptimizeCompatWithholdsMore(t *testing.T) {
 		{`string-length('hello')`, true, true},
 		{`xs:double(1)`, true, true},
 		{`not(true())`, true, true},
-		// Comparisons: withheld by both, for different reasons.
-		{`1 = 1`, false, false},
+		// Comparisons: numbers fold under optimize (no collation is read),
+		// withheld by compat; strings are withheld by both.
+		{`1 = 1`, true, false},
 		{`'a' eq 'a'`, false, false},
 		// Collation-sensitive: withheld by both.
 		{`starts-with('abc', 'ab')`, false, false},

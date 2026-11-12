@@ -100,9 +100,42 @@ func TestFnTransformGlobalContextItem(t *testing.T) {
 	if want := `<init global="dummy"/>`; !strings.Contains(got, want) {
 		t.Errorf("alone: got %s, want %s", got, want)
 	}
-	_, err = runGlobalItem(t, `'source-node': $in, 'global-context-item': 1`)
-	if xdm.ErrorCode(err) != "FOXT0001" {
-		t.Errorf("atomic global-context-item: got %v, want FOXT0001", err)
+}
+
+// F&O 3.1 types global-context-item item(), so an atomic value or a function
+// item is a global context item as a node is: it is the focus of the
+// top-level package's globals and of the initial template, and a source-node
+// beside it is still what templates are applied to. It was FOXT0001.
+func TestFnTransformAtomicGlobalContextItem(t *testing.T) {
+	const inner = `<xsl:stylesheet version='3.0' xmlns:xsl='http://www.w3.org/1999/XSL/Transform'
+	    xmlns:xs='http://www.w3.org/2001/XMLSchema' exclude-result-prefixes='xs'>
+	  <xsl:variable name='v' select='.'/>
+	  <xsl:template match='/'><out v='{$v instance of xs:integer}' doc='{. instance of document-node()}'/></xsl:template>
+	  <xsl:template name='xsl:initial-template'><init v='{$v + 1}' focus='{. + 1}'/></xsl:template>
+	</xsl:stylesheet>`
+	run := func(options string) (string, error) {
+		return runPP(t, `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+		  <xsl:template match="/">
+		    <xsl:variable name="in" select="parse-xml('&lt;dummy/&gt;')"/>
+		    <xsl:sequence select="transform(map{'stylesheet-node': /, `+options+`})?output"/>
+		  </xsl:template>
+		</xsl:stylesheet>`, inner)
+	}
+	for options, want := range map[string]string{
+		`'global-context-item': 41`:                     `<init v="42" focus="42"/>`,
+		`'source-node': $in, 'global-context-item': 41`: `<out v="true" doc="true"/>`,
+	} {
+		got, err := run(options)
+		if err != nil {
+			t.Fatalf("%s: %v", options, err)
+		}
+		if !strings.Contains(got, want) {
+			t.Errorf("%s: got %s, want %s", options, got, want)
+		}
+	}
+	// item(), not item()*: a sequence of two is still a type error.
+	if _, err := run(`'global-context-item': (1, 2)`); xdm.ErrorCode(err) != "XPTY0004" {
+		t.Errorf("two global context items: got %v, want XPTY0004", err)
 	}
 }
 

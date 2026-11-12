@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmsink"
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
@@ -86,6 +88,7 @@ func (c *compiler) compileTry(n *xdm.Node, ns xpath.NamespaceResolver) (Instruct
 			return nil, fmt.Errorf("in xsl:try/@select: %w", err)
 		}
 		instr.sel = comp
+		c.noteStreamSelect(n, instr, comp, ns)
 	}
 
 	// The children are the sequence constructor followed by the xsl:catch
@@ -218,9 +221,31 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// would not do: out may already have an open element whose attributes the
 	// body added, and there is no record of where the body's contribution
 	// began.
-	sub := newOutputBuilder(rt)
-	err := i.run(rt, sub)
+	//
+	// Under streamed output the builder hands what it completes on to out
+	// as it goes, provisionally (streamtry_out.go): tryEnd commits that or
+	// rolls it back, before the rest is appended or the catch runs.
+	sub := tryBuffer(rt, i, out)
+	defer func() {
+		if p := recover(); p != nil {
+			tryEnd(rt, sub, false)
+			panic(p)
+		}
+	}()
+	st := rt.streamTry()
+	err := i.run(rt.inTryBody(), sub) // secondaryout.go
 	if err == nil {
+		// Placing the body's attribute and namespace nodes on the element
+		// the try writes to is part of the try: 8.3.1 has the body's output
+		// "written to the result tree during the execution of xsl:try", so
+		// XTDE0410 there is caught by the try, and its rollback undoes the
+		// body's output. Saxon-HE 12.7 catches it there too, and DocBook
+		// xslTNG relies on that (titles.xsl, "Adding attributes will fail if
+		// we're not at the start of an element").
+		err = attrAfterContent(sub.Sequence(), out)
+	}
+	if err == nil {
+		tryEnd(rt, sub, true)
 		return appendSequence(sub.Sequence(), out)
 	}
 
@@ -235,15 +260,21 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// propagated: this path exists to preserve the output the body
 			// had already produced, and the signal is what the caller is
 			// waiting for.
+			tryEnd(rt, sub, true)
 			_ = appendSequence(sub.Sequence(), out)
+		} else {
+			tryEnd(rt, sub, false)
 		}
 		return err
 	}
 	cl, ok := i.selectCatch(errorQName(err))
+	tryEnd(rt, sub, false)
 	if !ok {
 		return err
 	}
-	if i.noRollback && len(sub.Sequence()) > 0 {
+	// The items the body produced, those a buffer handed on included
+	// (streamtry_out.go): tree mode's len(sub.Sequence()).
+	if i.noRollback && xdmsink.Items(sub) > 0 {
 		// rollback-output="no" waives the guarantee that the failed body's
 		// output is discarded. This engine could discard it anyway, but the
 		// stylesheet has declared it does not need to be able to, and 8.3.1
@@ -254,6 +285,9 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 			"xsl:try has rollback-output=\"no\" and the failed sequence "+
 				"constructor had already written output, so %s cannot be "+
 				"recovered from", xdm.ErrorCode(err))
+	}
+	if err := st.caught(); err != nil {
+		return err
 	}
 	// The err: variables are in scope for the catch body only.
 	crt := bindErrorVars(rt, err, i.module)
@@ -267,10 +301,48 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	return execSequence(cl.body, crt, out)
 }
 
+// attrAfterContent returns the XTDE0410 that appending seq to out's open
+// element would raise, before anything is appended: an attribute or namespace
+// node "preceded by a node that is neither an attribute nor a namespace node"
+// (5.7.1), counting the element's existing children. Zero-length text adds no
+// content, as AppendText drops it. A document node's content (XTDE0420) is
+// left to the append.
+func attrAfterContent(seq xdm.Sequence, out *outputBuilder) error {
+	open := out.Open()
+	if open == nil || open.Kind() != xdm.KindElement {
+		return nil
+	}
+	content := open.FirstChild() != nil
+	for _, it := range seq {
+		n, ok := it.(*xdm.Node)
+		switch {
+		case !ok:
+			a, atomic := it.(*xdm.Atomic)
+			content = content || !atomic || a.String() != ""
+		case n.Kind() == xdm.KindAttribute && content:
+			return xsltPolicy{}.Err(xdmbuild.FaultAttrAfterChild,
+				fmt.Sprintf("attribute %q added after the element already has children",
+					n.Name().Lexical()))
+		case n.Kind() == xdm.KindNamespace && content:
+			return xsltPolicy{}.Err(xdmbuild.FaultAttrAfterChild,
+				fmt.Sprintf("namespace node %q added after the element %s has children",
+					n.Name().Local, open.Name().Lexical()))
+		case n.Kind() == xdm.KindAttribute || n.Kind() == xdm.KindNamespace:
+		case n.Kind() == xdm.KindText:
+			content = content || n.Value() != ""
+		case n.Kind() == xdm.KindDocument:
+			content = content || n.FirstChild() != nil
+		default:
+			content = true
+		}
+	}
+	return nil
+}
+
 // run instantiates the try body, from @select or from the constructor.
 func (i *tryInstr) run(rt *runtime, out *outputBuilder) error {
 	if i.sel != nil {
-		seq, err := i.sel.Eval(rt.ctx)
+		seq, err := rt.evalSelect(i, i.sel)
 		if err != nil {
 			return err
 		}

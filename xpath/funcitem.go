@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/knroy/go-xml/v2/internal/xdmfunc"
@@ -200,7 +201,17 @@ func native(fn *xdm.FunctionItem) *xdm.FunctionItem {
 
 // callItem calls the function item fn at ctx. An item this module did not
 // make was built by the host, so the call runs host code: see hostCall.
+//
+// It polls Env.Ctx first, once per call, as path steps and quantified
+// expressions do once per item. The higher-order functions -- fold-left,
+// fold-right, for-each, filter, for-each-pair, the sort keys, their array:
+// forms and map:for-each -- loop calling a function item and evaluate
+// nothing else that polls, so without this a cancelled 4M-item fold ran to
+// the end.
 func callItem(ctx *Context, fn *xdm.FunctionItem, args []xdm.Sequence) (xdm.Sequence, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if xdmfunc.Native(fn) {
 		return fn.Invoke(ctx, args)
 	}
@@ -243,10 +254,13 @@ func evalLockOf(c *Context) *EvalLock {
 }
 
 // envForCall is the environment a function item's body runs in: the one it
-// captured, with the call's cancellation, item and byte counters and depth
-// bound, which are per evaluation rather than per closure. The entity and node
-// allowances stay the captured ones. Within one evaluation the two
-// environments are the same and nothing is copied.
+// captured, with the call's cancellation, its item, byte, node and entity
+// budgets and the bounds they are checked against, and its depth and digit
+// bounds, which are per evaluation rather than per closure. A counter travels
+// with its bound, as in AdoptBudget: a closure made in another evaluation (an
+// XSLT static variable, kept on the compiled stylesheet) otherwise spent that
+// evaluation's allowances, under its default limits, on every call. Within one
+// evaluation the two environments are the same and nothing is copied.
 //
 // ponytail: environments are compared by pointer, so a closure called across
 // a host boundary copies one per call; compare the four fields if that shows.
@@ -260,6 +274,8 @@ func envForCall(captured *Env, call *Context) *Env {
 	}
 	c := call.ev()
 	e.Ctx, e.items, e.bytes, e.MaxDepth = c.Ctx, c.items, c.bytes, c.MaxDepth
+	e.nodes, e.entities, e.limits = c.nodes, c.entities, c.limits
+	e.MaxItems, e.MaxDigits = c.MaxItems, c.MaxDigits
 	return &e
 }
 
@@ -373,7 +389,13 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			// count, and taking MaxDepth with it keeps a caller that raised
 			// its own bound from having the package default reimposed inside
 			// a closure written before it was set.
-			s.Depth = c.Depth
+			//
+			// A tall body costs extra levels, bounded by maxChainLength
+			// (so at most 50): see spineDepth.
+			s.Depth = c.Depth + int32(e.spine/spineDepth)
+			if lim := s.depthLimit(); int(s.Depth) > lim {
+				return nil, depthRefusal(lim)
+			}
 			sub = &s
 		}
 		for i, p := range e.Params {
@@ -382,7 +404,7 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			// where a mismatch is XPTY0004 rather than something the body
 			// discovers as a stranger error later.
 			if p.Type != nil {
-				conv, err := convertForParam(v, *p.Type)
+				conv, err := convertForParam(sub, v, *p.Type)
 				if err != nil {
 					return nil, err
 				}
@@ -398,7 +420,7 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			return nil, err
 		}
 		if e.Result != nil {
-			return convertForParam(out, *e.Result)
+			return convertForParam(sub, out, *e.Result)
 		}
 		return out, nil
 	}
@@ -412,11 +434,14 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 // and a node is atomised when the declared type is atomic. Only the parts that
 // arise for a function item are applied here — the sequence type is checked,
 // and atomisation happens when the target is an atomic type.
-func convertForParam(v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
+//
+// The atomisation is charged to ctx's budgets (see flattenCharged); a nil ctx
+// has none.
+func convertForParam(ctx *Context, v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
 	// An atomic target atomises its argument first: "function($x as xs:string)"
 	// called with an element is given the element's string value.
 	if st.HasAtomicType {
-		atoms, err := xdm.AtomizeChecked(v)
+		atoms, err := ctx.atomizeChecked(v)
 		if err != nil {
 			return nil, err
 		}
@@ -443,7 +468,10 @@ func convertForParam(v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
 				return nil, xdm.ErrType(
 					"value does not match the declared type %s", st.String())
 			}
-			c, err := CastAtomic(a, st.AtomicType)
+			c, err := ctx.castAtomic(a, st.AtomicType)
+			if errors.Is(err, xdm.ErrResourceLimit) {
+				return nil, err
+			}
 			if err != nil {
 				return nil, xdm.ErrType(
 					"value does not match the declared type %s", st.String())
@@ -498,13 +526,14 @@ func coerceFunctionItem(fn *xdm.FunctionItem, st SequenceType) *xdm.FunctionItem
 		Arity:     fn.Arity,
 		Signature: sig,
 		Invoke: func(callCtx any, args []xdm.Sequence) (xdm.Sequence, error) {
+			c, _ := callCtx.(invokeContext)
 			// The declared parameter types are applied on the way in and the
 			// declared return type on the way out. The wrapped function then
 			// applies its own, which is what makes a chain of coercions
 			// compose rather than the outermost one deciding everything.
 			for i := range args {
 				if i < len(params) {
-					conv, err := convertForParam(args[i], params[i])
+					conv, err := convertForParam(c, args[i], params[i])
 					if err != nil {
 						return nil, err
 					}
@@ -516,7 +545,7 @@ func coerceFunctionItem(fn *xdm.FunctionItem, st SequenceType) *xdm.FunctionItem
 				return nil, err
 			}
 			if ret != nil {
-				return convertForParam(out, *ret)
+				return convertForParam(c, out, *ret)
 			}
 			return out, nil
 		},

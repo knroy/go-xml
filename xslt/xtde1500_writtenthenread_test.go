@@ -2,6 +2,8 @@ package xslt
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -88,5 +90,98 @@ func TestXTDE1500UnwrittenDocumentStillReadable(t *testing.T) {
 	}
 	if got := res.String(); !strings.Contains(got, "b") {
 		t.Errorf("got %q, want the document's element name", got)
+	}
+}
+
+// TestXTDE1500SymlinkedPath: a document read through a FileResolver is
+// recorded under its real path, while an href resolves against the base URI
+// as written; XTDE1500 compares the two by the file they name, in both
+// directions. t.TempDir is under the symlinked /var on macOS; elsewhere the
+// directory is reached through a link made here.
+func TestXTDE1500SymlinkedPath(t *testing.T) {
+	tmp := t.TempDir()
+	data := filepath.Join(tmp, "data")
+	if err := os.Mkdir(data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"in.xml", "out.xml"} {
+		if err := os.WriteFile(filepath.Join(data, f), []byte("<a/>"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dirs := map[string]string{"temp": data}
+	alias := filepath.Join(tmp, "alias")
+	if err := os.Symlink(data, alias); err == nil {
+		dirs["link"] = alias
+	} else {
+		t.Logf("no symbolic link (%v): the link case is skipped", err)
+	}
+	bodies := map[string]string{
+		"read then write":   `<xsl:value-of select="doc('in.xml')/*/name()"/><xsl:result-document href="in.xml"><b/></xsl:result-document>`,
+		"write then read":   `<xsl:result-document href="out.xml"><b/></xsl:result-document><xsl:value-of select="doc('out.xml')/*/name()"/>`,
+		"stream then write": `<xsl:source-document streamable="yes" href="in.xml"><xsl:value-of select="name(*)"/></xsl:source-document><xsl:result-document href="in.xml"><b/></xsl:result-document>`,
+		"write then stream": `<xsl:result-document href="out.xml"><b/></xsl:result-document><xsl:source-document streamable="yes" href="out.xml"><xsl:value-of select="name(*)"/></xsl:source-document>`,
+	}
+	for name, dir := range dirs {
+		base := fileURIOf(filepath.Join(dir, "s.xsl"))
+		for what, body := range bodies {
+			src := `<xsl:transform version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+				`<xsl:template name="main"><out>` + body + `</out></xsl:template></xsl:transform>`
+			tree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: base})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sheet, err := Compile(tree.Root, CompileOptions{})
+			if err != nil {
+				t.Fatalf("%s, %s: compile: %v", name, what, err)
+			}
+			res, err := NewFileResolver(tmp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = sheet.Transform(context.Background(), nil, TransformOptions{
+				InitialTemplate: "main", BaseOutputURI: base, Documents: res})
+			if err == nil || !strings.Contains(err.Error(), "XTDE1500") {
+				t.Errorf("%s, %s: got %v, want XTDE1500", name, what, err)
+			}
+		}
+	}
+}
+
+// TestResultHrefNotSymlinkResolved: a result-document href is compared as
+// written, never resolved on the host filesystem. Resolving its symbolic
+// links, with no resolver or output granted, told a document whether two
+// paths it chose named one file: hrefs through a link and through its target
+// failed XTDE1490, and two plain directories did not.
+func TestResultHrefNotSymlinkResolved(t *testing.T) {
+	// The real path, so that only the link here is one (t.TempDir is under
+	// the symlinked /var on macOS).
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(tmp, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(tmp, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("no symbolic link: %v", err)
+	}
+	sheet, err := Compile(mustParse(t, `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+	  <xsl:template match="/">
+	    <xsl:result-document href="{/r/@a}"><x/></xsl:result-document>
+	    <xsl:result-document href="{/r/@b}"><y/></xsl:result-document>
+	    <r/>
+	  </xsl:template>
+	</xsl:stylesheet>`), CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := fileURIOf(filepath.Join(link, "out.xml"))
+	b := fileURIOf(filepath.Join(real, "out.xml"))
+	src := mustParse(t, `<r a="`+a+`" b="`+b+`"/>`)
+	if _, err := sheet.Transform(context.Background(), src, TransformOptions{}); err != nil {
+		t.Errorf("hrefs %s and %s: got %v, want them compared as written", a, b, err)
 	}
 }

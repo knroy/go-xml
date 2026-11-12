@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -68,8 +69,8 @@ func TestSubsumeBudgetDeclineIsCounted(t *testing.T) {
 					// TestSubsumeDeclineIsNotAcceptance makes, repeated
 					// here so that breaking it while adding observability
 					// fails THIS test too.
-					if ok || err != nil {
-						t.Errorf("verdict changed: got (%v, %v), want (nil, false)", err, ok)
+					if ok || err != errBudgetDeclined {
+						t.Errorf("verdict changed: got (%v, %v), want (errBudgetDeclined, false)", err, ok)
 					}
 				})
 			})
@@ -95,8 +96,9 @@ func TestSubsumeStructuralDeclineIsCountedSeparately(t *testing.T) {
 			{MinOccurs: 1, MaxOccurs: 1,
 				Term: &ElementDecl{Name: xdm.QName{Local: "a"}}}}}}
 	st := withStats(func() {
-		if _, ok := particleSubsumes(all, all); ok {
-			t.Error("verdict changed: an all group must still decline")
+		if err, ok := particleSubsumes(all, all); ok || err != nil {
+			t.Errorf("verdict changed: an all group must still decline "+
+				"as (nil, false), got (%v, %v)", err, ok)
 		}
 	})
 	if st.SubsumeStructural.Load() == 0 {
@@ -119,7 +121,7 @@ func TestBranchCountDeclinesAreCounted(t *testing.T) {
 
 	// Control: the normal budget enumerates exactly and counts nothing.
 	st := withStats(func() {
-		if _, ok := allBranchCounts(choice); !ok {
+		if _, ok := branchCountsOK(choice); !ok {
 			t.Fatal("the normal budget must enumerate this")
 		}
 	})
@@ -129,8 +131,8 @@ func TestBranchCountDeclinesAreCounted(t *testing.T) {
 
 	st = withStats(func() {
 		withBudgets(-1, 0, -1, -1, func() {
-			if br, ok := allBranchCounts(choice); ok || br != nil {
-				t.Errorf("verdict changed: got (%v, %v), want (nil, false)", br, ok)
+			if br, err := allBranchCounts(choice); err != errBudgetDeclined || br != nil {
+				t.Errorf("verdict changed: got (%v, %v), want (nil, errBudgetDeclined)", br, err)
 			}
 		})
 	})
@@ -141,8 +143,8 @@ func TestBranchCountDeclinesAreCounted(t *testing.T) {
 	// A wildcard has no per-name count at any budget.
 	wild := &Particle{MinOccurs: 1, MaxOccurs: 1, Term: &Wildcard{}}
 	st = withStats(func() {
-		if br, ok := allBranchCounts(wild); ok || br != nil {
-			t.Errorf("verdict changed: got (%v, %v), want (nil, false)", br, ok)
+		if br, err := allBranchCounts(wild); err != errNotCountable || br != nil {
+			t.Errorf("verdict changed: got (%v, %v), want (nil, errNotCountable)", br, err)
 		}
 	})
 	if st.BranchStructural.Load() == 0 {
@@ -166,8 +168,62 @@ func TestDeclinesAreUnchangedWithNoHook(t *testing.T) {
 		t.Errorf("got (%v, %v), want (err!=nil, true)", err, ok)
 	}
 	withBudgets(-1, -1, 0, -1, func() {
-		if err, ok := particleSubsumes(der, base); ok || err != nil {
-			t.Errorf("got (%v, %v), want (nil, false)", err, ok)
+		if err, ok := particleSubsumes(der, base); ok || err != errBudgetDeclined {
+			t.Errorf("got (%v, %v), want (errBudgetDeclined, false)", err, ok)
 		}
 	})
+}
+
+// D9. A schema the 1.0 table rejects after an exact 1.1 check declined for its
+// budget was reported exactly like one the table genuinely forbids, although
+// raising the budget would admit it: a refusal read as a verdict. The
+// rejection now wraps xdm.ErrResourceLimit, the package's "undecided" form,
+// and an ordinary rejection at the normal budget still does not.
+func TestRestrictionBudgetRejectionIsAResourceLimit(t *testing.T) {
+	load := func(src string) error {
+		sdoc, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Load(sdoc.Root, "", Options{Version: Version11})
+		return err
+	}
+	refused := 0
+	for _, c := range derivationCases() {
+		if c.ver != Version11 {
+			continue
+		}
+		t.Run(c.name, func(t *testing.T) {
+			if err := load(c.schema); errors.Is(err, xdm.ErrResourceLimit) {
+				t.Errorf("at the normal budget the verdict is exact, but the "+
+					"rejection reads as undecided: %v", err)
+			}
+			if !c.valid {
+				return
+			}
+			for _, f := range []struct {
+				name                      string
+				branches, states, product int
+			}{{"branchLimit=0", 0, -1, -1}, {"subsumeMaxStates=0", -1, 0, -1},
+				{"subsumeMaxProduct=0", -1, -1, 0}} {
+				var err error
+				withBudgets(-1, f.branches, f.states, f.product, func() {
+					err = load(c.schema)
+				})
+				if err == nil {
+					continue
+				}
+				refused++
+				if !errors.Is(err, xdm.ErrResourceLimit) {
+					t.Errorf("with %s a valid 1.1 restriction was refused as "+
+						"invalid; the budget, not the schema, decided it: %v",
+						f.name, err)
+				}
+			}
+		})
+	}
+	if refused == 0 {
+		t.Fatal("no forced budget refused a valid restriction, so nothing " +
+			"above exercised the undecided path")
+	}
 }

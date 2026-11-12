@@ -41,6 +41,10 @@ type Host struct {
 	// Unbound holds host-defined bits of context components this context is
 	// known to have cleared (XSLT: grouping, merge, regex captures).
 	Unbound uint8
+	// Depth is the host's recursion depth where this context was made (XSLT:
+	// the template depth), so that a host function called from it continues
+	// the count rather than restarting from where Runtime was bound.
+	Depth int
 }
 
 // Package xpath sets these in its init. ctx is a *xpath.Context; WithHost and
@@ -91,9 +95,13 @@ var WithExpr func(c, e any) any
 // refund (Refund); zero is xpath.MaxNodes or xpath.MaxBytes and a negative
 // value is no bound. NodesBuilt and BytesBuilt, when positive, bound every
 // node and byte charged, refunds notwithstanding; zero or negative is none.
+// Entities, when non-nil, holds the entity limits (the xdm.ParseOptions
+// Max*Entity* and MaxExternal* fields; the rest is ignored) that
+// fn:parse-xml parses with; nil is the xdm defaults.
 type Limits struct {
 	Nodes, Bytes           int64
 	NodesBuilt, BytesBuilt int64
+	Entities               *xdm.ParseOptions
 }
 
 // Package xpath sets these in its init. ctx is a *xpath.Context. SetLimits
@@ -107,3 +115,12 @@ var (
 	Charged   func(ctx any) (nodes, bytes int64)
 	Refund    func(ctx any, nodes, bytes int64)
 )
+
+// LockYield lets go of l, an *xpath.EvalLock, when it is shared and the
+// calling goroutine holds it, and returns what takes it back; otherwise it
+// does nothing. Once a host call has shared the lock, the goroutine
+// evaluating holds it: one of several goroutines that take turns evaluating
+// with one runtime (xslt's streamed xsl:fork and xsl:merge), suspended
+// holding it, would leave the next waiting forever. So each lets go at the
+// end of its turn. Package xpath sets it in its init.
+var LockYield func(l any) func()

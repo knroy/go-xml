@@ -1,0 +1,727 @@
+package xslt
+
+// Validating a streamed document as the cursor reads it (lane H1): what
+// assessSource does to the tree of an xsl:source-document or a merge
+// source, and what the conformance harness does to a principal input it
+// gives as validated.
+//
+// The validator (xsd, through internal/xsdstream) is the cursor's first
+// observer: it types the parse's records as it meets them, so every view,
+// grounded copy and leaf copy of them carries the typing the tree's typed
+// copy has, and it adds the attributes the schema supplies by default to
+// the start tags. A document is known to be valid only at its end; until
+// then the run goes on, and a failure is the run's error, the tree's
+// whether or not the body failed first, since the tree validates before it
+// runs the body. Where the stream knows the tree's code from the first
+// failure (type=, and validation="strict" as attach says), the error is
+// final, with that code and the first failure (inputInvalid: XSLT 3.0
+// §2.14); otherwise the container re-runs on the tree (executeStream, the
+// merge's re-run), which raises the tree's error with its code and message.
+// So the stream must be exact on a valid document and exact about whether
+// a document is valid. (Invalidity of what the body constructs is another
+// matter: its error is the tree's as the stream meets it, and is returned
+// with no re-run; settle, below.)
+//
+// What the tree's copy is besides typed is the stream's too: no document
+// URI (streamDocAs), no DTD (dropped at the document element's start tag,
+// before the validator meets an xs:ENTITY value; what the parse applied of
+// it, attribute defaults and entities, the copy has too; a harness-marked
+// document whose prolog may hold a DOCTYPE is left to the tree, its first
+// validation having read the DTD), and ignorable whitespace kept for an
+// element-rooted validation and dropped for a document-rooted one.
+
+import (
+	"bufio"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/internal/xdmburst"
+	"github.com/knroy/go-xml/v2/internal/xdmstream"
+	"github.com/knroy/go-xml/v2/internal/xsdstream"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xsd"
+)
+
+// A document the harness gives as validated, and preloads as a typed tree,
+// may be read again on a stream by a validating xsl:source-document: the
+// harness marks it (xsdstream.MarkSource), and the stream repeats its
+// validation first.
+func init() {
+	xsdstream.MarkSource = func(resolver any, uri string, schema any) {
+		r, ok := resolver.(*FileResolver)
+		if !ok || schema == nil {
+			return
+		}
+		path, err := r.resolvePath(uri, "")
+		if err != nil {
+			return
+		}
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.preValid == nil {
+			r.preValid = map[string]any{}
+		}
+		r.preValid[path] = schema
+	}
+}
+
+// preValidation is the schema the harness marked the document at uri with,
+// or nil.
+func (r *FileResolver) preValidation(uri, base string) any {
+	path, err := r.resolvePath(uri, base)
+	if err != nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.preValid[path]
+}
+
+// streamValidation is how a document is validated on the stream.
+type streamValidation struct {
+	// schema and mode are the validation, when there is an assessment;
+	// pre is a validation that comes first, the document node the root:
+	// the harness's (preloadSources, annotate), with its own schema.
+	schema, pre any
+	mode        xsdstream.Mode
+	// docIDs is the ID/IDREF check XSLT applies over the typed document
+	// (checkDocumentIDs): validation strict and lax.
+	docIDs bool
+	// marked says the resolver holds the tree the harness validated, which
+	// the stream reads again (wantsBursts would decline it).
+	marked bool
+	// strips is input-type-annotations="strip" on an xsl:source-document's
+	// document (stripInputAnnotations), applied once it is validated.
+	strips bool
+	// main is the principal input's validation (pre the stylesheet's
+	// schema): its mode, and its error (sourceError).
+	main SourceValidation
+	// dropDTD says the document is read as assessSource's copy, which has
+	// no DTD: its DOCTYPE and unparsed entities go before the validator
+	// meets the document element (xdmburst.DropDTD).
+	dropDTD bool
+	// asRead says the document is the harness's typed tree read as it is
+	// (asRead): it keeps its document URI.
+	asRead bool
+}
+
+// streamedValidation says how spec's validation of the document at href is
+// made on the stream: nil for none (validation="strip", the default); ok
+// false when it cannot be, and the tree does it.
+//
+// strips says the caller strips the validated document's annotations when
+// the stylesheet asks (xsl:source-document does; the tree's merge does not).
+func (spec validationSpec) streamedValidation(rt *runtime, br burstResolver, href, base string, strips bool) (sv *streamValidation, ok bool) {
+	defer func() {
+		if ok && !rt.sheet.schemaFoldStreams(sv) { // streamsplit_schema.go
+			sv, ok = nil, false
+		}
+	}()
+	if spec.isDefault() {
+		return asRead(rt, br, href, base, strips) // streamvalidin_asread.go
+	}
+	fr, isFile := br.(*FileResolver)
+	if !isFile {
+		return nil, false
+	}
+	sv = &streamValidation{pre: fr.preValidation(href, base), strips: strips && rt.sheet.stripTypeAnnotations, dropDTD: true}
+	sv.marked = sv.pre != nil
+	if sv.marked && fr.prologMayHaveDTD(href, base) {
+		// The harness's validation read the DTD (its typed copy of the
+		// document keeps it), which the copy validated here has not.
+		return nil, false
+	}
+	schema := any(nil)
+	if rt.sheet.schema != nil {
+		schema = rt.sheet.schema
+	}
+	switch {
+	case spec.typeName != nil:
+		if schema == nil {
+			if spec.typeName.URI != xdm.NSXS {
+				return nil, false // XTSE1660, from the tree
+			}
+			schema = xsd.NewSchema()
+		}
+		if spec.typeName.URI == xdm.NSXS {
+			switch spec.typeName.Local {
+			case "untyped", "anyType":
+				schema = nil // assess strips: untyped
+			case "untypedAtomic":
+				return nil, false
+			}
+		}
+		sv.mode = xsdstream.Mode{Root: xsdstream.Type, Type: *spec.typeName}
+	case spec.mode == validatePreserve:
+		schema = nil // the copy, as read
+	case spec.mode == validateLax:
+		sv.mode, sv.docIDs = xsdstream.Mode{Root: xsdstream.Lax}, true
+	case spec.mode == validateStrict:
+		if schema == nil {
+			return nil, false // XTSE1660, from the tree
+		}
+		sv.mode, sv.docIDs = xsdstream.Mode{Root: xsdstream.Strict}, true
+	}
+	if schema == nil {
+		sv.docIDs = false
+	} else if xsdstream.Refusal(schema) != "" {
+		return nil, false
+	}
+	if sv.pre != nil && xsdstream.Refusal(sv.pre) != "" {
+		return nil, false
+	}
+	sv.schema = schema
+	return sv, true
+}
+
+// attach makes sv the cursor's first observer, strip (xsl:strip-space) or
+// nil the whitespace it strips, and returns what reports the outcome once
+// the cursor has read the document to its end.
+func (sv *streamValidation) attach(c *xdmstream.Cursor, strip func(*xdm.Node) bool) func() error {
+	var vs []xsdstream.Validator
+	if sv.pre != nil {
+		vs = append(vs, xsdstream.Open(sv.pre, rootMode(sv.main)))
+	}
+	if sv.schema != nil {
+		vs = append(vs, xsdstream.Open(sv.schema, sv.mode))
+	}
+	var ids *docIDs
+	if sv.docIDs {
+		ids = &docIDs{owners: map[string]uint64{}}
+	}
+	stripped, docElem := error(nil), ""
+	// assessable says validation="strict" can assess the document element
+	// (the tree's XTTE1512 otherwise: assess).
+	assessable := false
+	c.Observe(func(n *xdm.Node, d int, end bool, ord uint64) {
+		if d == 1 && !end && n != nil && n.Kind() == xdm.KindElement {
+			if sv.dropDTD {
+				xdmburst.DropDTD(n)
+			}
+			docElem = describeNode(n)
+			if s, ok := sv.schema.(*xsd.Schema); ok && sv.mode.Root == xsdstream.Strict {
+				assessable = s.CanAssessStrictly(n)
+			}
+		}
+		for _, v := range vs {
+			v.Observe(n, d, end)
+		}
+		if ids != nil {
+			ids.observe(n, d, end, ord)
+		}
+		if sv.strips && stripped == nil {
+			stripped = stripAnnotationsOf(n, end)
+		}
+	})
+	c.StripWhitespace(validatedStripper(vs, strip, sv.pre != nil))
+	return func() error {
+		for k, v := range vs {
+			if err := v.Err(); err != nil {
+				if sv.main != 0 {
+					return sourceError(sv.main, err)
+				}
+				if k == 0 && sv.pre != nil && sv.schema != nil && len(vs) == 2 && vs[1].Err() != nil {
+					// The harness's validation failed, which it does not
+					// report (its typed copy keeps the annotations up to the
+					// failure), and so did the stylesheet's: the tree's error
+					// is the stylesheet's validation's (streamable-149).
+					k, err = 1, vs[1].Err()
+				}
+				if k == len(vs)-1 && sv.schema != nil {
+					switch {
+					case sv.mode.Root == xsdstream.Type:
+						// type= is the tree's XTTE1540 whatever the failure
+						// (assess: ValidateAgainstTypeCopy). ERR XTTE1540:
+						// "if an [xsl:]type attribute is defined ... and the
+						// outcome of schema validity assessment against that
+						// type is that the validity property ... is other
+						// than valid".
+						return &inputInvalid{fmt.Errorf("XTTE1540: %s is not valid against %s%s%w",
+							docElem, sv.mode.Type.Lexical(), streamtrace.FirstFailure, err)}
+					case sv.mode.Root == xsdstream.Strict && assessable && !uncertainCode(err):
+						// validation="strict" of a document element the
+						// schema can assess is the tree's XTTE1510 unless
+						// every failure is an ID/IDREF one (XTTE1555:
+						// idConstraintFailure), which a first failure of
+						// another kind rules out.
+						return &inputInvalid{fmt.Errorf("XTTE1510: %s is not valid%s%w",
+							docElem, streamtrace.FirstFailure, err)}
+					}
+				}
+				// Otherwise (lax, a harness validation first, a first
+				// failure that is an ID's) the tree's code (XTTE1510, 1512,
+				// 1515, 1555) turns on every failure, the stream's Err on
+				// the first; the re-run raises it.
+				return fmt.Errorf("XTTE1510: the streamed document is not valid: %w", err)
+			}
+		}
+		if ids != nil && ids.err != nil {
+			return ids.err
+		}
+		return stripped
+	}
+}
+
+// inputInvalid is the invalidity of a streamed input document, found by
+// attach's validation, whose code is the one the tree raises: XTTE1540 for
+// type=, XTTE1510 for validation="strict" (see attach). Its text is the
+// first failure the stream met, where the tree's lists every failure. The
+// tree validates the document before its body runs, so this is its error
+// whatever the streamed body did, once the document is known to be well
+// formed: final, with no re-run (runStream, settle). XSLT 3.0 §2.14: "If
+// more than one error arises, an implementation is not required to signal
+// any errors other than the first one that it detects." The differential
+// tests compare it by code (streamtrace.SameError).
+type inputInvalid struct{ err error }
+
+func (e *inputInvalid) Error() string { return e.err.Error() }
+func (e *inputInvalid) Unwrap() error { return e.err }
+
+// uncertainCode reports whether err, a validation's first failure, is not one
+// whose code the tree's error is known from: an ID/IDREF constraint
+// (cvc-id), or a failure with no code.
+func uncertainCode(err error) bool {
+	var errs *xsd.ValidationErrors
+	if !errors.As(err, &errs) || len(errs.Errors) == 0 {
+		return true
+	}
+	code := errs.Errors[0].Code
+	return code == "" || strings.HasPrefix(code, "cvc-id.")
+}
+
+// stripAnnotationsOf is stripAnnotationCopy for n, an element of the parse
+// at its start tag or its end, once the validation has typed it: its typing
+// and its attributes' cleared but for is-id and is-idrefs, no type
+// environment, and xsi:nil taken off the start tag.
+func stripAnnotationsOf(n *xdm.Node, end bool) error {
+	if n == nil || n.Kind() != xdm.KindElement {
+		return nil
+	}
+	strip := func(x *xdm.Node) {
+		x.StripTyping()
+		x.SetTypeEnv(nil)
+	}
+	strip(n)
+	if end {
+		return nil
+	}
+	var nils []*xdm.Node
+	for a := range n.Attrs() {
+		if a.Name().URI == xdm.NSXSI && a.Name().Local == "nil" {
+			nils = append(nils, a)
+			continue
+		}
+		strip(a)
+	}
+	for _, a := range nils {
+		if !xdmburst.RemoveAttr(n, a) {
+			return fmt.Errorf("streaming: xsi:nil cannot be taken off the start tag")
+		}
+	}
+	return nil
+}
+
+// validatedStripper is the cursor's whitespace stripping under validation:
+// ignorable whitespace a document-rooted validation drops, then strip's.
+// With first (a validation made before the stylesheet strips, as the harness
+// makes it), strip spares an element annotated with a simple type
+// (stripCopyNode's exemption) and tells the validation what it stripped.
+func validatedStripper(vs []xsdstream.Validator, strip func(*xdm.Node) bool, first bool) func(*xdm.Node) bool {
+	return func(el *xdm.Node) bool {
+		for _, v := range vs {
+			if v.Drops(el) {
+				return true
+			}
+		}
+		if strip == nil || !strip(el) {
+			return false
+		}
+		if first {
+			if xdm.HasSimpleTypeAnnotation(el.TypeAnnotation()) {
+				return false
+			}
+			vs[0].Stripped(el)
+		}
+		return true
+	}
+}
+
+// docIDs is checkDocumentIDs over the stream: the annotations are those
+// the validator has written by the time it is told of a node.
+type docIDs struct {
+	owners map[string]uint64 // ID value -> its element's ordinal
+	refs   []string
+	dupe   string
+	// text collects the string value of each open element annotated as an
+	// ID or a reference (they have simple content), per depth.
+	text []*strings.Builder
+	err  error
+}
+
+func (x *docIDs) observe(n *xdm.Node, d int, end bool, ord uint64) {
+	if x.err != nil {
+		return
+	}
+	switch {
+	case n == nil:
+		if x.dupe != "" {
+			x.err = fmt.Errorf("XTTE1555: ID value %q is defined more than once in the document", x.dupe)
+			return
+		}
+		for _, r := range x.refs {
+			if _, ok := x.owners[r]; !ok {
+				x.err = fmt.Errorf("XTTE1555: IDREF %q does not match any ID in the document", r)
+				return
+			}
+		}
+	case n.Kind() == xdm.KindElement && !end:
+		for a := range n.Attrs() {
+			x.note(ord, a.TypeAnnotation(), a.Value())
+		}
+		for len(x.text) <= d {
+			x.text = append(x.text, nil)
+		}
+		x.text[d] = nil
+		switch n.TypeAnnotation() {
+		case "ID", "IDREF", "IDREFS":
+			x.text[d] = &strings.Builder{}
+		}
+	case n.Kind() == xdm.KindElement:
+		if d < len(x.text) && x.text[d] != nil {
+			x.note(ord, n.TypeAnnotation(), x.text[d].String())
+			x.text[d] = nil
+		}
+	case n.Kind() == xdm.KindText && d-1 < len(x.text) && x.text[d-1] != nil:
+		x.text[d-1].WriteString(n.Value())
+	}
+}
+
+// note is checkDocumentIDs's noteID and noteRefs for a node of the element
+// whose ordinal is owner.
+func (x *docIDs) note(owner uint64, ann, value string) {
+	switch ann {
+	case "ID":
+		if prev, seen := x.owners[value]; !seen {
+			x.owners[value] = owner
+		} else if prev != owner && x.dupe == "" {
+			x.dupe = value
+		}
+	case "IDREF":
+		x.refs = append(x.refs, value)
+	case "IDREFS":
+		x.refs = append(x.refs, strings.Fields(value)...)
+	}
+}
+
+// prologMayHaveDTD reports whether the document at href may have a
+// DOCTYPE: one before its first element, or a prolog this cannot read
+// (a UTF-16 one, or one past what it looks at).
+func (r *FileResolver) prologMayHaveDTD(href, base string) bool {
+	path, err := r.resolvePath(href, base)
+	if err != nil {
+		return false // the stream reports it as the tree would
+	}
+	may := true
+	_ = r.openConfined(path, href, func(f *os.File) error {
+		may = prologDTD(bufio.NewReaderSize(io.LimitReader(f, 1<<16), 1<<12))
+		return nil
+	})
+	return may
+}
+
+// prologDTD reads a prolog up to its first element: false only when it
+// meets that element with no DOCTYPE before it.
+func prologDTD(r *bufio.Reader) bool {
+	b, _ := r.Peek(2)
+	if len(b) == 2 && (b[0] == 0xFE && b[1] == 0xFF || b[0] == 0xFF && b[1] == 0xFE) {
+		return true
+	}
+	if b, _ := r.Peek(3); string(b) == "\xEF\xBB\xBF" {
+		r.Discard(3)
+	}
+	for {
+		c, err := r.ReadByte()
+		if err != nil {
+			return true
+		}
+		if c != '<' {
+			continue
+		}
+		next, err := r.Peek(1)
+		if err != nil {
+			return true
+		}
+		switch next[0] {
+		case '?':
+			if !skipPast(r, "?>") {
+				return true
+			}
+		case '!':
+			if b, _ := r.Peek(3); string(b) == "!--" {
+				if !skipPast(r, "-->") {
+					return true
+				}
+				continue
+			}
+			return true // <!DOCTYPE
+		default:
+			return false // the first element
+		}
+	}
+}
+
+// skipPast reads r past the next end.
+func skipPast(r *bufio.Reader, end string) bool {
+	k := 0
+	for {
+		c, err := r.ReadByte()
+		if err != nil {
+			return false
+		}
+		switch {
+		case c == end[k]:
+			k++
+			if k == len(end) {
+				return true
+			}
+		case c == end[0]:
+			k = 1
+		default:
+			k = 0
+		}
+	}
+}
+
+// typedValue reports whether a split that atomizes the element el, a view
+// or the parse's record at its start tag, must take its typed value: el
+// carries a type (only a validated stream types its records) and the split
+// does not want its string value (a string() tail, or fn:string's argument).
+func typedValue(s *streamSplit, el *xdm.Node) bool {
+	return s.tailText != "string" && !s.strVal && el != nil && el.Kind() == xdm.KindElement &&
+		xdm.TypingOf(el) != (xdm.Typing{})
+}
+
+// groundAtomized is the typed value of the element the cursor is at: its
+// grounded copy, which has its typing, atomized as the tree atomizes it
+// (FOTY0012 for element-only content).
+func groundAtomized(c *xdmstream.Cursor) (xdm.Sequence, error) {
+	g, err := c.Ground()
+	if err != nil {
+		return nil, err
+	}
+	return xdm.AtomizeChecked(xdm.One(g))
+}
+
+// The principal input with TransformOptions.SourceValidation: validated
+// against the stylesheet's schema, the document node the root, as an xsd
+// typed copy of the document is made, before xsl:strip-space (which then
+// spares simple content: validatedStripper's first). TransformReader
+// validates on the stream when it streams and the schema allows; Transform,
+// and TransformReader otherwise, makes the typed copy. An invalid document
+// is the same error both ways: the failures the event validator meets,
+// which on the tree path it is made to meet by reading the document again
+// (sourceInvalid), positions left out (a stream's parse and a tree's differ
+// in them).
+
+// sourceValidationStreams reports whether the validation mode asks for can
+// be made on the stream.
+func (s *Stylesheet) sourceValidationStreams(mode SourceValidation) bool {
+	switch {
+	case mode == 0:
+		return true
+	case mode == SourceLax && len(s.schemaFolds) > 0:
+		return false // streamsplit_schema.go
+	case s.schema == nil:
+		return mode == SourceLax // lax without a schema assesses nothing
+	}
+	return xsdstream.Refusal(s.schema) == ""
+}
+
+// rootMode is the event validator's mode for mode.
+func rootMode(mode SourceValidation) xsdstream.Mode {
+	if mode == SourceLax {
+		return xsdstream.Mode{Root: xsdstream.Lax, Doc: true}
+	}
+	return xsdstream.Mode{Root: xsdstream.Strict, Doc: true}
+}
+
+// validateMain attaches the validation mode asks for to c, the principal
+// input's cursor, and returns what reports its outcome once c has been read
+// to its end.
+func (s *Stylesheet) validateMain(mode SourceValidation, c *xdmstream.Cursor) func() error {
+	if mode == 0 || s.schema == nil {
+		return func() error { return nil }
+	}
+	var strip func(*xdm.Node) bool
+	if len(s.strip) > 0 {
+		strip = s.whitespaceStripper(0)
+	}
+	return (&streamValidation{pre: s.schema, main: mode}).attach(c, strip)
+}
+
+// validatedSource is source as the validation mode asks for leaves it: the
+// typed copy of the document.
+func (s *Stylesheet) validatedSource(source *xdm.Node, mode SourceValidation) (*xdm.Node, error) {
+	if source == nil || source.Kind() != xdm.KindDocument {
+		return nil, fmt.Errorf("SourceValidation: the source must be a document node")
+	}
+	if s.schema == nil {
+		if mode == SourceLax {
+			return source, nil
+		}
+		return nil, fmt.Errorf("XTSE1660: validation requires a schema; none was imported")
+	}
+	if els := source.ChildElements(); mode == SourceLax && (len(els) == 0 || !s.schema.CanAssessStrictly(els[0])) {
+		return source, nil
+	}
+	typed, err := s.schema.ValidateCopy(source, xsd.ValidateOptions{})
+	if err != nil {
+		return nil, s.sourceInvalid(source, mode, err)
+	}
+	return typed, nil
+}
+
+// sourceInvalid is the error of source, which the typed copy found invalid
+// with err: the failures the event validator meets reading it, as a stream
+// of it would have met them.
+func (s *Stylesheet) sourceInvalid(source *xdm.Node, mode SourceValidation, err error) error {
+	var b strings.Builder
+	if Serialize(&b, xdm.One(source), OutputSettings{Method: "xml"}, nil) == nil {
+		c := xdmstream.Open(strings.NewReader(b.String()), xdm.ParseOptions{MaxBytes: -1, MaxNodes: -1})
+		defer c.Close()
+		v := xsdstream.Open(s.schema, rootMode(mode))
+		c.Observe(func(n *xdm.Node, d int, end bool, _ uint64) { v.Observe(n, d, end) })
+		c.StripWhitespace(v.Drops)
+		if drainTo(c) == nil && v.Err() != nil {
+			err = v.Err()
+		}
+	}
+	return sourceError(mode, err)
+}
+
+// sourceError is the principal input's validation error: its code, and the
+// failures without their positions.
+func sourceError(mode SourceValidation, err error) error {
+	code := "XTTE1510"
+	if mode == SourceLax {
+		code = "XTTE1515"
+	}
+	var errs *xsd.ValidationErrors
+	if errors.As(err, &errs) {
+		c := &xsd.ValidationErrors{}
+		for _, e := range errs.Errors {
+			x := *e
+			x.Line, x.Column = 0, 0
+			c.Errors = append(c.Errors, &x)
+		}
+		err = c
+	}
+	return fmt.Errorf("%s: the principal input is not valid: %w", code, err)
+}
+
+// drainTo reads c to its end.
+func drainTo(c *xdmstream.Cursor) error {
+	for {
+		ev, err := c.Next()
+		switch {
+		case err == io.EOF:
+			return nil
+		case err != nil:
+			return err
+		case ev.Kind == xdmstream.EndDocument:
+			return nil
+		}
+	}
+}
+
+// stream reads d on a cursor fn reads: as the tree's validated copy of it
+// is, with no document URI, when it is validated.
+func (d *mergeDoc) stream(ctx *xpath.Context, fn func(*xdmstream.Cursor) error) error {
+	if d.vin == nil || d.vin.asRead {
+		return d.br.streamDoc(ctx, d.href, d.base, fn)
+	}
+	return d.br.(*FileResolver).streamDocAs(ctx, d.href, d.base, false, fn)
+}
+
+// A schema-validity failure of what the body constructs -- a validated
+// copy, xsl:copy, xsl:element, a literal result element, an
+// xsl:result-document, xsl:document -- is raised by assess at the end tag
+// where it becomes known, from the same content and the same code as the
+// tree's, so its text is the tree's. REC §2.12: "Schema invalidity, however,
+// is treated as a dynamic error of the instruction that processes the entire
+// input stream". The container returns it with no re-run once the rest of
+// the document is known to be what the tree would have read before running
+// its body: well-formed, valid when the container validates it, and its
+// accumulators' rules without error (settle). Every other failure re-runs.
+
+// invalidError is a failure of assess: XTTE1510, XTTE1512, XTTE1515,
+// XTTE1540 or XTTE1555 (§2.12's schema invalidity).
+type invalidError struct{ err error }
+
+func (e *invalidError) Error() string { return e.err.Error() }
+func (e *invalidError) Unwrap() error { return e.err }
+
+// markInvalid marks *err, a failure of assess, when it is invalidity.
+func markInvalid(err *error) {
+	if *err != nil && strings.HasPrefix(xdm.ErrorCode(*err), "XTTE15") {
+		*err = &invalidError{*err}
+	}
+}
+
+// treesError is a streamed container's failure that is the tree's: the
+// container returns err, with no re-run (executeStream).
+type treesError struct{ err error }
+
+func (e *treesError) Error() string { return e.err.Error() }
+func (e *treesError) Unwrap() error { return e.err }
+
+// settle is the error of a streamed body that failed with err: err as the
+// tree's when it is final (invalidity, invalidError, or a family of
+// finalCodes: streamFinal; or a reference to a global variable whose value
+// is being computed, active, which the tree's container meets too: a
+// circularity, XTDE0640 once the global's evaluation sees it) and the rest
+// of the document reads, validates and accumulates without error, which the
+// tree had done before its body ran; otherwise err, for the re-run. A
+// validated document (run.typed) is read on to its end whatever err is,
+// short of a posture fault or a resource limit: when it is invalid with the
+// tree's code (inputInvalid), that is the tree's error, raised before its
+// body ran.
+func (run *streamRun) settle(err error, valid func() error, acc *streamAccums, active map[string]bool) error {
+	final := streamFinal(err, nil) || circularGlobalInPattern(err, active) != nil // streamexec.go, pattern.go
+	var pe *streamtrace.PostureError
+	if !final && (!run.typed || errors.As(err, &pe) || errors.Is(err, xdm.ErrResourceLimit)) {
+		return err
+	}
+	if run.c.At().Kind != xdmstream.EndDocument && run.drain() != nil {
+		return err
+	}
+	if verr := valid(); verr != nil {
+		if fe := inputFinal(verr); fe != verr {
+			return fe
+		}
+		return err
+	}
+	if !final || acc.finish() != nil {
+		return err
+	}
+	return &treesError{err}
+}
+
+// inputFinal is err, a streamed document's validation outcome, as the
+// tree's (treesError) when it is inputInvalid with a code of
+// inputFinalCodes; otherwise err, for the re-run.
+func inputFinal(err error) error {
+	if ie, ok := err.(*inputInvalid); ok && inputFinalCodes[xdm.ErrorCode(ie)] {
+		return &treesError{ie}
+	}
+	return err
+}
+
+// inputFinalCodes are the codes of inputInvalid, final: each has a case in
+// TestStreamFinalErrors that fails when it is dropped.
+var inputFinalCodes = map[string]bool{"XTTE1510": true, "XTTE1540": true}

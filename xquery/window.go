@@ -60,7 +60,7 @@ func (v *windowVars) bind(t tuple, seq xdm.Sequence, i int, x *nameExt) tuple {
 		k++
 	}
 	for _, n := range nm[:k] {
-		if slices.Contains(t.names, n) { // rebinding replaces; the slow path
+		if t.has(n) { // rebinding replaces; the slow path
 			for j := 0; j < k; j++ {
 				t = t.bind(nm[j], vs[j])
 			}
@@ -70,10 +70,15 @@ func (v *windowVars) bind(t tuple, seq xdm.Sequence, i int, x *nameExt) tuple {
 	if k == 0 {
 		return t
 	}
+	if t.shares() {
+		// Each window of a wide tuple shares its bindings; see tuple.
+		return tuple{up: x.frameOf(t), names: x.extendN(nil, nm[:k]),
+			vals: slices.Clone(vs[:k])}
+	}
 	vals := make([]xdm.Sequence, len(t.vals)+k)
 	copy(vals, t.vals)
 	copy(vals[len(t.vals):], vs[:k])
-	return tuple{names: x.extendN(t.names, nm[:k]), vals: vals}
+	return tuple{up: t.up, names: x.extendN(t.names, nm[:k]), vals: vals}
 }
 
 // extendN is extend for several names at once.
@@ -190,6 +195,15 @@ func (c *windowClause) windows(t tuple, seq xdm.Sequence, ctx *evalContext) ([]t
 			// where the specification asks for four.
 			continue
 		}
+		// emit copies the window's items, so a sliding window that never
+		// closes holds n(n+1)/2 of them across its starts. The copy is
+		// charged to the held item budget before it is made; the tuple count
+		// flwor.eval charges afterwards sees only one item per window.
+		if end >= s {
+			if err := ctx.xp.ChargeItems(end - s + 1); err != nil {
+				return nil, err
+			}
+		}
 		w := c.emit(st, seq, s, end, closed, &x)
 		if c.typeCheck != nil {
 			v, _ := w.lookup(c.name)
@@ -215,8 +229,16 @@ func (c *windowClause) windows(t tuple, seq xdm.Sequence, ctx *evalContext) ([]t
 // condition — the one case where the end is defined in terms of the start.
 func (c *windowClause) findEnd(st tuple, seq xdm.Sequence, s int,
 	ctx *evalContext, x *winExt) (int, bool, error) {
+	// Each scan runs to the end of the sequence when no boundary fires, and
+	// windows calls this once per start, so the scans together are
+	// quadratic in the binding sequence with nothing emitted or charged
+	// under "only". Both loops check for cancellation per position, which is
+	// what lets a host deadline stop that work.
 	if !c.hasEnd {
 		for e := s + 1; e <= len(seq); e++ {
+			if err := ctx.xp.Err(); err != nil {
+				return 0, false, err
+			}
 			nt := c.start.bind(st, seq, e, &x.start)
 			ok, err := c.start.when.evalBool(nt.sub(ctx))
 			if err != nil {
@@ -229,6 +251,9 @@ func (c *windowClause) findEnd(st tuple, seq xdm.Sequence, s int,
 		return len(seq), false, nil
 	}
 	for e := s; e <= len(seq); e++ {
+		if err := ctx.xp.Err(); err != nil {
+			return 0, false, err
+		}
 		et := c.end.bind(st, seq, e, &x.end)
 		ok, err := c.end.when.evalBool(et.sub(ctx))
 		if err != nil {

@@ -1,7 +1,6 @@
 package xslt
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -46,10 +45,15 @@ import (
 // staticPhase is the state of one run of the pass.
 type staticPhase struct {
 	c *compiler
-	// vars holds the static variables declared so far, in tree order. The
+	// vars holds the static variables declared so far, by Clark name. The
 	// spec says the most recent declaration in tree order wins, so a repeated
-	// name overwrites the value in place rather than appending.
-	vars []staticVar
+	// name overwrites the value in place. scope is the same bindings as a
+	// static expression reads them; see staticScope.
+	vars  map[string]*staticVar
+	scope staticScope
+	// nodes is what this walk has charged against maxModuleNodes; see
+	// includeModule.
+	nodes int
 	// seen guards the module graph against include cycles. The cycle itself
 	// is reported by compileInclude with the right error code; this pass only
 	// has to avoid recursing forever before it gets there.
@@ -88,6 +92,7 @@ func (c *compiler) runStaticPhase(doc *xdm.Node) error {
 	defer suspendVersionMemo()()
 	p := &staticPhase{
 		c:    c,
+		vars: map[string]*staticVar{},
 		seen: map[string]bool{},
 		done: map[*xdm.Node]*xdm.Node{},
 	}
@@ -138,6 +143,11 @@ type staticVar struct {
 // compilation reads in its place: conditional inclusion applied and shadow
 // attributes expanded. The copy keeps the original's source positions.
 func (p *staticPhase) module(doc *xdm.Node) error {
+	// CompileContext stops the static phase on cancellation; a declaration
+	// without a select evaluates nothing that would notice it.
+	if err := p.c.goCtx().Err(); err != nil {
+		return err
+	}
 	if cp, ok := p.done[doc]; ok {
 		// The tree has already been pruned and its shadow attributes
 		// expanded, both of which must happen once. Its static variables
@@ -385,6 +395,9 @@ func (p *staticPhase) topLevel(el *xdm.Node) error {
 
 // declare evaluates one static variable or parameter declaration.
 func (p *staticPhase) declare(el *xdm.Node) error {
+	if err := p.c.goCtx().Err(); err != nil {
+		return err
+	}
 	name := el.AttrValue("name")
 	if name == "" {
 		return fmt.Errorf("%s requires a name attribute", el.Name().Lexical())
@@ -512,11 +525,7 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 	}
 
 	isParam := el.Name().Local == "param"
-	for i := range p.vars {
-		if p.vars[i].name.Clark() != key {
-			continue
-		}
-		prev := &p.vars[i]
+	if prev := p.vars[key]; prev != nil {
 		// XTSE3450, section 9.5 rule 2. When the declaration reached later in
 		// stylesheet tree order has the *higher* import precedence, it is the
 		// one that wins — but every static expression between the two has
@@ -547,6 +556,7 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 			}
 			prev.val = val
 			prev.prec = p.depth
+			p.scope.set(key, val)
 			return nil
 		}
 		// Equal or lower precedence: the most recent declaration in tree
@@ -554,12 +564,56 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 		if p.depth == prev.prec {
 			prev.val = val
 			prev.isParam = isParam
+			p.scope.set(key, val)
 		}
 		return nil
 	}
-	p.vars = append(p.vars, staticVar{
-		name: qn, val: val, isParam: isParam, prec: p.depth})
+	p.vars[key] = &staticVar{name: qn, val: val, isParam: isParam, prec: p.depth}
+	p.scope.set(key, val)
 	return nil
+}
+
+// staticScope is the static variables in scope, as the chain of variable
+// scopes a static expression is evaluated in: levels[i] is shadowed by the
+// levels after it. Binding a variable again for every expression made a
+// stylesheet of V static declarations cost O(V^2); a new binding is instead
+// a one-entry level, and a level is merged into the one below it once it is
+// as large, as a binary counter carries. Each binding is so copied O(log V)
+// times, and an expression reads O(log V) levels.
+//
+// A level is never written once made, because a function item a static
+// expression returns closes over the scope it was created in, and must not
+// see a later declaration.
+type staticScope struct {
+	levels []map[string]xdm.Sequence
+}
+
+// set binds key to val, shadowing any earlier binding of it.
+func (s *staticScope) set(key string, val xdm.Sequence) {
+	top := map[string]xdm.Sequence{key: val}
+	for n := len(s.levels); n > 0 && len(s.levels[n-1]) <= len(top); n-- {
+		merged := make(map[string]xdm.Sequence, len(s.levels[n-1])+len(top))
+		for k, v := range s.levels[n-1] {
+			merged[k] = v
+		}
+		for k, v := range top {
+			merged[k] = v
+		}
+		top = merged
+		s.levels = s.levels[:n-1]
+	}
+	s.levels = append(s.levels, top)
+}
+
+// bind returns ctx with the scope's variables in scope. ctx must be fresh
+// from xpath.NewContext, with no bindings of its own.
+func (s *staticScope) bind(ctx *xpath.Context) *xpath.Context {
+	for _, m := range s.levels {
+		n := *ctx
+		n.Vars, n.Parent = m, ctx
+		ctx = &n
+	}
+	return ctx
 }
 
 // declKind names the element a staticVar was declared by, for a diagnostic.
@@ -620,6 +674,9 @@ func (p *staticPhase) includeModule(el *xdm.Node) error {
 	if i := strings.IndexByte(href, '#'); i >= 0 {
 		fragment, href = href[i+1:], href[:i]
 	}
+	if err := p.c.visitModule(el, href); err != nil {
+		return err
+	}
 	doc, resolved, err := resolveModule(p.c.opts.Resolver, p.c.opts.moduleBudget, href, base)
 	if err != nil {
 		return nil
@@ -630,8 +687,23 @@ func (p *staticPhase) includeModule(el *xdm.Node) error {
 	p.seen[resolved] = true
 	defer delete(p.seen, resolved)
 	if fragment != "" {
-		if sub := embeddedModule(doc, fragment); sub != nil {
+		if sub := p.c.embeddedModule(doc, fragment); sub != nil {
 			doc = sub
+		}
+	}
+	// Every occurrence is walked, since each has its own import precedence
+	// (3.11.3), and a module reached again is re-declared rather than
+	// skipped (redeclare). The walk is charged what compileModuleNodes will
+	// charge the same occurrence, on a counter of its own: it refuses nothing
+	// compilation would accept, but refuses it before the static work rather
+	// than after it.
+	if b := p.c.opts.budget; b.maxNodes >= 0 {
+		p.nodes += doc.SubtreeEnd() - doc.Index()
+		if p.nodes > b.maxNodes {
+			return fmt.Errorf(
+				"%s %q: resource limit exceeded: the static phase of this "+
+					"stylesheet needs more than %d module nodes: %w",
+				el.Name().Lexical(), href, b.maxNodes, xdm.ErrResourceLimit)
 		}
 	}
 	// An imported module ranks below its importer; an included one shares the
@@ -904,12 +976,23 @@ func (p *staticPhase) valueTemplate(el *xdm.Node, src string) (string, error) {
 // functions alike, so there is nothing for the zero values to withhold that
 // the specification does not already withhold.
 func (p *staticPhase) staticRuntime() *runtime {
+	// The exception is the fn:transform nesting count and its bound, which
+	// a static expression needs as much as a running one: it can call
+	// fn:transform on its own text. See CompileOptions.nestedDepth.
+	maxDepth := p.c.opts.nestedMaxDepth
+	if maxDepth == 0 {
+		maxDepth = DefaultMaxDepth
+	}
 	rt := &runtime{transformState: &transformState{
-		static: true,
-		opts:   &TransformOptions{},
-		sheet:  p.c.sheet,
-		goCtx:  context.Background(),
-	}}
+		static:   true,
+		opts:     &TransformOptions{},
+		sheet:    p.c.sheet,
+		goCtx:    p.c.goCtx(),
+		maxDepth: maxDepth,
+		// A transform this static expression starts spends the Compile's
+		// module budget at run time too. See transformState.compileBudget.
+		compileBudget: p.c.opts.budget,
+	}, depth: p.c.opts.nestedDepth}
 	// Only a ModuleResolver that is also a DocumentResolver can answer
 	// stylesheet-location, which is the same pairing eval already requires
 	// for fn:doc, and for the same reason: FileResolver is both, and a
@@ -926,9 +1009,19 @@ func (p *staticPhase) staticRuntime() *runtime {
 // containing element, no context item, no schema, the restricted function
 // library, and the static variables declared before el in tree order — which
 // is exactly the set this pass has accumulated by the time it reaches el.
+//
+// The bindings are the per-compile shared map of el's nearest declaring
+// element (inScopeNamespacesShared), which this function and everything it
+// hands them to only read: building el's own map per expression was linear in
+// the declarations in scope, per expression.
 func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
+	// Every use-when and shadow attribute is evaluated here, so this is the
+	// one cancellation point a module of nothing else needs.
+	if err := p.c.goCtx().Err(); err != nil {
+		return nil, err
+	}
 	ns := &nsResolver{
-		bindings:  el.InScopeNamespaces(),
+		bindings:  inScopeNamespacesShared(el),
 		defaultNS: xpathDefaultNamespace(el),
 	}
 	compiled, err := xpath.CompileWith(src, xpath.CompileOptions{
@@ -954,7 +1047,7 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 	} else {
 		// A 2.0 processor runs no nested transformation. Left to the xpath
 		// stub, the call would reach the processor this package's init
-		// registers, which compiles under the compileMu this Compile already
+		// registers, which compiles under the compileSlot this Compile already
 		// holds -- a deadlock -- so the stub's FOXT0004 is given here instead.
 		lib.Add(xpath.Function{
 			Name:  xdm.QName{URI: xdm.NSFN, Local: "transform"},
@@ -966,7 +1059,7 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 			},
 		})
 	}
-	ctx := xpath.NewContext(nil, lib)
+	ctx := p.scope.bind(xpath.NewContext(nil, lib))
 	if staticRT != nil {
 		// A function ITEM the nested transformation returned is an
 		// xsl:function of the nested stylesheet, and userFunction.call reads
@@ -995,6 +1088,8 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 		p.now = time.Now()
 	}
 	ctx = ctx.WithEnv(func(e *xpath.Env) {
+		// The static phase stops when the CompileContext caller gives up.
+		e.Ctx = p.c.goCtx()
 		if processorAtLeast30() {
 			e.LibraryVersion = xpath.XPath31
 			e.RegexVersion = xpath.XPath31
@@ -1035,9 +1130,6 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 	// module, whose URI is the static base URI just set. Saxon 9.8 passes it.
 	//
 	// The resolver is installed with the rest of the environment above.
-	for _, sv := range p.vars {
-		ctx = ctx.WithVar(sv.name, sv.val)
-	}
 	return compiled.Eval(ctx)
 }
 
@@ -1095,12 +1187,9 @@ func (c *compiler) staticGlobal(el *xdm.Node) (*Variable, error) {
 		isStatic: true,
 		baseURI:  el.BaseURI(),
 	}
-	key := qn.Clark()
-	for _, sv := range c.staticVars {
-		if sv.name.Clark() == key {
-			v.staticValue = sv.val
-			return v, nil
-		}
+	if sv := c.staticVars[qn.Clark()]; sv != nil {
+		v.staticValue = sv.val
+		return v, nil
 	}
 	// The static phase visits exactly the declarations that survive
 	// conditional inclusion, and compilation sees the same tree, so a name
@@ -1151,6 +1240,9 @@ func ignoredTopLevel(ch *xdm.Node) bool {
 // expanding its shadow attributes again would re-evaluate expressions against
 // a static context that has since moved on; only the declarations belong to
 // the position in tree order this visit occupies.
+//
+// Every visit has to be walked, since each occurrence has its own import
+// precedence (3.11.3); includeModule charges it.
 func (p *staticPhase) redeclare(doc *xdm.Node) error {
 	root := firstElement(doc)
 	if root == nil || root.Kind() != xdm.KindElement ||
