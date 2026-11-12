@@ -304,10 +304,12 @@ always works.
   definitions) compiles in about 0.5 s and 170 MB. A budget of 200,000
   definition compilations (`Options.MaxRefExpansions`) remains as a guard,
   far above any real schema.
-* **Large schemas can still exceed the derivative bound.** Validation does not
-  intern patterns, so a deeply mixed content model can grow past
-  `ValidateOptions.MaxPatternSize`, which ends validation with an error that
-  says so; a few DocBook documents with nested inlines do. The bound is also
+* **Large schemas can still exceed the derivative bound.** Validation interns
+  patterns and remembers derivatives, but interning merges no more than the
+  simplifying constructors do, so a pattern keeps its size: a deeply mixed
+  content model can grow past `ValidateOptions.MaxPatternSize`, which ends
+  validation with an error that says so; a few DocBook documents with nested
+  inlines do. The bound is also
   checked between the tokens of a `<list>`.
 
 ## XSD
