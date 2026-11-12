@@ -45,6 +45,7 @@ The harness, its workloads and the raw results of both runs are in
 - [Schema validation: XSD and RELAX NG](#schema-validation)
 - [Parsing and Canonical XML](#parsing-and-canonical-xml)
 - [Memory](#memory)
+  - [Streaming against the tree](#streaming-against-the-tree)
 - [Where the break-even is](#where-the-break-even-is)
 - [What could not be measured, and why](#what-could-not-be-measured)
 - [Correctness findings](#correctness-findings)
@@ -477,6 +478,57 @@ the live heap passes 128 MB. For large documents v1's tree
 cost about 23 bytes of RSS per byte of input, 1.6× libxml2's; v2's costs
 under 4, about a quarter of libxml2's. Only `encoding/xml`, which builds no
 tree, uses less.
+
+### Streaming against the tree
+
+The figures above are tree mode, which is what the CLI runs. Through the API,
+`Stylesheet.TransformReader` streams a document whose initial mode is
+streamable and verified, and its memory then does not grow with the input.
+One stylesheet per workload, run both ways: tree is `xdm.Parse` +
+`Transform`, stream is `TransformReader`, and both write the principal result
+to `TransformOptions.Output`, so neither holds a result tree. The outputs are
+compared by digest and agree in every run.
+
+| Input | Workload | Tree RSS | Stream RSS | Tree heap | Stream heap | Tree time | Stream time |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 11 MB | identity | 46 MB | 15 MB | 35 MB | 3.8 MB | 0.20 s | 0.24 s |
+| 11 MB | filter | 74 MB | 18 MB | 60 MB | 3.6 MB | 0.13 s | 0.22 s |
+| 11 MB | sum | 59 MB | 17 MB | 45 MB | 3.8 MB | 0.07 s | 0.09 s |
+| 112 MB | identity | 348 MB | 16 MB | 349 MB | 3.8 MB | 1.94 s | 2.23 s |
+| 112 MB | filter | 619 MB | 19 MB | 588 MB | 3.7 MB | 1.27 s | 1.88 s |
+| 112 MB | sum | 502 MB | 18 MB | 485 MB | 3.8 MB | 0.73 s | 0.79 s |
+| 564 MB | identity | 1,644 MB | 16 MB | 1,743 MB | 3.8 MB | 9.58 s | 11.07 s |
+| 564 MB | filter | 2,414 MB | 20 MB | 2,930 MB | 3.8 MB | 6.81 s | 9.83 s |
+| 564 MB | sum | 2,075 MB | 19 MB | 2,571 MB | 3.8 MB | 4.28 s | 3.93 s |
+
+- **Memory.** Streamed, the peak is 15–20 MB of RSS and under 4 MB of live
+  heap at every size: 85–125 times less than the tree at 564 MB. The tree
+  holds 3–5 times the input.
+- **Time.** Streamed runs take 0.9–1.5 times as long. The 1.3–2.1× CPU cost
+  of the streamed reader ([known-gaps.md](known-gaps.md)) is partly paid back
+  at large sizes by the tree's collector work; `sum` at 564 MB is as fast.
+- **Workloads.** `identity` copies every node (`on-no-match="shallow-copy"`);
+  `filter` writes one small element per record; `sum` writes
+  `sum(data/record/amount)`. A record is about 185 bytes (an id, a name, an
+  amount and a 96-character note); 60,000, 600,000 and 3,000,000 records.
+- **What it does not cover.** These workloads stream completely. The
+  constructs that still run on the tree when streamed (a merge over
+  `MaxMergeStreams` inputs, a map or `xsl:fork` with more than 64 reading
+  parts, the whole-document cases) and a very deep document (about 2.7× the
+  tree) are listed in [known-gaps.md](known-gaps.md).
+
+Measured at `1db051a4` on a 12-core Apple Silicon Mac with 18 GB, Go's
+default `GOGC`, nothing else running; medians of three runs, each in a process
+of its own. Peak RSS is the child's rusage; peak heap is
+`/memory/classes/heap/objects:bytes` sampled every millisecond. The parse
+limits are lifted (`MaxBytes`, `MaxNodes` −1) so the tree can hold 564 MB.
+Reproduce with:
+
+    go run ./tests/streambench                 # 11, 112 and 564 MB; about 4 GB free
+    go run ./tests/streambench -records 60000  # one size
+
+On Windows the RSS columns are empty (its rusage carries no memory figure);
+read the heap columns.
 
 ## Where the break-even is
 

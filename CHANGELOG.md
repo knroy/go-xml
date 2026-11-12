@@ -32,6 +32,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `c14n.FromXPathFilterHere`, `FromXPathHere` | XML-DSig filters can call `here()`: the node bearing the expression, a text node read as its parent; a node outside the document is refused. | [`e0d2c13`][e0d2c13] |
 | `xdm.ParseOptions.Warn` | Receives xml:id errors (duplicate ID, non-NCName value) as XQDY0091 `*xdm.Error`s, at most 100 then one summary; nil stays silent. | [`0caab03`][0caab03], [`c6508c3`][c6508c3] |
 | `xslt.StreamingDocumentResolver`, `FileResolver.OpenDocument` | A resolver with `OpenDocument` streams streamable `xsl:source-document` and merge sources; one without it still builds the tree. | [`0d9c103`][0d9c103] |
+| `tests/streambench` | Measures one transform on the tree against the same transform streamed through `TransformReader`, per process: 15–20 MB of RSS at 11, 112 and 564 MB streamed, against 46 MB to 2.4 GB on the tree, at 0.9–1.5× the time (docs/benchmark.md, "Streaming against the tree"). | [`1db051a`][1db051a] |
 
 ### Changed
 
@@ -2983,6 +2984,7 @@ here so every entry in this file sits under a release.
 [4c5c3ee]: https://github.com/knroy/go-xml/commit/4c5c3ee
 [2a41550]: https://github.com/knroy/go-xml/commit/2a41550
 [4ad352d]: https://github.com/knroy/go-xml/commit/4ad352d
+[1db051a]: https://github.com/knroy/go-xml/commit/1db051a
 [9399efd]: https://github.com/knroy/go-xml/commit/9399efd
 [cfa135c]: https://github.com/knroy/go-xml/commit/cfa135c
 [4694fa3]: https://github.com/knroy/go-xml/commit/4694fa3

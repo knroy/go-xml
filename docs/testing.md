@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,687 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,688 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,260 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -585,6 +585,19 @@ a hit.
 ```
 go run ./tests/streamdiff <base-rev> <outdir>     # ~3 min
 go test ./xslt -run 'TestStreamFuzz$' -v          # 1000 cases; GOXSLT_STREAM_FUZZ=N, _SEED=S
+```
+
+What streaming saves is measured separately:
+[`tests/streambench`](../tests/streambench/main.go) runs three streamable
+workloads on generated documents, in tree mode and through `TransformReader`,
+each run a process of its own, and prints peak RSS, peak heap and time for
+both; it fails when the outputs differ. `TestWorkloadsStreamAndAgree` runs it
+at 11 MB and fails when a stream holds half the tree's heap or more, which is
+what a silent fallback to the tree looks like. The figures are in
+[benchmark.md](benchmark.md#streaming-against-the-tree).
+
+```
+go run ./tests/streambench                 # 11, 112 and 564 MB, 3 runs each; ~4 GB free
 ```
 
 The streamed XPath split ([`xslt/streamsplit.go`](../xslt/streamsplit.go))
