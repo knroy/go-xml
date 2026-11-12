@@ -14,22 +14,23 @@ import (
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
-// sm02Growth times run(n) and run(4n), each the best of three, after
+// sm02Growth times run(n) and run(4n), each the best of five, after
 // setup, and fails when the larger took more than ratio times as long: a
 // cost linear in n grows about fourfold, a quadratic one sixteenfold.
-// Each timing repeats run until 2ms have passed and takes the mean, so a
-// scheduler or timer tick (about 1ms on Windows) cannot decide the ratio.
+// Each timing repeats run until 10ms have passed and takes the mean, so a
+// timer tick (about 1ms on Windows) or a preemption on a busy two-core CI
+// runner cannot decide the ratio.
 func sm02Growth(t *testing.T, n int, ratio float64, setup func(n int) func()) {
 	t.Helper()
 	best := func(n int) time.Duration {
 		run := setup(n)
 		d := time.Duration(1 << 62)
-		for range 3 {
+		for range 5 {
 			goruntime.GC()
 			t0 := time.Now()
 			for k := 1; ; k++ {
 				run()
-				if el := time.Since(t0); el >= 2*time.Millisecond {
+				if el := time.Since(t0); el >= 10*time.Millisecond {
 					d = min(d, el/time.Duration(k))
 					break
 				}
