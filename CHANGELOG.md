@@ -4,7 +4,17 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
-## Unreleased
+## v2.3.0 — 2026-11-11
+
+Streaming and hardening. XSLT 3.0 streaming runs on the cursor for templates,
+grouping, `xsl:try`, `xsl:merge`, `xsl:fork`, accumulators and
+`xsl:source-document` (2,661 W3C cases on the streamed path), and
+`TransformReader` with `Output` keeps a transform's memory flat: 15–20 MB of
+RSS at 564 MB, against 1.6–2.4 GB on the tree. Every fixed resource limit is
+an option now, xmlconf passes 1,965 of 1,965, and the confirmed findings of
+the security audits run since v2.2.0 are fixed (what they left open is in
+docs/known-gaps.md). New API is additive; refusals that changed are listed
+under *Changed — behaviour*.
 
 ### Added
 
