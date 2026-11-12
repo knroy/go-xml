@@ -9,8 +9,7 @@ import (
 
 // Every workload writes what the tree writes, and streams: its peak heap
 // does not grow with the input. A stream that fell back to the tree, or kept
-// something per record, would peak about four times higher on four times
-// the records. The peak is not compared with the tree's: it counts garbage
+// something per record, would peak far higher on four times the records. The peak is not compared with the tree's: it counts garbage
 // not yet swept, which on a slow two-core runner reached half the tree's
 // (34.5 against 68.3 MB on Windows) without the stream holding anything.
 func TestWorkloadsStreamAndAgree(t *testing.T) {
@@ -48,7 +47,10 @@ func TestWorkloadsStreamAndAgree(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if big.heapMB > 2*stream.heapMB {
+		// The 16 MB is collector lag under load (4.4 to 9.1 MB in the race
+		// lane); a fallback peaks at 150 MB or more here, and anything kept
+		// per record of 100 bytes or more adds 24 MB.
+		if big.heapMB > 2*stream.heapMB+16 {
 			t.Errorf("%s: streamed peak heap %.1f MB at 4x the records, %.1f MB at 1x; did it stream?", w.name, big.heapMB, stream.heapMB)
 		}
 	}
