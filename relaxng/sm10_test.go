@@ -154,7 +154,7 @@ func pruneDepthCost(t *testing.T, d, m int) time.Duration {
 // so D levels above a wide group cost D times its size: 1.15 s at D=800.
 // Memoised, the depth adds only its own nodes.
 func TestSM10RestrictionWalkIsLinear(t *testing.T) {
-	flat, deep := pruneDepthCost(t, 1, 5000), pruneDepthCost(t, 400, 5000)
+	flat, deep := pruneDepthCost(t, 1, 20000), pruneDepthCost(t, 400, 20000)
 	if r := float64(deep) / float64(flat); r > 8 {
 		t.Fatalf("400 levels cost %.0fx one level (%v vs %v); prune rescans subtrees again", r, deep, flat)
 	}
@@ -198,7 +198,7 @@ func competitionWidthCost(t *testing.T, k int) time.Duration {
 // accumulated side at every binary node of a wide group or interleave:
 // O(K²), 5.3 s at K=8000. Indexed, 8x the width costs about 8x.
 func TestSM10CompetitionWidthIsLinear(t *testing.T) {
-	small, large := competitionWidthCost(t, 500), competitionWidthCost(t, 4000)
+	small, large := competitionWidthCost(t, 2000), competitionWidthCost(t, 16000)
 	if r := float64(large) / float64(small); r > 24 {
 		t.Fatalf("8x the members cost %.0fx the time (%v vs %v); the competition check is quadratic again", r, large, small)
 	}
