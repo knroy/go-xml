@@ -591,9 +591,12 @@ What streaming saves is measured separately:
 [`tests/streambench`](../tests/streambench/main.go) runs three streamable
 workloads on generated documents, in tree mode and through `TransformReader`,
 each run a process of its own, and prints peak RSS, peak heap and time for
-both; it fails when the outputs differ. `TestWorkloadsStreamAndAgree` runs it
-at 11 MB and fails when a stream holds half the tree's heap or more, which is
-what a silent fallback to the tree looks like. The figures are in
+both; it fails when the outputs differ. `TestWorkloadsStreamAndAgree` checks
+each workload's outputs agree at 11 MB, and fails when a stream's peak heap
+doubles from 11 to 45 MB of input: a silent fallback to the tree, or anything
+kept per record, grows with the input. It does not compare the stream's peak
+with the tree's, which counts unswept garbage and on a two-core Windows runner
+reached half the tree's without the stream holding anything. The figures are in
 [benchmark.md](benchmark.md#streaming-against-the-tree).
 
 ```

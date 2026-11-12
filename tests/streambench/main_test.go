@@ -7,8 +7,12 @@ import (
 	"testing"
 )
 
-// Every workload streams on TransformReader and writes what the tree writes:
-// a small document, both modes, outputs compared by digest.
+// Every workload writes what the tree writes, and streams: its peak heap
+// does not grow with the input. A stream that fell back to the tree, or kept
+// something per record, would peak about four times higher on four times
+// the records. The peak is not compared with the tree's: it counts garbage
+// not yet swept, which on a slow two-core runner reached half the tree's
+// (34.5 against 68.3 MB on Windows) without the stream holding anything.
 func TestWorkloadsStreamAndAgree(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs the command")
@@ -21,26 +25,31 @@ func TestWorkloadsStreamAndAgree(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	doc := filepath.Join(dir, "d.xml")
-	if _, err := generate(60000, doc); err != nil {
+	small, large := filepath.Join(dir, "small.xml"), filepath.Join(dir, "large.xml")
+	if _, err := generate(60000, small); err != nil { // 11 MB
+		t.Fatal(err)
+	}
+	if _, err := generate(240000, large); err != nil { // 45 MB
 		t.Fatal(err)
 	}
 	for _, w := range workloads {
-		tree, err := runOnce(bin, "tree", w.name, doc)
+		tree, err := runOnce(bin, "tree", w.name, small)
 		if err != nil {
 			t.Fatal(err)
 		}
-		stream, err := runOnce(bin, "stream", w.name, doc)
+		stream, err := runOnce(bin, "stream", w.name, small)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if tree.out != stream.out {
 			t.Errorf("%s: tree wrote %s, stream %s", w.name, tree.out, stream.out)
 		}
-		// 11 MB of input: the tree holds 35-60 MB, a stream about 4 MB
-		// whatever the size; a stream that fell back would hold the tree's.
-		if stream.heapMB*2 > tree.heapMB {
-			t.Errorf("%s: stream peak heap %.1f MB against the tree's %.1f MB; did it stream?", w.name, stream.heapMB, tree.heapMB)
+		big, err := runOnce(bin, "stream", w.name, large)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if big.heapMB > 2*stream.heapMB {
+			t.Errorf("%s: streamed peak heap %.1f MB at 4x the records, %.1f MB at 1x; did it stream?", w.name, big.heapMB, stream.heapMB)
 		}
 	}
 }
