@@ -4,13 +4,13 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
-## Unreleased
+## v2.3.1 — 2026-11-13
 
 ### Fixed
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| A stylesheet compiled from its `xsl:stylesheet` element never streamed: the planner took the document node as the principal module | The planner scopes the principal module to the element itself; an element inside a `ds:Transform` streams too. | |
+| A stylesheet compiled from its `xsl:stylesheet` element never streamed: the planner took the document node as the principal module | The planner scopes the principal module to the element itself; an element inside a `ds:Transform` streams too. | [`94cff9e`][94cff9e] |
 
 ## v2.3.0 — 2026-11-11
 
@@ -3308,3 +3308,4 @@ here so every entry in this file sits under a release.
 [8ca4e94]: https://github.com/knroy/go-xml/commit/8ca4e94
 [e34e85c]: https://github.com/knroy/go-xml/commit/e34e85c
 [83902a6]: https://github.com/knroy/go-xml/commit/83902a6
+[94cff9e]: https://github.com/knroy/go-xml/commit/94cff9e
