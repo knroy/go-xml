@@ -69,11 +69,11 @@ func (c *compiler) planMainStreams() {
 	if s.source == nil {
 		return
 	}
-	els := s.source.ChildElements()
-	if len(els) == 0 {
+	top := firstElement(s.source)
+	if top == nil {
 		return
 	}
-	rs := c.rulesPlanFor(els[0])
+	rs := c.rulesPlanFor(top)
 	if rs == nil {
 		return
 	}

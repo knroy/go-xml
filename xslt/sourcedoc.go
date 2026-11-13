@@ -79,7 +79,7 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	if isYes(n.AttrValue("streamable")) {
 		// A module other than the principal one, or a principal that pulls
 		// in others, is not the whole stylesheet (streamtrust.go).
-		shared := n.Root() != c.sheet.source && !c.inOwnPkg(n) // streamtrust_pkguse.go
+		shared := !c.inPrincipal(n) && !c.inOwnPkg(n) // streamtrust_pkguse.go
 		var why string
 		var xm []*xdm.Node
 		if !shared {

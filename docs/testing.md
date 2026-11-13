@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,688 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,690 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,260 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -911,7 +911,12 @@ in an initial mode through `TransformReader` and through `xdm.Parse` +
 7,855 of them ending in an error, each Parse + Transform's. `go test ./xslt
 -run TestStreamMain -v` compares `TransformReader` with Parse + Transform over
 hand-written cases, errors and parse limits, and, without `-short`, peak
-heap. `go test ./xslt -run TestStreamGroup -v` compares groupings with the
+heap. `go test ./xslt -run 'TestStreamElementCompiled|TestStreamL7PackageFrame' -v`
+compiles each stylesheet from its document node, from its `xsl:stylesheet`
+element, and from that element inside a `ds:Signature` whose other
+`ds:Transform` includes a module, and requires the document node's output on
+the streamed path: the principal input, an `xsl:source-document`, and a used
+package's streamable mode. `go test ./xslt -run TestStreamGroup -v` compares groupings with the
 tree over key-run documents and whitespace declarations, errors in the
 tree's order through `TransformReader`, and, without `-short`, peak heap.
 `go test ./xslt -run 'TestStreamTry|TestStreamCall|TestStreamAttributeSets' -v`
