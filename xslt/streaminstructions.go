@@ -1967,10 +1967,29 @@ func (a *instrAnalyzer) appliedModeVerified(el *xdm.Node) bool {
 	return a.trust.modeVerified(documentElementOf(el), xdm.QName{URI: want.URI, Local: want.Local}.Clark())
 }
 
-// documentElementOf returns the outermost element containing el.
+// inPrincipal reports whether n is in the principal module, compiled from
+// its document node or from its element inside another tree.
+func (c *compiler) inPrincipal(n *xdm.Node) bool {
+	src := c.sheet.source
+	if src == nil {
+		return false
+	}
+	if src.Kind() == xdm.KindDocument {
+		return n.Root() == src
+	}
+	for ; n != nil; n = n.Parent() {
+		if n == src {
+			return true
+		}
+	}
+	return false
+}
+
+// documentElementOf returns the outermost element containing el, stopping
+// at a stylesheet module's element.
 func documentElementOf(el *xdm.Node) *xdm.Node {
 	top := el
-	for top.Parent() != nil && top.Parent().Kind() == xdm.KindElement {
+	for !isModuleElement(top) && top.Parent() != nil && top.Parent().Kind() == xdm.KindElement {
 		top = top.Parent()
 	}
 	return top

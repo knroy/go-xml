@@ -4,6 +4,14 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+### Fixed
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| A stylesheet compiled from its `xsl:stylesheet` element never streamed: the planner took the document node as the principal module | The planner scopes the principal module to the element itself; an element inside a `ds:Transform` streams too. | |
+
 ## v2.3.0 — 2026-11-11
 
 Streaming and hardening. XSLT 3.0 streaming runs on the cursor for templates,

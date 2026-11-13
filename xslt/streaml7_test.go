@@ -378,14 +378,20 @@ func TestStreamL7PackageFrame(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		run := func(core bool) (string, streamtrace.Counts) {
+		// elem compiles from the xsl:stylesheet element instead of its
+		// document node, as a ds:Transform host does (streamelement_test.go).
+		run := func(core, elem bool) (string, streamtrace.Counts) {
 			before := streamtrace.Snapshot()
 			defer func() { noBursts = false }()
 			tree, err := xdm.ParseString(top, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
 			if err != nil {
 				t.Fatal(err)
 			}
-			s, err := Compile(tree.Root, CompileOptions{PackageResolver: fixedPackages{"urn:j": pkg}})
+			root := tree.Root
+			if elem {
+				root = firstElement(root)
+			}
+			s, err := Compile(root, CompileOptions{PackageResolver: fixedPackages{"urn:j": pkg}})
 			if err != nil {
 				return "COMPILE " + err.Error(), streamtrace.Snapshot().Sub(before)
 			}
@@ -397,13 +403,15 @@ func TestStreamL7PackageFrame(t *testing.T) {
 			}
 			return res.String(), streamtrace.Snapshot().Sub(before)
 		}
-		so, st := run(true)
-		to, _ := run(false)
-		if so != to {
-			t.Errorf("case %d: core %q\ntree %q", i, so, to)
-		}
-		if got := st.Runs[streamtrace.Core] > 0 && st.Reruns == 0; got != c.stream {
-			t.Errorf("case %d: on the core without a re-run %v, want %v", i, got, c.stream)
+		for _, elem := range []bool{false, true} {
+			so, st := run(true, elem)
+			to, _ := run(false, elem)
+			if so != to {
+				t.Errorf("case %d elem %v: core %q\ntree %q", i, elem, so, to)
+			}
+			if got := st.Runs[streamtrace.Core] > 0 && st.Reruns == 0; got != c.stream {
+				t.Errorf("case %d elem %v: on the core without a re-run %v, want %v", i, elem, got, c.stream)
+			}
 		}
 	}
 }
