@@ -10,8 +10,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| The `go-xml` command never streamed its source: it always parsed the document into a tree and called `Transform`, so `xsl:mode streamable="yes"` ran on the tree, and the result was held whole ([#40](https://github.com/knroy/go-xml/issues/40)) | The command reads each source through `TransformReader`, which streams a streamable initial mode and otherwise runs on the tree, and writes the principal result to `Output` as it is made: a streamable `shallow-copy` of a 12 MB document peaks at 25 MB of RSS rather than 405 MB, with the same output in 1.5 times the time, and one of 267 MB, which the tree path refused, also at 25 MB. `-validate` is `SourceValidation`, so a streamed source is validated as it is read. `-o` is written to a temporary file renamed over it on success, so a failed run leaves it as it was. `-xinclude` still builds the tree. | |
-| The CLI could not raise the 10,000,000-node input limit, which a streamed input is held to too | `-max-nodes N` (`-1` removes it). | |
+| The `go-xml` command never streamed its source: it always parsed the document into a tree and called `Transform`, so `xsl:mode streamable="yes"` ran on the tree, and the result was held whole ([#40](https://github.com/knroy/go-xml/issues/40)) | The command reads each source through `TransformReader`, which streams a streamable initial mode and otherwise runs on the tree, and writes the principal result to `Output` as it is made: a streamable `shallow-copy` of a 12 MB document peaks at 25 MB of RSS rather than 405 MB, with the same output in 1.5 times the time, and one of 267 MB, which the tree path refused, also at 25 MB. `-validate` is `SourceValidation`, so a streamed source is validated as it is read. `-o` is written to a temporary file renamed over it on success, so a failed run leaves it as it was. `-xinclude` still builds the tree. | [`34977f7`][34977f7] |
+| The CLI could not raise the 10,000,000-node input limit, which a streamed input is held to too | `-max-nodes N` (`-1` removes it). | [`34977f7`][34977f7] |
 
 ## v2.3.1 — 2026-11-13
 
@@ -3317,4 +3317,5 @@ here so every entry in this file sits under a release.
 [8ca4e94]: https://github.com/knroy/go-xml/commit/8ca4e94
 [e34e85c]: https://github.com/knroy/go-xml/commit/e34e85c
 [83902a6]: https://github.com/knroy/go-xml/commit/83902a6
+[34977f7]: https://github.com/knroy/go-xml/commit/34977f7
 [94cff9e]: https://github.com/knroy/go-xml/commit/94cff9e
