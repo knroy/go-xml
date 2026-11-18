@@ -322,6 +322,16 @@ Measured on branches in 2026-11 and not adopted, each with the reason:
 
 ### Streamed execution covers `xsl:source-document` and `TransformReader`'s principal input (XSLT 3.0, performance)
 
+The `go-xml` command reads each source through `TransformReader` and writes
+the principal result to `TransformOptions.Output` (since issue #40; before,
+it always built the tree and held the result), except under `-xinclude`.
+
+Under `Output`, text nodes at the top level of the principal result (a rule
+that writes `xsl:value-of` with no enclosing element) are not handed back as
+they are written, whatever the output method: a streamed run that writes more
+than `MaxNodes` (2,000,000) of them fails with XPDY0130, where the same text
+inside an element is written in flat memory.
+
 An `xsl:source-document streamable="yes"` whose body has a known and verified
 §19.8 verdict runs on the streamed core: the document is read through a
 cursor and never built. Everything else builds the tree, as before. The core

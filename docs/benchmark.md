@@ -481,8 +481,9 @@ tree, uses less.
 
 ### Streaming against the tree
 
-The figures above are tree mode, which is what the CLI runs. Through the API,
-`Stylesheet.TransformReader` streams a document whose initial mode is
+The figures above are tree mode: their stylesheets declare no streamable
+mode. `Stylesheet.TransformReader`, which the CLI reads every source through
+(and writes to `TransformOptions.Output`, as below), streams a document whose initial mode is
 streamable and verified, and its memory then does not grow with the input.
 One stylesheet per workload, run both ways: tree is `xdm.Parse` +
 `Transform`, stream is `TransformReader`, and both write the principal result

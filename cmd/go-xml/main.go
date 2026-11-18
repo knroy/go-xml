@@ -232,6 +232,10 @@ func run() error {
 				"without a base case)")
 		maxItems = flag.Int("max-items", 0, maxItemsUsage)
 		maxBytes = flag.Int64("max-bytes", 0, maxBytesUsage)
+		maxNodes = flag.Int("max-nodes", 0,
+			"bound the nodes of the input document; 0 uses the default "+
+				"(10,000,000), negative removes the bound. A streamed input "+
+				"is held to it too, though its nodes are not all held at once")
 
 		validate = flag.String("validate", "",
 			"validate each source document against the schema the stylesheet "+
@@ -379,6 +383,7 @@ Exit status: 0 if every input transformed, 1 otherwise.
 		maxDepth:     *maxDepth,
 		maxItems:     *maxItems,
 		maxBytes:     *maxBytes,
+		maxNodes:     *maxNodes,
 		validate:     *validate,
 
 		baseOutputURI: baseOutputURI(*outPath, *resultDir),
@@ -499,6 +504,7 @@ type transformCfg struct {
 	maxDepth     int
 	maxItems     int
 	maxBytes     int64
+	maxNodes     int
 	validate     string
 	// baseOutputURI is where this run's output is actually going, as a URI.
 	// Unlike the library, the CLI knows that destination, so it supplies one
@@ -515,63 +521,7 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 	// the XInclude pass as well as the transform.
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
 	defer cancel()
-	var root *xdm.Node
-	if inPath != "" {
-		// Streamed, as the stylesheet is (see compileStylesheet).
-		f, err := os.Open(inPath)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		abs := realFileURI(inPath)
-		popts := xdm.ParseOptions{
-			BaseURI: abs,
-			// The document URI is what fn:document-uri returns, and it is a
-			// separate property from the base URI: a base URI is inherited
-			// and can be overridden by xml:base, while the document URI names
-			// where this document came from and nothing below it changes.
-			DocumentURI:    abs,
-			AllowDOCTYPE:   cfg.allowDoctype,
-			TrackPositions: cfg.trackPos,
-			MaxBytes:       cfg.maxBytes,
-		}
-		if cfg.externalEnts {
-			popts.ExternalEntities = cfg.resolver
-		}
-		tree, err := xdm.Parse(f, popts)
-		if err != nil {
-			return err
-		}
-		// XInclude is a transformation of the parsed document rather than a
-		// parsing option — XInclude 1.0 section 4 defines it over a finished
-		// infoset — so it runs here, between the parse and the transform, and
-		// only when asked for. The resolver doing the reading is the same one
-		// that gates fn:doc and xsl:include, so an inclusion is confined to
-		// the -allow-dir roots on exactly the same terms.
-		if cfg.xinclude {
-			included, err := xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
-				Resolver: cfg.resolver,
-				// The included documents are held to the same limits as the
-				// including one: an inclusion becomes part of the document,
-				// so it must not be a way around a bound the document itself
-				// was held to.
-				Parse:   popts,
-				Context: ctx,
-			})
-			if err != nil {
-				return err
-			}
-			tree = included
-		}
-		root = tree.Root
-		if cfg.validate != "" {
-			if root, err = validateSource(sheet.Schema(), root, cfg.validate); err != nil {
-				return err
-			}
-		}
-	}
-
-	res, err := sheet.Transform(ctx, root, xslt.TransformOptions{
+	opts := xslt.TransformOptions{
 		Params:           cfg.params,
 		Documents:        cfg.resolver,
 		InitialTemplate:  cfg.initial,
@@ -593,9 +543,106 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		// The library defaults to none because it never writes files; the CLI
 		// does know where the output goes, so it says so.
 		BaseOutputURI: cfg.baseOutputURI,
-	})
+	}
+	// -validate is the library's source validation, so that a streamed
+	// input is validated as it is read rather than built as a tree first.
+	switch cfg.validate {
+	case "strict":
+		opts.SourceValidation = xslt.SourceStrict
+	case "lax":
+		opts.SourceValidation = xslt.SourceLax
+	}
+
+	label := ""
+	if outPath == "" && cfg.multiple {
+		// With several inputs going to stdout, label each result so the
+		// output is not an undifferentiated run of documents.
+		label = fmt.Sprintf("<!-- %s -->\n", inPath)
+	}
+	out, err := openPrincipal(outPath, label)
 	if err != nil {
 		return err
+	}
+	if err := transformTo(ctx, sheet, inPath, cfg, opts, out); err != nil {
+		out.abort()
+		return err
+	}
+	return out.commit()
+}
+
+// transformTo runs the transform with its principal result written to out
+// as it is produced, then writes what follows it: the href-less result
+// documents, and the -result-dir ones.
+func transformTo(ctx context.Context, sheet *xslt.Stylesheet, inPath string,
+	cfg transformCfg, opts xslt.TransformOptions, out *principalOutput) error {
+	opts.Output = out
+	var res *xslt.Result
+	if inPath == "" {
+		var err error
+		if res, err = sheet.Transform(ctx, nil, opts); err != nil {
+			return err
+		}
+	} else {
+		// Read from the file as it is parsed, as the stylesheet is (see
+		// compileStylesheet).
+		f, err := os.Open(inPath)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		abs := realFileURI(inPath)
+		popts := xdm.ParseOptions{
+			BaseURI: abs,
+			// The document URI is what fn:document-uri returns, and it is a
+			// separate property from the base URI: a base URI is inherited
+			// and can be overridden by xml:base, while the document URI names
+			// where this document came from and nothing below it changes.
+			DocumentURI:    abs,
+			AllowDOCTYPE:   cfg.allowDoctype,
+			TrackPositions: cfg.trackPos,
+			MaxBytes:       cfg.maxBytes,
+			MaxNodes:       cfg.maxNodes,
+		}
+		if cfg.externalEnts {
+			popts.ExternalEntities = cfg.resolver
+		}
+		if !cfg.xinclude {
+			// TransformReader streams the document when the stylesheet's
+			// initial mode is streamable (xsl:mode streamable="yes") and its
+			// rules pass the streamability analysis, and otherwise parses it
+			// and runs Transform on the tree, so every stylesheet takes it.
+			opts.SourceParseOptions = popts
+			if res, err = sheet.TransformReader(ctx, f, opts); err != nil {
+				return err
+			}
+		} else {
+			// XInclude is a transformation of the parsed document rather
+			// than a parsing option — XInclude 1.0 section 4 defines it over
+			// a finished infoset — so it needs the tree, and the input is not
+			// streamed. It runs between the parse and the transform, and only
+			// when asked for. The resolver doing the reading is the same one
+			// that gates fn:doc and xsl:include, so an inclusion is confined
+			// to the -allow-dir roots on exactly the same terms.
+			tree, err := xdm.Parse(f, popts)
+			if err != nil {
+				return err
+			}
+			included, err := xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
+				Resolver: cfg.resolver,
+				// The included documents are held to the same limits as the
+				// including one: an inclusion becomes part of the document,
+				// so it must not be a way around a bound the document itself
+				// was held to.
+				Parse:   popts,
+				Context: ctx,
+			})
+			if err != nil {
+				return err
+			}
+			if res, err = sheet.Transform(ctx, included.Root, opts); err != nil {
+				return err
+			}
+		}
 	}
 
 	if cfg.showMessages {
@@ -612,45 +659,31 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 	// below alongside the principal tree rather than demanding -result-dir.
 	// The engine already raises XTDE1490 when the principal tree also has
 	// content, or when a second href-less instruction runs, so at most one
-	// reaches this point and it never collides with res.Serialize.
+	// reaches this point and it never collides with the principal result.
 	principal, secondary := splitSecondary(res.Secondary)
 	if err := writeSecondary(secondary, cfg.resultDir); err != nil {
 		return err
 	}
 
-	out := os.Stdout
-	if outPath != "" {
-		f, err := os.Create(outPath)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		out = f
-	} else if cfg.multiple {
-		// With several inputs going to stdout, label each result so the
-		// output is not an undifferentiated run of documents.
-		fmt.Fprintf(os.Stdout, "<!-- %s -->\n", inPath)
-	}
-
 	// Each href-less result document is serialized with its own settings —
 	// its @format names an xsl:output declaration that the principal tree's
 	// settings would not honour — so it is written through its own Serialize
-	// rather than folded into res.
-	for i := range principal {
-		if err := principal[i].Serialize(out, nil); err != nil {
+	// rather than folded into the principal result. That result was empty
+	// (XTDE1490 above), and what it wrote is still held: discard drops it.
+	if len(principal) > 0 {
+		if err := out.discard(); err != nil {
 			return err
 		}
-		fmt.Fprintln(out)
-	}
-	if len(principal) > 0 {
+		for i := range principal {
+			if err := principal[i].Serialize(out, nil); err != nil {
+				return err
+			}
+			fmt.Fprintln(out)
+		}
 		return nil
 	}
-
-	if err := res.Serialize(out); err != nil {
-		return err
-	}
-	fmt.Fprintln(out)
-	return nil
+	_, err := fmt.Fprintln(out)
+	return err
 }
 
 // splitSecondary separates the href-less result documents from those that

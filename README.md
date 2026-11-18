@@ -542,17 +542,42 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 | `-timeout` | bound the transform, and the `-xinclude` pass before it (default 60s) |
 | `-max-items N` | items the transform may materialise (default 5,000,000; `-1` removes the bound) |
 | `-max-bytes N` | largest input document (default 64 MB; `-1` removes the limit) |
+| `-max-nodes N` | most nodes in the input document (default 10,000,000; `-1` removes the limit); a streamed input is held to it too |
 | `-initial-template` | start at a named template instead of matching the root; no input document is then needed |
 | `-mode` | initial mode for `apply-templates` |
 | `-messages` | print `xsl:message` output to stderr |
 | `-now` | pin `fn:current-dateTime` (RFC 3339) |
 | `-timezone` | implicit timezone in minutes |
 | `-track-positions` | record source line/column; see below |
-| `-validate strict\|lax` | validate each source against the schema the stylesheet imports with `xsl:import-schema` before the transform, so its nodes carry schema types and atomise to typed values; `lax` skips an undeclared document element |
+| `-validate strict\|lax` | validate each source against the schema the stylesheet imports with `xsl:import-schema`, so its nodes carry schema types and atomise to typed values; `lax` skips an undeclared document element. A streamed source is validated as it is read |
 | `-result-dir` | where `xsl:result-document` outputs with an `href` are written; one with no `href` goes to the principal output instead |
 | `-keep-going` | continue a batch past a failure, still exiting non-zero |
 
 The exit status is 0 only if every input transformed.
+
+Each source is read through `Stylesheet.TransformReader`, so a stylesheet
+whose initial mode is streamable (`<xsl:mode streamable="yes"/>`, or the mode
+`-mode` names) streams the principal input instead of building its tree, with
+no flag to set; any other stylesheet is parsed and run on the tree, with the
+same output. `-xinclude` keeps the tree, since it needs the finished
+document. As XSLT 3.0 §2.3.2 requires, a global variable cannot read the
+source as its context item in a streamable initial mode (`XPDY0002`).
+
+The principal result is written as it is produced
+(`TransformOptions.Output`), so a streamed filter over a large document runs
+in flat memory: a streamable `shallow-copy` of a 12 MB document peaks at
+25 MB of RSS rather than the tree's 405 MB, in about 1.5 times the time, and
+one of 267 MB also at 25 MB. The input limits still apply to a streamed source, so a
+large one needs `-max-bytes -1` and, past ten million nodes, `-max-nodes -1`.
+With `-o` the result goes to a temporary file beside the destination that
+replaces it only when the transform succeeds, so a failed run leaves the
+file as it was, and `-o` may name the input (a device, or a file in a
+directory the user cannot write, is written in place). On stdout, output
+written before a failure cannot be taken back.
+
+```sh
+go-xml -xsl filter.xsl -max-bytes -1 -max-nodes -1 -o out.xml huge.xml
+```
 
 The CLI does not link `net/http`: `HTTPResolver` lives in its own package,
 `xsd/xsdnet`, which the CLI does not import.
